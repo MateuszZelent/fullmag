@@ -69,11 +69,12 @@ export function useModeCompositionFieldLayerResources({
         signal,
       });
     },
-    loadBinary: async (layer, signal, etag) => {
+    loadBinary: async (layer, signal, expectedArtifactGenerationId, etag) => {
       const result = await api.data.fields.vector(
         layer.field_id,
         {
           component: "full",
+          expected_artifact_generation_id: expectedArtifactGenerationId,
           scope_id: layer.object_id,
           scope_kind: "object",
           view: "complex",
@@ -84,6 +85,7 @@ export function useModeCompositionFieldLayerResources({
         throw new Error(`Object-scoped mode field returned '${result.status}'.`);
       }
       return {
+        artifactGenerationId: result.responseMetadata.artifactGenerationId ?? null,
         byteLength: result.byteLength,
         data: result.data,
         encoding: result.responseMetadata.encoding,

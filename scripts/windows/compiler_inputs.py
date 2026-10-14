@@ -372,9 +372,15 @@ def materialize(record_path, build_root, *, working_root=None):
     old_paths = set(previous_inventory)
     new_inventory = record["inventory"]
     new_paths = {entry["path"] for entry in new_inventory}
-    for path in new_paths:
-        if any(old.startswith(path + "/") for old in old_paths):
-            raise CompilerInputsError("File-to-directory transitions require explicit mirror recovery")
+    # Inventory paths are already validated POSIX-relative names. Index the
+    # proper ancestors once instead of comparing every new file with every
+    # previous file; preserve the same transition refusal before any write.
+    old_directories = set()
+    for path in old_paths:
+        parts = path.split("/")
+        old_directories.update("/".join(parts[:index]) for index in range(1, len(parts)))
+    if new_paths.intersection(old_directories):
+        raise CompilerInputsError("File-to-directory transitions require explicit mirror recovery")
 
     snapshot_source = Path(metadata["source_root"])
     # Preflight every source and destination chain before the first mutation.

@@ -1,6 +1,7 @@
 //! Native accepted-run service. UI is an attaching client, never its owner.
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
+    host_resource_ledger::{HostInventoryOwner, HostResourceLedger},
     repository_path::{checked_path, validate_store_id},
     runtime_service::{
         RuntimeServiceChild, RuntimeServiceConfig as ServiceConfig, RuntimeServiceOwner,
@@ -16,6 +17,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{
@@ -31,6 +33,31 @@ struct SchedulerChild {
     released: bool,
     status: Option<std::process::ExitStatus>,
     observation_unknown: bool,
+}
+
+async fn publish_compute_node_sample(
+    ledger: Arc<HostResourceLedger>,
+    inventory_owner: Option<Arc<HostInventoryOwner>>,
+) -> Result<Option<Arc<HostInventoryOwner>>> {
+    tokio::task::spawn_blocking(move || -> Result<Option<Arc<HostInventoryOwner>>> {
+        let inventory_owner = match inventory_owner {
+            Some(owner) => Some(owner),
+            None => ledger.try_acquire_inventory_owner()?.map(Arc::new),
+        };
+        let Some(inventory_owner) = inventory_owner else {
+            return Ok(None);
+        };
+        let previous = ledger.read_compute_node_snapshot()?;
+        let snapshot = fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner(
+            &ledger,
+            inventory_owner.descriptor(),
+            previous.as_ref(),
+        )?;
+        ledger.publish_compute_node_snapshot_with_owner(&inventory_owner, &snapshot)?;
+        Ok(Some(inventory_owner))
+    })
+    .await
+    .context("compute-node sampling worker failed")?
 }
 
 impl SchedulerChild {
@@ -686,6 +713,15 @@ fn run() -> Result<()> {
         executable(&bin, name)?;
     }
     let mut owner = RuntimeServiceOwner::acquire(&store, &config.target_id)?;
+    let host_ledger = config
+        .host_execution
+        .as_ref()
+        .map(|binding| {
+            HostResourceLedger::open(&binding.ledger_root, binding.policy.clone())
+                .context("open the configured host ledger for compute-node sampling")
+                .map(Arc::new)
+        })
+        .transpose()?;
     owner.set_execution_identity(
         identity.git_commit,
         identity.source_snapshot_sha256,
@@ -703,6 +739,7 @@ fn run() -> Result<()> {
         owner.set_control_address(Some(listener.local_addr()?.to_string()))?;
         let mut children = Schedulers::default();
         let mut generations = None;
+        let mut inventory_owner = None;
         let mut unknown_publishers = Vec::new();
         let mut drain_confirmation = None;
         let work: Result<()> = async {
@@ -729,6 +766,27 @@ fn run() -> Result<()> {
                 startup_deadline,
             )
             .await?;
+            if let Some(ledger) = host_ledger.as_ref() {
+                let admission = fullmag_runtime_control::host_runtime::HostRuntimeAdmission::open(
+                    &config,
+                )?
+                .context("host execution requires an initialized runtime admission context")?;
+                loop {
+                    inventory_owner = publish_compute_node_sample(
+                        Arc::clone(ledger),
+                        inventory_owner.take(),
+                    )
+                    .await
+                    .context("initial compute-node sample is required before releasing host schedulers")?;
+                    if admission.has_current_compute_snapshot()? {
+                        break;
+                    }
+                    if Instant::now() >= startup_deadline {
+                        bail!("no current host-owner sample became available before startup deadline");
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
             for child in &mut children.0 {
                 child.release()?;
             }
@@ -748,8 +806,25 @@ fn run() -> Result<()> {
                 children.describe(),
             )?;
             let mut heartbeat = Instant::now();
+            let mut last_compute_node_sample = Instant::now();
             loop {
                 children.poll()?;
+                if last_compute_node_sample.elapsed() >= Duration::from_secs(5) {
+                    if let Some(ledger) = host_ledger.as_ref() {
+                        match publish_compute_node_sample(
+                            Arc::clone(ledger),
+                            inventory_owner.take(),
+                        )
+                        .await
+                        {
+                            Ok(owner) => inventory_owner = owner,
+                            Err(error) => {
+                                tracing::warn!(error = %error, "compute-node sample publication failed");
+                            }
+                        }
+                    }
+                    last_compute_node_sample = Instant::now();
+                }
                 match drain_requested(&listener, &owner, &config, &store).await? {
                     ControlObservation::Continue => {}
                     ControlObservation::Drain(confirmation) => {

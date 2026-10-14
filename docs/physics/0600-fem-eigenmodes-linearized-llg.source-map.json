@@ -1,0 +1,694 @@
+{
+  "document": {
+    "path": "docs/physics/0600-fem-eigenmodes-linearized-llg.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This page specifies the FEM eigenmode realization; FDM time-domain eigenproducts have a separate owner."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This page specifies the FEM eigenmode realization; FDM time-domain eigenproducts have a separate owner."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-0600-reference-linewidth-r2",
+      "symbols": [
+        "alpha_reference_r2",
+        "g_reference_r2",
+        "omega0_reference_r2",
+        "omega_imag_reference_r2",
+        "fwhm_reference_r2"
+      ],
+      "sources": [
+        "source-reference-linewidth-factor-r2",
+        "source-reference-damping-publication-r2"
+      ]
+    },
+    {
+      "id": "eq-0600-modal-pencil",
+      "symbols": [
+        "q",
+        "lambda",
+        "B_alpha",
+        "omega",
+        "f"
+      ],
+      "sources": [
+        "source-runner-path",
+        "source-plan-eigen"
+      ]
+    },
+    {
+      "id": "eq-0600-floquet-gamma-admission",
+      "symbols": [
+        "k_vector",
+        "k_component",
+        "epsilon_gamma_component"
+      ],
+      "sources": [
+        "source-rust-gamma-k-threshold",
+        "source-rust-plan-gamma-k-threshold",
+        "source-rust-gamma-k-classifier",
+        "source-rust-gamma-k-test",
+        "source-rust-native-gamma-k-threshold",
+        "source-rust-native-empty-k-ffi",
+        "source-native-floquet-k-classifier",
+        "source-native-modal-k-route",
+        "source-native-production-cpu-k-guard",
+        "source-native-floquet-admission-test",
+        "source-native-floquet-cabi-route-test",
+        "source-native-floquet-direct-entry-test"
+      ]
+    },
+    {
+      "id": "eq-0600-floquet-mixed-dense-real-split-extent",
+      "symbols": [
+        "q_complex",
+        "n_real",
+        "N_dense"
+      ],
+      "sources": [
+        "source-native-floquet-mixed-dense-contract",
+        "source-native-floquet-mixed-dense-test"
+      ]
+    },
+    {
+      "id": "eq-0600-p00-reference",
+      "symbols": [
+        "P00",
+        "k",
+        "t"
+      ],
+      "sources": [
+        "source-p00"
+      ]
+    },
+    {
+      "id": "eq-eigenmode-branch-degeneracy-policy",
+      "symbols": [
+        "delta_f",
+        "f_r",
+        "f_i",
+        "f_r_prime",
+        "f_i_prime"
+      ],
+      "sources": [
+        "source-tracking-frequency-cluster-policy",
+        "source-tracking-frequency-cluster-tests"
+      ]
+    },
+    {
+      "id": "eq-0600-tiny-reference-metric",
+      "symbols": [
+        "M_toy",
+        "I2",
+        "q"
+      ],
+      "sources": [
+        "source-tiny-slepc-reference-metric",
+        "source-tiny-validation-dispatch-regression"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "alpha_reference_r2",
+      "latex": "$\\alpha$",
+      "meaning": "Bazowy współczynnik materiałowy, skończony i nieujemny",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "g_reference_r2",
+      "latex": "$g$",
+      "meaning": "Historyczny współczynnik proporcjonalnej korekty",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "omega0_reference_r2",
+      "latex": "$\\omega_0$",
+      "meaning": "Nietłumiona częstość reference",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "omega_imag_reference_r2",
+      "latex": "$\\omega_{\\mathrm{app}}''$",
+      "meaning": "Przybliżona szybkość zaniku reference",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "fwhm_reference_r2",
+      "latex": "$\\Delta f_{\\mathrm{app}}$",
+      "meaning": "Przybliżone FWHM mocy izolowanego bieguna",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "q",
+      "latex": "$q$",
+      "meaning": "tangent-plane modal coefficients",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "lambda",
+      "latex": "$\\lambda$",
+      "meaning": "generalized eigenvalue",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "B_alpha",
+      "latex": "$B_\\alpha$",
+      "meaning": "gyrotropic/mass operator",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "omega",
+      "latex": "$\\omega$",
+      "meaning": "angular frequency",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "f",
+      "latex": "$f$",
+      "meaning": "cyclic frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "delta_f",
+      "latex": "$\\delta_f$",
+      "meaning": "complex-frequency distance used for private candidate grouping",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "f_r",
+      "latex": "$f_r$",
+      "meaning": "real component of complex frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "f_i",
+      "latex": "$f_i$",
+      "meaning": "imaginary component of complex frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "f_r_prime",
+      "latex": "$f'_r$",
+      "meaning": "real component of comparison complex frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "f_i_prime",
+      "latex": "$f'_i$",
+      "meaning": "imaginary component of comparison complex frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "P00",
+      "latex": "$P_{00}$",
+      "meaning": "thin-film demagnetizing factor",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "k",
+      "latex": "$k$",
+      "meaning": "in-plane wave vector magnitude",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "k_vector",
+      "latex": "$\\mathbf{k}$",
+      "meaning": "selected three-component Bloch/Floquet wavevector",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "k_component",
+      "latex": "$k_i$",
+      "meaning": "wavevector component for $i \\in \\{x,y,z\\}$",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "epsilon_gamma_component",
+      "latex": "$\\varepsilon_{\\Gamma,\\mathrm{comp}}$",
+      "meaning": "closed componentwise Gamma-admission threshold",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "q_complex",
+      "latex": "$q_{\\mathbb{C}}$",
+      "meaning": "number of complex reduced tangent degrees of freedom before real splitting",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n_real",
+      "latex": "$n_{\\mathbb{R}}$",
+      "meaning": "number of scalar coordinates in the doubled real-split tangent basis",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "N_dense",
+      "latex": "$N_{\\mathrm{dense}}$",
+      "meaning": "scalar entry count of one square real-split $K$, $G$, $M$, or $K_{\\mathrm{demag}}$ matrix",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "t",
+      "latex": "$t$",
+      "meaning": "film thickness",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "M_toy",
+      "latex": "$M_{\\mathrm{toy}}$",
+      "meaning": "jawna dodatnia metryka referencyjnego problemu dwuwymiarowego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "I2",
+      "latex": "$I_2$",
+      "meaning": "macierz jednostkowa o wymiarze dwa",
+      "si_unit": "$1$"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-bias-sample-prepare-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs",
+      "symbol": "prepare_bias_field_sample_plan",
+      "responsibility": "Prepare the current field and seed while clearing the outer sweep to prevent recursion."
+    },
+    {
+      "id": "source-bias-sample-owner-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_bias_field_sample_with_potential_publication",
+      "responsibility": "Require producer identity and perform current-field accepted relaxation before modal solve."
+    },
+    {
+      "id": "source-bias-path-orchestrator-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "execute_fem_eigen_path_with_producer_identity_and_parallel_policy",
+      "responsibility": "Preserve outer bias-field intent after the delegated single-sample plan clears its sweep list."
+    },
+    {
+      "id": "source-synthetic-kittel-profile-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_guards.rs",
+      "symbol": "solve_k0_kittel_synthetic_demag_factor_single_k",
+      "responsibility": "Publish a consistent normalized XYZ synthetic profile without claiming a numerical FEM solution."
+    },
+    {
+      "id": "source-synthetic-kittel-selector-r2",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "k0_kittel_mode_uniformity_score",
+      "responsibility": "Reject malformed declared field dimensions and retain independent uniformity selection."
+    },
+    {
+      "id": "source-reference-linewidth-factor-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "damping_imaginary_factor",
+      "responsibility": "Stable evaluation of the explicitly approximate reference linewidth correction."
+    },
+    {
+      "id": "source-reference-method-evidence-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "reference_modal_method_evidence",
+      "responsibility": "Versioned reference method evidence; no exact damping or complete spectrum claim."
+    },
+    {
+      "id": "source-reference-damping-publication-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner_with_potential_publication",
+      "responsibility": "Validate alpha before reference execution and publish explicit method evidence."
+    },
+    {
+      "id": "source-native-modal-typed-vector-owner",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "populate_typed_modal_result",
+      "responsibility": "Populate the existing typed result with checked finite uniform mode-major q/phi buffers; header owner is ModalEigenTypedResult."
+    },
+    {
+      "id": "source-native-cpu-mode-json-formatter",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "format_contour_modes_json",
+      "responsibility": "Serialize contour metadata without bulk numeric arrays; existing SLEPc formatters use the same typed population owner."
+    },
+    {
+      "id": "source-native-rust-owned-mode-vectors",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "NativeModalEigenTypedResult",
+      "responsibility": "Own copied buffers before native result free; count, scalar and representation admission is independently required."
+    },
+    {
+      "id": "source-native-mode-vector-admission",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs",
+      "symbol": "native_modal_modes_from_typed_result",
+      "responsibility": "Live CPU typed admission binds mode-major vectors to scalar metadata and preserves lane layout; the explicit historical JSON parser remains separate."
+    },
+    {
+      "id": "source-python-eigenmodes",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class Eigenmodes",
+      "responsibility": "Validate public modal parameters."
+    },
+    {
+      "id": "source-plan-eigen",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem_eigen",
+      "responsibility": "Lower the FEM eigen study and enforce capability policy."
+    },
+    {
+      "id": "source-runner-path",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "execute_fem_eigen_path",
+      "responsibility": "Execute k samples and publish postsolve comparisons."
+    },
+    {
+      "id": "source-runner-bias-field-branch-adapter",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "track_bias_field_sweep_samples",
+      "responsibility": "Parse accepted Gamma bias-field sample publisher artifacts, preserve the declared single-k vector in sample and branch metadata, track modes on the declared physical field axis for branch, dispersion, and tracking-diagnostic requests, and retain only selected public modes and fields."
+    },
+    {
+      "id": "source-runner-bias-field-prefix-publication",
+      "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs",
+      "symbol": "execute_bias_field_sweep_with_publication",
+      "responsibility": "Apply tracking and output selection to the completed accepted prefix while retaining the sweep's existing terminal-sample and merge behavior. Finalize diagnostics-only samples using exactly one matching sample_solver_diagnostics entry and three canonical hashes; reject missing, duplicate, malformed, or contradictory provenance without publishing unrequested modes or fields. See native_field_sweep_sample_identity and native_field_sweep_identity_tests in the same file; GHA38059971447 exact5532bed64e2a0ec043788da29086108ce8f13594 passed four identity, one publisher, and three planner regressions. This is a source/publication contract, not science qualification."
+    },
+    {
+      "id": "source-plan-bias-field-branch-admission",
+      "path": "crates/fullmag-plan/src/validate.rs",
+      "symbol": "validate_eigen_outputs",
+      "responsibility": "Admit branch selectors for a Gamma bias-field sweep while continuing to reject ordinary single-Gamma branch selection."
+    },
+    {
+      "id": "source-bias-field-native-publisher-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication",
+      "responsibility": "Exercise canonical state builder from materialized fixture fields and typed test relaxation handoff, verify equilibrium/linearization/certificate hashes against sample sidecars, and track/select/publish deterministic modal data with matching potential manifests; artifact-pipeline fixture only, not relaxation/eigensolver/physical proof, hosted execution pending."
+    },
+    {
+      "id": "source-tracking-frequency-cluster-policy",
+      "path": "crates/fullmag-runner/src/eigen/tracking_subspace.rs",
+      "symbol": "frequencies_are_degenerate",
+      "responsibility": "Apply the private absolute-plus-relative complex-frequency grouping bound."
+    },
+    {
+      "id": "source-tracking-frequency-cluster-tests",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "frequency_clusters_use_anchored_complex_distance_and_additive_tolerance",
+      "responsibility": "Regress anchored grouping, complex distance, and the additive/relative boundary; does not qualify physical degeneracy."
+    },
+    {
+      "id": "source-p00",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "p00_demag_factor",
+      "responsibility": "Provide the stable analytic P00 reference."
+    },
+    {
+      "id": "source-tiny-slepc-reference-metric",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "slepc_tiny_validation_result",
+      "responsibility": "Supply explicit positive identity metric only for two-DOF validation reference; generic production mass remains mandatory."
+    },
+    {
+      "id": "source-tiny-validation-dispatch-regression",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "main",
+      "responsibility": "Run the positive AUTO tiny CABI solve and forced-GPU/tiny conflict regression through result v20; GHA proof pending."
+    },
+    {
+      "id": "source-tiny-gpu-conflict-guard",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "solve_modal_eigen_contract",
+      "responsibility": "Reject a forced production GPU request with a tiny validation fixture before the toy solver; preserve the resolved GPU target and do not fall back."
+    },
+    {
+      "id": "source-python-relax-stage-builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "add_relax",
+      "responsibility": "Author a distinct upstream Relax stage in the public Python DSL; add_eigenmodes equilibrium_source=relax consumes its accepted workflow handoff."
+    },
+    {
+      "id": "source-petsc-gmres-candidate-admission",
+      "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp",
+      "symbol": "floquet_shifted_true_convergence_test",
+      "responsibility": "Check the live KSP reason after a successful GMRES solution build; preserve negative reasons and keep candidate probes unavailable."
+    },
+    {
+      "id": "source-relax-stage-handoff",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "accepted_relax_handoff_for_eigen_stage",
+      "responsibility": "Resolve the accepted handoff from a completed upstream Relax stage for relaxed_initial_state; direct runner calls without that handoff fail closed."
+    },
+    {
+      "id": "source-relaxed-path-handoff-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation",
+      "responsibility": "Add a source-level real-path regression with an explicit accepted-handoff fixture, nonzero first k and per-sample binding checks; this does not qualify physical equilibrium or runtime."
+    },
+    {
+      "id": "source-eps-cancellation-boundary",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "stop_native_floquet_eps",
+      "responsibility": "Preserve negative solver reasons and poll explicit cancellation on iterating and final successful EPS iterations; pending managed runtime proof."
+    },
+    {
+      "id": "source-petsc-process-runtime-owner",
+      "path": "backends/fem/core/petsc_slepc_runtime.cpp",
+      "symbol": "petsc_slepc_process_mutex",
+      "responsibility": "Define one nonrecursive operation mutex shared by CPU and GPU PETSc/SLEPc families, preserving the unsafe retained-graph latch for shutdown."
+    },
+    {
+      "id": "source-floquet-candidate-diagnostic-workspace",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "prepare_candidate_operator_diagnostic",
+      "responsibility": "Create the bounded opt-in isolated Poisson workspace without changing solver admission; current source reviewed, current hosted execution pending."
+    },
+    {
+      "id": "source-floquet-dense-raw-spectrum",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "run_floquet_dense_original_oracle",
+      "responsibility": "Record bounded raw and rotated eigenvalues and shift distances before window filtering, with explicit count and truncation; not candidate identity or physics qualification."
+    },
+    {
+      "id": "source-solver-policy-native-route",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "fem_eigen_solver_policy_has_native_path",
+      "responsibility": "Reject nonempty modal solver controls on structurally selected reference paths without changing the equation."
+    },
+    {
+      "id": "source-solver-policy-runtime-admission",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "validate_modal_solver_policy_admission",
+      "responsibility": "Reject ignored reference controls before progress, relaxation handoff and artifacts; preserve no/all-null overrides."
+    },
+    {
+      "id": "source-candidate-shifted-lu-comparison",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "capture_candidate_shifted_lu_comparison",
+      "responsibility": "Capture isolated per-policy exact shifted LU residuals using the actual callback RHS and source-derived P-to-A scaling."
+    },
+    {
+      "id": "source-candidate-lu-handler-transaction",
+      "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp",
+      "symbol": "run_floquet_candidate_diagnostic_capture_transaction",
+      "responsibility": "Propagate uncertain handler setup/restoration before production residual mutation and gate continuation."
+    },
+    {
+      "id": "source-candidate-live-pc-observation",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "capture_candidate_live_pc_observation",
+      "responsibility": "Observe live PC with private RHS and isolated Schur action, preserving candidate phi snapshots and canonical fatal error quarantine."
+    },
+    {
+      "id": "source-live-pc-owned-type-name",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "bool copy_bounded_petsc_type_name",
+      "responsibility": "Own bounded type-name snapshots without borrowed PETSc type-name pointers after teardown."
+    },
+    {
+      "id": "source-live-pc-fresh-process-fault",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics",
+      "responsibility": "Run the diagnostic apply fault assertion via a dedicated fresh-process CLI path; hosted execution pending."
+    },
+    {
+      "id": "source-native-floquet-k-classifier",
+      "path": "backends/fem/cpu/frequency_domain/floquet_k_classification.hpp",
+      "symbol": "classify_components",
+      "responsibility": "Classify selected native Floquet wavevectors componentwise with the SI Gamma admission threshold; preserve authored k and physical operator inputs."
+    },
+    {
+      "id": "source-native-modal-k-route",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "modal_request_floquet_k_classification",
+      "responsibility": "Keep invalid declarations as validation errors and route only the shared nonzero class to native nonzero-k Floquet providers."
+    },
+    {
+      "id": "source-native-floquet-admission-test",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "void floquet_admission_uses_rust_gamma_threshold",
+      "responsibility": "Regress the closed componentwise Gamma boundary, invalid inputs, and consistent dense/sparse admission."
+    },
+    {
+      "id": "source-native-floquet-cabi-route-test",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void modal_gamma_cabi_route_preserves_authored_k",
+      "responsibility": "Exercise public C ABI Gamma routing and assert the requested k remains visible in diagnostics."
+    },
+    {
+      "id": "source-rust-gamma-k-threshold",
+      "path": "crates/fullmag-runner/src/fem/eigen_constants.rs",
+      "symbol": "GAMMA_K_TOLERANCE_RAD_PER_M",
+      "responsibility": "Define the canonical SI componentwise Gamma threshold used by Rust FEM eigen reduction and policy checks."
+    },
+    {
+      "id": "source-rust-plan-gamma-k-threshold",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "FEM_EIGEN_POLICY_GAMMA_K_TOLERANCE_RAD_PER_M",
+      "responsibility": "Define the matching componentwise Gamma threshold used by the Rust FEM planner’s eigen-policy resolution."
+    },
+    {
+      "id": "source-rust-gamma-k-classifier",
+      "path": "crates/fullmag-runner/src/fem/eigen_reduction.rs",
+      "symbol": "is_gamma_k_sampling",
+      "responsibility": "Classify a single k-vector by finite componentwise magnitude and retain implicit Gamma for omitted sampling."
+    },
+    {
+      "id": "source-rust-gamma-k-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_reduction.rs",
+      "symbol": "gamma_threshold_agrees_with_single_k_policy",
+      "responsibility": "Regress Rust Gamma threshold routing against the single-k execution policy."
+    },
+    {
+      "id": "source-rust-native-gamma-k-threshold",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M",
+      "responsibility": "Define the matching componentwise Gamma threshold in the Rust native FEM planner."
+    },
+    {
+      "id": "source-rust-native-empty-k-ffi",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "solve_native_modal_eigen",
+      "responsibility": "Dispatch native FEM eigen requests to the FFI conversion that maps optional k slices to pointer/count; Some(&[]) can carry a nonnull pointer with zero count."
+    },
+    {
+      "id": "source-native-production-cpu-k-guard",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "modal_request_has_invalid_floquet_k",
+      "responsibility": "Return a validation error for malformed Floquet k before direct production CPU route classification can collapse invalid into Gamma."
+    },
+    {
+      "id": "source-native-floquet-direct-entry-test",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void production_cpu_modal_eigen_direct_entry_validates_floquet_k",
+      "responsibility": "Regress direct production invalid/nonfinite Floquet k, empty raw-slice behavior, fixed fallback, and non-Floquet legacy routing."
+    },
+    {
+      "id": "source-native-floquet-mixed-dense-contract",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "solve_modal_eigen_contract",
+      "responsibility": "Validate mixed shared-domain dense requests against the provider's full doubled real-split dimension while retaining caller K/G/M."
+    },
+    {
+      "id": "source-native-floquet-mixed-dense-test",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void modal_shared_domain_floquet_mixed_dense_real_split_contract",
+      "responsibility": "Exercise caller-owned K/G/M, provider K_demag, full descriptor residuals, dimension rejection, and K sensitivity through the C ABI."
+    },
+    {
+      "id": "source-python-eigen-policy-validation",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FemEigenSolverPolicy",
+      "responsibility": "Preserve explicit modal controls and reject values outside the native signed iteration contract."
+    },
+    {
+      "id": "source-scene-eigen-policy-validation",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document.py",
+      "symbol": "builder_overrides_from_scene_document",
+      "responsibility": "Preserve primary/legacy modal tolerance intent through strict authoring validation."
+    },
+    {
+      "id": "source-native-eigen-policy-range",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "eigen_solver_policy",
+      "responsibility": "Validate existing finite positive tolerance and signed iteration count bounds."
+    },
+    {
+      "id": "source-floquet-success-observation",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "floquet_shifted_ksp_diagnostics_json_fields",
+      "responsibility": "Export cached opted-in candidate operator observation after successful solve without modifying acceptance or failure diagnostic semantics."
+    },
+    {
+      "id": "source-poisson-iteration-policy",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "apply_poisson_airbox_iteration_policy",
+      "responsibility": "Retain omitted GPU defaults and CPU PETSc sentinels; reject signed negative iteration budgets before conversion."
+    },
+    {
+      "id": "source-floquet-factor-phase-log",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "emit_floquet_factor_phase_marker",
+      "responsibility": "Opt-in text phase boundaries around existing live/fresh setup calls; no PETSc queries or acceptance changes."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.stages.add_eigenmodes.count",
+        "type": "int",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "positive integer",
+        "meaning": "maximum accepted modal count",
+        "backend_support": "FEM CPU/GPU authoring; runtime-qualified per lane",
+        "problem_ir": "studies[].eigenmodes.count"
+      },
+      {
+        "python": "FemEigenSolverPolicy.residual_tolerance",
+        "type": "Optional[float]",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Skończona liczba dodatnia; bool i niepoprawny tekst są błędem",
+        "meaning": "Żądana względna tolerancja residualu",
+        "backend_support": "FEM CPU/GPU w istniejących natywnych capability; FDM i trasy referencyjne: unsupported; runtime osobno",
+        "problem_ir": "problem_meta.runtime_metadata.modal_solver_policy.residual_tolerance"
+      },
+      {
+        "python": "FemEigenSolverPolicy.max_outer_iterations",
+        "type": "Optional[int]",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Całkowity licznik od 1 do $2^{31}-1$; bool, float i overflow są błędem; bez clamp",
+        "meaning": "Żądany limit iteracji EPS",
+        "backend_support": "FEM CPU/GPU w istniejących natywnych capability; FDM i trasy referencyjne: unsupported; runtime osobno",
+        "problem_ir": "problem_meta.runtime_metadata.modal_solver_policy.max_outer_iterations"
+      },
+      {
+        "python": "FemEigenSolverPolicy.max_linear_iterations",
+        "type": "Optional[int]",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Całkowity licznik od 1 do $2^{31}-1$; bool, float i overflow są błędem; bez clamp",
+        "meaning": "Żądany limit iteracji KSP",
+        "backend_support": "FEM CPU/GPU w istniejących natywnych capability; FDM i trasy referencyjne: unsupported; runtime osobno",
+        "problem_ir": "problem_meta.runtime_metadata.modal_solver_policy.max_linear_iterations"
+      }
+    ]
+  }
+}

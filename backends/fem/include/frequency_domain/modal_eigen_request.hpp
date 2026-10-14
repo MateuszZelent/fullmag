@@ -8,6 +8,8 @@
 
 namespace fullmag::fem::frequency_domain {
 
+struct FloquetSharedDomainSparseModalOperator;
+
 constexpr std::uint32_t kFrequencyDomainLegacyAbiVersion = 12;
 constexpr std::uint32_t kFrequencyDomainPriorAbiVersion = 13;
 constexpr std::uint32_t kFrequencyDomainPreviousAbiVersion = 14;
@@ -125,6 +127,10 @@ struct ModalEigenRequest {
     CsrMatrixView mfem_sparse_stiffness_csr{};
     CsrMatrixView mfem_sparse_gyrotropic_csr{};
     CsrMatrixView mfem_sparse_mass_csr{};
+    /* Internal native owner for nonzero-k shared-domain Floquet solves.  It
+       is deliberately outside the public ABI prefix and is populated only
+       after the payload importer has assembled all phase-reduced blocks. */
+    const FloquetSharedDomainSparseModalOperator *floquet_shared_domain_operator = nullptr;
     bool has_floquet_k_vector = false;
     double floquet_k_vector_rad_per_m[3] = {0.0, 0.0, 0.0};
     FrequencyDomainPhaseConvention phase_convention =
@@ -158,6 +164,12 @@ struct ModalEigenRequest {
     const char *poisson_airbox_gauge_policy = nullptr;
     const char *poisson_airbox_gauge_reason = nullptr;
     const char *poisson_airbox_assembly_kind = nullptr;
+    // Optional native airbox contribution for a nonzero-k Floquet modal
+    // request.  Values are a dense real-split tangent matrix in exactly the
+    // same reduced coordinates and units as mfem_stiffness_matrix_row_major;
+    // the provider must include the complex Bloch phase and scalar-potential
+    // elimination before handing it across this ABI.  A null pointer and zero
+    // count mean that dynamic demagnetization is unavailable, never k=0.
     const double *dynamic_demag_k_tangent_matrix_row_major = nullptr;
     std::uint64_t dynamic_demag_k_tangent_matrix_value_count = 0;
     ModalExecutionTarget execution_target = ModalExecutionTarget::auto_select;

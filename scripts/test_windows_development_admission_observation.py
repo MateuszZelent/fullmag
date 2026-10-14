@@ -18,8 +18,11 @@ class AdmissionObservationChecks(unittest.TestCase):
                               "request_scope_epoch": "pin:1"},
                   "lifecycle": {"connectivity": "disconnected"}}
         identity = {"api_instance_id": "pin", "session_id": "s", "session_epoch": 1}
+        document = {"dirty": True, "scene_resource_sha256": "a" * 64,
+                    "scene_document_sha256": "b" * 64}
         body = {"schema": "fullmag.development-browser-before.v1", "nonce": "nonce",
-                "api_instance_id": "pin", "project_document_before": {"dirty": True}}
+                "api_instance_id": "pin", "project_document_before": document,
+                "project_document_after_grid": dict(document)}
         for drift in (False, True):
             with self.subTest(drift=drift), tempfile.TemporaryDirectory() as directory:
                 receipt_path = Path(directory) / "receipt.json"
@@ -37,6 +40,10 @@ class AdmissionObservationChecks(unittest.TestCase):
                         return {"workspace_identity": identity}
                     if path.endswith("/status"):
                         return status
+                    if path.endswith("/visualization/state"):
+                        return {"camera": {"projection": "orthographic", "position": [2, 1, 2],
+                            "target": [0, 0, 0], "up": [0, 0, 1], "fov_degrees": 45,
+                            "orthographic_scale": None}}
                     if path.endswith("/meshing/semantics"):
                         return {"mesh_build_diagnostics": {"last_build_error": None}}
                     self.fail("Unexpected API read: " + path)

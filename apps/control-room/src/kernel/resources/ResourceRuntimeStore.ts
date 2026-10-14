@@ -335,6 +335,15 @@ export class ResourceRuntimeStore<TData = unknown> {
     return entry?.snapshot ?? createInitialSnapshot<TSnapshotData>();
   }
 
+  hasPendingLoad(resourceKey: ResourceKey): boolean {
+    const entry = this.entries.get(resourceKey);
+    return Boolean(entry && (
+      entry.controller || entry.inflight || entry.pendingRequest ||
+      entry.pendingTimer || entry.retryRequest || entry.retryTimer ||
+      entry.deadlineTimer
+    ));
+  }
+
   updateObservedData<TUpdateData = TData>(
     resourceKey: ResourceKey,
     data: TUpdateData,

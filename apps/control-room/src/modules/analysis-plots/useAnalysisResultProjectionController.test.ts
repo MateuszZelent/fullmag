@@ -19,14 +19,19 @@ import {
   type AnalysisResultDatasetManifestResource,
   type AnalysisResultProjectionResource,
 } from "@/shared/domain/analysis/results";
-import type { AnalysisResultProjectionSelection } from "./components/AnalysisResultProjectionSurface";
+import type {
+  AnalysisResultProjectionSelection,
+  AnalysisResultProjectionSurfaceProps,
+} from "./components/AnalysisResultProjectionSurface";
 
 let mockSelectedResultSelection: ReturnType<typeof resultSelection> | null = null;
+let mockResultManifest: AnalysisResultDatasetManifestResource | null = null;
+let mockResultProjection: AnalysisResultProjectionResource | null = null;
 const mockSelectionListeners = new Set<() => void>();
 
 vi.mock("@/kernel/resources/analysisResultResources", () => ({
-  useAnalysisResultDatasetManifestResource: () => ({ data: null }),
-  useAnalysisResultProjectionResource: () => ({ data: null, status: "idle" }),
+  useAnalysisResultDatasetManifestResource: () => ({ data: mockResultManifest }),
+  useAnalysisResultProjectionResource: () => ({ data: mockResultProjection, status: "ready" }),
 }));
 
 vi.mock("@/kernel/selection/useSelection", () => ({
@@ -122,6 +127,20 @@ function ProjectionOverlayBridge({
   useLayoutEffect(() => {
     onLayoutOverlay(kernel.analysisFieldOverlay.getRenderableSnapshot()?.fieldId ?? "none");
   }, [kernel.analysisFieldOverlay, observedSelection, onLayoutOverlay]);
+  return null;
+}
+
+function ProjectionModelBridge({
+  kernel,
+  onSurface,
+}: {
+  kernel: KernelApi;
+  onSurface: (surface: AnalysisResultProjectionSurfaceProps) => void;
+}) {
+  const surface = useAnalysisResultProjectionController(kernel);
+  useLayoutEffect(() => {
+    if (surface) onSurface(surface);
+  }, [onSurface, surface]);
   return null;
 }
 
@@ -287,5 +306,106 @@ describe("analysis result projection point selection", () => {
         },
       ).coordinates,
     ).toEqual(coordinates);
+  });
+});
+
+describe("analysis result projection scope binding", () => {
+  it("uses the selected sample by default and can select the global collection", async () => {
+    const resource = {
+      axis_labels: { x: "Wavevector", y: "Frequency" },
+      axis_mapping: { x: "k_rad_per_m", y: "frequency_hz" },
+      axis_units: { x: "rad/m", y: "Hz" },
+      dataset_id: "result:dataset-1",
+      dataset_revision: "dataset-revision-1",
+      fixed_coordinates: [],
+      projection_id: "field-frequency-map",
+      projection_revision: "projection-revision-1",
+      run_id: "run-1",
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      selection_index: [
+        { branch_id: "branch:0", item_id: "mode:k-negative:0", item_kind: "eigen_mode", ordinal: 0, sample_id: "sample:k-negative" },
+        { branch_id: "branch:0", item_id: "mode:k-zero:0", item_kind: "eigen_mode", ordinal: 1, sample_id: "sample:k-zero" },
+        { branch_id: "branch:0", item_id: "mode:k-positive:0", item_kind: "eigen_mode", ordinal: 2, sample_id: "sample:k-positive" },
+        { branch_id: "branch:1", item_id: "mode:k-negative:1", item_kind: "eigen_mode", ordinal: 3, sample_id: "sample:k-negative" },
+        { branch_id: "branch:1", item_id: "mode:k-zero:1", item_kind: "eigen_mode", ordinal: 4, sample_id: "sample:k-zero" },
+        { branch_id: "branch:1", item_id: "mode:k-positive:1", item_kind: "eigen_mode", ordinal: 5, sample_id: "sample:k-positive" },
+      ],
+      series: [
+        {
+          label: "mode 0",
+          points: [
+            { branch_id: "branch:0", item_id: "mode:k-negative:0", ordinal: 0, sample_id: "sample:k-negative", status: "ready", value: 1e9, x: -1, y: 1e9 },
+            { branch_id: "branch:0", item_id: "mode:k-zero:0", ordinal: 1, sample_id: "sample:k-zero", status: "ready", value: 2e9, x: 0, y: 2e9 },
+            { branch_id: "branch:0", item_id: "mode:k-positive:0", ordinal: 2, sample_id: "sample:k-positive", status: "ready", value: 3e9, x: 1, y: 3e9 },
+          ],
+          series_id: "branch:0",
+        },
+        {
+          label: "mode 1",
+          points: [
+            { branch_id: "branch:1", item_id: "mode:k-negative:1", ordinal: 3, sample_id: "sample:k-negative", status: "ready", value: 1.5e9, x: -1, y: 1.5e9 },
+            { branch_id: "branch:1", item_id: "mode:k-zero:1", ordinal: 4, sample_id: "sample:k-zero", status: "ready", value: 2e9, x: 0, y: 2e9 },
+            { branch_id: "branch:1", item_id: "mode:k-positive:1", ordinal: 5, sample_id: "sample:k-positive", status: "ready", value: 3.5e9, x: 1, y: 3.5e9 },
+          ],
+          series_id: "branch:1",
+        },
+      ],
+      status: {
+        completeness: "ready",
+        detail: null,
+        execution: "published",
+        qualification: "unvalidated",
+        reason_code: null,
+        resource: "ready",
+      },
+      unsupported_reason: null,
+    } as unknown as AnalysisResultProjectionResource;
+    mockResultManifest = {
+      ...manifestIdentity,
+      item_count: 2,
+      product_kind: "modal_eigen",
+      projections: [{ kind: "line", projection_id: "field-frequency-map", selectable: true, title: "Mode frequencies" }],
+      spectrum_output_scopes: ["per_sample", "global"],
+    } as unknown as AnalysisResultDatasetManifestResource;
+    mockResultProjection = resource;
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const observedSurfaces: AnalysisResultProjectionSurfaceProps[] = [];
+    const controller = new AnalysisFieldOverlayController();
+    const kernel = {
+      analysisFieldOverlay: controller,
+      selection: { set: vi.fn() },
+    } as unknown as KernelApi;
+    const onSurface = (surface: AnalysisResultProjectionSurfaceProps) => observedSurfaces.push(surface);
+
+    try {
+      setMockSelectedResultSelection({ ...resultSelection(), sampleId: "sample:k-zero" });
+      await act(async () => {
+        root.render(createElement(ProjectionModelBridge, { kernel, onSurface }));
+      });
+
+      expect(observedSurfaces.at(-1)?.model.scopeView?.kind).toBe("per_sample");
+      expect(observedSurfaces.at(-1)?.model.exportSeries?.flatMap((series) => series.points)).toEqual([
+        expect.objectContaining({ itemId: "mode:k-zero:0", sampleId: "sample:k-zero" }),
+        expect.objectContaining({ itemId: "mode:k-zero:1", sampleId: "sample:k-zero" }),
+      ]);
+
+      await act(async () => {
+        observedSurfaces.at(-1)?.onSpectrumOutputScopeSelect?.("global");
+      });
+      expect(observedSurfaces.at(-1)?.model.scopeView?.kind).toBe("global");
+      expect(
+        observedSurfaces.at(-1)?.model.exportSeries?.reduce(
+          (count, series) => count + series.points.length,
+          0,
+        ),
+      ).toBe(6);
+    } finally {
+      setMockSelectedResultSelection(null);
+      mockResultManifest = null;
+      mockResultProjection = null;
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 });

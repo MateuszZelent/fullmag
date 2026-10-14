@@ -372,8 +372,8 @@
     {
       "id": "ir-structured-current-closure",
       "path": "crates/fullmag-ir/src/spin_transport.rs",
-      "symbol": "validation_errors",
-      "responsibility": "Own typed closed_geometry validation, unique source/circuit/drive identities, finite cut planes and nonzero impressed-potential jumps in ProblemIR."
+      "symbol": "StructuredCurrentClosureIR",
+      "responsibility": "Own the typed closed_geometry contract; its validation_errors method checks unique source/circuit/drive identities, finite cut planes and nonzero impressed-potential jumps in ProblemIR. The owner distinguishes this method from ConservativeCurrentSourceIR::validation_errors."
     },
     {
       "id": "planner-structured-current-closure",
@@ -752,6 +752,42 @@
       "path": "crates/fullmag-plan/src/spin_transport.rs",
       "symbol": "fem_ohmic_oersted_binds_the_solved_charge_field",
       "responsibility": "Verify source binding and the FEM descriptor provenance bit."
+    },
+    {
+      "id": "fem-charge-only-resolved-contract",
+      "path": "crates/fullmag-ir/src/spin_transport.rs",
+      "symbol": "ResolvedChargeTransportPlanIR",
+      "responsibility": "Represent a standalone one-way charge solve independently of spin transport, including its resolved FEM CPU/double descriptor and optional conservative-current view."
+    },
+    {
+      "id": "fem-charge-only-planner",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "resolve_fem_charge_only_transport",
+      "responsibility": "Materialize a complete static charge-only FEM plan, bind Oersted only through a complete conservative-current view, and reject dynamic or reciprocal sources without manufacturing a spin module."
+    },
+    {
+      "id": "fem-charge-only-native-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_charge_transport_v1",
+      "responsibility": "Append-only CPU/double H1/P1 charge ABI publishing electric potential and nodal current without evaluating a spin equation or silently falling back to GPU."
+    },
+    {
+      "id": "fem-charge-only-native-owner",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
+      "symbol": "solve_charge",
+      "responsibility": "Reuse the existing conforming charge operator for the standalone one-way solve and publish finite convergence, balance and current diagnostics."
+    },
+    {
+      "id": "fem-charge-only-runner",
+      "path": "crates/fullmag-runner/src/native_fem/charge_transport.rs",
+      "symbol": "execute_native_fem_charge_transport_plans",
+      "responsibility": "Execute resolved charge-only plans before LLG, publish V_electric and J_charge, delegate conservative RT0/Oersted to the existing owner, and preserve explicit no-spin provenance."
+    },
+    {
+      "id": "fem-charge-only-managed-contract",
+      "path": "backends/fem/tests/charge_transport_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed affine-bar proof for potential/current sign, linearity, global balance, ABI layout and fail-closed invalid/GPU requests."
     },
     {
       "id": "runtime-regression",

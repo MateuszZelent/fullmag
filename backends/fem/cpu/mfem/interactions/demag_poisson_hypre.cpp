@@ -26,6 +26,23 @@
 
 namespace fullmag::fem {
 
+namespace {
+
+// Hypre reports a stopping norm that can differ from the independently
+// recomputed unpreconditioned residual used by the demag contract. Solve to a
+// stricter internal target and retain the requested tolerance as the explicit
+// certification threshold.
+constexpr double kCertificationSolverToleranceFactor = 0.1;
+
+double certification_solver_tolerance(double requested) noexcept
+{
+    return requested > 0.0
+        ? requested * kCertificationSolverToleranceFactor
+        : requested;
+}
+
+} // namespace
+
 #if FULLMAG_HAS_MFEM_STACK
 #ifdef MFEM_USE_MPI
 struct PoissonHypreWorkspace {
@@ -294,7 +311,8 @@ bool solve_demag_poisson_hypre(
                 auto *pcg = new mfem::HyprePCG(fullmag_serial_comm());
                 staged_solver = pcg;
                 pcg->iterative_mode = true;
-                pcg->SetTol(ctx.demag.solver.relative_tolerance);
+                pcg->SetTol(certification_solver_tolerance(
+                    ctx.demag.solver.relative_tolerance));
                 if (ctx.demag.solver.has_absolute_tolerance &&
                     ctx.demag.solver.absolute_tolerance > 0.0) {
                     pcg->SetAbsTol(ctx.demag.solver.absolute_tolerance);
@@ -309,7 +327,8 @@ bool solve_demag_poisson_hypre(
                 auto *gmres = new mfem::HypreGMRES(fullmag_serial_comm());
                 staged_solver = gmres;
                 gmres->iterative_mode = true;
-                gmres->SetTol(ctx.demag.solver.relative_tolerance);
+                gmres->SetTol(certification_solver_tolerance(
+                    ctx.demag.solver.relative_tolerance));
                 if (ctx.demag.solver.has_absolute_tolerance &&
                     ctx.demag.solver.absolute_tolerance > 0.0) {
                     gmres->SetAbsTol(ctx.demag.solver.absolute_tolerance);
@@ -460,38 +479,36 @@ bool solve_demag_poisson_hypre(
     const double rhs_norm = b_par.Norml2();
     bool residual_independently_certified = false;
     double absolute_residual = 0.0;
-    if (!solver_reported_converged) {
-        auto *active_operator = static_cast<mfem::HypreParMatrix *>(
-            ctx.poisson_demag.cached_hypre_par);
-        if (active_operator == nullptr) {
-            error = "independent CPU Poisson residual certification requires the cached Hypre operator";
-            if (!rollback_rejected_candidate()) {
-                error += "; accepted solution rollback failed";
-            }
-            return false;
+    auto *active_operator = static_cast<mfem::HypreParMatrix *>(
+        ctx.poisson_demag.cached_hypre_par);
+    if (active_operator == nullptr) {
+        error = "independent CPU Poisson residual certification requires the cached Hypre operator";
+        if (!rollback_rejected_candidate()) {
+            error += "; accepted solution rollback failed";
         }
-        try {
-            active_operator->Mult(x_par, poisson_hypre_workspace->residual);
-            poisson_hypre_workspace->residual.Add(-1.0, b_par);
-            absolute_residual = poisson_hypre_workspace->residual.Norml2();
-        } catch (const std::exception &ex) {
-            error = std::string("Hypre Poisson residual certification failed: ") + ex.what();
-            if (!rollback_rejected_candidate()) {
-                error += "; accepted solution rollback failed";
-            }
-            return false;
-        } catch (...) {
-            error = "Hypre Poisson residual certification failed with an unknown error";
-            if (!rollback_rejected_candidate()) {
-                error += "; accepted solution rollback failed";
-            }
-            return false;
-        }
-        final_residual = rhs_norm > 0.0
-            ? static_cast<mfem::real_t>(absolute_residual / rhs_norm)
-            : static_cast<mfem::real_t>(absolute_residual);
-        residual_independently_certified = std::isfinite(absolute_residual);
+        return false;
     }
+    try {
+        active_operator->Mult(x_par, poisson_hypre_workspace->residual);
+        poisson_hypre_workspace->residual.Add(-1.0, b_par);
+        absolute_residual = poisson_hypre_workspace->residual.Norml2();
+    } catch (const std::exception &ex) {
+        error = std::string("Hypre Poisson residual certification failed: ") + ex.what();
+        if (!rollback_rejected_candidate()) {
+            error += "; accepted solution rollback failed";
+        }
+        return false;
+    } catch (...) {
+        error = "Hypre Poisson residual certification failed with an unknown error";
+        if (!rollback_rejected_candidate()) {
+            error += "; accepted solution rollback failed";
+        }
+        return false;
+    }
+    final_residual = rhs_norm > 0.0
+        ? static_cast<mfem::real_t>(absolute_residual / rhs_norm)
+        : static_cast<mfem::real_t>(absolute_residual);
+    residual_independently_certified = std::isfinite(absolute_residual);
     ctx.poisson_demag.last_residual = static_cast<double>(final_residual);
 
     DemagLinearSolveResult result;

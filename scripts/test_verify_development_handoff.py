@@ -3,6 +3,7 @@
 from contextlib import nullcontext, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,7 +15,20 @@ import verify_development_handoff as checks
 
 
 class ManagedHandoffCheckReceiptTests(unittest.TestCase):
-    def exercise(self, output, identities=("a", "a"), child_code=0):
+    def test_restart_pump_change_invalidates_source_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            for relative in checks.SOURCE_PATHS:
+                path = repo / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("baseline\n", encoding="utf-8")
+            before = checks.source_identity(repo)
+            pump = repo / "crates/fullmag-cli/src/development_restart.rs"
+            self.assertTrue(pump.is_file())
+            pump.write_text("changed pump\n", encoding="utf-8")
+            self.assertNotEqual(checks.source_identity(repo), before)
+
+    def exercise(self, output, identities=("a", "a"), child_code=0, suite="handoff"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             repo = root / "repo"
@@ -32,7 +46,9 @@ class ManagedHandoffCheckReceiptTests(unittest.TestCase):
                       "env": {}}
 
             def child(command, **kwargs):
-                self.assertEqual(command[-2:], ["test_*development_*.py", "-v"])
+                pattern = "test_fullmag_storage.py" if suite == "storage" else "test_*development_*.py"
+                self.assertEqual(command[-2:], [pattern, "-v"])
+                self.assertEqual(kwargs["env"]["FULLMAG_TEST_TEMP_ROOT"], kwargs["env"]["TEMP"])
                 kwargs["stdout"].write(output)
                 return type("Result", (), {"returncode": child_code})()
 
@@ -45,7 +61,7 @@ class ManagedHandoffCheckReceiptTests(unittest.TestCase):
                     patch.object(checks.subprocess, "run", side_effect=child), \
                     redirect_stdout(io.StringIO()):
                 try:
-                    result = checks.run(str(repo))
+                    result = checks.run(str(repo), suite)
                 except Exception as error:
                     result, failure = None, error
             receipts = list(Path(layout["build_root"]).glob("checks/*/receipt.json"))
@@ -59,6 +75,18 @@ class ManagedHandoffCheckReceiptTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(receipt["state"], "completed")
         self.assertEqual(receipt["tests_run"], 4)
+
+    def test_storage_suite_records_its_fixed_scope(self):
+        result, error, receipt = self.exercise("Ran 4 tests in 0.01s\n\nOK\n", suite="storage")
+        self.assertEqual(result, 0)
+        self.assertIsNone(error)
+        self.assertEqual(receipt["suite"], "storage")
+
+    def test_unknown_suite_is_rejected_before_storage_resolution(self):
+        with patch.object(checks.storage, "resolve_layout") as resolve:
+            with self.assertRaises(checks.storage.StorageError):
+                checks.run("unused", "arbitrary")
+            resolve.assert_not_called()
 
     def test_zero_checks_or_all_skipped_is_not_success(self):
         for output in ("Ran 0 tests in 0.01s\n\nOK\n",
@@ -87,8 +115,17 @@ class ManagedHandoffCheckReceiptTests(unittest.TestCase):
 
     def test_shell_rejects_composite_or_extra_arguments_before_preflight(self):
         bash = shutil.which("bash")
+        if os.name == "nt":
+            # System32 bash is a WSL launcher and cannot consume native paths.
+            # Exercise the same Windows Git shell used for repository scripts.
+            git = shutil.which("git")
+            candidates = [] if git is None else [
+                Path(git).resolve().parent.parent / "bin" / "bash.exe",
+                Path(git).resolve().parent.parent / "usr" / "bin" / "bash.exe",
+            ]
+            bash = next((str(candidate) for candidate in candidates if candidate.is_file()), None)
         if bash is None:
-            self.skipTest("Bash is unavailable")
+            self.skipTest("Native repository Bash is unavailable")
         repo = Path(__file__).resolve().parent.parent
         helper = (repo / "scripts/verify_development_handoff.py").as_posix()
         valid = f'python "{helper}" --repo-root "{repo.as_posix()}"'

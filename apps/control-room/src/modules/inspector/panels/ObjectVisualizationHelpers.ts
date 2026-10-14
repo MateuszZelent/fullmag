@@ -1,5 +1,9 @@
 import { type LiveStatusResource, type FieldCatalogResource } from "@/kernel/api/apiTypes";
 import {
+  projectFlatActiveLaneDiscretization,
+  type SessionDiscretizationCapabilitiesProjection,
+} from "@/kernel/resources/sessionDiscretization";
+import {
   type VisualizationTargetKind,
   type VisualizationTargetRef,
   type ObjectVisualizationSnapshot,
@@ -10,7 +14,8 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 export type ObjectVisualizationManifestStatus = {
-  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology"> &
+    SessionDiscretizationCapabilitiesProjection;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<LiveStatusResource["resources"], "mesh_revision">;
   session: Pick<LiveStatusResource["session"], "session_epoch" | "session_id">;
@@ -20,6 +25,12 @@ export function selectObjectVisualizationManifestStatus(status: {
   data: LiveStatusResource | null;
 }): ObjectVisualizationManifestStatus | null {
   if (!status.data) return null;
+  const sourceCapabilities = status.data.capabilities;
+  const flatLane = projectFlatActiveLaneDiscretization(sourceCapabilities);
+  const hasActiveLane = Object.prototype.hasOwnProperty.call(
+    sourceCapabilities ?? {},
+    "active_lane",
+  );
   return {
     capabilities: {
       // A malformed/stale status response must not crash the inspector. The
@@ -27,6 +38,10 @@ export function selectObjectVisualizationManifestStatus(status: {
       // session on its structured-grid path; missing capability data disables
       // FEM manifest loading through the existing fail-closed gate.
       explicit_topology: status.data.capabilities?.explicit_topology ?? false,
+      ...(hasActiveLane
+        ? { active_lane: status.data.capabilities?.active_lane ?? null }
+        : {}),
+      ...(flatLane ? { active_lane_discretization: flatLane.value } : {}),
     },
     domain: {
       discretization: status.data.domain?.discretization ?? "",
@@ -50,6 +65,22 @@ export function objectVisualizationManifestStatusEquals(
   return (
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
+    Object.prototype.hasOwnProperty.call(
+      previous.capabilities,
+      "active_lane",
+    ) === Object.prototype.hasOwnProperty.call(next.capabilities, "active_lane") &&
+    previous.capabilities.active_lane?.resolved?.discretization ===
+      next.capabilities.active_lane?.resolved?.discretization &&
+    Object.prototype.hasOwnProperty.call(
+      previous.capabilities,
+      "active_lane_discretization",
+    ) ===
+      Object.prototype.hasOwnProperty.call(
+        next.capabilities,
+        "active_lane_discretization",
+      ) &&
+    previous.capabilities.active_lane_discretization ===
+      next.capabilities.active_lane_discretization &&
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_revision === next.resources.mesh_revision
     && previous.session.session_id === next.session.session_id

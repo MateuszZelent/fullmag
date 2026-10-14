@@ -31,6 +31,7 @@ import type {
   AuthoringTransactionRequest,
   JsonObject,
   JsonValue,
+  LiveStatusResource,
   MeshCapabilitiesResource,
   RequestOptions,
 } from "../api/apiTypes";
@@ -60,6 +61,10 @@ import {
 } from "./authoringHistoryMutation";
 import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import {
+  resolveActiveLaneOperation,
+} from "../resources/useActiveLaneCapabilities";
+import { resolveSessionAuthoringDiscretization } from "../resources/sessionDiscretization";
 
 function deleteObjectBlockedReason(context: CommandContext, ignoreReservation = false): string | null {
   const controller = context.objectEditSession;
@@ -107,8 +112,16 @@ function sessionRequestOptions(
 }
 
 function sceneBaseRevision(context: CommandContext): number | null {
-  const revision = asRecord(resourceData(context, MODEL_SCENE_PATH))?.revision;
-  return typeof revision === "number" && Number.isFinite(revision)
+  const scene = asRecord(resourceData(context, MODEL_SCENE_PATH));
+  const revision = scene?.revision ?? scene?.scene_revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+    ? revision
+    : null;
+}
+
+function sceneDocumentRevision(scene: unknown): number | null {
+  const revision = asRecord(scene)?.revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
     ? revision
     : null;
 }
@@ -240,7 +253,7 @@ export const FDM_MESH_COMMAND_NOT_APPLICABLE_REASON =
   "FEM mesh commands are not applicable to an FDM structured-grid session.";
 
 export const UNKNOWN_MESH_COMMAND_LANE_REASON =
-  "Session discretization is unresolved; FEM mesh commands remain unavailable until an explicit FEM lane is published.";
+  "Choose FEM or FDM in Study settings. If a method is already selected, review session diagnostics before building a mesh.";
 
 /**
  * Resolve the current command lane from the session-status resource only.
@@ -258,27 +271,33 @@ export function resolveMeshCommandLane(
 
 function meshCommandLane(context: CommandContext): MeshCommandLane {
   const status = asRecord(resourceData(context, SESSION_STATUS_RESOURCE_KEY));
-  return resolveMeshCommandLane(asRecord(status?.domain)?.discretization);
+  const payload = asRecord(status?.data ?? status);
+  return resolveMeshCommandLane(resolveSessionAuthoringDiscretization(payload));
 }
 
 function femMeshCommandDisabledReason(context: CommandContext): string | null {
   const lane = meshCommandLane(context);
   if (lane === "fdm") return FDM_MESH_COMMAND_NOT_APPLICABLE_REASON;
   if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
-  return null;
+  const status = resourceData(context, SESSION_STATUS_RESOURCE_KEY) as LiveStatusResource | null;
+  const operation = resolveActiveLaneOperation(status?.capabilities?.active_lane ?? null, "shared_mesh_build");
+  return operation.enabled ? null : operation.reason;
 }
 
 export const FEM_GRID_COMMAND_NOT_APPLICABLE_REASON =
   "Build Grid is only applicable to an FDM structured-grid session.";
 
 export const UNKNOWN_GRID_COMMAND_LANE_REASON =
-  "Session discretization is unresolved; Build Grid remains unavailable until an explicit FDM lane is published.";
+  "Choose FDM in Study settings to build a structured grid. If FDM is already selected, review session diagnostics.";
 
 function fdmGridBuildDisabledReason(context: CommandContext): string | null {
   if (!context.api) return "Control-room API is unavailable.";
   const lane = meshCommandLane(context);
   if (lane === "fem") return FEM_GRID_COMMAND_NOT_APPLICABLE_REASON;
   if (lane === "unknown") return UNKNOWN_GRID_COMMAND_LANE_REASON;
+  const status = resourceData(context, SESSION_STATUS_RESOURCE_KEY) as LiveStatusResource | null;
+  const operation = resolveActiveLaneOperation(status?.capabilities?.active_lane ?? null, "grid_build");
+  if (!operation.enabled) return operation.reason;
   return sceneBaseRevision(context) === null
     ? "The canonical scene revision is unavailable. Refetch the scene before building the grid."
     : null;
@@ -962,6 +981,7 @@ let fdmGridRefreshSequence = 0;
 export function runFdmGridRefreshOperation(
   context: CommandContext,
   request: FdmGridRefreshRequest,
+  confirmationRequestId?: string,
 ): Promise<CommandResult> {
   const api = context.api?.commands;
   if (!api) {
@@ -988,7 +1008,8 @@ export function runFdmGridRefreshOperation(
     });
   }
 
-  const requestId = `fdm-grid-refresh-${Date.now()}-${++fdmGridRefreshSequence}`;
+  const requestId = confirmationRequestId ??
+    `fdm-grid-refresh-${Date.now()}-${++fdmGridRefreshSequence}`;
   const operation: MeshBuildOperation = {
     announced: false,
     baseMeshRevision: currentMeshRevision(context),
@@ -1115,13 +1136,6 @@ function sceneObjects(scene: unknown): JsonObject[] {
     : [];
 }
 
-function sceneFieldDrives(scene: unknown): JsonObject[] {
-  const drives = asRecord(asRecord(scene)?.field_drives)?.drives;
-  return Array.isArray(drives)
-    ? drives.filter((drive): drive is JsonObject => Boolean(drive && typeof drive === "object" && !Array.isArray(drive)))
-    : [];
-}
-
 function defaultPrimitiveGeometry(
   primitiveKind: "box" | "cylinder" | "sphere",
 ): JsonObject {
@@ -1153,8 +1167,32 @@ function draftObjectId(primitiveKind: string): string {
 function defaultMicrostripAntennaObject(objectId: string): JsonObject {
   return {
     geometry: {
-      geometry_kind: "Box",
-      geometry_params: { size: [50e-9, 1e-6, 10e-9] },
+      geometry_kind: "MicrostripAntennaLayout",
+      geometry_params: {
+        length_m: 1e-6,
+        thickness_m: 10e-9,
+        conductivity_s_per_m: 5.8e7,
+        stations: [
+          { s: 0, signal_width_m: 50e-9 },
+          { s: 1, signal_width_m: 50e-9 },
+        ],
+        transform: {
+          rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+          translation_m: [0, -0.5e-6, 0],
+        },
+        return_width_m: 500e-9,
+        return_offset_m: 30e-9,
+        conductors: [
+          { id: "signal", kind: "signal" },
+          { id: "return", kind: "return" },
+        ],
+        terminal_faces: {
+          signal: { inlet: "local_u_min", outlet: "local_u_max" },
+          return: { inlet: "local_u_min", outlet: "local_u_max" },
+        },
+      },
+      bounds_min: [-250e-9, -0.5e-6, -45e-9],
+      bounds_max: [250e-9, 0.5e-6, 5e-9],
     },
     id: objectId,
     locked: false,
@@ -1173,19 +1211,125 @@ function defaultMicrostripAntennaObject(objectId: string): JsonObject {
   };
 }
 
-function defaultMicrostripFieldDrive(objectId: string): JsonObject {
+function sceneArray(scene: unknown, key: string): JsonValue[] {
+  const record = asRecord(scene);
+  if (!Array.isArray(record?.[key])) return [];
+  return record[key].flatMap((item) => {
+    const converted = jsonValue(item);
+    return converted === undefined ? [] : [converted];
+  });
+}
+
+function defaultCpwAntennaObject(objectId: string): JsonObject {
   return {
-    activation: { kind: "all_time_evolution" },
-    amplitude_B_T: 0.001,
-    direction: [0, 1, 0],
-    enabled: true,
-    id: `${objectId}:H_ant`,
-    kind: "regional",
-    name: "Microstrip antenna field",
-    spatial_profile: { kind: "geometry_mask", object_id: objectId, envelope: { kind: "uniform" } },
-    target: { kind: "global" },
-    time_origin: "stage_local",
-    waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+    ...defaultMicrostripAntennaObject(objectId),
+    name: "CPW antenna",
+    geometry: {
+      geometry_kind: "CPWAntennaLayout",
+      geometry_params: {
+        length_m: 1e-6,
+        thickness_m: 10e-9,
+        conductivity_s_per_m: 5.8e7,
+        stations: [0, 1].map((s) => ({
+          s, signal_width_m: 50e-9,
+          left_gap_m: 50e-9, right_gap_m: 50e-9,
+          left_ground_width_m: 200e-9, right_ground_width_m: 200e-9,
+        })),
+        transform: {
+          rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+          translation_m: [0, -0.5e-6, 0],
+        },
+        conductors: [
+          { id: "signal", kind: "signal" },
+          { id: "ground_left", kind: "ground_left" },
+          { id: "ground_right", kind: "ground_right" },
+        ],
+        terminal_faces: {
+          signal: { inlet: "local_u_min", outlet: "local_u_max" },
+          ground_left: { inlet: "local_u_min", outlet: "local_u_max" },
+          ground_right: { inlet: "local_u_min", outlet: "local_u_max" },
+        },
+      },
+      bounds_min: [-275e-9, -0.5e-6, -5e-9],
+      bounds_max: [275e-9, 0.5e-6, 5e-9],
+    },
+  };
+}
+
+function defaultMicrostripCurrentTransport(
+  objectId: string,
+  conductorIds = ["signal", "return"],
+): JsonObject {
+  const currentId = `${objectId}:current`;
+  return {
+    boundaries: [
+      ...conductorIds.flatMap((id) => [
+        {
+          id: `${id}_in`,
+          kind: "equipotential_current_terminal",
+          surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: `antenna_terminal:${id}:local_u_min` }],
+        },
+        {
+          id: `${id}_out`,
+          kind: "equipotential_current_terminal",
+          surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: `antenna_terminal:${id}:local_u_max` }],
+        },
+      ]),
+      {
+        id: "insulating_outer",
+        kind: "insulating",
+        surfaces: [{ object_id: objectId, orientation: [0, 0, 1], surface_id: "antenna_nonterminal" }],
+      },
+    ],
+    coupling: "one_way",
+    domain: [{ object_id: objectId }],
+    gauge: "terminal_reference",
+    kind: "current_transport",
+    materials: [{ material: { sigma_Spm: 5.8e7 }, region: { object_id: objectId } }],
+    model: "ohmic_poisson",
+    name: currentId,
+    solver: {
+      engine: "cg",
+      linear: { absolute_tolerance: 0, max_iterations: 500, relative_tolerance: 1e-10 },
+      operator_version: "fem_charge_conforming_h1_p1.transparent.v1",
+      physical_residual_version: "charge_balance_integrated_l2.v1",
+    },
+  };
+}
+
+function defaultMicrostripPortMode(
+  objectId: string,
+  conductorIds = ["signal", "return"],
+): JsonObject {
+  return {
+    schema_version: "antenna_port_mode.v2",
+    branches: conductorIds.map((id, index) => ({
+      id,
+      inlet_terminal_ref: `${id}_in`,
+      outlet_terminal_ref: `${id}_out`,
+      signed_weight: index === 0 ? 1 : -1 / (conductorIds.length - 1),
+    })),
+    current_transport_id: `${objectId}:current`,
+    id: `${objectId}:port:common`,
+    normalization_current_a: 1,
+    source_object_id: objectId,
+  };
+}
+
+function defaultMicrostripFieldSolveStage(objectId: string): JsonObject {
+  return {
+    conductor_mesh_policy: "shared_domain_conforming",
+    conservative_current_view_ref: `${objectId}:current:rt0`,
+    current_transport_id: `${objectId}:current`,
+    field_sampling_domain: { kind: "global" },
+    id: `${objectId}:solve-field`,
+    model: "quasistatic_conduction_biot_savart3d",
+    oersted_realization: "direct_tetra_quadrature",
+    outputs: [{ id: `${objectId}:field-solution`, quantity: "H_ant_basis" }],
+    port_mode_ids: [`${objectId}:port:common`],
+    solver_policy: "fem_cpu_double_reference",
+    source_object_id: objectId,
+    target_refs: [{ kind: "global" }],
   };
 }
 
@@ -1327,7 +1471,7 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     scope: "workspace",
     isEnabled: (context) => fdmGridBuildDisabledReason(context) === null,
     disabledReason: fdmGridBuildDisabledReason,
-    run: (context) => {
+    run: async (context) => {
       const disabledReason = fdmGridBuildDisabledReason(context);
       if (disabledReason) {
         return { message: disabledReason, status: "failed" };
@@ -1340,16 +1484,25 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
+      const confirmation = await awaitMeshBuildConfirmation(context, "grid.build-fdm", {
+        ...asRecord(context.input),
+        kind: "fdm_grid_refresh",
+        reason: "explicit_build_grid",
+        scene_revision: sceneRevision,
+      });
+      if (!confirmation.confirmed) {
+        return { status: "cancelled" };
+      }
       return runFdmGridRefreshOperation(context, {
         kind: "fdm_grid_refresh",
-        precondition: { scene_revision: sceneRevision },
+        precondition: confirmation.precondition ?? { scene_revision: sceneRevision },
         reason: "explicit_build_grid",
-      });
+      }, confirmation.requestId);
     },
   },
-  {
-    id: "geometry.add-microstrip-antenna",
-    title: "Add Microstrip Antenna",
+  ...(["microstrip", "cpw"] as const).map((layout): CommandContribution => ({
+    id: `geometry.add-${layout}-antenna`,
+    title: layout === "cpw" ? "Add CPW Antenna" : "Add Microstrip Antenna",
     category: "Geometry",
     group: "geometry",
     scope: "workspace",
@@ -1364,22 +1517,40 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
 
       const preparation = await prepareAuthoringMutation(context);
       const scene = preparation.before ?? await context.api.model.scene(sessionRequestOptions(context));
-      preparation.before ??= scene;
-      preparation.baseRevision ??= scene.scene_revision ?? scene.revision ?? null;
       assertCurrentSessionScope(context);
+      const baseRevision = sceneDocumentRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before adding an antenna.",
+          status: "failed",
+        };
+      }
+      preparation.before ??= scene;
+      preparation.baseRevision = baseRevision;
       const objectId = draftObjectId("antenna");
+      const conductorIds = layout === "cpw"
+        ? ["signal", "ground_left", "ground_right"]
+        : ["signal", "return"];
+      const label = layout === "cpw" ? "CPW antenna" : "Microstrip antenna";
       const request: AuthoringTransactionRequest = {
+        base_revision: baseRevision,
         kind: "merge_patch",
         merge_patch: {
-          field_drives: {
-            drives: [
-              ...sceneFieldDrives(scene),
-              defaultMicrostripFieldDrive(objectId),
-            ],
-          },
+          antenna_field_solve_stages: [
+            ...sceneArray(scene, "antenna_field_solve_stages"),
+            defaultMicrostripFieldSolveStage(objectId),
+          ],
+          antenna_port_modes: [
+            ...sceneArray(scene, "antenna_port_modes"),
+            defaultMicrostripPortMode(objectId, conductorIds),
+          ],
+          current_transports: [
+            ...sceneArray(scene, "current_transports"),
+            defaultMicrostripCurrentTransport(objectId, conductorIds),
+          ],
           objects: [
             ...sceneObjects(scene),
-            defaultMicrostripAntennaObject(objectId),
+            layout === "cpw" ? defaultCpwAntennaObject(objectId) : defaultMicrostripAntennaObject(objectId),
           ],
         },
       };
@@ -1389,19 +1560,19 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         : await context.api.model.commitTransaction(request);
       const obsoleteAfterWrite = obsoleteSessionResult(context);
       if (obsoleteAfterWrite) return obsoleteAfterWrite;
-      selectCommittedObject(context, objectId, "Microstrip antenna");
+      selectCommittedObject(context, objectId, label);
       await recordAuthoringMutationHistory(
         context,
-        "Add microstrip antenna",
+        `Add ${layout} antenna`,
         preparation,
         response.committed_scene,
         captureAuthoringHistoryWorkspaceState(context),
       );
       assertCurrentSessionScope(context);
       invalidateSceneAuthoringResources(context, response.scene_revision);
-      return { message: "Microstrip antenna added.", status: "completed" };
+      return { message: `${label} draft added; field solve requires a mesh-exact ConservativeCurrentView.`, status: "completed" };
     },
-  },
+  })),
   {
     id: "geometry.commit-object-draft",
     title: "Commit Object Draft",

@@ -24,6 +24,12 @@ import {
 import { frequencyDomainModeFieldMetaResourceKey } from "../resources/frequencyDomainResourceKeys";
 import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
+  DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   SESSIONS_PATH,
   DATA_FIELD_AVAILABILITY_PATH,
@@ -301,6 +307,78 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH)).toBe(
       digest,
     );
+  });
+
+  it("invalidates only antenna result resources when the artifact catalog changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const fieldSolutionKey = DATA_ANTENNA_FIELD_SOLUTION_PATH.replace(
+      "{solution_id}",
+      "solution-1",
+    );
+    const sourceSpectrumKey = DATA_ANTENNA_SOURCE_SPECTRUM_PATH.replace(
+      "{output_id}",
+      "spectrum-1",
+    );
+    const stageOutputCatalogKey = DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH.replace(
+      "{stage_id}",
+      "solve-1",
+    );
+    const inspectionKey = "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7|" +
+      DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH.replace("{stage_id}", "solve-1");
+    const inspectionPayloadKey = inspectionKey + "/payloads/magnetic_field?content_digest=sha256%3Aselected#4:record@bytes=0-23";
+    resources.subscribe(fieldSolutionKey, () => {});
+    resources.subscribe(stageOutputCatalogKey, () => {});
+    resources.subscribe(sourceSpectrumKey, () => {});
+    resources.subscribe(inspectionKey, () => {});
+    resources.subscribe(inspectionPayloadKey, () => {});
+    resources.subscribe(DATA_ARTIFACTS_PATH, () => {});
+    resources.subscribe(DATA_DOMAIN_TOPOLOGY_PATH, () => {});
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              recommended_fetch: DATA_ARTIFACTS_PATH,
+              resource: "artifacts",
+              revision: 17,
+            },
+          ],
+        },
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(fieldSolutionKey)).toBe(17);
+    expect(resources.getRevision(stageOutputCatalogKey)).toBe(17);
+    expect(resources.getRevision(sourceSpectrumKey)).toBe(17);
+    expect(resources.getRevision(inspectionKey)).toBe(17);
+    expect(resources.getRevision(inspectionPayloadKey)).toBe(17);
+    expect(resources.getRevision(DATA_ARTIFACTS_PATH)).toBe(17);
+    expect(resources.getRevision(DATA_DOMAIN_TOPOLOGY_PATH)).toBeNull();
+  });
+
+  it("invalidates scoped antenna catalogs and inspection payloads when stage execution changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const scope = "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7|";
+    const keys = [
+      DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH.replace("{stage_id}", "solve-1"),
+      DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH.replace("{stage_id}", "solve-1"),
+      DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH.replace("{stage_id}", "solve-1")
+        .replace("{payload_kind}", "magnetic_field") + "?content_digest=sha256%3Aselected#4:record",
+    ].map((key) => scope + key);
+    keys.forEach((key) => resources.subscribe(key, () => {}));
+    resources.subscribe(DATA_DOMAIN_TOPOLOGY_PATH, () => {});
+    bridge.handleEvent({
+      payload: { changes: [{ recommended_fetch: SIMULATION_STAGES_EXECUTION_PATH, resource: "stages", revision: 44 }] },
+      type: "resource.batch_changed",
+    });
+    keys.forEach((key) => expect(resources.getRevision(key)).toBe(dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44)));
+    expect(resources.getRevision(DATA_DOMAIN_TOPOLOGY_PATH)).toBeNull();
   });
 
   it.each([

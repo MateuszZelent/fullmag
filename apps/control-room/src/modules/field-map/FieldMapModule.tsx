@@ -15,6 +15,7 @@ import {
   usePlanarVectorResource,
 } from "@/kernel/resources/planarFieldResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
@@ -85,7 +86,7 @@ function useFieldMapModuleController() {
   }, [canonicalSourceKind, canonicalSourceMonitorId]);
   const domain = useDomainMetaResource({ enabled: active });
   const runtime = useSessionStatusSelector(
-    (status) => status.data?.domain.discretization ?? null,
+    (status) => resolveSessionDiscretization(status.data),
     { enabled: active },
   );
   const selectedFieldContext = useSelectionSelector((selection) => {
@@ -444,7 +445,6 @@ function useFieldMapModuleController() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -525,6 +525,9 @@ export default function FieldMapModule() {
   if (!renderModel) {
     return <FieldMapStatus message="Loading planar field…" planarStatus="loading" />;
   }
+  const ambiguousSurfaceMeta = meta.data && surfaceProjectionStatus(meta.data) === "ambiguous"
+    ? meta.data
+    : null;
 
   return (
     <section className="fm-field-map">
@@ -572,10 +575,10 @@ export default function FieldMapModule() {
         <strong>{plan.quantityId}</strong>
         <span>{presentationPlanar.component}</span>
         <span>{renderModel.display.legendUnit}</span>
-        {meta.data && surfaceProjectionStatus(meta.data) === "ambiguous" ? (
+        {ambiguousSurfaceMeta ? (
           <span className="fm-field-map__diagnostic" role="status">
-            Ambiguous surface: {meta.data.overlap_count} overlaps,{" "}
-            {meta.data.fold_count} folds
+            Ambiguous surface: {ambiguousSurfaceMeta.overlap_count} overlaps,{" "}
+            {ambiguousSurfaceMeta.fold_count} folds
           </span>
         ) : null}
       </header>

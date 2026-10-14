@@ -28,6 +28,18 @@ describe("AppMenuBar", () => {
     expect(source).not.toContain("const sessionStatus = useSessionStatus();");
   });
 
+  it("keeps the new-simulation dialog mounted across session-header transitions", () => {
+    const source = readFileSync(appMenuBarSourceUrl, "utf8");
+    const appMenuBar = source.slice(
+      source.indexOf("export function AppMenuBar()"),
+      source.indexOf("function NoSessionAppMenuBar"),
+    );
+
+    expect(appMenuBar).toContain("useNewProblemRequest()");
+    expect(appMenuBar).toContain("<NewProblemDialog");
+    expect(source.match(/<NewProblemDialog/g)).toHaveLength(1);
+  });
+
   it("renders header controls through shared shadcn-style button primitives", () => {
     const html = renderToStaticMarkup(
       <ThemeProvider>

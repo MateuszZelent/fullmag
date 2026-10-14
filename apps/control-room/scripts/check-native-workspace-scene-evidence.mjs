@@ -19,7 +19,7 @@ const executableHelpers = stripTypeScriptTypes(
 );
 const sandbox = {};
 vm.runInNewContext(
-  `${executableHelpers}\nglobalThis.assertUsefulScene = assertUsefulScene; globalThis.summarizeScene = summarizeScene;`,
+  `${executableHelpers}\nglobalThis.assertUsefulScene = assertUsefulScene; globalThis.summarizeScene = summarizeScene; globalThis.sceneAfterSuccessfulGrid = sceneAfterSuccessfulGrid;`,
   sandbox,
 );
 
@@ -77,6 +77,21 @@ assert.throws(
   "a dangling material reference must not satisfy scene evidence",
 );
 
+const dirtyScene = structuredClone(validScene);
+dirtyScene.objects[0].tags = ["mesh:dirty", "user-tag"];
+dirtyScene.materials[0].properties = { Ms: 800000, Aex: 1.3e-11, alpha: 0.02 };
+const afterGrid = JSON.parse(JSON.stringify(sandbox.sceneAfterSuccessfulGrid(dirtyScene)));
+assert.deepEqual(afterGrid.objects[0].tags, ["user-tag"]);
+assert.deepEqual(afterGrid.materials, dirtyScene.materials);
+assert.deepEqual(afterGrid.objects[0].regions, dirtyScene.objects[0].regions);
+assert.deepEqual(dirtyScene.objects[0].tags, ["mesh:dirty", "user-tag"]);
+dirtyScene.objects[0].tags = ["mesh:dirty"];
+assert.equal(Object.hasOwn(sandbox.sceneAfterSuccessfulGrid(dirtyScene).objects[0], "tags"), false);
+assert.match(fixtureSource, /project_document_after_grid: await projectDocumentProof\([\s\S]*?sceneAfterSuccessfulGrid\(sceneAfter\)/);
+assert.match(fixtureSource, /project_document_after_grid: prepared\.project_document_after_grid/);
+assert.match(fixtureSource, /canonicalJson\(restoredDocument\) !== canonicalJson\(captured\.project_document_after_grid\)/);
+assert.match(fixtureSource, /sceneHash !== captured\.project_document_after_grid\.scene_resource_sha256/);
+
 console.log(JSON.stringify({
   schema: "fullmag.control-room.check-result.v1",
   check: "native-workspace-scene-evidence",
@@ -85,5 +100,7 @@ console.log(JSON.stringify({
     "same-object-geometry-region-and-existing-material-passes",
     "disconnected-global-counts-fail",
     "dangling-material-reference-fails",
+    "after-grid-clears-only-mesh-dirty-without-mutating-baseline",
+    "after-grid-document-hashes-pinned-before-restart-and-checked-at-finish",
   ],
 }));

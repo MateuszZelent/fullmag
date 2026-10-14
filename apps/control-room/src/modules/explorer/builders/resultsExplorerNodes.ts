@@ -1,3 +1,16 @@
+import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
+import {
+  PIN_MODE_VISUALIZATION_COMMAND,
+  UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
+} from "@/kernel/analysis-modules/postprocessingCommandContributions";
+import {
+  modeVisualizationBaseOwnerKey,
+  type ModeVisualizationOwnerIdentity,
+} from "@/kernel/analysis-modules/postprocessingDefinitions";
+import type {
+  AnalysisResultDatasetSummaryResource,
+  PostprocessingDefinition as AnalysisPostprocessingDefinition,
+} from "@/kernel/api/apiTypes";
 import {
   classifyFrequencyDomainResult,
   type FrequencyDomainResultEvidence,
@@ -7,6 +20,7 @@ import {
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
+  eigenModeFieldAvailable,
   responseFieldResourcesFromManifest,
   type FrequencyDomainJsonArtifactLike,
   type FrequencyDomainTextArtifactLike,
@@ -59,10 +73,12 @@ export interface PhysicsFirstAnalysisFieldTarget {
   frequencyIndex?: number;
   kPathCoordinateRadPerM?: number;
   label: string;
+  modeId?: string;
   modeIndex?: number;
   observableId?: string;
   representation: "complex-vector-xyz";
   resourceRef: string;
+  sampleId?: string;
   sampleIndex?: number;
   source: "eigen-mode" | "frequency-response";
   view: "phase_rotated_real";
@@ -313,17 +329,24 @@ function modalFieldTargets({
 }): PhysicsFirstAnalysisFieldTarget[] {
   if (kSampling?.kind === "path") {
     return buildEigenDispersionChartModel(dispersionArtifact(dispersion)).points.flatMap((point) => {
-      if (!point.modeFieldId) return [];
-      const wavevectorKf = pathWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex);
+      if (
+        !eigenModeFieldAvailable(point) ||
+        !point.modeFieldId ||
+        !point.modeFieldResourceKey
+      ) return [];
+      const wavevectorKf = point.wavevectorKf ??
+        pathWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex);
       if (!wavevectorKf || !Number.isFinite(point.pathS)) return [];
       return [{
         fieldId: point.modeFieldId,
         frequencyHz: point.frequencyHz,
         kPathCoordinateRadPerM: point.pathS,
         label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        ...(point.modeId ? { modeId: point.modeId } : {}),
         modeIndex: point.rawModeIndex,
         representation: "complex-vector-xyz" as const,
-        resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+        resourceRef: point.modeFieldResourceKey,
+        ...(point.sampleId ? { sampleId: point.sampleId } : {}),
         sampleIndex: point.sampleIndex,
         source: "eigen-mode" as const,
         view: "phase_rotated_real" as const,
@@ -333,14 +356,18 @@ function modalFieldTargets({
   }
   const fixedWavevector = kSampling?.kind === "single" ? kSampling.vectorRadPerM : undefined;
   return buildEigenSpectrumChartModel(jsonArtifact(spectrum)).points.flatMap((point) =>
-    point.modeFieldId
+    eigenModeFieldAvailable(point) &&
+    point.modeFieldId &&
+    point.modeFieldResourceKey
       ? [{
           fieldId: point.modeFieldId,
           frequencyHz: point.frequencyHz,
           label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+          ...(point.modeId ? { modeId: point.modeId } : {}),
           modeIndex: point.rawModeIndex,
           representation: "complex-vector-xyz" as const,
-          resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+          resourceRef: point.modeFieldResourceKey,
+          ...(point.sampleId ? { sampleId: point.sampleId } : {}),
           sampleIndex: point.sampleIndex,
           source: "eigen-mode" as const,
           view: "phase_rotated_real" as const,
@@ -653,13 +680,16 @@ function analysisFieldTargetNodes(
         ...(target.kPathCoordinateRadPerM !== undefined
           ? { kPathCoordinateRadPerM: target.kPathCoordinateRadPerM }
           : {}),
+        ...(target.modeId ? { modeId: target.modeId } : {}),
         ...(target.modeIndex !== undefined ? { modeIndex: target.modeIndex } : {}),
         ...(target.observableId ? { observableId: target.observableId } : {}),
         resourceRef: target.resourceRef,
         ...(entry.normalization ? { normalization: entry.normalization } : {}),
+        ...(target.sampleId ? { sampleId: target.sampleId } : {}),
         ...(target.sampleIndex !== undefined ? { sampleIndex: target.sampleIndex } : {}),
         studyProduct: entry.studyProduct,
         ...(target.wavevectorKf ? { wavevectorKf: target.wavevectorKf } : {}),
+        contextCommands: [PIN_MODE_VISUALIZATION_COMMAND],
       },
     ),
   );
@@ -861,6 +891,268 @@ function kResolvedStage(
     studyProduct: entry.studyProduct,
     },
   );
+}
+
+/**
+ * Adds a "Pinned visualizations" group to each analysis family for the
+ * user-created definitions it owns (ADR 0054, spec 32 §8). A pinned node is a
+ * copy of the published mode node with the same run, dataset, revision, field,
+ * and optional sample/item identity, so selecting it reopens that exact mode.
+ * An unpublished or ambiguous owner stays visible as unavailable.
+ */
+export function withPinnedAnalysisDefinitions(
+  tree: readonly ExplorerNode[],
+  definitions: readonly AnalysisPostprocessingDefinition[],
+): ExplorerNode[] {
+  if (definitions.length === 0) return [...tree];
+  return tree.map((resultsRoot) => ({
+    ...resultsRoot,
+    children: resultsRoot.children?.map((family) => {
+      const moduleId = family.analysisModuleId;
+      if (!moduleId) return family;
+      const owned = definitions.filter(
+        (definition) =>
+          definition.module_id === moduleId &&
+          definition.node_kind === `${moduleId}.mode_visualization` &&
+          definition.data_ref.run_id === resultsRoot.analysisRunId,
+      );
+      if (owned.length === 0) return family;
+      const groupId = `${family.id}:pinned`;
+      const publishedByBaseOwner = new Map<
+        string,
+        { identity: ModeVisualizationOwnerIdentity; node: ExplorerNode }[]
+      >();
+      const collect = (nodes: readonly ExplorerNode[] | undefined) => {
+        for (const candidate of nodes ?? []) {
+          if (
+            candidate.fieldId &&
+            candidate.analysisRunId &&
+            candidate.datasetId &&
+            candidate.datasetRevision
+          ) {
+            const identity: ModeVisualizationOwnerIdentity = {
+              moduleId,
+              runId: candidate.analysisRunId,
+              datasetId: candidate.datasetId,
+              datasetRevision: candidate.datasetRevision,
+              fieldId: candidate.fieldId,
+              sampleId: candidate.sampleId ?? null,
+              itemId: candidate.modeId ?? null,
+            };
+            const ownerKey = modeVisualizationBaseOwnerKey(identity);
+            const matches = publishedByBaseOwner.get(ownerKey) ?? [];
+            matches.push({ identity, node: candidate });
+            publishedByBaseOwner.set(ownerKey, matches);
+          }
+          collect(candidate.children);
+        }
+      };
+      collect(family.children);
+      const pinned = owned.map((definition): ExplorerNode => {
+        const id = `${groupId}:${key(definition.definition_id)}`;
+        const dataRef = definition.data_ref;
+        const baseIdentity: ModeVisualizationOwnerIdentity = {
+          moduleId,
+          runId: dataRef.run_id,
+          datasetId: dataRef.dataset_id,
+          datasetRevision: dataRef.dataset_revision,
+          fieldId: dataRef.field_id ?? null,
+        };
+        const candidates = dataRef.field_id
+          ? publishedByBaseOwner.get(modeVisualizationBaseOwnerKey(baseIdentity)) ?? []
+          : [];
+        const matching = candidates.filter(({ identity }) =>
+          (dataRef.sample_id == null || dataRef.sample_id === identity.sampleId) &&
+          (dataRef.item_id == null || dataRef.item_id === identity.itemId),
+        );
+        // Legacy definitions without optional IDs remain usable when their
+        // mandatory identity resolves to exactly one published mode.
+        const published = matching.length === 1 ? matching[0].node : undefined;
+        const unpin = {
+          contextCommandInputs: {
+            [UNPIN_POSTPROCESSING_DEFINITION_COMMAND]: { definitionId: definition.definition_id },
+          },
+          contextCommands: [UNPIN_POSTPROCESSING_DEFINITION_COMMAND],
+        };
+        if (!published) {
+          return node(id, "results.pinned_visualizations.root", definition.label, groupId, {
+            ...unpin,
+            analysisModuleId: moduleId,
+            availability: "unavailable",
+            badge: "not published",
+            executionState: "not_started",
+            resourceState: "idle",
+            status: "unavailable",
+          });
+        }
+        return {
+          ...published,
+          ...unpin,
+          children: undefined,
+          id,
+          label: definition.label,
+          parentId: groupId,
+        };
+      });
+      const group = node(groupId, "results.pinned_visualizations.root", "Pinned visualizations", family.id, {
+        analysisModuleId: moduleId,
+        analysisPinnedGroup: true,
+        analysisRunId: resultsRoot.analysisRunId,
+        badge: String(pinned.length),
+        children: pinned,
+        icon: "wave",
+      });
+      return { ...family, children: [...(family.children ?? []), group] };
+    }),
+  }));
+}
+
+/** Keeps an analysis family only when it has published children, tagged with its owning module. */
+/**
+ * Families published only through the typed results catalog (plan stage 8):
+ * hysteresis loops, and a Comparison family once the run has more than one
+ * dataset or a saved reference to compare against.
+ */
+export function withCatalogAnalysisFamilies(
+  tree: readonly ExplorerNode[],
+  datasets: readonly AnalysisResultDatasetSummaryResource[],
+  definitions: readonly AnalysisPostprocessingDefinition[] = [],
+): ExplorerNode[] {
+  return tree.map((resultsRoot) => {
+    const runDatasets = datasets.filter((dataset) => dataset.run_id === resultsRoot.analysisRunId);
+    const existingKinds = new Set((resultsRoot.children ?? []).map((child) => child.kind));
+    const families: ExplorerNode[] = [];
+    const loops = runDatasets.filter((dataset) => dataset.product_kind === "hysteresis_loop");
+    if (loops.length > 0 && !existingKinds.has("results.hysteresis.root")) {
+      const familyId = `${resultsRoot.id}:hysteresis`;
+      families.push(
+        withAnalysisModule(
+          node(familyId, "results.hysteresis.root", "Hysteresis", resultsRoot.id, {
+            analysisRunId: resultsRoot.analysisRunId,
+            children: loops.map((dataset) =>
+              node(`${familyId}:${key(dataset.dataset_id)}`, "results.hysteresis.dataset", dataset.title, familyId, {
+                analysisRunId: dataset.run_id,
+                analysisStageId: dataset.stage_id,
+                datasetId: dataset.dataset_id,
+                datasetRevision: dataset.dataset_revision,
+                badge: dataset.stage_id,
+                icon: "activity",
+                studyProduct: dataset.product_kind,
+              }),
+            ),
+            icon: "activity",
+          }),
+          "analysis.hysteresis",
+        ),
+      );
+    }
+    const references = definitions.filter(
+      (definition) =>
+        definition.node_kind === "analysis.dispersion.reference" &&
+        definition.data_ref.run_id === resultsRoot.analysisRunId,
+    );
+    if (
+      (runDatasets.length > 1 || references.length > 0) &&
+      !existingKinds.has("results.frequency_domain.comparison")
+    ) {
+      families.push(
+        node(`${resultsRoot.id}:comparison`, "results.frequency_domain.comparison", "Comparison", resultsRoot.id, {
+          analysisRunId: resultsRoot.analysisRunId,
+          badge: `${runDatasets.length + references.length} sources`,
+          icon: "activity",
+        }),
+      );
+    }
+    const augmentedRoot = families.length === 0
+      ? resultsRoot
+      : {
+          ...resultsRoot,
+          availability: "available" as const,
+          executionState: "completed" as const,
+          resourceState: resultsRoot.resourceState === "error" ? "error" as const : "ready" as const,
+          status: resultsRoot.status === "failed" ? "failed" as const : "ready" as const,
+          children: [...(resultsRoot.children ?? []), ...families],
+        };
+    return withCatalogDatasetIdentity(augmentedRoot, runDatasets);
+  });
+}
+
+/** Joins legacy frequency-domain result nodes only to one exact catalog identity. */
+function withCatalogDatasetIdentity(
+  node: ExplorerNode,
+  datasets: readonly AnalysisResultDatasetSummaryResource[],
+): ExplorerNode {
+  const catalogJoinOwnedKind =
+    node.kind.startsWith("results.dispersion.") ||
+    node.kind.startsWith("results.resonance.") ||
+    node.kind.startsWith("results.eigen.");
+  const catalogJoinCandidate =
+    catalogJoinOwnedKind &&
+    Boolean(node.analysisRunId && node.analysisStageId && node.studyProduct);
+  const matches = catalogJoinCandidate
+    ? datasets.filter(
+        (dataset) =>
+          dataset.run_id === node.analysisRunId &&
+          dataset.stage_id === node.analysisStageId &&
+          dataset.product_kind === node.studyProduct,
+      )
+    : [];
+  const canonical = matches.length === 1 ? matches[0] : undefined;
+  const children = node.children?.map((child) =>
+    withCatalogDatasetIdentity(child, datasets),
+  );
+  const childrenChanged = Boolean(
+    node.children && children?.some((child, index) => child !== node.children?.[index]),
+  );
+  const identityChanged = Boolean(
+    canonical &&
+      (node.datasetId !== canonical.dataset_id ||
+        node.datasetRevision !== canonical.dataset_revision),
+  );
+  const clearStaleIdentity =
+    catalogJoinCandidate &&
+    !canonical &&
+    (node.datasetId !== undefined || node.datasetRevision !== undefined);
+  if (!childrenChanged && !identityChanged && !clearStaleIdentity) return node;
+
+  const nextNode: ExplorerNode = { ...node };
+  if (clearStaleIdentity) {
+    delete nextNode.datasetId;
+    delete nextNode.datasetRevision;
+  }
+  if (canonical) {
+    nextNode.datasetId = canonical.dataset_id;
+    nextNode.datasetRevision = canonical.dataset_revision;
+  }
+  if (childrenChanged) nextNode.children = children;
+  return nextNode;
+}
+
+function publishedAnalysisRoot(
+  root: ExplorerNode | null,
+  analysisModuleId?: AnalysisModuleId,
+): ExplorerNode[] {
+  if (!root || (root.children?.length ?? 0) === 0) return [];
+  return [analysisModuleId ? withAnalysisModule(root, analysisModuleId) : root];
+}
+
+/** Every node of a module-owned family records its owner so view, Inspector and ribbon hosts can resolve it. */
+function withAnalysisModule(node: ExplorerNode, analysisModuleId: AnalysisModuleId): ExplorerNode {
+  return {
+    ...node,
+    analysisModuleId,
+    ...(node.children
+      ? { children: node.children.map((child) => withAnalysisModule(child, analysisModuleId)) }
+      : {}),
+  };
+}
+
+/** Snapshots are shown while loading or failed so the state stays visible; an empty ready catalog is omitted. */
+function observationFramesPublished(snapshot: PhysicsFirstResultsSnapshot): boolean {
+  const resource = snapshot.observationFrames;
+  if (!resource) return false;
+  if (resource.status !== "ready") return true;
+  return (resource.data?.frames.length ?? 0) > 0;
 }
 
 function rootWithChildren(
@@ -1113,22 +1405,33 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
           }
         : {}),
       children: [
-        rootWithChildren(
-          `${resultsId}:dynamics`,
-          "results.dynamics.root",
-          "Dynamics",
-          resultsId,
-          [observationFramesRoot(`${resultsId}:dynamics`, snapshot)],
+        // Analysis families exist only for what this run published (ADR 0054);
+        // there is no placeholder family for analyses that did not run.
+        ...publishedAnalysisRoot(
+          observationFramesPublished(snapshot)
+            ? rootWithChildren(
+                `${resultsId}:dynamics`,
+                "results.dynamics.root",
+                "Dynamics",
+                resultsId,
+                [observationFramesRoot(`${resultsId}:dynamics`, snapshot)],
+              )
+            : null,
         ),
-        rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
-        rootWithChildren(
-          dispersionId,
-          "results.dispersion.root",
-          "Dispersion & k-resolved response",
-          resultsId,
-          dispersionStages,
+        ...publishedAnalysisRoot(
+          rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
+          "analysis.resonance",
         ),
-        rootWithChildren(`${resultsId}:hysteresis`, "results.hysteresis.root", "Hysteresis", resultsId, []),
+        ...publishedAnalysisRoot(
+          rootWithChildren(
+            dispersionId,
+            "results.dispersion.root",
+            "Dispersion & k-resolved response",
+            resultsId,
+            dispersionStages,
+          ),
+          "analysis.dispersion",
+        ),
         postprocessingRootWithChildren(
           `${resultsId}:analysis-views`,
           "results.analysis_views.root",

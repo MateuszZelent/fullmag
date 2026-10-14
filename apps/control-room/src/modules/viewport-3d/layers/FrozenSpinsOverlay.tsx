@@ -11,10 +11,12 @@ import {
 import type {
   DecodedFrozenSpinsMask,
 } from "@/kernel/resources/frozenSpinsResources";
+import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { buildFdmFieldIndexResolver } from "../model/fdmFieldIndexing";
 
 const MAX_FROZEN_SPINS_OVERLAY_POINTS = 50_000;
 
@@ -26,6 +28,7 @@ export interface FrozenSpinsOverlayModel {
   positions: Float32Array;
   previewId: string;
   renderedCount: number;
+  source: "preview-mask" | "runtime-field";
   totalCount: number;
 }
 
@@ -69,6 +72,7 @@ export function buildFrozenSpinsOverlayModel({
       positions: fdmCellCenters(fdmDomain, frozenIndices),
       previewId,
       renderedCount: frozenIndices.length,
+      source: "preview-mask",
       totalCount: mask.bitCount,
     };
   }
@@ -90,11 +94,49 @@ export function buildFrozenSpinsOverlayModel({
       positions: femPositions,
       previewId,
       renderedCount: femPositions.length / 3,
+      source: "preview-mask",
       totalCount: mask.bitCount,
     };
   }
 
   return null;
+}
+
+/**
+ * Build the same spatial overlay from the solver-published Frozen Spins field.
+ * Scripted interactive runs have no authoring preview resource, but they do
+ * publish the resolved scalar mask as a regular field.  Mapping it here keeps
+ * the overlay useful for both UI-authored and script-authored constraints.
+ */
+export function buildFrozenSpinsOverlayModelFromField({
+  current,
+  expectedTopologyFingerprint,
+  fdmDomain,
+  femCarrier,
+  fieldVector,
+  maskSha256,
+  previewId,
+}: {
+  current: boolean;
+  expectedTopologyFingerprint: string | null | undefined;
+  fdmDomain: FdmGridRenderDomain | null | undefined;
+  femCarrier: FemLocalNodeRenderCarrier | null | undefined;
+  fieldVector: DecodedFieldVector | null | undefined;
+  maskSha256: string;
+  previewId: string;
+}): FrozenSpinsOverlayModel | null {
+  if (!fieldVector || !previewId || fieldVector.nComp !== 1) return null;
+  const mask = frozenMaskFromField(fieldVector, fdmDomain, maskSha256);
+  if (!mask) return null;
+  const model = buildFrozenSpinsOverlayModel({
+    current,
+    expectedTopologyFingerprint,
+    fdmDomain,
+    femCarrier,
+    mask,
+    previewId,
+  });
+  return model ? { ...model, source: "runtime-field" } : null;
 }
 
 export function FrozenSpinsOverlay({
@@ -203,12 +245,15 @@ function frozenFemRenderPositions(
   maskLocalNodeCount: number,
   expectedTopologyFingerprint: string | null | undefined,
 ): Float32Array | null {
+  const carrierFingerprint = canonicalFingerprint(carrier.carrierFingerprint);
+  const meshFingerprint = canonicalFingerprint(carrier.meshFingerprint);
+  const expectedFingerprint = canonicalFingerprint(expectedTopologyFingerprint ?? "");
   if (
     carrier.schemaVersion !== "fullmag.fem-local-node-render.v1" ||
-    !isCanonicalFingerprint(carrier.carrierFingerprint) ||
-    !isCanonicalFingerprint(carrier.meshFingerprint) ||
-    !isCanonicalFingerprint(expectedTopologyFingerprint ?? "") ||
-    carrier.meshFingerprint !== expectedTopologyFingerprint ||
+    carrierFingerprint === null ||
+    meshFingerprint === null ||
+    expectedFingerprint === null ||
+    meshFingerprint !== expectedFingerprint ||
     !Number.isInteger(carrier.feSpaceOrder) ||
     carrier.feSpaceOrder < 1 ||
     carrier.localNodeCount !== maskLocalNodeCount ||
@@ -228,6 +273,54 @@ function frozenFemRenderPositions(
   return selected;
 }
 
-function isCanonicalFingerprint(value: string): boolean {
-  return /^sha256:[0-9a-f]{64}$/.test(value);
+function canonicalFingerprint(value: string): string | null {
+  const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value.trim());
+  return match ? `sha256:${match[1]!.toLowerCase()}` : null;
+}
+
+function frozenMaskFromField(
+  fieldVector: DecodedFieldVector,
+  fdmDomain: FdmGridRenderDomain | null | undefined,
+  maskSha256: string,
+): DecodedFrozenSpinsMask | null {
+  if (!Number.isSafeInteger(fieldVector.pointCount) || fieldVector.pointCount <= 0) {
+    return null;
+  }
+  if (fieldVector.values.length < fieldVector.pointCount) return null;
+
+  if (fdmDomain) {
+    const resolver = buildFdmFieldIndexResolver(
+      fieldVector,
+      fdmDomain.totalCells,
+      fdmDomain.shape,
+    );
+    if (resolver.status !== "compatible") return null;
+    const frozenIndices: number[] = [];
+    for (let cellOrdinal = 0; cellOrdinal < fdmDomain.totalCells; cellOrdinal += 1) {
+      const fieldIndex = resolver.resolve(cellOrdinal);
+      if (fieldIndex === null) continue;
+      const value = fieldVector.values[fieldIndex];
+      if (Number.isFinite(value) && value >= 0.5) frozenIndices.push(cellOrdinal);
+    }
+    return {
+      bitCount: fdmDomain.totalCells,
+      frozenIndices: Uint32Array.from(frozenIndices),
+      maskSha256: canonicalFingerprint(maskSha256) ?? maskSha256,
+      sceneRevision: 0,
+      sourceStateRevision: 0,
+    };
+  }
+
+  const frozenIndices: number[] = [];
+  for (let index = 0; index < fieldVector.pointCount; index += 1) {
+    const value = fieldVector.values[index];
+    if (Number.isFinite(value) && value >= 0.5) frozenIndices.push(index);
+  }
+  return {
+    bitCount: fieldVector.pointCount,
+    frozenIndices: Uint32Array.from(frozenIndices),
+    maskSha256: canonicalFingerprint(maskSha256) ?? maskSha256,
+    sceneRevision: 0,
+    sourceStateRevision: 0,
+  };
 }

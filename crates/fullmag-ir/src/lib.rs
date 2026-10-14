@@ -2,11 +2,17 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod antenna;
+pub mod antenna_current_source;
 pub mod constraint;
 pub mod compute_resources;
 pub mod eigen_contract;
 pub mod execution;
+pub mod parallel_execution;
 pub mod execution_profile;
+
+pub mod execution_profile_materialization;
+pub mod field_drive_validation;
 pub mod frequency_response_contract;
 pub mod mechanics;
 pub mod mesh_assets;
@@ -16,6 +22,7 @@ pub mod mixed_certificate;
 pub mod native_indexed_geometry;
 pub mod model;
 pub mod output_storage;
+pub mod object_binding;
 pub mod physics_object;
 pub mod plan;
 pub mod planar_monitor;
@@ -24,13 +31,37 @@ pub mod quantities;
 pub mod selection;
 pub mod spectral_validation;
 pub mod spin_transport;
+pub mod antenna_lead_preparation;
 pub mod study;
+pub mod study_v04;
+mod v04_material_wire;
+mod v04_spectral_wire;
+pub mod waveguide_frame;
+pub mod waveguide_mesh;
+pub mod waveguide_mesh_contours;
+pub mod waveguide_mesh_elements;
+pub mod waveguide_mesh_embedding;
+pub mod waveguide_mesh_incidence;
+pub(crate) mod waveguide_mesh_bindings;
+pub(crate) mod waveguide_mesh_dirichlet;
+pub(crate) mod waveguide_mesh_world;
+pub(crate) mod waveguide_mesh_identity;
+mod floating_point_guard;
 mod validation;
+pub use antenna::*;
+pub use antenna_current_source::*;
 pub use constraint::*;
 pub use compute_resources::*;
 pub use eigen_contract::*;
 pub use execution::*;
+pub use parallel_execution::*;
 pub use execution_profile::*;
+
+pub use execution_profile_materialization::{
+    materialize_execution_request, materialize_referenced_execution,
+    validate_execution_materialization,
+};
+pub use field_drive_validation::*;
 pub use frequency_response_contract::*;
 pub use mechanics::*;
 pub use mesh_assets::*;
@@ -39,6 +70,7 @@ pub use mesh_policy::*;
 pub use mixed_certificate::*;
 pub use model::*;
 pub use output_storage::*;
+pub use object_binding::*;
 pub use physics_object::*;
 pub use plan::*;
 pub use planar_monitor::*;
@@ -49,7 +81,14 @@ pub use quantities::{
 pub use selection::*;
 pub use spectral_validation::BlochWavevectorIR;
 pub use spin_transport::*;
+pub use antenna_lead_preparation::*;
 pub use study::*;
+pub use study_v04::*;
+pub use waveguide_frame::{
+    validate_waveguide_frame, CanonicalWaveguideFrameIR, ValidatedWaveguideFrameIR,
+    WaveguideFrameIR, WaveguideFrameValidationError, WaveguideSignedKIR,
+    WAVEGUIDE_GEOMETRY_TOLERANCE,
+};
 use validation::*;
 
 pub const IR_VERSION: &str = "0.3.0";
@@ -57,6 +96,14 @@ pub const CURRENT_IR_VERSION: &str = IR_VERSION;
 pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.2.0";
 pub const LEGACY_PUBLIC_IR_VERSION: &str = "0.1.0";
 pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
+
+/// Canonical quantity produced by the eigen spectrum output.
+pub const CANONICAL_EIGEN_SPECTRUM_QUANTITY: &str = "eigenfrequency";
+
+/// Whether an eigen spectrum quantity uses the supported canonical name.
+pub fn is_supported_eigen_spectrum_quantity(quantity: &str) -> bool {
+    quantity.trim() == CANONICAL_EIGEN_SPECTRUM_QUANTITY
+}
 /// Canonical scalar spin-susceptibility adapter for the non-magnetic transient
 /// reduction.  Other strings are not enough to establish the DOS convention
 /// and therefore remain unsupported until a tensor/charge-spin contract exists.
@@ -288,13 +335,34 @@ fn migrate_v0_2_to_v0_3(value: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject future spatial intent before the legacy typed study can discard it.
+/// Missing fields retain historical 3D semantics; null is explicit presence.
+fn reject_unversioned_spatial_representation(value: &Value) -> Result<(), String> {
+    if value
+        .get("study")
+        .and_then(Value::as_object)
+        .is_some_and(|study| study.contains_key("spatial_representation"))
+    {
+        return Err(
+            concat!(
+                "/study/spatial_representation requires the typed ProblemIRV04 study contract; ",
+                "the legacy StudyIR wire cannot represent this intent"
+            )
+            .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn migrate_problem_ir_json_value_for_direct_read(value: &mut Value) -> Result<bool, String> {
     match problem_ir_version(value)? {
         CURRENT_IR_VERSION => {
+            reject_unversioned_spatial_representation(value)?;
             validate_public_metadata_versions(value, CURRENT_IR_VERSION)?;
             Ok(false)
         }
         PREVIOUS_PUBLIC_IR_VERSION => {
+            reject_unversioned_spatial_representation(value)?;
             migrate_v0_2_to_v0_3(value)?;
             Ok(true)
         }
@@ -309,6 +377,13 @@ fn migrate_problem_ir_json_value_for_direct_read(value: &mut Value) -> Result<bo
 /// migrations in order.
 pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
     let version = problem_ir_version(value)?.to_string();
+    if matches!(
+        version.as_str(),
+        CURRENT_IR_VERSION | PREVIOUS_PUBLIC_IR_VERSION | LEGACY_PUBLIC_IR_VERSION
+    ) {
+        // Reject before the explicit chain can mutate historical data.
+        reject_unversioned_spatial_representation(value)?;
+    }
     if version == CURRENT_IR_VERSION {
         return Ok(false);
     }
@@ -361,6 +436,20 @@ pub struct ProblemIR {
     pub current_modules: Vec<CurrentModuleIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<RegionalFieldDriveIR>,
+    /// Typed composition-first microwave antenna resources.  These fields
+    /// are additive to the 0.3 wire contract so existing scenes remain
+    /// readable while antenna authoring can already use the canonical
+    /// PhysicsObject/CurrentTransport lineage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_port_modes: Vec<AntennaPortModeIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_field_solve_stages: Vec<AntennaFieldSolveStageIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_target_projections: Vec<AntennaTargetProjectionRefIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solved_antenna_drives: Vec<SolvedAntennaDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_spectrum_requests: Vec<AntennaSpectrumRequestIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ExcitationAnalysisIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -477,6 +566,16 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             field_drives: Vec<RegionalFieldDriveIR>,
             #[serde(default)]
+            antenna_port_modes: Vec<AntennaPortModeIR>,
+            #[serde(default)]
+            antenna_field_solve_stages: Vec<AntennaFieldSolveStageIR>,
+            #[serde(default)]
+            antenna_target_projections: Vec<AntennaTargetProjectionRefIR>,
+            #[serde(default)]
+            solved_antenna_drives: Vec<SolvedAntennaDriveIR>,
+            #[serde(default)]
+            antenna_spectrum_requests: Vec<AntennaSpectrumRequestIR>,
+            #[serde(default)]
             excitation_analysis: Option<ExcitationAnalysisIR>,
             #[serde(default)]
             spin_torque_modules: Vec<SpinTorqueModuleIR>,
@@ -541,6 +640,11 @@ impl<'de> Deserialize<'de> for ProblemIR {
             validation_profile: wire.validation_profile,
             current_modules: wire.current_modules,
             field_drives: wire.field_drives,
+            antenna_port_modes: wire.antenna_port_modes,
+            antenna_field_solve_stages: wire.antenna_field_solve_stages,
+            antenna_target_projections: wire.antenna_target_projections,
+            solved_antenna_drives: wire.solved_antenna_drives,
+            antenna_spectrum_requests: wire.antenna_spectrum_requests,
             excitation_analysis: wire.excitation_analysis,
             spin_torque_modules: wire.spin_torque_modules,
             spin_transport_modules: wire.spin_transport_modules,
@@ -693,6 +797,11 @@ impl ProblemIR {
             },
             current_modules: Vec::new(),
             field_drives: Vec::new(),
+            antenna_port_modes: Vec::new(),
+            antenna_field_solve_stages: Vec::new(),
+            antenna_target_projections: Vec::new(),
+            solved_antenna_drives: Vec::new(),
+            antenna_spectrum_requests: Vec::new(),
             excitation_analysis: None,
             spin_torque_modules: Vec::new(),
             spin_transport_modules: Vec::new(),
@@ -787,6 +896,7 @@ impl ProblemIR {
             }
         }
         validate_current_modules(self, &mut errors);
+        validate_antenna_composition_v03(self, &mut errors);
         validate_field_drives(self, &mut errors);
         validate_planar_monitors(self, &mut errors);
         validate_spin_wave_response_request(self, &mut errors);
@@ -800,13 +910,14 @@ impl ProblemIR {
         validate_spin_transport_modules(self, &mut errors);
         validate_magnetoelastic(self, &mut errors);
         validate_region_owned_semantics(self, &mut errors);
-        if self.regions.is_empty() {
+        let antenna_study = matches!(self.study, StudyIR::AntennaFieldSolve { .. });
+        if !antenna_study && self.regions.is_empty() {
             errors.push("at least one region is required".to_string());
         }
-        if self.materials.is_empty() {
+        if !antenna_study && self.materials.is_empty() {
             errors.push("at least one material is required".to_string());
         }
-        if self.magnets.is_empty() {
+        if !antenna_study && self.magnets.is_empty() {
             errors.push("at least one magnet is required".to_string());
         }
         let has_material_anisotropy = self.materials.iter().any(|material| {
@@ -821,933 +932,22 @@ impl ProblemIR {
                 || material.kc2_field.is_some()
                 || material.kc3_field.is_some()
         });
-        if self.energy_terms.is_empty() && !has_material_anisotropy {
+        if !antenna_study && self.energy_terms.is_empty() && !has_material_anisotropy {
             errors.push("at least one interaction or material anisotropy is required".to_string());
         }
-        if matches!(
+        errors.extend(validate_study_contracts(
             &self.study,
-            StudyIR::Eigenmodes { .. } | StudyIR::FrequencyResponse { .. }
-        ) && self.study.sampling().outputs.is_empty()
-        {
-            errors.push("spectral study requires at least one output".to_string());
+            Some(&StudyRootValidationContext {
+                energy_terms: &self.energy_terms,
+                materials: &self.materials,
+                backend_policy: &self.backend_policy,
+                validation_profile: &self.validation_profile,
+                pbc: self.pbc.as_ref(),
+            }),
+        ));
+        if let Err(error) = self.study.validate_antenna_selection(&self.antenna_field_solve_stages) {
+            errors.push(error);
         }
-        for output in &self.study.sampling().outputs {
-            match output {
-                OutputIR::FieldResolvedAuto {
-                    requested_policy, ..
-                } => validate_sampling_period_policy(
-                    "field_resolved_auto output",
-                    requested_policy,
-                    &mut errors,
-                ),
-                OutputIR::ScalarResolvedAuto {
-                    requested_policy, ..
-                } => validate_sampling_period_policy(
-                    "scalar_resolved_auto output",
-                    requested_policy,
-                    &mut errors,
-                ),
-                _ => {}
-            }
-            match output {
-                OutputIR::Field {
-                    name,
-                    every_seconds,
-                }
-                | OutputIR::FieldResolvedAuto {
-                    name,
-                    every_seconds,
-                    ..
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("field output name must not be empty".to_string());
-                    }
-                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
-                        errors.push(format!(
-                            "field output '{}' must have finite positive every_seconds",
-                            name
-                        ));
-                    }
-                }
-                OutputIR::FieldAuto {
-                    name,
-                    sample_period_policy,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("field_auto output name must not be empty".to_string());
-                    }
-                    validate_sampling_period_policy(
-                        "field_auto output",
-                        sample_period_policy,
-                        &mut errors,
-                    );
-                }
-                OutputIR::Scalar {
-                    name,
-                    every_seconds,
-                }
-                | OutputIR::ScalarResolvedAuto {
-                    name,
-                    every_seconds,
-                    ..
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("scalar output name must not be empty".to_string());
-                    }
-                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
-                        errors.push(format!(
-                            "scalar output '{}' must have finite positive every_seconds",
-                            name
-                        ));
-                    }
-                }
-                OutputIR::ScalarAuto {
-                    name,
-                    sample_period_policy,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("scalar_auto output name must not be empty".to_string());
-                    }
-                    validate_sampling_period_policy(
-                        "scalar_auto output",
-                        sample_period_policy,
-                        &mut errors,
-                    );
-                }
-                OutputIR::Snapshot {
-                    field,
-                    component,
-                    every_seconds,
-                    ..
-                } => {
-                    if field.trim().is_empty() {
-                        errors.push("snapshot field name must not be empty".to_string());
-                    }
-                    let valid_components = ["x", "y", "z", "3D"];
-                    if !valid_components.contains(&component.as_str()) {
-                        errors.push(format!(
-                            "snapshot component '{}' must be one of: x, y, z, 3D",
-                            component
-                        ));
-                    }
-                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
-                        errors.push(format!(
-                            "snapshot '{}' must have finite positive every_seconds",
-                            field
-                        ));
-                    }
-                }
-                OutputIR::EigenSpectrum { quantity } => {
-                    if quantity.trim().is_empty() {
-                        errors.push("eigen_spectrum quantity must not be empty".to_string());
-                    }
-                }
-                OutputIR::EigenMode { field, indices } => {
-                    if field.trim().is_empty() {
-                        errors.push("eigen_mode field must not be empty".to_string());
-                    }
-                    if indices.is_empty() {
-                        errors.push("eigen_mode must contain at least one mode index".to_string());
-                    }
-                }
-                OutputIR::DispersionCurve { name } => {
-                    if name.trim().is_empty() {
-                        errors.push("dispersion_curve name must not be empty".to_string());
-                    }
-                }
-                OutputIR::FrequencyResponseOutput { .. } => {
-                    // Observable enum constrains response output names.
-                }
-                OutputIR::EigenDiagnostics { .. } => {
-                    // No additional validation needed for diagnostics flags
-                }
-                OutputIR::SaveQuantity {
-                    quantity_id,
-                    every_seconds,
-                    ..
-                } => {
-                    if quantity_id.trim().is_empty() {
-                        errors.push("save_quantity quantity_id must not be empty".to_string());
-                    }
-                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
-                        errors.push(format!(
-                            "save_quantity '{}' must have finite positive every_seconds",
-                            quantity_id
-                        ));
-                    }
-                }
-            }
-        }
-        if let Some(table_autosave) = &self.study.sampling().table_autosave {
-            if table_autosave.kind != "table_autosave" {
-                errors.push("sampling.table_autosave.kind must be 'table_autosave'".to_string());
-            }
-            if table_autosave.table_id.trim().is_empty() {
-                errors.push("sampling.table_autosave.table_id must not be empty".to_string());
-            }
-            match (
-                table_autosave.sample_period_s,
-                table_autosave.sample_period_policy.as_ref(),
-                table_autosave.resolved_sample_period_s,
-                table_autosave.every_steps,
-            ) {
-                (None, None, None, None) => errors.push(
-                    "sampling.table_autosave requires sample_period_s or sample_period_policy"
-                        .to_string(),
-                ),
-                (Some(sample_period_s), None, None, None) => {
-                    if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
-                        errors.push(
-                            "sampling.table_autosave.sample_period_s must be finite and positive"
-                                .to_string(),
-                        );
-                    }
-                }
-                (None, Some(policy), None, None) => validate_sampling_period_policy(
-                    "sampling.table_autosave.sample_period_policy",
-                    policy,
-                    &mut errors,
-                ),
-                (None, Some(policy), Some(resolved_sample_period_s), None) => {
-                    if !resolved_sample_period_s.is_finite() || resolved_sample_period_s <= 0.0 {
-                        errors.push(
-                            "sampling.table_autosave.resolved_sample_period_s must be finite and positive"
-                                .to_string(),
-                        );
-                    }
-                    validate_sampling_period_policy(
-                        "sampling.table_autosave.sample_period_policy",
-                        policy,
-                        &mut errors,
-                    );
-                }
-                (None, None, None, Some(every_steps)) => {
-                    if every_steps == 0 {
-                        errors.push(
-                            "sampling.table_autosave.every_steps must be a positive accepted-step count"
-                                .to_string(),
-                        );
-                    }
-                }
-                _ => errors.push(
-                    "sampling.table_autosave cadence state is ambiguous; use exactly one of explicit sample_period_s, unresolved sample_period_policy, sample_period_policy with resolved_sample_period_s, or every_steps"
-                        .to_string(),
-                ),
-            }
-            let is_relaxation = matches!(&self.study, StudyIR::Relaxation { .. });
-            if table_autosave.accepted_step_cadence().is_some() && !is_relaxation {
-                errors.push(
-                    "sampling.table_autosave.every_steps is only valid for relaxation studies"
-                        .to_string(),
-                );
-            }
-            if table_autosave.accepted_step_cadence().is_none() && is_relaxation {
-                errors.push(
-                    "relaxation table_autosave must use every_steps; simulation-time cadence is not physically meaningful for relaxation"
-                        .to_string(),
-                );
-            }
-            if table_autosave.quantities.is_empty() {
-                errors.push("sampling.table_autosave.quantities must not be empty".to_string());
-            }
-            for quantity in &table_autosave.quantities {
-                if quantity.trim().is_empty() {
-                    errors.push(
-                        "sampling.table_autosave.quantities must not contain empty ids".to_string(),
-                    );
-                }
-            }
-        }
-        if let Some(stage_autosave) = &self.study.sampling().stage_autosave {
-            if let Err(stage_errors) = stage_autosave.validate_for_study(&self.study) {
-                errors.extend(stage_errors);
-            }
-        }
-        match &self.study {
-            StudyIR::TimeEvolution { dynamics, .. } => {
-                validate_study_dynamics(dynamics, &mut errors);
-                for output in &self.study.sampling().outputs {
-                    if matches!(
-                        output,
-                        OutputIR::EigenSpectrum { .. }
-                            | OutputIR::EigenMode { .. }
-                            | OutputIR::DispersionCurve { .. }
-                            | OutputIR::FrequencyResponseOutput { .. }
-                    ) {
-                        errors.push(
-                            "time_evolution outputs must be field/scalar/snapshot requests"
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-            StudyIR::Relaxation {
-                algorithm,
-                dynamics,
-                stop,
-                ..
-            } => {
-                match (algorithm, dynamics) {
-                    (RelaxationAlgorithmIR::LlgOverdamped, Some(dynamics)) => {
-                        validate_study_dynamics(dynamics, &mut errors);
-                    }
-                    (RelaxationAlgorithmIR::LlgOverdamped, None) => errors.push(
-                        "relaxation algorithm 'llg_overdamped' requires dynamics".to_string(),
-                    ),
-                    (_, Some(_)) => errors.push(format!(
-                        "relaxation algorithm '{}' is a direct minimizer and requires dynamics=None",
-                        algorithm.as_str()
-                    )),
-                    (_, None) => {}
-                }
-                if stop
-                    .torque_tolerance_apm
-                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
-                {
-                    errors.push(
-                        "relaxation.stop.torque_tolerance_apm must be finite and positive"
-                            .to_string(),
-                    );
-                }
-                if stop
-                    .energy_tolerance_j
-                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
-                {
-                    errors.push(
-                        "relaxation.stop.energy_tolerance_j must be finite and positive when provided"
-                            .to_string(),
-                    );
-                }
-                if stop.max_steps.is_some_and(|value| value == 0) {
-                    errors.push("relaxation.stop.max_steps must be > 0".to_string());
-                }
-                if stop
-                    .max_relaxation_time_s
-                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
-                {
-                    errors.push(
-                        "relaxation.stop.max_relaxation_time_s must be finite and positive when provided"
-                            .to_string(),
-                    );
-                }
-                if *algorithm != RelaxationAlgorithmIR::LlgOverdamped
-                    && stop.max_relaxation_time_s.is_some()
-                {
-                    errors.push(format!(
-                        "relaxation algorithm '{}' is a direct minimizer and does not accept max_relaxation_time_s",
-                        algorithm.as_str()
-                    ));
-                }
-                if stop.torque_tolerance_apm.is_none()
-                    && stop.energy_tolerance_j.is_none()
-                    && stop.max_steps.is_none()
-                    && stop.max_relaxation_time_s.is_none()
-                {
-                    errors.push("relaxation.stop requires at least one stop criterion".to_string());
-                }
-                for output in &self.study.sampling().outputs {
-                    if matches!(
-                        output,
-                        OutputIR::EigenSpectrum { .. }
-                            | OutputIR::EigenMode { .. }
-                            | OutputIR::DispersionCurve { .. }
-                            | OutputIR::FrequencyResponseOutput { .. }
-                    ) {
-                        errors.push(
-                            "relaxation outputs must be field/scalar/snapshot requests".to_string(),
-                        );
-                    }
-                }
-            }
-            StudyIR::Eigenmodes {
-                dynamics,
-                operator,
-                count,
-                target,
-                equilibrium,
-                k_sampling,
-                bias_field_sweep,
-                damping_policy,
-                spin_wave_bc,
-                magnetostatic_bc,
-                ..
-            } => {
-                validate_frequency_response_dynamics(dynamics, &mut errors);
-                if *count == 0 {
-                    errors.push("eigenmodes.count must be > 0".to_string());
-                }
-                match operator.kind {
-                    EigenOperatorIR::LinearizedLlg => {}
-                    EigenOperatorIR::Full2x2 => {}
-                }
-                match target {
-                    EigenTargetIR::Lowest => {}
-                    EigenTargetIR::Nearest { frequency_hz } => {
-                        if *frequency_hz <= 0.0 {
-                            errors.push(
-                                "eigenmodes.target.frequency_hz must be positive".to_string(),
-                            );
-                        }
-                    }
-                    EigenTargetIR::FrequencyWindow {
-                        frequency_min_hz,
-                        frequency_max_hz,
-                    } => {
-                        if *frequency_min_hz <= 0.0 {
-                            errors.push(
-                                "eigenmodes.target.frequency_min_hz must be positive".to_string(),
-                            );
-                        }
-                        if *frequency_max_hz <= 0.0 {
-                            errors.push(
-                                "eigenmodes.target.frequency_max_hz must be positive".to_string(),
-                            );
-                        }
-                        if frequency_min_hz >= frequency_max_hz {
-                            errors.push(
-                                "eigenmodes.target.frequency_min_hz must be less than frequency_max_hz".to_string(),
-                            );
-                        }
-                    }
-                }
-                if let EquilibriumSourceIR::Artifact { path } = equilibrium {
-                    if path.trim().is_empty() {
-                        errors.push(
-                            "eigenmodes.equilibrium artifact path must not be empty".to_string(),
-                        );
-                    }
-                }
-                if let Some(KSamplingIR::Single { k_vector }) = k_sampling {
-                    if !k_vector.iter().all(|value| value.is_finite()) {
-                        errors.push(
-                            "eigenmodes.k_sampling.k_vector must contain finite values".to_string(),
-                        );
-                    }
-                }
-                if let Some(KSamplingIR::Path {
-                    points,
-                    samples_per_segment,
-                    closed,
-                }) = k_sampling
-                {
-                    validate_k_sampling_path(
-                        "eigenmodes.k_sampling.path",
-                        points,
-                        samples_per_segment,
-                        *closed,
-                        &mut errors,
-                    );
-                }
-                if let Some(sweep) = bias_field_sweep {
-                    if sweep.samples_a_per_m.is_empty() {
-                        errors.push(
-                            "eigenmodes.bias_field_sweep.samples_a_per_m must not be empty"
-                                .to_string(),
-                        );
-                    }
-                    for (sample_index, sample) in sweep.samples_a_per_m.iter().enumerate() {
-                        if !sample.iter().all(|value| value.is_finite()) {
-                            errors.push(format!(
-                                "eigenmodes.bias_field_sweep.samples_a_per_m[{sample_index}] must contain finite A/m values"
-                            ));
-                        }
-                    }
-                    if sweep.ordering != "declared" {
-                        errors.push(
-                            "eigenmodes.bias_field_sweep.ordering must be 'declared'".to_string(),
-                        );
-                    }
-                    if !matches!(
-                        k_sampling,
-                        Some(KSamplingIR::Single {
-                            k_vector: [0.0, 0.0, 0.0]
-                        })
-                    ) {
-                        errors
-                            .push("eigenmodes.bias_field_sweep_requires_single_gamma".to_string());
-                    }
-                    if !operator.include_demag
-                        || !self
-                            .energy_terms
-                            .iter()
-                            .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
-                    {
-                        errors.push("eigenmodes.bias_field_sweep_requires_demag".to_string());
-                    }
-                    if *magnetostatic_bc != MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
-                        errors.push(
-                            "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0".to_string(),
-                        );
-                    }
-                    if *damping_policy != EigenDampingPolicyIR::Ignore {
-                        errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
-                    }
-                    if self
-                        .materials
-                        .iter()
-                        .any(|material| material.damping != 0.0)
-                    {
-                        errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
-                    }
-                    if self.backend_policy.execution_precision != ExecutionPrecision::Double {
-                        errors.push(
-                            "eigenmodes.bias_field_sweep_requires_double_precision".to_string(),
-                        );
-                    }
-                    if self.validation_profile.execution_mode != ExecutionMode::Strict {
-                        errors.push(
-                            "eigenmodes.bias_field_sweep_requires_strict_execution_mode"
-                                .to_string(),
-                        );
-                    }
-                    match &self.pbc {
-                        Some(periodicity)
-                            if periodicity.axes
-                                == [
-                                    AxisBoundary::Periodic,
-                                    AxisBoundary::Periodic,
-                                    AxisBoundary::Open,
-                                ] => {}
-                        Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
-                            errors.push(
-                                "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d".to_string(),
-                            );
-                        }
-                        _ => errors.push(
-                            "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z".to_string(),
-                        ),
-                    }
-                }
-                if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
-                    if !operator.include_demag {
-                        errors.push("eigenmodes.k0_periodic_airbox_requires_demag".to_string());
-                    }
-                    if spin_wave_bc.kind() != SpinWaveBoundaryKindIR::Periodic {
-                        errors.push(
-                            "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc"
-                                .to_string(),
-                        );
-                    }
-                    if !matches!(
-                        k_sampling,
-                        Some(KSamplingIR::Single {
-                            k_vector: [0.0, 0.0, 0.0]
-                        })
-                    ) {
-                        errors.push(
-                            "eigenmodes.k0_periodic_airbox_requires_exact_zero_k".to_string(),
-                        );
-                    }
-                    if *damping_policy != EigenDampingPolicyIR::Ignore {
-                        errors
-                            .push("eigenmodes.k0_periodic_airbox_requires_alpha_zero".to_string());
-                    }
-                    if self.backend_policy.execution_precision != ExecutionPrecision::Double {
-                        errors.push(
-                            "eigenmodes.k0_periodic_airbox_requires_double_precision".to_string(),
-                        );
-                    }
-                    if !self
-                        .energy_terms
-                        .iter()
-                        .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
-                    {
-                        errors.push(
-                            "eigenmodes.k0_periodic_airbox_requires_demag_energy".to_string(),
-                        );
-                    }
-                    match &self.pbc {
-                        Some(periodicity)
-                            if periodicity.axes
-                                == [
-                                    AxisBoundary::Periodic,
-                                    AxisBoundary::Periodic,
-                                    AxisBoundary::Open,
-                                ] => {}
-                        Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
-                            errors.push(
-                                "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d"
-                                    .to_string(),
-                            );
-                        }
-                        _ => errors.push(
-                            "eigenmodes.k0_periodic_airbox_requires_xy_periodic_open_z".to_string(),
-                        ),
-                    }
-                }
-                let has_mode_output = self
-                    .study
-                    .sampling()
-                    .outputs
-                    .iter()
-                    .any(|output| matches!(output, OutputIR::EigenMode { .. }));
-                let has_spectrum_output = self
-                    .study
-                    .sampling()
-                    .outputs
-                    .iter()
-                    .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
-                if !has_mode_output && !has_spectrum_output {
-                    errors.push(
-                        "eigenmodes study requires at least one eigen_spectrum or eigen_mode output"
-                            .to_string(),
-                    );
-                }
-                for output in &self.study.sampling().outputs {
-                    if matches!(
-                        output,
-                        OutputIR::Field { .. }
-                            | OutputIR::FieldAuto { .. }
-                            | OutputIR::FieldResolvedAuto { .. }
-                            | OutputIR::Scalar { .. }
-                            | OutputIR::ScalarAuto { .. }
-                            | OutputIR::ScalarResolvedAuto { .. }
-                            | OutputIR::Snapshot { .. }
-                    ) {
-                        errors.push(
-                            "eigenmodes outputs must be eigen_spectrum/eigen_mode/dispersion_curve requests"
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-            StudyIR::FrequencyResponse {
-                dynamics,
-                operator,
-                equilibrium,
-                k_sampling,
-                excitation,
-                frequencies_hz,
-                solver_policy,
-                ..
-            } => {
-                validate_frequency_response_dynamics(dynamics, &mut errors);
-                match operator.kind {
-                    EigenOperatorIR::LinearizedLlg => {}
-                    EigenOperatorIR::Full2x2 => {}
-                }
-                if let EquilibriumSourceIR::Artifact { path } = equilibrium {
-                    if path.trim().is_empty() {
-                        errors.push(
-                            "frequency_response.equilibrium artifact path must not be empty"
-                                .to_string(),
-                        );
-                    }
-                }
-                if let Some(KSamplingIR::Single { k_vector }) = k_sampling {
-                    if !k_vector.iter().all(|value| value.is_finite()) {
-                        errors.push(
-                            "frequency_response.k_sampling.k_vector must contain finite values"
-                                .to_string(),
-                        );
-                    }
-                }
-                if let Some(KSamplingIR::Path {
-                    points,
-                    samples_per_segment,
-                    closed,
-                }) = k_sampling
-                {
-                    validate_k_sampling_path(
-                        "frequency_response.k_sampling.path",
-                        points,
-                        samples_per_segment,
-                        *closed,
-                        &mut errors,
-                    );
-                }
-                if !excitation
-                    .field_au_per_m
-                    .iter()
-                    .all(|value| value.is_finite())
-                {
-                    errors.push(
-                        "frequency_response.excitation.field_au_per_m must contain finite values"
-                            .to_string(),
-                    );
-                }
-                if !excitation.phase_rad.is_finite() {
-                    errors
-                        .push("frequency_response.excitation.phase_rad must be finite".to_string());
-                }
-                if frequencies_hz.values_hz.is_empty() {
-                    errors.push(
-                        "frequency_response.frequencies_hz.values_hz must not be empty".to_string(),
-                    );
-                }
-                if frequencies_hz
-                    .values_hz
-                    .iter()
-                    .any(|value| !value.is_finite() || *value <= 0.0)
-                {
-                    errors.push(
-                        "frequency_response.frequencies_hz.values_hz entries must be finite and > 0"
-                            .to_string(),
-                    );
-                }
-                if let Some(policy) = solver_policy {
-                    if let Some(rtol) = policy.rtol {
-                        if !rtol.is_finite() || rtol <= 0.0 {
-                            errors.push(
-                                "frequency_response.solver_policy.rtol must be finite and > 0"
-                                    .to_string(),
-                            );
-                        }
-                    }
-                    if let Some(0) = policy.max_iterations {
-                        errors.push(
-                            "frequency_response.solver_policy.max_iterations must be > 0"
-                                .to_string(),
-                        );
-                    }
-                    if let Some(0) = policy.restart_iterations {
-                        errors.push(
-                            "frequency_response.solver_policy.restart_iterations must be > 0"
-                                .to_string(),
-                        );
-                    }
-                    if let (Some(restart), Some(max)) =
-                        (policy.restart_iterations, policy.max_iterations)
-                    {
-                        if restart > max {
-                            errors.push(
-                                "frequency_response.solver_policy.restart_iterations must be <= max_iterations"
-                                    .to_string(),
-                            );
-                        }
-                    }
-                }
-                let has_mode_output = self
-                    .study
-                    .sampling()
-                    .outputs
-                    .iter()
-                    .any(|output| matches!(output, OutputIR::EigenMode { .. }));
-                let has_spectrum_output = self
-                    .study
-                    .sampling()
-                    .outputs
-                    .iter()
-                    .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
-                let has_response_output = self
-                    .study
-                    .sampling()
-                    .outputs
-                    .iter()
-                    .any(|output| matches!(output, OutputIR::FrequencyResponseOutput { .. }));
-                if !has_mode_output && !has_spectrum_output && !has_response_output {
-                    errors.push(
-                        "frequency_response study requires at least one frequency_response_output, eigen_spectrum, or eigen_mode output"
-                            .to_string(),
-                    );
-                }
-                for output in &self.study.sampling().outputs {
-                    if matches!(
-                        output,
-                        OutputIR::Field { .. }
-                            | OutputIR::FieldAuto { .. }
-                            | OutputIR::FieldResolvedAuto { .. }
-                            | OutputIR::Scalar { .. }
-                            | OutputIR::ScalarAuto { .. }
-                            | OutputIR::ScalarResolvedAuto { .. }
-                            | OutputIR::Snapshot { .. }
-                    ) {
-                        errors.push(
-                            "frequency_response outputs must be frequency_response_output/eigen_spectrum/eigen_mode/dispersion_curve requests"
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-            StudyIR::Hysteresis {
-                direction,
-                orientation,
-                measurement_axis,
-                angular_family,
-                initial_protocol,
-                initial_state_ref,
-                saturation,
-                branch_mode,
-                storage,
-                field_min_mT,
-                field_max_mT,
-                field_step_mT,
-                field_values_mT,
-                field_unit_provenance,
-                settle_pipeline,
-                field_schedule,
-                schedule_refinements,
-                adaptive_refinement,
-                minor_loops,
-                ..
-            } => {
-                if field_min_mT.is_some_and(|value| !value.is_finite()) {
-                    errors
-                        .push("study.stages[].hysteresis.field_min_mT must be finite".to_string());
-                }
-                if field_max_mT.is_some_and(|value| !value.is_finite()) {
-                    errors
-                        .push("study.stages[].hysteresis.field_max_mT must be finite".to_string());
-                }
-                if let Some(d) = direction {
-                    if !vector_is_finite(d) {
-                        errors.push(
-                            "study.stages[].hysteresis.direction must contain finite values"
-                                .to_string(),
-                        );
-                    } else if vector_norm_sq(d) <= 1e-30 {
-                        errors.push(
-                            "study.stages[].hysteresis.direction must not be the zero vector"
-                                .to_string(),
-                        );
-                    }
-                }
-                validate_hysteresis_orientation(orientation.as_ref(), &mut errors);
-                validate_hysteresis_measurement_axis(measurement_axis, &mut errors);
-                if let Some(family) = angular_family {
-                    validate_hysteresis_angular_family(family, &mut errors);
-                }
-                if !matches!(
-                    initial_protocol.as_str(),
-                    "as_authored"
-                        | "zero_field_relaxed"
-                        | "positive_saturation"
-                        | "negative_saturation"
-                        | "checkpoint"
-                ) {
-                    errors.push(
-                        "study.stages[].hysteresis.initial_protocol is unsupported".to_string(),
-                    );
-                }
-                if initial_protocol == "checkpoint"
-                    && initial_state_ref.as_deref().is_none_or(str::is_empty)
-                {
-                    errors.push(
-                        "study.stages[].hysteresis.initial_state_ref is required when initial_protocol is checkpoint"
-                            .to_string(),
-                    );
-                }
-                if !matches!(
-                    branch_mode.as_str(),
-                    "major_loop"
-                        | "major_with_minor_loops"
-                        | "virgin_curve"
-                        | "virgin_then_major_loop"
-                ) {
-                    errors.push("study.stages[].hysteresis.branch_mode is unsupported".to_string());
-                }
-                if let Some(probe) = saturation {
-                    validate_hysteresis_saturation_probe(probe, &mut errors);
-                }
-                if let Some(policy) = storage {
-                    validate_hysteresis_storage(policy, &mut errors);
-                }
-                if field_values_mT.as_ref().is_some_and(Vec::is_empty) {
-                    errors.push(
-                        "study.stages[].hysteresis.field_values_mT must not be empty".to_string(),
-                    );
-                }
-                if let Some(values) = field_values_mT {
-                    for (idx, value) in values.iter().enumerate() {
-                        if !value.is_finite() {
-                            errors.push(format!(
-                                "study.stages[].hysteresis.field_values_mT[{}] must be finite",
-                                idx
-                            ));
-                        }
-                    }
-                }
-                if let Some(provenance) = field_unit_provenance {
-                    validate_hysteresis_field_unit_provenance(provenance, &mut errors);
-                }
-                if let Some(step) = field_step_mT {
-                    if !step.is_finite() {
-                        errors.push(
-                            "study.stages[].hysteresis.field_step_mT must be finite".to_string(),
-                        );
-                    } else if *step == 0.0 {
-                        errors.push(
-                            "study.stages[].hysteresis.field_step_mT must not be zero".to_string(),
-                        );
-                    }
-                }
-                if let Some(sched) = field_schedule {
-                    if sched.segments.is_empty() {
-                        errors.push(
-                            "study.stages[].hysteresis.field_schedule.segments must not be empty"
-                                .to_string(),
-                        );
-                    }
-                    for (idx, seg) in sched.segments.iter().enumerate() {
-                        if seg.segment_id.trim().is_empty() {
-                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].segment_id must not be empty", idx));
-                        }
-                        if seg.step <= 0.0 {
-                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].step must be positive", idx));
-                        }
-                        if !seg.start.is_finite() || !seg.stop.is_finite() || !seg.step.is_finite()
-                        {
-                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}] start, stop, and step must be finite", idx));
-                        }
-                        if seg.start == seg.stop {
-                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].start and stop must differ", idx));
-                        }
-                        if !matches!(
-                            seg.endpoint_policy.as_str(),
-                            "include_stop" | "skip_start" | "include_both"
-                        ) {
-                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].endpoint_policy is unsupported", idx));
-                        }
-                    }
-                }
-                if let Some(windows) = schedule_refinements {
-                    validate_hysteresis_field_windows(windows, &mut errors);
-                }
-                if let Some(policy) = adaptive_refinement {
-                    validate_hysteresis_adaptive_refinement(policy, &mut errors);
-                }
-                if let Some(loops) = minor_loops {
-                    validate_hysteresis_minor_loops(loops, &mut errors);
-                }
-                if let Some(pipeline) = settle_pipeline {
-                    match pipeline {
-                        SettlePipelineIR::Sequence { steps } => {
-                            if steps.is_empty() {
-                                errors.push(
-                                    "study.stages[].hysteresis.settle_pipeline must not be empty"
-                                        .to_string(),
-                                );
-                            }
-                            for (idx, step) in steps.iter().enumerate() {
-                                validate_settle_step(step, idx, &mut errors);
-                                if settle_non_convergence(step) == "run_next_algorithm"
-                                    && idx + 1 == steps.len()
-                                {
-                                    errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].on_non_convergence run_next_algorithm requires a following step", idx));
-                                }
-                            }
-                        }
-                        SettlePipelineIR::Tree { default, branches } => {
-                            validate_settle_step(default, 0, &mut errors);
-                            if settle_non_convergence(default) == "run_next_algorithm"
-                                && !branches.iter().any(|branch| {
-                                    matches!(
-                                        branch.when.as_str(),
-                                        "non_converged" | "fallback" | "run_next_algorithm"
-                                    )
-                                })
-                            {
-                                errors.push("study.stages[].hysteresis.settle_pipeline.default.on_non_convergence run_next_algorithm requires a non_converged fallback branch".to_string());
-                            }
-                            for (idx, branch) in branches.iter().enumerate() {
-                                validate_settle_step(&branch.run, idx + 1, &mut errors);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         for magnet in &self.magnets {
             if let Some(ref init_mag) = magnet.initial_magnetization {
                 match init_mag {
@@ -2003,6 +1203,50 @@ impl ProblemIR {
                         ));
                     }
                 }
+                GeometryEntryIR::MicrostripAntenna {
+                    name,
+                    length_m,
+                    thickness_m,
+                    conductivity_s_per_m,
+                    transform,
+                    stations,
+                    return_width_m,
+                    return_offset_m,
+                    conductors,
+                    terminal_faces,
+                } => antenna::validate_microstrip_geometry(
+                    name,
+                    *length_m,
+                    *thickness_m,
+                    *conductivity_s_per_m,
+                    transform,
+                    stations,
+                    *return_width_m,
+                    *return_offset_m,
+                    conductors,
+                    terminal_faces,
+                    &mut errors,
+                ),
+                GeometryEntryIR::CpwAntenna {
+                    name,
+                    length_m,
+                    thickness_m,
+                    conductivity_s_per_m,
+                    transform,
+                    stations,
+                    conductors,
+                    terminal_faces,
+                } => antenna::validate_cpw_geometry(
+                    name,
+                    *length_m,
+                    *thickness_m,
+                    *conductivity_s_per_m,
+                    transform,
+                    stations,
+                    conductors,
+                    terminal_faces,
+                    &mut errors,
+                ),
                 GeometryEntryIR::Difference { name, base, tool } => {
                     if name.trim().is_empty() {
                         errors.push("difference geometry name must not be empty".to_string());
@@ -2290,39 +1534,6 @@ mod absorbing_boundary_tests {
         assert!(errors
             .iter()
             .any(|error| error.contains("faces must not contain duplicates")));
-    }
-}
-
-fn validate_k_sampling_path(
-    prefix: &str,
-    points: &[KPointIR],
-    samples_per_segment: &[u32],
-    closed: bool,
-    errors: &mut Vec<String>,
-) {
-    if points.len() < 2 {
-        errors.push(format!("{prefix} requires at least two control points"));
-    }
-    for point in points {
-        if !point.k_vector.iter().all(|v| v.is_finite()) {
-            errors.push(format!(
-                "{prefix} point k_vector must contain finite values"
-            ));
-        }
-    }
-    let expected_segments = if closed {
-        points.len()
-    } else {
-        points.len().saturating_sub(1)
-    };
-    if samples_per_segment.len() != expected_segments {
-        errors.push(format!(
-            "{prefix} expected {expected_segments} samples_per_segment entries, got {}",
-            samples_per_segment.len()
-        ));
-    }
-    if samples_per_segment.iter().any(|n| *n == 0) {
-        errors.push(format!("{prefix} samples_per_segment entries must be > 0"));
     }
 }
 
@@ -3741,5 +2952,1009 @@ fn validate_hysteresis_adaptive_refinement(
             "study.stages[].hysteresis.adaptive_refinement.min_step_mT must not exceed max_step_mT"
                 .to_string(),
         );
+    }
+}
+
+
+pub(crate) struct StudyRootValidationContext<'a> {
+    pub energy_terms: &'a [EnergyTermIR],
+    pub materials: &'a [MaterialIR],
+    pub backend_policy: &'a BackendPolicyIR,
+    pub validation_profile: &'a ValidationProfileIR,
+    pub pbc: Option<&'a FdmPeriodicityIR>,
+}
+
+pub(crate) fn validate_study_contracts(
+    study: &StudyIR,
+    root_context: Option<&StudyRootValidationContext<'_>>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+if matches!(
+    &study,
+    StudyIR::Eigenmodes { .. } | StudyIR::FrequencyResponse { .. }
+) && study.sampling().outputs.is_empty()
+{
+    errors.push("spectral study requires at least one output".to_string());
+}
+for output in &study.sampling().outputs {
+    match output {
+        OutputIR::FieldResolvedAuto {
+            requested_policy, ..
+        } => validate_sampling_period_policy(
+            "field_resolved_auto output",
+            requested_policy,
+            &mut errors,
+        ),
+        OutputIR::ScalarResolvedAuto {
+            requested_policy, ..
+        } => validate_sampling_period_policy(
+            "scalar_resolved_auto output",
+            requested_policy,
+            &mut errors,
+        ),
+        _ => {}
+    }
+    match output {
+        OutputIR::Field {
+            name,
+            every_seconds,
+        }
+        | OutputIR::FieldResolvedAuto {
+            name,
+            every_seconds,
+            ..
+        } => {
+            if name.trim().is_empty() {
+                errors.push("field output name must not be empty".to_string());
+            }
+            if !every_seconds.is_finite() || *every_seconds <= 0.0 {
+                errors.push(format!(
+                    "field output '{}' must have finite positive every_seconds",
+                    name
+                ));
+            }
+        }
+        OutputIR::FieldAuto {
+            name,
+            sample_period_policy,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("field_auto output name must not be empty".to_string());
+            }
+            validate_sampling_period_policy(
+                "field_auto output",
+                sample_period_policy,
+                &mut errors,
+            );
+        }
+        OutputIR::Scalar {
+            name,
+            every_seconds,
+        }
+        | OutputIR::ScalarResolvedAuto {
+            name,
+            every_seconds,
+            ..
+        } => {
+            if name.trim().is_empty() {
+                errors.push("scalar output name must not be empty".to_string());
+            }
+            if !every_seconds.is_finite() || *every_seconds <= 0.0 {
+                errors.push(format!(
+                    "scalar output '{}' must have finite positive every_seconds",
+                    name
+                ));
+            }
+        }
+        OutputIR::ScalarAuto {
+            name,
+            sample_period_policy,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("scalar_auto output name must not be empty".to_string());
+            }
+            validate_sampling_period_policy(
+                "scalar_auto output",
+                sample_period_policy,
+                &mut errors,
+            );
+        }
+        OutputIR::Snapshot {
+            field,
+            component,
+            every_seconds,
+            ..
+        } => {
+            if field.trim().is_empty() {
+                errors.push("snapshot field name must not be empty".to_string());
+            }
+            let valid_components = ["x", "y", "z", "3D"];
+            if !valid_components.contains(&component.as_str()) {
+                errors.push(format!(
+                    "snapshot component '{}' must be one of: x, y, z, 3D",
+                    component
+                ));
+            }
+            if !every_seconds.is_finite() || *every_seconds <= 0.0 {
+                errors.push(format!(
+                    "snapshot '{}' must have finite positive every_seconds",
+                    field
+                ));
+            }
+        }
+        OutputIR::EigenSpectrum { quantity, .. } => {
+            if quantity.trim().is_empty() {
+                errors.push("eigen_spectrum quantity must not be empty".to_string());
+            } else if !is_supported_eigen_spectrum_quantity(quantity) {
+                errors.push(format!(
+                    "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is '{CANONICAL_EIGEN_SPECTRUM_QUANTITY}'"
+                ));
+            }
+        }
+        OutputIR::EigenMode {
+            field,
+            all_modes,
+            indices,
+            branches,
+            sample_selector,
+        } => {
+            if field.trim().is_empty() {
+                errors.push("eigen_mode field must not be empty".to_string());
+            }
+            if !all_modes && indices.is_empty() && branches.is_empty() {
+                errors.push(
+                    "eigen_mode must contain at least one mode index or branch index"
+                        .to_string(),
+                );
+            }
+            if *all_modes && (!indices.is_empty() || !branches.is_empty()) {
+                errors.push("eigen_mode all_modes cannot be combined with indices or branches".to_string());
+            }
+            if indices
+                .iter()
+                .enumerate()
+                .any(|(index, value)| indices[index + 1..].contains(value))
+            {
+                errors.push("eigen_mode indices must be unique".to_string());
+            }
+            if branches
+                .iter()
+                .enumerate()
+                .any(|(index, value)| branches[index + 1..].contains(value))
+            {
+                errors.push("eigen_mode branches must be unique".to_string());
+            }
+            if let Some(selector) = sample_selector {
+                errors.extend(selector.validation_errors("eigen_mode.sample_selector"));
+            }
+        }
+        OutputIR::DispersionCurve {
+            name,
+            include_branch_table: _,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("dispersion_curve name must not be empty".to_string());
+            }
+        }
+        OutputIR::FrequencyResponseOutput { .. } => {
+            // Observable enum constrains response output names.
+        }
+        OutputIR::EigenDiagnostics { .. } => {
+            // No additional validation needed for diagnostics flags
+        }
+        OutputIR::SaveQuantity {
+            quantity_id,
+            every_seconds,
+            ..
+        } => {
+            if quantity_id.trim().is_empty() {
+                errors.push("save_quantity quantity_id must not be empty".to_string());
+            }
+            if !every_seconds.is_finite() || *every_seconds <= 0.0 {
+                errors.push(format!(
+                    "save_quantity '{}' must have finite positive every_seconds",
+                    quantity_id
+                ));
+            }
+        }
+    }
+}
+if let Some(table_autosave) = &study.sampling().table_autosave {
+    if table_autosave.kind != "table_autosave" {
+        errors.push("sampling.table_autosave.kind must be 'table_autosave'".to_string());
+    }
+    if table_autosave.table_id.trim().is_empty() {
+        errors.push("sampling.table_autosave.table_id must not be empty".to_string());
+    }
+    match (
+        table_autosave.sample_period_s,
+        table_autosave.sample_period_policy.as_ref(),
+        table_autosave.resolved_sample_period_s,
+        table_autosave.every_steps,
+    ) {
+        (None, None, None, None) => errors.push(
+            "sampling.table_autosave requires sample_period_s or sample_period_policy"
+                .to_string(),
+        ),
+        (Some(sample_period_s), None, None, None) => {
+            if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
+                errors.push(
+                    "sampling.table_autosave.sample_period_s must be finite and positive"
+                        .to_string(),
+                );
+            }
+        }
+        (None, Some(policy), None, None) => validate_sampling_period_policy(
+            "sampling.table_autosave.sample_period_policy",
+            policy,
+            &mut errors,
+        ),
+        (None, Some(policy), Some(resolved_sample_period_s), None) => {
+            if !resolved_sample_period_s.is_finite() || resolved_sample_period_s <= 0.0 {
+                errors.push(
+                    "sampling.table_autosave.resolved_sample_period_s must be finite and positive"
+                        .to_string(),
+                );
+            }
+            validate_sampling_period_policy(
+                "sampling.table_autosave.sample_period_policy",
+                policy,
+                &mut errors,
+            );
+        }
+        (None, None, None, Some(every_steps)) => {
+            if every_steps == 0 {
+                errors.push(
+                    "sampling.table_autosave.every_steps must be a positive accepted-step count"
+                        .to_string(),
+                );
+            }
+        }
+        _ => errors.push(
+            "sampling.table_autosave cadence state is ambiguous; use exactly one of explicit sample_period_s, unresolved sample_period_policy, sample_period_policy with resolved_sample_period_s, or every_steps"
+                .to_string(),
+        ),
+    }
+    let is_relaxation = matches!(&study, StudyIR::Relaxation { .. });
+    if table_autosave.accepted_step_cadence().is_some() && !is_relaxation {
+        errors.push(
+            "sampling.table_autosave.every_steps is only valid for relaxation studies"
+                .to_string(),
+        );
+    }
+    if table_autosave.accepted_step_cadence().is_none() && is_relaxation {
+        errors.push(
+            "relaxation table_autosave must use every_steps; simulation-time cadence is not physically meaningful for relaxation"
+                .to_string(),
+        );
+    }
+    if table_autosave.quantities.is_empty() {
+        errors.push("sampling.table_autosave.quantities must not be empty".to_string());
+    }
+    for quantity in &table_autosave.quantities {
+        if quantity.trim().is_empty() {
+            errors.push(
+                "sampling.table_autosave.quantities must not contain empty ids".to_string(),
+            );
+        }
+    }
+}
+if let Some(stage_autosave) = &study.sampling().stage_autosave {
+    if let Err(stage_errors) = stage_autosave.validate_for_study(&study) {
+        errors.extend(stage_errors);
+    }
+}
+match &study {
+    StudyIR::AntennaFieldSolve { sampling, .. } => {
+        if !sampling.outputs.is_empty()
+            || sampling.table_autosave.is_some()
+            || sampling.stage_autosave.is_some()
+        {
+            errors.push(
+                "antenna_field_solve uses stage output requests, not magnetic time sampling"
+                    .to_string(),
+            );
+        }
+    }
+    StudyIR::TimeEvolution { dynamics, .. } => {
+        validate_study_dynamics(dynamics, &mut errors);
+        for output in &study.sampling().outputs {
+            if matches!(
+                output,
+                OutputIR::EigenSpectrum { .. }
+                    | OutputIR::EigenMode { .. }
+                    | OutputIR::DispersionCurve { .. }
+                    | OutputIR::FrequencyResponseOutput { .. }
+            ) {
+                errors.push(
+                    "time_evolution outputs must be field/scalar/snapshot requests"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    StudyIR::Relaxation {
+        algorithm,
+        dynamics,
+        stop,
+        ..
+    } => {
+        match (algorithm, dynamics) {
+            (RelaxationAlgorithmIR::LlgOverdamped, Some(dynamics)) => {
+                validate_study_dynamics(dynamics, &mut errors);
+            }
+            (RelaxationAlgorithmIR::LlgOverdamped, None) => errors.push(
+                "relaxation algorithm 'llg_overdamped' requires dynamics".to_string(),
+            ),
+            (_, Some(_)) => errors.push(format!(
+                "relaxation algorithm '{}' is a direct minimizer and requires dynamics=None",
+                algorithm.as_str()
+            )),
+            (_, None) => {}
+        }
+        if stop
+            .torque_tolerance_apm
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
+        {
+            errors.push(
+                "relaxation.stop.torque_tolerance_apm must be finite and positive"
+                    .to_string(),
+            );
+        }
+        if stop
+            .energy_tolerance_j
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
+        {
+            errors.push(
+                "relaxation.stop.energy_tolerance_j must be finite and positive when provided"
+                    .to_string(),
+            );
+        }
+        if stop.max_steps.is_some_and(|value| value == 0) {
+            errors.push("relaxation.stop.max_steps must be > 0".to_string());
+        }
+        if stop
+            .max_relaxation_time_s
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
+        {
+            errors.push(
+                "relaxation.stop.max_relaxation_time_s must be finite and positive when provided"
+                    .to_string(),
+            );
+        }
+        if *algorithm != RelaxationAlgorithmIR::LlgOverdamped
+            && stop.max_relaxation_time_s.is_some()
+        {
+            errors.push(format!(
+                "relaxation algorithm '{}' is a direct minimizer and does not accept max_relaxation_time_s",
+                algorithm.as_str()
+            ));
+        }
+        if stop.torque_tolerance_apm.is_none()
+            && stop.energy_tolerance_j.is_none()
+            && stop.max_steps.is_none()
+            && stop.max_relaxation_time_s.is_none()
+        {
+            errors.push("relaxation.stop requires at least one stop criterion".to_string());
+        }
+        for output in &study.sampling().outputs {
+            if matches!(
+                output,
+                OutputIR::EigenSpectrum { .. }
+                    | OutputIR::EigenMode { .. }
+                    | OutputIR::DispersionCurve { .. }
+                    | OutputIR::FrequencyResponseOutput { .. }
+            ) {
+                errors.push(
+                    "relaxation outputs must be field/scalar/snapshot requests".to_string(),
+                );
+            }
+        }
+    }
+    StudyIR::Eigenmodes {
+        dynamics,
+        operator,
+        count,
+        target,
+        equilibrium,
+        k_sampling,
+        bias_field_sweep,
+        damping_policy,
+        spin_wave_bc,
+        magnetostatic_bc,
+        ..
+    } => {
+        validate_frequency_response_dynamics(dynamics, &mut errors);
+        if *count == 0 {
+            errors.push("eigenmodes.count must be > 0".to_string());
+        }
+        match operator.kind {
+            EigenOperatorIR::LinearizedLlg => {}
+            EigenOperatorIR::Full2x2 => {}
+        }
+        match target {
+            EigenTargetIR::Lowest => {}
+            EigenTargetIR::Nearest { frequency_hz } => {
+                if *frequency_hz <= 0.0 {
+                    errors.push(
+                        "eigenmodes.target.frequency_hz must be positive".to_string(),
+                    );
+                }
+            }
+            EigenTargetIR::FrequencyWindow {
+                frequency_min_hz,
+                frequency_max_hz,
+            } => {
+                if *frequency_min_hz <= 0.0 {
+                    errors.push(
+                        "eigenmodes.target.frequency_min_hz must be positive".to_string(),
+                    );
+                }
+                if *frequency_max_hz <= 0.0 {
+                    errors.push(
+                        "eigenmodes.target.frequency_max_hz must be positive".to_string(),
+                    );
+                }
+                if frequency_min_hz >= frequency_max_hz {
+                    errors.push(
+                        "eigenmodes.target.frequency_min_hz must be less than frequency_max_hz".to_string(),
+                    );
+                }
+            }
+        }
+        if let EquilibriumSourceIR::Artifact { path } = equilibrium {
+            if path.trim().is_empty() {
+                errors.push(
+                    "eigenmodes.equilibrium artifact path must not be empty".to_string(),
+                );
+            }
+        }
+        if let Some(k_sampling) = k_sampling {
+            errors.extend(k_sampling.validation_errors("eigenmodes.k_sampling"));
+        }
+        if let Some(sweep) = bias_field_sweep {
+            if sweep.samples_a_per_m.is_empty() {
+                errors.push(
+                    "eigenmodes.bias_field_sweep.samples_a_per_m must not be empty"
+                        .to_string(),
+                );
+            }
+            for (sample_index, sample) in sweep.samples_a_per_m.iter().enumerate() {
+                if !sample.iter().all(|value| value.is_finite()) {
+                    errors.push(format!(
+                        "eigenmodes.bias_field_sweep.samples_a_per_m[{sample_index}] must contain finite A/m values"
+                    ));
+                }
+            }
+            if sweep.ordering != "declared" {
+                errors.push(
+                    "eigenmodes.bias_field_sweep.ordering must be 'declared'".to_string(),
+                );
+            }
+            if !matches!(
+                k_sampling,
+                Some(KSamplingIR::Single {
+                    k_vector: [0.0, 0.0, 0.0]
+                })
+            ) {
+                errors
+                    .push("eigenmodes.bias_field_sweep_requires_single_gamma".to_string());
+            }
+            if !operator.include_demag {
+                errors.push("eigenmodes.bias_field_sweep_requires_demag".to_string());
+            } else if let Some(root_context) = root_context {
+                errors.extend(validate_eigenmodes_bias_sweep_demag_energy(root_context));
+            }
+            if *magnetostatic_bc != MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+                errors.push(
+                    "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0".to_string(),
+                );
+            }
+            if *damping_policy != EigenDampingPolicyIR::Ignore {
+                errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
+            }
+            if let Some(root_context) = root_context {
+                errors.extend(validate_eigenmodes_bias_sweep_root_context(root_context));
+            }
+        }
+        if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+            if !operator.include_demag {
+                errors.push("eigenmodes.k0_periodic_airbox_requires_demag".to_string());
+            }
+            if spin_wave_bc.kind() != SpinWaveBoundaryKindIR::Periodic {
+                errors.push(
+                    "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc"
+                        .to_string(),
+                );
+            }
+            if !matches!(
+                k_sampling,
+                Some(KSamplingIR::Single {
+                    k_vector: [0.0, 0.0, 0.0]
+                })
+            ) {
+                errors.push(
+                    "eigenmodes.k0_periodic_airbox_requires_exact_zero_k".to_string(),
+                );
+            }
+            if *damping_policy != EigenDampingPolicyIR::Ignore {
+                errors
+                    .push("eigenmodes.k0_periodic_airbox_requires_alpha_zero".to_string());
+            }
+            if let Some(root_context) = root_context {
+                errors.extend(validate_eigenmodes_k0_root_context(root_context));
+            }
+        }
+        let has_mode_output = study
+            .sampling()
+            .outputs
+            .iter()
+            .any(|output| matches!(output, OutputIR::EigenMode { .. }));
+        let has_spectrum_output = study
+            .sampling()
+            .outputs
+            .iter()
+            .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
+        let has_dispersion_output = study
+            .sampling()
+            .outputs
+            .iter()
+            .any(|output| matches!(output, OutputIR::DispersionCurve { .. }));
+        let has_diagnostics_output = study
+            .sampling()
+            .outputs
+            .iter()
+            .any(|output| matches!(output, OutputIR::EigenDiagnostics { .. }));
+        if !has_mode_output
+            && !has_spectrum_output
+            && !has_dispersion_output
+            && !has_diagnostics_output
+        {
+            errors.push(
+                "eigenmodes study requires at least one eigen_spectrum, eigen_mode, dispersion_curve, or eigen_diagnostics output"
+                    .to_string(),
+            );
+        }
+        for output in &study.sampling().outputs {
+            if matches!(
+                output,
+                OutputIR::Field { .. }
+                    | OutputIR::FieldAuto { .. }
+                    | OutputIR::FieldResolvedAuto { .. }
+                    | OutputIR::Scalar { .. }
+                    | OutputIR::ScalarAuto { .. }
+                    | OutputIR::ScalarResolvedAuto { .. }
+                    | OutputIR::Snapshot { .. }
+            ) {
+                errors.push(
+                    "eigenmodes outputs must be eigen_spectrum/eigen_mode/dispersion_curve/eigen_diagnostics requests"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    StudyIR::FrequencyResponse {
+        dynamics,
+        operator,
+        equilibrium,
+        k_sampling,
+        excitation,
+        frequencies_hz,
+        solver_policy,
+        ..
+    } => {
+        validate_frequency_response_dynamics(dynamics, &mut errors);
+        match operator.kind {
+            EigenOperatorIR::LinearizedLlg => {}
+            EigenOperatorIR::Full2x2 => {}
+        }
+        if let EquilibriumSourceIR::Artifact { path } = equilibrium {
+            if path.trim().is_empty() {
+                errors.push(
+                    "frequency_response.equilibrium artifact path must not be empty"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(k_sampling) = k_sampling {
+            errors.extend(k_sampling.validation_errors("frequency_response.k_sampling"));
+        }
+        if !excitation
+            .field_au_per_m
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            errors.push(
+                "frequency_response.excitation.field_au_per_m must contain finite values"
+                    .to_string(),
+            );
+        }
+        if !excitation.phase_rad.is_finite() {
+            errors
+                .push("frequency_response.excitation.phase_rad must be finite".to_string());
+        }
+        if frequencies_hz.values_hz.is_empty() {
+            errors.push(
+                "frequency_response.frequencies_hz.values_hz must not be empty".to_string(),
+            );
+        }
+        if frequencies_hz
+            .values_hz
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            errors.push(
+                "frequency_response.frequencies_hz.values_hz entries must be finite and > 0"
+                    .to_string(),
+            );
+        }
+        if let Some(policy) = solver_policy {
+            if let Some(rtol) = policy.rtol {
+                if !rtol.is_finite() || rtol <= 0.0 {
+                    errors.push(
+                        "frequency_response.solver_policy.rtol must be finite and > 0"
+                            .to_string(),
+                    );
+                }
+            }
+            if let Some(0) = policy.max_iterations {
+                errors.push(
+                    "frequency_response.solver_policy.max_iterations must be > 0"
+                        .to_string(),
+                );
+            }
+            if let Some(0) = policy.restart_iterations {
+                errors.push(
+                    "frequency_response.solver_policy.restart_iterations must be > 0"
+                        .to_string(),
+                );
+            }
+            if let (Some(restart), Some(max)) =
+                (policy.restart_iterations, policy.max_iterations)
+            {
+                if restart > max {
+                    errors.push(
+                        "frequency_response.solver_policy.restart_iterations must be <= max_iterations"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        let has_mode_output = study
+            .sampling()
+            .outputs
+            .iter()
+            .any(|output| matches!(output, OutputIR::EigenMode { .. }));
+        let has_spectrum_output = study
+            .sampling()
+            .outputs
+            .iter()
+            .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
+        let has_response_output = study
+            .sampling()
+            .outputs
+            .iter()
+            .any(|output| matches!(output, OutputIR::FrequencyResponseOutput { .. }));
+        if !has_mode_output && !has_spectrum_output && !has_response_output {
+            errors.push(
+                "frequency_response study requires at least one frequency_response_output, eigen_spectrum, or eigen_mode output"
+                    .to_string(),
+            );
+        }
+        for output in &study.sampling().outputs {
+            if matches!(
+                output,
+                OutputIR::Field { .. }
+                    | OutputIR::FieldAuto { .. }
+                    | OutputIR::FieldResolvedAuto { .. }
+                    | OutputIR::Scalar { .. }
+                    | OutputIR::ScalarAuto { .. }
+                    | OutputIR::ScalarResolvedAuto { .. }
+                    | OutputIR::Snapshot { .. }
+            ) {
+                errors.push(
+                    "frequency_response outputs must be frequency_response_output/eigen_spectrum/eigen_mode/dispersion_curve requests"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    StudyIR::Hysteresis {
+        direction,
+        orientation,
+        measurement_axis,
+        angular_family,
+        initial_protocol,
+        initial_state_ref,
+        saturation,
+        branch_mode,
+        storage,
+        field_min_mT,
+        field_max_mT,
+        field_step_mT,
+        field_values_mT,
+        field_unit_provenance,
+        settle_pipeline,
+        field_schedule,
+        schedule_refinements,
+        adaptive_refinement,
+        minor_loops,
+        ..
+    } => {
+        if field_min_mT.is_some_and(|value| !value.is_finite()) {
+            errors
+                .push("study.stages[].hysteresis.field_min_mT must be finite".to_string());
+        }
+        if field_max_mT.is_some_and(|value| !value.is_finite()) {
+            errors
+                .push("study.stages[].hysteresis.field_max_mT must be finite".to_string());
+        }
+        if let Some(d) = direction {
+            if !vector_is_finite(d) {
+                errors.push(
+                    "study.stages[].hysteresis.direction must contain finite values"
+                        .to_string(),
+                );
+            } else if vector_norm_sq(d) <= 1e-30 {
+                errors.push(
+                    "study.stages[].hysteresis.direction must not be the zero vector"
+                        .to_string(),
+                );
+            }
+        }
+        validate_hysteresis_orientation(orientation.as_ref(), &mut errors);
+        validate_hysteresis_measurement_axis(measurement_axis, &mut errors);
+        if let Some(family) = angular_family {
+            validate_hysteresis_angular_family(family, &mut errors);
+        }
+        if !matches!(
+            initial_protocol.as_str(),
+            "as_authored"
+                | "zero_field_relaxed"
+                | "positive_saturation"
+                | "negative_saturation"
+                | "checkpoint"
+        ) {
+            errors.push(
+                "study.stages[].hysteresis.initial_protocol is unsupported".to_string(),
+            );
+        }
+        if initial_protocol == "checkpoint"
+            && initial_state_ref.as_deref().is_none_or(str::is_empty)
+        {
+            errors.push(
+                "study.stages[].hysteresis.initial_state_ref is required when initial_protocol is checkpoint"
+                    .to_string(),
+            );
+        }
+        if !matches!(
+            branch_mode.as_str(),
+            "major_loop"
+                | "major_with_minor_loops"
+                | "virgin_curve"
+                | "virgin_then_major_loop"
+        ) {
+            errors.push("study.stages[].hysteresis.branch_mode is unsupported".to_string());
+        }
+        if let Some(probe) = saturation {
+            validate_hysteresis_saturation_probe(probe, &mut errors);
+        }
+        if let Some(policy) = storage {
+            validate_hysteresis_storage(policy, &mut errors);
+        }
+        if field_values_mT.as_ref().is_some_and(Vec::is_empty) {
+            errors.push(
+                "study.stages[].hysteresis.field_values_mT must not be empty".to_string(),
+            );
+        }
+        if let Some(values) = field_values_mT {
+            for (idx, value) in values.iter().enumerate() {
+                if !value.is_finite() {
+                    errors.push(format!(
+                        "study.stages[].hysteresis.field_values_mT[{}] must be finite",
+                        idx
+                    ));
+                }
+            }
+        }
+        if let Some(provenance) = field_unit_provenance {
+            validate_hysteresis_field_unit_provenance(provenance, &mut errors);
+        }
+        if let Some(step) = field_step_mT {
+            if !step.is_finite() {
+                errors.push(
+                    "study.stages[].hysteresis.field_step_mT must be finite".to_string(),
+                );
+            } else if *step == 0.0 {
+                errors.push(
+                    "study.stages[].hysteresis.field_step_mT must not be zero".to_string(),
+                );
+            }
+        }
+        if let Some(sched) = field_schedule {
+            if sched.segments.is_empty() {
+                errors.push(
+                    "study.stages[].hysteresis.field_schedule.segments must not be empty"
+                        .to_string(),
+                );
+            }
+            for (idx, seg) in sched.segments.iter().enumerate() {
+                if seg.segment_id.trim().is_empty() {
+                    errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].segment_id must not be empty", idx));
+                }
+                if seg.step <= 0.0 {
+                    errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].step must be positive", idx));
+                }
+                if !seg.start.is_finite() || !seg.stop.is_finite() || !seg.step.is_finite()
+                {
+                    errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}] start, stop, and step must be finite", idx));
+                }
+                if seg.start == seg.stop {
+                    errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].start and stop must differ", idx));
+                }
+                if !matches!(
+                    seg.endpoint_policy.as_str(),
+                    "include_stop" | "skip_start" | "include_both"
+                ) {
+                    errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].endpoint_policy is unsupported", idx));
+                }
+            }
+        }
+        if let Some(windows) = schedule_refinements {
+            validate_hysteresis_field_windows(windows, &mut errors);
+        }
+        if let Some(policy) = adaptive_refinement {
+            validate_hysteresis_adaptive_refinement(policy, &mut errors);
+        }
+        if let Some(loops) = minor_loops {
+            validate_hysteresis_minor_loops(loops, &mut errors);
+        }
+        if let Some(pipeline) = settle_pipeline {
+            match pipeline {
+                SettlePipelineIR::Sequence { steps } => {
+                    if steps.is_empty() {
+                        errors.push(
+                            "study.stages[].hysteresis.settle_pipeline must not be empty"
+                                .to_string(),
+                        );
+                    }
+                    for (idx, step) in steps.iter().enumerate() {
+                        validate_settle_step(step, idx, &mut errors);
+                        if settle_non_convergence(step) == "run_next_algorithm"
+                            && idx + 1 == steps.len()
+                        {
+                            errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].on_non_convergence run_next_algorithm requires a following step", idx));
+                        }
+                    }
+                }
+                SettlePipelineIR::Tree { default, branches } => {
+                    validate_settle_step(default, 0, &mut errors);
+                    if settle_non_convergence(default) == "run_next_algorithm"
+                        && !branches.iter().any(|branch| {
+                            matches!(
+                                branch.when.as_str(),
+                                "non_converged" | "fallback" | "run_next_algorithm"
+                            )
+                        })
+                    {
+                        errors.push("study.stages[].hysteresis.settle_pipeline.default.on_non_convergence run_next_algorithm requires a non_converged fallback branch".to_string());
+                    }
+                    for (idx, branch) in branches.iter().enumerate() {
+                        validate_settle_step(&branch.run, idx + 1, &mut errors);
+                    }
+                }
+            }
+        }
+    }
+}
+    errors
+}
+
+pub(crate) fn validate_study_root_context_contracts(
+    study: &StudyIR,
+    root_context: &StudyRootValidationContext<'_>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let StudyIR::Eigenmodes {
+        operator,
+        bias_field_sweep,
+        magnetostatic_bc,
+        ..
+    } = study
+    {
+        if bias_field_sweep.is_some() {
+            if operator.include_demag {
+                errors.extend(validate_eigenmodes_bias_sweep_demag_energy(root_context));
+            }
+            errors.extend(validate_eigenmodes_bias_sweep_root_context(root_context));
+        }
+        if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+            errors.extend(validate_eigenmodes_k0_root_context(root_context));
+        }
+    }
+    errors
+}
+
+fn validate_eigenmodes_bias_sweep_demag_energy(
+    root_context: &StudyRootValidationContext<'_>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !root_context
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+    {
+        errors.push("eigenmodes.bias_field_sweep_requires_demag".to_string());
+    }
+    errors
+}
+
+fn validate_eigenmodes_bias_sweep_root_context(
+    root_context: &StudyRootValidationContext<'_>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if root_context
+        .materials
+        .iter()
+        .any(|material| material.damping != 0.0)
+    {
+        errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
+    }
+    if root_context.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push("eigenmodes.bias_field_sweep_requires_double_precision".to_string());
+    }
+    if root_context.validation_profile.execution_mode != ExecutionMode::Strict {
+        errors.push("eigenmodes.bias_field_sweep_requires_strict_execution_mode".to_string());
+    }
+    validate_xy_periodic_open_z(
+        root_context.pbc,
+        "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d",
+        "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z",
+        &mut errors,
+    );
+    errors
+}
+
+fn validate_eigenmodes_k0_root_context(
+    root_context: &StudyRootValidationContext<'_>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if root_context.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push("eigenmodes.k0_periodic_airbox_requires_double_precision".to_string());
+    }
+    if !root_context
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+    {
+        errors.push("eigenmodes.k0_periodic_airbox_requires_demag_energy".to_string());
+    }
+    validate_xy_periodic_open_z(
+        root_context.pbc,
+        "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d",
+        "eigenmodes.k0_periodic_airbox_requires_xy_periodic_open_z",
+        &mut errors,
+    );
+    errors
+}
+
+fn validate_xy_periodic_open_z(
+    pbc: Option<&FdmPeriodicityIR>,
+    fully_periodic_message: &str,
+    missing_xy_periodic_message: &str,
+    errors: &mut Vec<String>,
+) {
+    match pbc {
+        Some(periodicity)
+            if periodicity.axes
+                == [
+                    AxisBoundary::Periodic,
+                    AxisBoundary::Periodic,
+                    AxisBoundary::Open,
+                ] => {}
+        Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
+            errors.push(fully_periodic_message.to_string());
+        }
+        _ => errors.push(missing_xy_periodic_message.to_string()),
     }
 }

@@ -239,7 +239,8 @@ fn initialize_array(path: &Path, sample_count: usize, width: usize) -> Result<()
 
 pub(crate) fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    // Each concurrent publication must own its temporary file.
+    let temporary = path.with_extension(format!("tmp.{}.{}", std::process::id(), uuid::Uuid::new_v4()));
     let file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
     writer

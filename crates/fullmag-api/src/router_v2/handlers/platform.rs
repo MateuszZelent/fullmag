@@ -6,6 +6,7 @@ pub(crate) mod development_restore;
 pub(crate) mod development_restore_input;
 pub mod compute_profiles;
 pub mod compute_preview;
+pub mod compute_nodes;
 pub mod output_storage;
 pub mod realtime;
 pub mod runtime_service;

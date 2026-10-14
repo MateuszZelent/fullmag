@@ -21,6 +21,7 @@ const vitestConfig = {
       ...configDefaults.exclude,
       "scripts/fdm-terminal-field-contract.test.mjs",
       "scripts/smoke-viewport-2d.test.mjs",
+      "scripts/lib/antenna-authoring-browser.test.mjs",
     ],
     environment: "node",
     globals: true,

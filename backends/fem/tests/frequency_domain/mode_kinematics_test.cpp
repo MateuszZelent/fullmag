@@ -348,44 +348,126 @@ void zero_and_nonfinite_modes_are_explicit()
 }
 
 
+void default_zero_frequency_classification_preserves_small_finite_branches()
+{
+    check(
+        fd::kDefaultZeroFrequencyToleranceRadPerS == 0.0,
+        "default zero-frequency tolerance must be exact zero");
+
+    constexpr double one_rad_per_s = 1.0;
+    const double one_khz_rad_per_s =
+        fd::omega_rad_s_from_frequency_hz(1.0e3);
+
+    for (const fd::FrequencyDomainPhaseConvention phase : {
+             fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
+             fd::FrequencyDomainPhaseConvention::exp_minus_i_omega_t}) {
+        const double phase_sign =
+            phase == fd::FrequencyDomainPhaseConvention::exp_i_omega_t ? 1.0 : -1.0;
+        for (const double input_omega_rad_s : {
+                 one_rad_per_s,
+                 -one_rad_per_s,
+                 one_khz_rad_per_s,
+                 -one_khz_rad_per_s}) {
+            const double expected_omega_rad_s = phase_sign * input_omega_rad_s;
+            const fd::ModeKinematics mapped = fd::map_eigenvalue(
+                {-1.0, input_omega_rad_s},
+                phase);
+            check(mapped.finite, "finite nonzero angular frequency must remain finite");
+            check(
+                !mapped.zero_frequency_mode,
+                "finite nonzero angular frequency must not be classified as zero by default");
+            check(
+                mapped.branch_sign == (expected_omega_rad_s > 0.0 ? 1 : -1),
+                "small finite modes must preserve the phase-aware branch convention");
+            check_relative_close(
+                mapped.omega_rad_s,
+                expected_omega_rad_s,
+                1.0e-15,
+                "mapped angular frequency must preserve its phase-aware sign");
+            check_relative_close(
+                mapped.frequency_hz,
+                fd::frequency_hz_from_omega_rad_s(expected_omega_rad_s),
+                1.0e-15,
+                "mapped cyclic frequency must use the canonical angular-frequency conversion");
+            check(
+                fd::select_positive_frequency_mode(
+                    mapped,
+                    fd::ZeroFrequencyModePolicy::exclude) ==
+                    (expected_omega_rad_s > 0.0),
+                "positive-frequency selection must retain its phase-aware branch convention");
+        }
+
+        const fd::ModeKinematics exact_zero = fd::map_eigenvalue(
+            {-1.0, 0.0},
+            phase);
+        check(exact_zero.finite, "exact zero mode must remain finite for both phasors");
+        check(
+            exact_zero.zero_frequency_mode && exact_zero.branch_sign == 0,
+            "exact zero must be the only default zero-frequency classification");
+        check(
+            exact_zero.frequency_hz == 0.0 && exact_zero.omega_rad_s == 0.0,
+            "exact zero must retain zero frequency under both phasors");
+        check(
+            !fd::select_positive_frequency_mode(
+                exact_zero,
+                fd::ZeroFrequencyModePolicy::exclude) &&
+                fd::select_positive_frequency_mode(
+                    exact_zero,
+                    fd::ZeroFrequencyModePolicy::include),
+            "exact zero selection must continue to honor the explicit include-zero policy");
+    }
+}
+
 void zero_frequency_tolerance_is_absolute_and_policy_is_explicit()
 {
-    const fd::ModeKinematics decay_independent = fd::map_eigenvalue(
-        {-1.0e20, 1.0},
-        fd::FrequencyDomainPhaseConvention::exp_i_omega_t);
-    check(
-        decay_independent.branch_sign == 1 && !decay_independent.zero_frequency_mode,
-        "large decay must not change the absolute zero-frequency classification");
-
     constexpr double tolerance_rad_per_s = 1.0e-9;
     const fd::ModeKinematicsPolicy policy{tolerance_rad_per_s};
-    const auto map = [&](double omega_rad_s) {
-        return fd::map_eigenvalue(
-            {-1.0e20, omega_rad_s},
-            fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
-            policy);
-    };
 
-    const fd::ModeKinematics exact_zero = map(0.0);
-    const fd::ModeKinematics below = map(0.5 * tolerance_rad_per_s);
-    const fd::ModeKinematics at = map(tolerance_rad_per_s);
-    const fd::ModeKinematics above = map(2.0 * tolerance_rad_per_s);
-    check(exact_zero.zero_frequency_mode, "exact zero must be classified as a zero mode");
-    check(below.zero_frequency_mode, "frequency below tolerance must be a zero mode");
-    check(at.zero_frequency_mode, "frequency at tolerance must be a zero mode");
-    check(
-        above.branch_sign == 1 && !above.zero_frequency_mode,
-        "frequency above tolerance must retain its positive branch");
-    check(
-        !fd::select_positive_frequency_mode(
-            at,
-            fd::ZeroFrequencyModePolicy::exclude),
-        "positive-frequency filters must explicitly exclude zero modes");
-    check(
-        fd::select_positive_frequency_mode(
-            at,
-            fd::ZeroFrequencyModePolicy::include),
-        "positive-frequency selection must support an explicit include-zero policy");
+    for (const fd::FrequencyDomainPhaseConvention phase : {
+             fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
+             fd::FrequencyDomainPhaseConvention::exp_minus_i_omega_t}) {
+        const double positive_branch_sign =
+            phase == fd::FrequencyDomainPhaseConvention::exp_i_omega_t ? 1.0 : -1.0;
+        const auto map = [&](double omega_rad_s) {
+            return fd::map_eigenvalue(
+                {-1.0e20, omega_rad_s},
+                phase,
+                policy);
+        };
+
+        const fd::ModeKinematics exact_zero = map(0.0);
+        const fd::ModeKinematics below = map(0.5 * tolerance_rad_per_s);
+        const fd::ModeKinematics below_negative = map(-0.5 * tolerance_rad_per_s);
+        const fd::ModeKinematics at = map(tolerance_rad_per_s);
+        const fd::ModeKinematics at_negative = map(-tolerance_rad_per_s);
+        const fd::ModeKinematics above = map(2.0 * tolerance_rad_per_s);
+        const fd::ModeKinematics above_negative = map(-2.0 * tolerance_rad_per_s);
+        check(
+            exact_zero.zero_frequency_mode,
+            "exact zero must be classified under an explicit tolerance");
+        check(below.zero_frequency_mode && below_negative.zero_frequency_mode,
+              "magnitudes below an explicit tolerance must be zero modes");
+        check(at.zero_frequency_mode && at_negative.zero_frequency_mode,
+              "the explicit tolerance boundary must be inclusive for both signs");
+        check(
+            above.branch_sign == (positive_branch_sign > 0.0 ? 1 : -1) &&
+                !above.zero_frequency_mode,
+            "positive angular frequency above tolerance must retain the phase-aware branch");
+        check(
+            above_negative.branch_sign == (positive_branch_sign > 0.0 ? -1 : 1) &&
+                !above_negative.zero_frequency_mode,
+            "negative angular frequency above tolerance must retain the phase-aware branch");
+        check(
+            !fd::select_positive_frequency_mode(
+                at,
+                fd::ZeroFrequencyModePolicy::exclude),
+            "positive-frequency filters must explicitly exclude zero modes");
+        check(
+            fd::select_positive_frequency_mode(
+                at,
+                fd::ZeroFrequencyModePolicy::include),
+            "positive-frequency selection must support an explicit include-zero policy");
+    }
 
     for (const double invalid_tolerance : {
              -1.0,
@@ -423,62 +505,62 @@ fd::DensePoissonAirboxEigenOracleProblem dense_oracle_problem(
 
 void dense_oracle_filter_excludes_zero_modes_without_rewriting_kinematics()
 {
-    const double omega_below = 0.5 * fd::kDefaultZeroFrequencyToleranceRadPerS;
-    const double a_qq_below[4] = {0.0, -omega_below, omega_below, 0.0};
+    const double omega_exact_zero = 0.0;
+    const double a_qq_zero[4] = {0.0, -omega_exact_zero, omega_exact_zero, 0.0};
     const double a_qphi[2] = {0.0, 0.0};
     const double a_phiq[2] = {0.0, 0.0};
     const double a_phiphi[1] = {0.0};
     const double b_qq[4] = {1.0, 0.0, 0.0, 1.0};
     const double weights[1] = {1.0};
 
-    const fd::DensePoissonAirboxEigenOracleProblem below_problem =
+    const fd::DensePoissonAirboxEigenOracleProblem zero_problem =
         dense_oracle_problem(
-            a_qq_below,
+            a_qq_zero,
             a_qphi,
             a_phiq,
             a_phiphi,
             b_qq,
             weights);
-    fd::DensePoissonAirboxEigenOracleResult below_result{};
+    fd::DensePoissonAirboxEigenOracleResult zero_result{};
     check(
         fd::solve_dense_poisson_airbox_eigen_oracle(
-            below_problem,
-            &below_result) == fd::FrequencyDomainStatus::solve_error,
-        "dense oracle positive-frequency filter must exclude a below-tolerance zero mode");
+            zero_problem,
+            &zero_result) == fd::FrequencyDomainStatus::solve_error,
+        "dense oracle positive-frequency filter must exclude an exact zero mode");
     check(
-        contains(below_result.diagnostics_json, "\"stable\":true"),
+        contains(zero_result.diagnostics_json, "\"stable\":true"),
         "unaccepted zero-mode artifacts must preserve mapper stability");
     check(
-        contains(below_result.diagnostics_json, "\"finite\":true") &&
-            contains(below_result.diagnostics_json, "\"zero_frequency_mode\":true"),
+        contains(zero_result.diagnostics_json, "\"finite\":true") &&
+            contains(zero_result.diagnostics_json, "\"zero_frequency_mode\":true"),
         "dense oracle artifacts must serialize finite and zero-mode mapper fields");
     check(
-        contains(below_result.diagnostics_json, "\"eigenpair_found\":false") &&
-            contains(below_result.diagnostics_json, "\"eigenpair_accepted\":false"),
+        contains(zero_result.diagnostics_json, "\"eigenpair_found\":false") &&
+            contains(zero_result.diagnostics_json, "\"eigenpair_accepted\":false"),
         "dense oracle artifacts must keep selection state separate from stability");
     check(
-        contains(below_result.diagnostics_json, "exclude_zero_frequency"),
+        contains(zero_result.diagnostics_json, "exclude_zero_frequency"),
         "dense oracle diagnostics must name the zero-frequency exclusion policy");
 
-    const double omega_above = 2.0 * fd::kDefaultZeroFrequencyToleranceRadPerS;
-    const double a_qq_above[4] = {0.0, -omega_above, omega_above, 0.0};
-    const fd::DensePoissonAirboxEigenOracleProblem above_problem =
+    const double omega_nonzero = 1.0;
+    const double a_qq_nonzero[4] = {0.0, -omega_nonzero, omega_nonzero, 0.0};
+    const fd::DensePoissonAirboxEigenOracleProblem nonzero_problem =
         dense_oracle_problem(
-            a_qq_above,
+            a_qq_nonzero,
             a_qphi,
             a_phiq,
             a_phiphi,
             b_qq,
             weights);
-    fd::DensePoissonAirboxEigenOracleResult above_result{};
+    fd::DensePoissonAirboxEigenOracleResult nonzero_result{};
     check(
         fd::solve_dense_poisson_airbox_eigen_oracle(
-            above_problem,
-            &above_result) == fd::FrequencyDomainStatus::ok,
-        above_result.error_message);
+            nonzero_problem,
+            &nonzero_result) == fd::FrequencyDomainStatus::ok,
+        nonzero_result.error_message);
     check(
-        above_result.positive_frequency_branch_found,
-        "dense oracle filter must accept a positive mode above tolerance");
+        nonzero_result.positive_frequency_branch_found,
+        "dense oracle filter must accept a finite nonzero 1 rad/s mode");
 }
 
 fd::ModalEigenRequest tiny_analytic_modal_request(
@@ -502,15 +584,14 @@ fd::ModalEigenRequest tiny_analytic_modal_request(
     return request;
 }
 
-void tiny_analytic_canonical_lambda_never_reinterprets_decay_as_frequency()
+void tiny_analytic_canonical_lambda_excludes_exact_zero_for_both_phasors()
 {
     constexpr double decay_rate_per_s = 1.0e3;
-    const double below_tolerance_omega_rad_s =
-        0.5 * fd::kDefaultZeroFrequencyToleranceRadPerS;
-    const double below_stiffness[4] = {
+    constexpr double exact_zero_omega_rad_s = 0.0;
+    const double zero_stiffness[4] = {
         -decay_rate_per_s,
-        -below_tolerance_omega_rad_s,
-        below_tolerance_omega_rad_s,
+        -exact_zero_omega_rad_s,
+        exact_zero_omega_rad_s,
         -decay_rate_per_s,
     };
     const double identity_mass[4] = {1.0, 0.0, 0.0, 1.0};
@@ -519,14 +600,14 @@ void tiny_analytic_canonical_lambda_never_reinterprets_decay_as_frequency()
              fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
              fd::FrequencyDomainPhaseConvention::exp_minus_i_omega_t}) {
         fd::ModalEigenRequest request = tiny_analytic_modal_request(phase);
-        request.tiny_validation_stiffness_matrix_row_major = below_stiffness;
+        request.tiny_validation_stiffness_matrix_row_major = zero_stiffness;
         request.tiny_validation_mass_matrix_row_major = identity_mass;
         const fd::FrequencyDomainContractResult result =
             fd::solve_modal_eigen_contract(request);
 
         check(
             result.status == fd::FrequencyDomainStatus::solve_error,
-            "tiny canonical damped mode at or below tolerance must be excluded for both phasors");
+            "tiny canonical exact-zero mode must be excluded for both phasors");
         check(
             contains(result.diagnostics_json, "\"eigenvalue_representation\":\"canonical_complex_lambda\"") &&
                 contains(result.diagnostics_json, "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\"") &&
@@ -539,7 +620,7 @@ void tiny_analytic_canonical_lambda_never_reinterprets_decay_as_frequency()
     }
 }
 
-void tiny_analytic_canonical_lambda_selects_above_tolerance_for_both_phasors()
+void tiny_analytic_canonical_lambda_selects_finite_nonzero_mode_for_both_phasors()
 {
     constexpr double decay_rate_per_s = 1.0e3;
     constexpr double omega_rad_s = 1.0;
@@ -564,7 +645,7 @@ void tiny_analytic_canonical_lambda_selects_above_tolerance_for_both_phasors()
 
         check(
             result.status == fd::FrequencyDomainStatus::ok,
-            "tiny canonical above-threshold mode must be selected for both phasors");
+            "tiny canonical finite nonzero mode must be selected for both phasors");
         check(
             contains(result.diagnostics_json, "\"eigenvalue_representation\":\"canonical_complex_lambda\"") &&
                 contains(result.diagnostics_json, "map_eigenvalue(lambda, phase_convention).frequency_hz"),
@@ -680,10 +761,11 @@ int main()
     plus_and_minus_phasors_select_opposite_positive_branches();
     damped_conjugate_branches_keep_decay_and_stability();
     zero_and_nonfinite_modes_are_explicit();
+    default_zero_frequency_classification_preserves_small_finite_branches();
     zero_frequency_tolerance_is_absolute_and_policy_is_explicit();
     dense_oracle_filter_excludes_zero_modes_without_rewriting_kinematics();
-    tiny_analytic_canonical_lambda_never_reinterprets_decay_as_frequency();
-    tiny_analytic_canonical_lambda_selects_above_tolerance_for_both_phasors();
+    tiny_analytic_canonical_lambda_excludes_exact_zero_for_both_phasors();
+    tiny_analytic_canonical_lambda_selects_finite_nonzero_mode_for_both_phasors();
     tiny_analytic_diagonal_legacy_frequency_uses_explicit_adapter();
     tiny_slepc_non_window_maps_both_phasors_and_publishes_provenance();
     if (failure_count != 0) {

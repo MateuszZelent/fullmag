@@ -1,5 +1,6 @@
 use super::eigen_digest::is_sha256_digest;
 use super::eigen_output::{json_artifact, mode_metadata_path, published_artifact_sha256};
+use crate::dispatch::FemEngine;
 use crate::types::AuxiliaryArtifact;
 use crate::types::ExecutedRun;
 use crate::types::RunError;
@@ -8,11 +9,31 @@ use fullmag_engine::Vector3;
 use fullmag_engine::MU0;
 use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
+use fullmag_ir::OutputIR;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub(super) fn bias_field_sweep_requested(plan: &FemEigenPlanIR) -> bool {
     !plan.bias_field_samples.is_empty()
+}
+
+pub(super) fn bias_field_branch_tracking_requested(outputs: &[OutputIR]) -> bool {
+    outputs.iter().any(|output| {
+        matches!(
+            output,
+            OutputIR::EigenMode { branches, .. } if !branches.is_empty()
+        ) || matches!(output, OutputIR::DispersionCurve { .. })
+            || matches!(
+                output,
+                OutputIR::EigenDiagnostics {
+                    include_tracking: true,
+                    ..
+                } | OutputIR::EigenDiagnostics {
+                    include_overlaps: true,
+                    ..
+                }
+            )
+    })
 }
 
 pub(super) fn validate_bias_field_samples(
@@ -320,12 +341,32 @@ pub(super) fn execute_bias_field_sweep_with_executor<F>(
 where
     F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,
 {
+    execute_bias_field_sweep_with_publication(
+        plan,
+        &[],
+        FemEngine::CpuNative,
+        false,
+        execute_sample,
+    )
+}
+
+pub(super) fn execute_bias_field_sweep_with_publication<F>(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    engine: FemEngine,
+    track_publication: bool,
+    mut execute_sample: F,
+) -> Result<ExecutedRun, RunError>
+where
+    F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,
+{
     validate_bias_field_sweep_oracle_contract(plan)?;
     let samples = validate_bias_field_samples(plan)?;
     let base_initial_magnetization = plan.equilibrium_magnetization.clone();
     let mut previous_accepted_magnetization: Option<Vec<Vector3>> = None;
 
     let mut runs = Vec::with_capacity(samples.len());
+    let mut sample_plans = Vec::with_capacity(samples.len());
     for (sample_position, sample) in samples.iter().enumerate() {
         let sample_plan = prepare_bias_field_sample_plan(
             plan,
@@ -337,6 +378,15 @@ where
             Ok(run) => run,
             Err(error) if runs.is_empty() => return Err(error),
             Err(error) => {
+                if track_publication {
+                    super::eigen_path::track_bias_field_sweep_samples(
+                        plan,
+                        &sample_plans,
+                        outputs,
+                        engine,
+                        &mut runs,
+                    )?;
+                }
                 return finalize_failed_bias_field_sweep(
                     runs,
                     samples.len(),
@@ -347,7 +397,17 @@ where
             }
         };
         if !bias_field_sample_is_complete(run.result.status) {
+            sample_plans.push(sample_plan);
             runs.push(run);
+            if track_publication {
+                super::eigen_path::track_bias_field_sweep_samples(
+                    plan,
+                    &sample_plans,
+                    outputs,
+                    engine,
+                    &mut runs,
+                )?;
+            }
             return merge_bias_field_sweep_runs(
                 runs,
                 samples.len(),
@@ -372,6 +432,15 @@ where
             if runs.is_empty() {
                 return Err(error);
             }
+            if track_publication {
+                super::eigen_path::track_bias_field_sweep_samples(
+                    plan,
+                    &sample_plans,
+                    outputs,
+                    engine,
+                    &mut runs,
+                )?;
+            }
             return finalize_failed_bias_field_sweep(
                 runs,
                 samples.len(),
@@ -381,7 +450,17 @@ where
             );
         }
         previous_accepted_magnetization = Some(run.result.final_magnetization.clone());
+        sample_plans.push(sample_plan);
         runs.push(run);
+    }
+    if track_publication {
+        super::eigen_path::track_bias_field_sweep_samples(
+            plan,
+            &sample_plans,
+            outputs,
+            engine,
+            &mut runs,
+        )?;
     }
     let first_sample = samples.first().ok_or_else(|| RunError {
         message: "bias-field sweep produced no declared samples".to_string(),
@@ -428,6 +507,7 @@ fn append_physical_k0_kittel_artifacts(
     let generated =
         crate::eigen::artifacts::k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
             validation,
+            plan.gyromagnetic_ratio,
             &spectrum,
             &branches,
             &diagnostics,
@@ -546,6 +626,28 @@ where
     execute_bias_field_sweep_with_executor(plan, executor)
 }
 
+pub(super) fn execute_bias_field_sweep_with_planned_publication<F>(
+    plan: &FemEigenPlanIR,
+    resolution: &fullmag_ir::FemEigenExecutionResolutionIR,
+    outputs: &[OutputIR],
+    engine: FemEngine,
+    executor: F,
+) -> Result<ExecutedRun, RunError>
+where
+    F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,
+{
+    super::eigen_execution_resolution::validate_bias_field_sample_execution_resolutions(
+        plan, resolution,
+    )?;
+    execute_bias_field_sweep_with_publication(
+        plan,
+        outputs,
+        engine,
+        bias_field_branch_tracking_requested(outputs),
+        executor,
+    )
+}
+
 fn native_field_sweep_status(status: RunStatus) -> &'static str {
     match status {
         RunStatus::Completed => "complete",
@@ -590,6 +692,165 @@ fn required_sha256_from_json(
         });
     }
     Ok(digest)
+}
+
+const NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS: [&str; 3] = [
+    "equilibrium_artifact_sha256",
+    "linearization_state_sha256",
+    "operator_input_signature_sha256",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeFieldSweepSampleIdentity {
+    equilibrium_artifact_sha256: String,
+    linearization_state_sha256: String,
+    operator_input_signature_sha256: String,
+}
+
+impl NativeFieldSweepSampleIdentity {
+    fn from_json(value: &serde_json::Value, context: &str) -> Result<Self, RunError> {
+        Ok(Self {
+            equilibrium_artifact_sha256: required_sha256_from_json(
+                value,
+                "equilibrium_artifact_sha256",
+                context,
+            )?,
+            linearization_state_sha256: required_sha256_from_json(
+                value,
+                "linearization_state_sha256",
+                context,
+            )?,
+            operator_input_signature_sha256: required_sha256_from_json(
+                value,
+                "operator_input_signature_sha256",
+                context,
+            )?,
+        })
+    }
+
+    fn get(&self, key: &str) -> &str {
+        match key {
+            "equilibrium_artifact_sha256" => &self.equilibrium_artifact_sha256,
+            "linearization_state_sha256" => &self.linearization_state_sha256,
+            "operator_input_signature_sha256" => &self.operator_input_signature_sha256,
+            _ => unreachable!("field-sweep identity keys are declared above"),
+        }
+    }
+}
+
+fn sample_solver_diagnostics_for_index(
+    diagnostics: &serde_json::Value,
+    sample_index: u64,
+    required: bool,
+) -> Result<Option<&serde_json::Value>, RunError> {
+    let entries_value = diagnostics.get("sample_solver_diagnostics");
+    let Some(entries_value) = entries_value else {
+        return if required {
+            Err(RunError {
+                message: format!(
+                    "native field sweep sample {sample_index} requires sample_solver_diagnostics for empty selected modes"
+                ),
+            })
+        } else {
+            Ok(None)
+        };
+    };
+    let entries = entries_value
+        .as_array()
+        .ok_or_else(|| RunError {
+            message: "native field sweep sample_solver_diagnostics must be an array".to_string(),
+        })?;
+    let mut matching = entries.iter().filter(|entry| {
+        entry.get("sample_index").and_then(serde_json::Value::as_u64) == Some(sample_index)
+    });
+    let Some(sample) = matching.next() else {
+        return if required {
+            Err(RunError {
+                message: format!(
+                    "native field sweep sample {sample_index} has no matching sample_solver_diagnostics entry"
+                ),
+            })
+        } else {
+            Ok(None)
+        };
+    };
+    if matching.next().is_some() {
+        return Err(RunError {
+            message: format!(
+                "native field sweep sample {sample_index} has duplicate sample_solver_diagnostics entries"
+            ),
+        });
+    }
+    let sample_diagnostics = sample
+        .get("diagnostics")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| RunError {
+            message: format!(
+                "native field sweep sample {sample_index} sample_solver_diagnostics entry has no diagnostics object"
+            ),
+        })?;
+    Ok(Some(sample_diagnostics))
+}
+
+fn native_field_sweep_sample_identity(
+    modes: &[serde_json::Value],
+    diagnostics: &serde_json::Value,
+    sample_index: u64,
+) -> Result<NativeFieldSweepSampleIdentity, RunError> {
+    let sample_diagnostics = sample_solver_diagnostics_for_index(
+        diagnostics,
+        sample_index,
+        modes.is_empty(),
+    )?;
+    let context = if modes.is_empty() {
+        "sample_solver_diagnostics.diagnostics"
+    } else {
+        "spectrum mode"
+    };
+    let identity = match modes.first() {
+        Some(mode) => NativeFieldSweepSampleIdentity::from_json(mode, context)?,
+        None => {
+            let sample_diagnostics = sample_diagnostics.ok_or_else(|| RunError {
+                message: format!(
+                    "native field sweep sample {sample_index} has no sample-level provenance"
+                ),
+            })?;
+            NativeFieldSweepSampleIdentity::from_json(sample_diagnostics, context)?
+        }
+    };
+    for (mode_index, mode) in modes.iter().enumerate().skip(1) {
+        let mode_context = format!("native field sweep sample {sample_index} spectrum mode {mode_index}");
+        let candidate = NativeFieldSweepSampleIdentity::from_json(mode, &mode_context)?;
+        for key in NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS {
+            if candidate.get(key) != identity.get(key) {
+                return Err(RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} has contradictory {key} in spectrum mode {mode_index}"
+                    ),
+                });
+            }
+        }
+    }
+    if let (Some(sample_diagnostics), Some(_mode)) = (sample_diagnostics, modes.first()) {
+        for key in NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS {
+            if sample_diagnostics.get(key).is_none() {
+                continue;
+            }
+            let diagnostic_digest = required_sha256_from_json(
+                sample_diagnostics,
+                key,
+                "sample_solver_diagnostics.diagnostics",
+            )?;
+            if diagnostic_digest != identity.get(key) {
+                return Err(RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} has contradictory {key} between its spectrum mode and solver diagnostics"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(identity)
 }
 
 fn native_field_sweep_execution(diagnostics: &serde_json::Value, key: &str) -> serde_json::Value {
@@ -782,17 +1043,33 @@ pub(super) fn build_native_field_sweep_artifact(
                 .get("mode_field_resource_key")
                 .and_then(serde_json::Value::as_str)
                 .filter(|value| !value.trim().is_empty());
-            if mode_field_id.is_some() != mode_field_resource_key.is_some() {
+            let explicit_mode_field_available = mode
+                .get("mode_field_available")
+                .and_then(serde_json::Value::as_bool);
+            let mode_field_available = explicit_mode_field_available
+                .unwrap_or(mode_field_id.is_some() && mode_field_resource_key.is_some());
+            if explicit_mode_field_available != Some(false)
+                && mode_field_id.is_some() != mode_field_resource_key.is_some()
+            {
                 return Err(RunError {
                     message: format!(
                         "native field sweep sample {sample_index} mode {raw_mode_index} has an incomplete field reference"
                     ),
                 });
             }
+            if mode_field_available
+                && (mode_field_id.is_none() || mode_field_resource_key.is_none())
+            {
+                return Err(RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} mode {raw_mode_index} marks field available without a complete field reference"
+                    ),
+                });
+            }
             let branch_id = branch_ids_by_mode
                 .get(&(sample_index, raw_mode_index))
                 .copied();
-            if mode_field_id.is_some() && branch_id.is_none() {
+            if mode_field_available && branch_id.is_none() {
                 return Err(RunError {
                     message: format!(
                         "native field sweep sample {sample_index} mode {raw_mode_index} has no branch mapping"
@@ -813,13 +1090,15 @@ pub(super) fn build_native_field_sweep_artifact(
                 "angular_frequency_rad_per_s": mode.get("angular_frequency_rad_per_s").cloned().unwrap_or(serde_json::Value::Null),
                 "residual_relative_l2": mode.get("residual_relative_l2").cloned().unwrap_or(serde_json::Value::Null),
                 "source_revision": spectrum_revision,
-                "field_status": if mode_field_id.is_some() { "ready" } else { "spectrum-only" },
+                "mode_field_available": mode_field_available,
+                "field_status": if mode_field_available { "ready" } else { "spectrum-only" },
                 "status": sample_status,
             });
             if let Some(object) = output_mode.as_object_mut() {
-                if let (Some(mode_field_id), Some(mode_field_resource_key)) =
-                    (mode_field_id, mode_field_resource_key)
-                {
+                if mode_field_available {
+                    let mode_field_id = mode_field_id.expect("available mode field id validated");
+                    let mode_field_resource_key = mode_field_resource_key
+                        .expect("available mode field resource key validated");
                     object.insert(
                         "mode_artifact_path".to_string(),
                         serde_json::json!(mode_metadata_path(
@@ -839,9 +1118,7 @@ pub(super) fn build_native_field_sweep_artifact(
             }
             output_modes.push(output_mode);
         }
-        let first_mode = modes.first().ok_or_else(|| RunError {
-            message: format!("native field sweep sample {sample_index} has no modes"),
-        })?;
+        let sample_identity = native_field_sweep_sample_identity(modes, diagnostics, sample_index)?;
         output_samples.push(serde_json::json!({
             "sample_id": sample_id,
             "sample_index": sample_index,
@@ -853,9 +1130,9 @@ pub(super) fn build_native_field_sweep_artifact(
             },
             "bias_field_a_per_m": bias_field_a_per_m,
             "bias_field_mu0_t": bias_field_a_per_m.map(|value| value * MU0),
-            "equilibrium_artifact_sha256": required_sha256_from_json(first_mode, "equilibrium_artifact_sha256", "spectrum mode")?,
-            "linearization_state_sha256": required_sha256_from_json(first_mode, "linearization_state_sha256", "spectrum mode")?,
-            "operator_input_signature_sha256": required_sha256_from_json(first_mode, "operator_input_signature_sha256", "spectrum mode")?,
+            "equilibrium_artifact_sha256": sample_identity.equilibrium_artifact_sha256,
+            "linearization_state_sha256": sample_identity.linearization_state_sha256,
+            "operator_input_signature_sha256": sample_identity.operator_input_signature_sha256,
             "topology": topology,
             "branch_ids": branch_ids,
             "modes": output_modes,
@@ -980,6 +1257,14 @@ fn merge_bias_field_sweep_runs_with_terminal(
         .as_ref()
         .map(|(status, _)| *status)
         .unwrap_or(inferred_sweep_status);
+    if sweep_status == RunStatus::Completed && all_runs.len() != sample_count {
+        return Err(RunError {
+            message: format!(
+                "completed bias-field sweep has {} sample runs but its plan requires {sample_count}",
+                all_runs.len()
+            ),
+        });
+    }
     let sweep_complete = sweep_status == RunStatus::Completed
         && all_runs
             .iter()
@@ -996,8 +1281,11 @@ fn merge_bias_field_sweep_runs_with_terminal(
         .count();
 
     let mut spectrum_samples = Vec::new();
+    let mut spectrum_v3_samples = Vec::new();
+    let mut spectrum_v3_template = None;
     let mut branch_points = BTreeMap::<u64, Vec<serde_json::Value>>::new();
     let mut branch_templates = BTreeMap::<u64, serde_json::Value>::new();
+    let mut branch_payload_template = None;
     let mut summary_modes = Vec::new();
     let mut sample_solver_diagnostics = Vec::new();
     let mut summary_template = None;
@@ -1028,8 +1316,31 @@ fn merge_bias_field_sweep_runs_with_terminal(
                         }
                     }
                 }
+                "eigen/spectrum.v3.json" => {
+                    let spectrum = parse_sweep_artifact(artifact, "eigen/spectrum.v3.json")?;
+                    if spectrum_v3_template.is_none() {
+                        spectrum_v3_template = Some(spectrum.clone());
+                    }
+                    if include_completed_sample {
+                        if let Some(samples) = spectrum.get("samples").and_then(|v| v.as_array()) {
+                            spectrum_v3_samples.extend(samples.iter().cloned().map(|mut sample| {
+                                if let Some(object) = sample.as_object_mut() {
+                                    object.insert(
+                                        "status".to_string(),
+                                        serde_json::json!("complete"),
+                                    );
+                                    object.insert("stop_reason".to_string(), serde_json::Value::Null);
+                                }
+                                sample
+                            }));
+                        }
+                    }
+                }
                 "eigen/branches.v2.json" => {
                     let branches = parse_sweep_artifact(artifact, "eigen/branches.v2.json")?;
+                    if branch_payload_template.is_none() {
+                        branch_payload_template = Some(branches.clone());
+                    }
                     if include_completed_sample {
                         if let Some(entries) = branches.get("branches").and_then(|v| v.as_array()) {
                             for branch in entries {
@@ -1087,12 +1398,15 @@ fn merge_bias_field_sweep_runs_with_terminal(
                     }
                 }
                 "eigen/spectrum.json"
+                | "eigen/branches.json"
                 | "eigen/dispersion.csv"
                 | "eigen/dispersion/branch_table.csv" => {}
                 _ => {
                     if !include_completed_sample
                         && (artifact.relative_path.starts_with("eigen/modes/")
-                            || artifact.relative_path.starts_with("eigen/mode_fields"))
+                            || artifact.relative_path.starts_with("eigen/mode_fields")
+                            || (artifact.relative_path.starts_with("eigen/metadata/sample_")
+                                && artifact.relative_path.contains("_mode_")))
                     {
                         continue;
                     }
@@ -1105,6 +1419,12 @@ fn merge_bias_field_sweep_runs_with_terminal(
     }
 
     spectrum_samples.sort_by_key(|sample| {
+        sample
+            .get("sample_index")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    });
+    spectrum_v3_samples.sort_by_key(|sample| {
         sample
             .get("sample_index")
             .and_then(serde_json::Value::as_u64)
@@ -1151,6 +1471,20 @@ fn merge_bias_field_sweep_runs_with_terminal(
         "status": sweep_status_label,
         "complete": sweep_complete,
         "samples": spectrum_samples,
+    });
+    let spectrum_v3 = spectrum_v3_template.map(|mut value| {
+        let mode_count = spectrum_v3_samples
+            .iter()
+            .filter_map(|sample| sample.get("modes").and_then(|v| v.as_array()))
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0);
+        value["sample_count"] = serde_json::json!(spectrum_v3_samples.len());
+        value["mode_count"] = serde_json::json!(mode_count);
+        value["status"] = serde_json::json!(sweep_status_label);
+        value["complete"] = serde_json::json!(sweep_complete);
+        value["samples"] = serde_json::Value::Array(spectrum_v3_samples);
+        value
     });
 
     let mut summary = summary_template.ok_or_else(|| RunError {
@@ -1212,6 +1546,15 @@ fn merge_bias_field_sweep_runs_with_terminal(
     }
 
     artifacts.push(json_artifact("eigen/spectrum.v2.json", &spectrum)?);
+    let final_spectrum_revision =
+        published_artifact_sha256(&artifacts, "eigen/spectrum.v2.json")?;
+    bind_bias_field_mode_metadata_to_spectrum_revision(
+        &mut artifacts,
+        &final_spectrum_revision,
+    )?;
+    if let Some(spectrum_v3) = spectrum_v3.as_ref() {
+        artifacts.push(json_artifact("eigen/spectrum.v3.json", spectrum_v3)?);
+    }
     artifacts.push(json_artifact("eigen/spectrum.json", &summary)?);
     artifacts.push(json_artifact(
         "eigen/metadata/eigen_summary.json",
@@ -1221,20 +1564,116 @@ fn merge_bias_field_sweep_runs_with_terminal(
         "eigen/diagnostics/solver.v1.json",
         &diagnostics,
     )?);
-    let branches_payload = serde_json::json!({
+    if let Some(diagnostics_artifact) = artifacts
+        .iter_mut()
+        .find(|artifact| artifact.relative_path == "eigen/diagnostics.v2.json")
+    {
+        let mut value = parse_sweep_artifact(diagnostics_artifact, "eigen/diagnostics.v2.json")?;
+        let field_sweep = serde_json::json!({
+            "kind": "bias_field_sweep",
+            "source": "bias_field_samples",
+            "requested_sample_count": sample_count,
+            "completed_sample_count": completed_sample_count,
+            "status": artifact_status_label,
+            "run_status": sweep_status_label,
+            "stop_reason": sweep_stop_reason,
+            "complete": sweep_complete,
+            "independent_solves": true,
+            "equilibrium_policy": bias_field_equilibrium_policy_label(equilibrium_policy),
+            "continuation_seed": bias_field_continuation_seed_label(continuation_seed),
+            "continuation_seed_scope": "first_sample_bootstrap",
+        });
+        if let Some(object) = value.as_object_mut() {
+            object.insert("status".to_string(), serde_json::json!(sweep_status_label));
+            object.insert("complete".to_string(), serde_json::json!(sweep_complete));
+            object.insert("field_sweep".to_string(), field_sweep.clone());
+            if let Some(nested) = object
+                .get_mut("diagnostics")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                nested.insert("status".to_string(), serde_json::json!(sweep_status_label));
+                nested.insert("complete".to_string(), serde_json::json!(sweep_complete));
+                nested.insert("field_sweep".to_string(), field_sweep);
+            }
+        }
+        diagnostics_artifact.bytes = serde_json::to_vec_pretty(&value).map_err(|error| RunError {
+            message: format!("failed to serialize field-sweep eigen diagnostics: {error}"),
+        })?;
+    }
+    let tracking_score_source = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("tracking_score_source"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!("seed_only"));
+    let modal_overlap_available = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("modal_overlap_available"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Bool(false));
+    let tracking_policy_availability = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("tracking_policy_availability"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!("missing_or_mixed"));
+    let tracking_method = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("tracking_method"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let overlap_floor = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("overlap_floor"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let frequency_window_hz = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("frequency_window_hz"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mut branch_diagnostics = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("diagnostics"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(object) = branch_diagnostics.as_object_mut() {
+        object.insert("status".to_string(), serde_json::json!(sweep_status_label));
+        object.insert("complete".to_string(), serde_json::json!(sweep_complete));
+        object.insert("tracking_score_source".to_string(), tracking_score_source.clone());
+        object.insert("modal_overlap_available".to_string(), modal_overlap_available.clone());
+    }
+    let mut branches_payload = serde_json::json!({
         "schema_version": "eigen_branches.v2",
         "solver_model": summary["solver_kind"],
-        "tracking_score_source": "seed_only",
-        "modal_overlap_available": false,
-        "branches": branches,
-        "diagnostics": {
-            "tracking_score_source": "seed_only",
-            "modal_overlap_available": false,
-            "status": sweep_status_label,
-            "complete": sweep_complete,
-        },
+        "tracking_policy_availability": tracking_policy_availability,
+        "tracking_method": tracking_method,
+        "tracking_score_source": tracking_score_source,
+        "modal_overlap_available": modal_overlap_available,
+        "overlap_floor": overlap_floor,
+        "frequency_window_hz": frequency_window_hz,
+        "branches": branches.clone(),
+        "diagnostics": branch_diagnostics,
     });
+    if let Some(path) = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("mode_output_selection_path"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.is_empty())
+    {
+        branches_payload["mode_output_selection_path"] = serde_json::json!(path);
+    }
     artifacts.push(json_artifact("eigen/branches.v2.json", &branches_payload)?);
+    artifacts.push(json_artifact(
+        "eigen/branches.json",
+        &serde_json::json!({
+            "schema_version": "2",
+            "tracking_policy_availability": branches_payload["tracking_policy_availability"],
+            "solver_model": branches_payload["solver_model"],
+            "tracking_method": branches_payload["tracking_method"],
+            "overlap_floor": branches_payload["overlap_floor"],
+            "frequency_window_hz": branches_payload["frequency_window_hz"],
+            "branches": branches,
+        }),
+    )?);
     let field_sweep = build_native_field_sweep_artifact(
         &spectrum,
         &branches_payload,
@@ -1253,6 +1692,8 @@ fn merge_bias_field_sweep_runs_with_terminal(
         &artifacts,
         &diagnostics,
         sample_count,
+        &tracking_score_source,
+        &modal_overlap_available,
     )?;
     if let Some(artifact_index) = manifest
         .get_mut("artifacts")
@@ -1280,10 +1721,14 @@ fn merge_bias_field_sweep_runs_with_terminal(
     )?);
 
     let mut dispersion = String::from(
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key\n",
+        "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key\n",
     );
     for sample in spectrum["samples"].as_array().into_iter().flatten() {
         let sample_index = sample["sample_index"].as_u64().unwrap_or(0);
+        let sample_id = sample["sample_id"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("bias-field-sample-{sample_index:04}"));
         let path_s = sample["path_s"].as_f64().unwrap_or(0.0);
         let label = sample["label"].as_str().unwrap_or("");
         let k = sample["k_vector"].as_array();
@@ -1301,16 +1746,39 @@ fn merge_bias_field_sweep_runs_with_terminal(
             .unwrap_or(0.0);
         for mode in sample["modes"].as_array().into_iter().flatten() {
             let raw_mode_index = mode["raw_mode_index"].as_u64().unwrap_or(0);
+            let mode_id = mode["mode_id"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("sample-{sample_index:04}/mode-{raw_mode_index:04}"));
+            let mode_field_available =
+                mode["mode_field_available"].as_bool().unwrap_or_else(|| {
+                    mode["mode_field_id"].as_str().is_some()
+                        && mode["mode_field_resource_key"].as_str().is_some()
+                });
+            let mode_field_id = if mode_field_available {
+                mode["mode_field_id"].as_str().unwrap_or("")
+            } else {
+                ""
+            };
+            let mode_field_resource_key = if mode_field_available {
+                mode["mode_field_resource_key"].as_str().unwrap_or("")
+            } else {
+                ""
+            };
+            let tracking_score_source = mode["tracking_score_source"]
+                .as_str()
+                .unwrap_or("seed");
             dispersion.push_str(&format!(
-                "{sample_index},{path_s:.16e},{kx:.16e},{ky:.16e},{kz:.16e},{label},{raw_mode_index},{},{:.16e},{:.16e},{},{},{},seed,{},{}\n",
+                "{sample_index},{sample_id},{path_s:.16e},{kx:.16e},{ky:.16e},{kz:.16e},{label},{raw_mode_index},{mode_id},{},{:.16e},{:.16e},{},{},{},{tracking_score_source},{},{},{}\n",
                 mode["branch_id"].as_u64().unwrap_or(raw_mode_index),
                 mode["frequency_hz"].as_f64().unwrap_or(0.0),
                 mode["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
                 mode["frequency_imag_hz"].as_f64().map(|v| 2.0 * v).unwrap_or(0.0),
                 mode["residual_norm"].as_f64().unwrap_or(0.0),
                 "",
-                mode["mode_field_id"].as_str().unwrap_or(""),
-                mode["mode_field_resource_key"].as_str().unwrap_or(""),
+                mode_field_available,
+                mode_field_id,
+                mode_field_resource_key,
             ));
         }
     }
@@ -1390,7 +1858,11 @@ fn update_sweep_manifest(
     artifacts: &[AuxiliaryArtifact],
     diagnostics: &serde_json::Value,
     sample_count: usize,
+    tracking_score_source: &serde_json::Value,
+    modal_overlap_available: &serde_json::Value,
 ) -> Result<serde_json::Value, RunError> {
+    let spectrum_revision = published_artifact_sha256(artifacts, "eigen/spectrum.v2.json")?;
+    let branches_revision = published_artifact_sha256(artifacts, "eigen/branches.v2.json")?;
     let mode_metadata_paths: Vec<String> = artifacts
         .iter()
         .filter(|artifact| {
@@ -1422,9 +1894,38 @@ fn update_sweep_manifest(
         object.insert(
             "diagnostics".to_string(),
             serde_json::json!({
-                "tracking_score_source": "seed_only",
-                "modal_overlap_available": false,
+                "tracking_score_source": tracking_score_source,
+                "modal_overlap_available": modal_overlap_available,
             }),
+        );
+        let mut cross_artifact_refs = object
+            .get("cross_artifact_refs")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|reference| {
+                !matches!(
+                    reference.get("relation").and_then(serde_json::Value::as_str),
+                    Some("source_spectrum" | "source_branches")
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        cross_artifact_refs.extend([
+            serde_json::json!({
+                "relation": "source_spectrum",
+                "artifact": "eigen/spectrum.v2.json",
+                "revision": spectrum_revision,
+            }),
+            serde_json::json!({
+                "relation": "source_branches",
+                "artifact": "eigen/branches.v2.json",
+                "revision": branches_revision,
+            }),
+        ]);
+        object.insert(
+            "cross_artifact_refs".to_string(),
+            serde_json::Value::Array(cross_artifact_refs),
         );
         if let Some(artifacts_object) = object
             .get_mut("artifacts")
@@ -1459,4 +1960,244 @@ fn update_sweep_manifest(
         }
     }
     Ok(manifest)
+}
+
+fn bind_bias_field_mode_metadata_to_spectrum_revision(
+    artifacts: &mut [AuxiliaryArtifact],
+    spectrum_revision: &str,
+) -> Result<(), RunError> {
+    for artifact in artifacts.iter_mut().filter(|artifact| {
+        artifact.relative_path.starts_with("eigen/modes/sample_")
+            && artifact.relative_path.ends_with(".json")
+    }) {
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+                message: format!(
+                    "invalid bias-field mode metadata {}: {error}",
+                    artifact.relative_path
+                ),
+            })?;
+        let object = metadata.as_object_mut().ok_or_else(|| RunError {
+            message: format!(
+                "bias-field mode metadata {} must be a JSON object",
+                artifact.relative_path
+            ),
+        })?;
+        object.insert(
+            "source_spectrum_revision".to_string(),
+            serde_json::json!(spectrum_revision),
+        );
+        artifact.bytes = serde_json::to_vec_pretty(&metadata).map_err(|error| RunError {
+            message: format!(
+                "failed to serialize bias-field mode metadata {}: {error}",
+                artifact.relative_path
+            ),
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod native_field_sweep_identity_tests {
+    use super::*;
+
+    fn identity_values() -> serde_json::Value {
+        serde_json::json!({
+            "equilibrium_artifact_sha256": format!("sha256:{}", "a".repeat(64)),
+            "linearization_state_sha256": format!("sha256:{}", "b".repeat(64)),
+            "operator_input_signature_sha256": format!("sha256:{}", "c".repeat(64)),
+        })
+    }
+
+    fn diagnostics_for(sample_index: u64, identity: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "sample_solver_diagnostics": [{
+                "sample_index": sample_index,
+                "diagnostics": identity,
+            }],
+        })
+    }
+
+    #[test]
+    fn diagnostics_only_field_sweep_uses_the_exact_sample_identity() {
+        let expected = identity_values();
+        let other = serde_json::json!({
+            "equilibrium_artifact_sha256": format!("sha256:{}", "d".repeat(64)),
+            "linearization_state_sha256": format!("sha256:{}", "e".repeat(64)),
+            "operator_input_signature_sha256": format!("sha256:{}", "f".repeat(64)),
+        });
+        let diagnostics = serde_json::json!({
+            "sample_solver_diagnostics": [
+                {"sample_index": 1, "diagnostics": other},
+                {"sample_index": 4, "diagnostics": expected.clone()},
+            ],
+        });
+
+        let actual = native_field_sweep_sample_identity(&[], &diagnostics, 4)
+            .expect("empty selected modes must use the matching publisher diagnostics");
+        assert_eq!(
+            actual,
+            NativeFieldSweepSampleIdentity::from_json(
+                &expected,
+                "sample_solver_diagnostics.diagnostics"
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn diagnostics_only_field_sweep_fails_closed_for_missing_or_duplicate_samples() {
+        let identity = identity_values();
+        let missing = diagnostics_for(3, identity.clone());
+        assert!(native_field_sweep_sample_identity(&[], &missing, 4).is_err());
+
+        let duplicate = serde_json::json!({
+            "sample_solver_diagnostics": [
+                {"sample_index": 4, "diagnostics": identity.clone()},
+                {"sample_index": 4, "diagnostics": identity},
+            ],
+        });
+        let error = native_field_sweep_sample_identity(&[], &duplicate, 4)
+            .expect_err("duplicate sample provenance must not be selected arbitrarily");
+        assert!(error.message.contains("duplicate sample_solver_diagnostics"));
+    }
+
+    #[test]
+    fn diagnostics_only_field_sweep_fails_closed_for_missing_null_and_malformed_hashes() {
+        assert!(native_field_sweep_sample_identity(&[], &serde_json::json!({}), 0).is_err());
+
+        for key in NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS {
+            let mut null_hash = identity_values();
+            null_hash[key] = serde_json::Value::Null;
+            assert!(native_field_sweep_sample_identity(
+                &[],
+                &diagnostics_for(0, null_hash),
+                0,
+            )
+            .is_err());
+
+            let mut malformed_hash = identity_values();
+            malformed_hash[key] = serde_json::json!("not-a-sha256-digest");
+            assert!(native_field_sweep_sample_identity(
+                &[],
+                &diagnostics_for(0, malformed_hash),
+                0,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn mode_provenance_remains_authoritative_and_conflicts_fail_closed() {
+        let mode = identity_values();
+        let mode_identity = NativeFieldSweepSampleIdentity::from_json(&mode, "spectrum mode")
+            .expect("the existing selected-mode contract still accepts canonical hashes");
+        assert_eq!(
+            native_field_sweep_sample_identity(&[mode.clone()], &serde_json::json!({}), 0)
+                .unwrap(),
+            mode_identity
+        );
+        assert_eq!(
+            native_field_sweep_sample_identity(
+                &[mode.clone()],
+                &diagnostics_for(0, mode.clone()),
+                0,
+            )
+            .unwrap(),
+            mode_identity
+        );
+
+        let mut conflicting_diagnostics = identity_values();
+        conflicting_diagnostics["operator_input_signature_sha256"] =
+            serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+        let error = native_field_sweep_sample_identity(
+            &[mode],
+            &diagnostics_for(0, conflicting_diagnostics),
+            0,
+        )
+        .expect_err("mode and sample-level identities must not disagree");
+        assert!(error.message.contains("contradictory operator_input_signature_sha256"));
+    }
+    #[test]
+    fn every_mode_in_a_field_sweep_sample_must_share_valid_provenance() {
+        let first = identity_values();
+        let diagnostics = diagnostics_for(4, first.clone());
+        let expected = NativeFieldSweepSampleIdentity::from_json(&first, "spectrum mode").unwrap();
+        for diagnostic in [serde_json::json!({}), diagnostics] {
+            assert_eq!(
+                native_field_sweep_sample_identity(&[first.clone(), first.clone()], &diagnostic, 4).unwrap(),
+                expected
+            );
+            for key in NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS {
+                let mut contradictory = first.clone();
+                contradictory[key] = serde_json::json!(format!("sha256:{}", "d".repeat(64)));
+                for modes in [
+                    vec![first.clone(), contradictory.clone()],
+                    vec![contradictory.clone(), first.clone()],
+                ] {
+                    assert!(native_field_sweep_sample_identity(&modes, &diagnostic, 4).is_err());
+                }
+                for invalid in [serde_json::Value::Null, serde_json::json!("invalid-digest")] {
+                    let mut later = first.clone();
+                    later[key] = invalid;
+                    assert!(native_field_sweep_sample_identity(&[first.clone(), later], &diagnostic, 4).is_err());
+                }
+                let mut missing = first.clone();
+                missing.as_object_mut().unwrap().remove(key);
+                assert!(native_field_sweep_sample_identity(&[first.clone(), missing], &diagnostic, 4).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn sweep_manifest_rebinds_source_refs_and_preserves_other_relations() {
+        let spectrum_bytes = br#"{"schema_version":"eigen_spectrum.v2"}"#.to_vec();
+        let branches_bytes = br#"{"schema_version":"eigen_branches.v2"}"#.to_vec();
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path: "eigen/spectrum.v2.json".to_string(),
+                bytes: spectrum_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/branches.v2.json".to_string(),
+                bytes: branches_bytes,
+            },
+        ];
+        let preserved = serde_json::json!({
+            "relation": "source_equilibrium",
+            "artifact": "eigen/metadata/equilibrium.v2.json",
+            "revision": "sha256:equilibrium",
+        });
+        let manifest = serde_json::json!({
+            "cross_artifact_refs": [
+                {"relation": "source_spectrum", "artifact": "eigen/spectrum.v2.json", "revision": "sha256:stale"},
+                preserved.clone(),
+                {"relation": "source_branches", "artifact": "eigen/branches.v2.json", "revision": "sha256:stale"},
+            ],
+        });
+
+        let updated = update_sweep_manifest(
+            manifest,
+            &artifacts,
+            &serde_json::json!({}),
+            1,
+            &serde_json::json!("branch_overlap"),
+            &serde_json::json!(true),
+        )
+        .expect("the final manifest should reference the merged artifacts");
+        let refs = updated["cross_artifact_refs"]
+            .as_array()
+            .expect("cross-artifact references stay an array");
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0], preserved);
+        assert_eq!(
+            refs[1]["revision"],
+            published_artifact_sha256(&artifacts, "eigen/spectrum.v2.json").unwrap()
+        );
+        assert_eq!(
+            refs[2]["revision"],
+            published_artifact_sha256(&artifacts, "eigen/branches.v2.json").unwrap()
+        );
+    }
+
 }

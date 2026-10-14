@@ -271,6 +271,7 @@ export type Viewport3DFieldIdentityMismatchReason =
   | "quantity"
   | "scope"
   | "generation"
+  | "artifact_generation"
   | "carrier"
   | "component"
   | "snapshot"
@@ -324,6 +325,18 @@ export function resolveViewport3DFieldVectorIdentityMatch(
   const responseScopeId = field.scopeId ?? envelope.responseMetadata?.scopeId ?? null;
   const responseGenerationId =
     field.domainGenerationId ?? envelope.responseMetadata?.domainGenerationId ?? null;
+  const expectedArtifactGenerationId = normalizeStringIdentity(
+    request.query.expected_artifact_generation_id,
+  );
+  const responseArtifactGenerationId = normalizeStringIdentity(
+    envelope.responseMetadata?.artifactGenerationId,
+  );
+  if (
+    expectedArtifactGenerationId !== null &&
+    responseArtifactGenerationId !== expectedArtifactGenerationId
+  ) {
+    return { matches: false, reason: "artifact_generation" };
+  }
   const responseCarrierRevision =
     field.meshTopologyHash ?? envelope.responseMetadata?.meshTopologyHash ?? null;
   const expectedGenerationId = normalizeStringIdentity(request.query.expected_generation_id);
@@ -643,6 +656,27 @@ const VIEWPORT_3D_UNIVERSE_RESOURCE_KEY = MODEL_UNIVERSE_PATH;
 const FULL_FIELD_VECTOR_QUERY: FieldVectorQuery = {
   component: "full",
   scope_kind: "full",
+};
+/**
+ * FEM topology is a sequential header/full/decode load. The live 1.4 MiB
+ * topology measured a 3.3 s header response before the full payload could
+ * start, so the generic 5 s hook deadline expired before adoption. Keep the
+ * larger budget local to topology; field resources retain their own policy.
+ */
+export const VIEWPORT_3D_TOPOLOGY_RETRY_POLICY: ResourceRetryPolicy = {
+  deadlineMs: 15_000,
+  maxAttempts: 3,
+  retryAfterMs: 250,
+  retryableReasonCodes: [
+    "field_materialization_pending",
+    "field_pending",
+    "field_unmaterialized",
+    "materialization_pending",
+    "not_ready",
+    "pending",
+    "temporary_not_found",
+    "transient_not_found",
+  ],
 };
 const FIELD_VECTOR_RETRY_POLICY: ResourceRetryPolicy = {
   deadlineMs: 5_000,
@@ -1453,6 +1487,7 @@ export function useViewport3DDomainTopology(enabled = true) {
   return useResource({
     enabled: enabled && sessionIdentity !== null,
     load,
+    retryPolicy: VIEWPORT_3D_TOPOLOGY_RETRY_POLICY,
     resolveRevision: () => topologyCache.peek(resourceKey)?.etag ?? null,
     resourceKey,
   });

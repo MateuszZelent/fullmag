@@ -1,0 +1,18 @@
+name: FEM native failure receipt observation contracts
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-receipt-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run isolated FEM failure receipt observation regressions
+        run: python3 -B -m unittest discover -s scripts/ci -p "test_fem_contract_failure_receipt.py" -v

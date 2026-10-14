@@ -4,8 +4,16 @@
 *.mphtxt -text
 justfile text eol=lf
 scripts/local_runner/worker_entrypoint.py text eol=lf
+# This controller is compared byte-for-byte with its immutable source capsule.
+scripts/run_nonzero_k_validation_controller.py text eol=lf
 agent/skills/**/scripts/* text eol=lf
 .agents/skills/**/scripts/* text eol=lf
 
+# Preserve hash-bound DE runtime231 publication bytes across platforms.
+docs/raports/2026-10-04-de-signed15-runtime.csv text eol=lf
+docs/raports/2026-10-04-de-air-matrix-runtime231.* text eol=lf
+docs/raports/assets/de-air-matrix-20261004/*.py text eol=lf
+docs/raports/assets/de-air-matrix-20261004/manifest.json text eol=lf
+docs/raports/assets/de-air-matrix-20261004/air-matrix231-*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # Preserve exact bytes validated by this audit package manifest.
 /docs/plans/active/frontned_10_2026/fullmag_frontend_audit_v2_2026-10-12/** -text

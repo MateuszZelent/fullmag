@@ -143,6 +143,80 @@ describe("frequencyDomainSeriesAdapter", () => {
     expect(bounded.at(-1)).toEqual(points.at(-1));
   });
 
+  it.each([
+    {
+      exceedsPointBudget: false,
+      expectedGapCount: 2_500,
+      pointCount: MAX_FREQUENCY_DOMAIN_RENDER_POINTS * 2,
+    },
+    {
+      exceedsPointBudget: true,
+      expectedGapCount: 6_250,
+      pointCount: MAX_FREQUENCY_DOMAIN_RENDER_POINTS * 5,
+    },
+  ])(
+    "preserves many gaps when decimation drops points from $pointCount samples",
+    ({ exceedsPointBudget, expectedGapCount, pointCount }) => {
+      const gapIndices: number[] = [];
+      const points = Array.from({ length: pointCount }, (_, rowIndex) => {
+        const breakBefore = rowIndex > 0 && rowIndex % 4 === 3;
+        if (breakBefore) gapIndices.push(rowIndex);
+        return {
+          ...(breakBefore ? { breakBefore: true } : {}),
+          rowIndex,
+          x: rowIndex,
+          y: rowIndex,
+        };
+      });
+      const model: FrequencyDomainChartBuildResult<unknown> = {
+        dataSourceVersion: "unknown",
+        diagnostics: [],
+        droppedPointCount: 0,
+        points: [],
+        series: [{
+          id: "analysis.frequency-domain:test-gapped-bounded",
+          label: "Gapped bounded test",
+          points,
+          quantity: "test",
+          source: {
+            kind: "analysis.frequency_domain",
+            resourceKey: "analysis/frequency-domain/test-gapped-bounded",
+            tableId: "frequency-domain:test-gapped-bounded",
+          },
+          status: "ready",
+          unit: "a.u.",
+          xUnit: "1",
+        }],
+      };
+
+      const bounded = frequencyDomainChartSeriesForAnalysisPlots(model)[0]?.points ?? [];
+      const retainedRows = new Set(bounded.map((point) => point.rowIndex));
+      const droppedGaps = gapIndices.filter((rowIndex) => !retainedRows.has(rowIndex));
+
+      expect(bounded).toHaveLength(MAX_FREQUENCY_DOMAIN_RENDER_POINTS);
+      expect(bounded[0]).toEqual(points[0]);
+      expect(bounded.at(-1)).toEqual(points.at(-1));
+      expect(gapIndices).toHaveLength(expectedGapCount);
+      expect(gapIndices.length > MAX_FREQUENCY_DOMAIN_RENDER_POINTS).toBe(exceedsPointBudget);
+      expect(droppedGaps.length).toBeGreaterThan(100);
+      const firstGapIndex = gapIndices[0]!;
+      expect(retainedRows.has(firstGapIndex)).toBe(false);
+      const firstRetainedAfterGap = bounded.find((point) => point.rowIndex > firstGapIndex);
+      expect(firstRetainedAfterGap).toBeDefined();
+      expect(Reflect.get(firstRetainedAfterGap ?? {}, "breakBefore")).toBe(true);
+
+      let retainedIndex = 0;
+      for (const gapIndex of gapIndices) {
+        while (
+          retainedIndex < bounded.length &&
+          bounded[retainedIndex]!.rowIndex < gapIndex
+        ) {
+          retainedIndex += 1;
+        }
+        expect(Reflect.get(bounded[retainedIndex] ?? {}, "breakBefore")).toBe(true);
+      }
+  });
+
   it("preserves a narrow resonance when bounding a large render series", () => {
     const pointCount = MAX_FREQUENCY_DOMAIN_RENDER_POINTS + 1;
     const resonanceIndex = 4321;

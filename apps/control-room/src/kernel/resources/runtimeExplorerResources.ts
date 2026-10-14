@@ -4,12 +4,14 @@ import { useCallback, useMemo } from "react";
 
 import {
   PLATFORM_CAPABILITIES_PATH,
+  PLATFORM_COMPUTE_NODES_PATH,
   PLATFORM_HEALTH_PATH,
   SIMULATION_COMMANDS_PATH,
 } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   CommandDetailResource,
+  ComputeNodesResource,
   HealthResource,
   PlatformCapabilitiesResource,
 } from "../api/apiTypes";
@@ -52,6 +54,37 @@ export function usePlatformCapabilitiesResource({
     load,
     resolveRevision: () => null,
     resourceKey: PLATFORM_CAPABILITIES_PATH,
+  });
+}
+
+export function computeNodesResourceRevision(data: ComputeNodesResource): string {
+  return JSON.stringify({
+    schema_version: data.schema_version,
+    state: data.state,
+    stale_after_seconds: data.stale_after_seconds,
+    nodes: data.nodes.map((node) => ({
+      node_id: node.node_id,
+      state: node.state,
+      stale_after_seconds: node.stale_after_seconds,
+      snapshot: node.snapshot,
+    })),
+  }) ?? "null";
+}
+
+export function usePlatformComputeNodesResource({
+  enabled = true,
+}: RuntimeExplorerResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.platform.computeNodes({ signal }),
+    [api],
+  );
+  return useResource<ComputeNodesResource>({
+    enabled,
+    load,
+    minRefetchIntervalMs: 5_000,
+    resolveRevision: computeNodesResourceRevision,
+    resourceKey: PLATFORM_COMPUTE_NODES_PATH,
   });
 }
 

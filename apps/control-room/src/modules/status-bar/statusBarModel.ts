@@ -1,3 +1,5 @@
+import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
+
 export interface StatusBarRunReadback {
   requested_backend?: string | null;
   requested_device?: string | null;
@@ -12,6 +14,64 @@ export interface StatusBarRunReadback {
     reason?: string | null;
     message?: string | null;
   } | null;
+}
+
+export interface StatusBarMethodReadback {
+  capabilities?: {
+    active_lane?: {
+      authored?: { discretization?: string; backend?: string } | null;
+      requested?: { discretization?: string; backend?: string };
+      resolved?: { discretization?: string } | null;
+    } | null;
+  };
+  domain?: { discretization?: string | null };
+}
+
+export interface StatusBarMethodModel {
+  label: string;
+  state: "resolved" | "pending" | "unknown";
+  method: "fdm" | "fem" | null;
+  title: string;
+}
+
+export function statusBarMethodModelsEqual(
+  previous: StatusBarMethodModel,
+  next: StatusBarMethodModel,
+): boolean {
+  return previous.label === next.label
+    && previous.method === next.method
+    && previous.state === next.state
+    && previous.title === next.title;
+}
+
+export function buildStatusBarMethodModel(
+  status: StatusBarMethodReadback | null | undefined,
+): StatusBarMethodModel {
+  const method = resolveSessionAuthoringDiscretization(status);
+  const requested = status?.capabilities?.active_lane?.requested;
+  const request = normalizeToken(requested?.discretization ?? requested?.backend)?.toLowerCase();
+  if (method) {
+    return {
+      label: method.toUpperCase(),
+      state: "resolved",
+      method,
+      title: `Model method: ${method.toUpperCase()}. Requested: ${request ?? "unavailable"}. Engine execution is shown separately.`,
+    };
+  }
+  if (request === "fdm" || request === "fem" || request === "auto") {
+    return {
+      label: request === "auto" ? "Method auto" : `${request.toUpperCase()} requested`,
+      state: "pending",
+      method: null,
+      title: "Simulation method resolution is pending. Requested selection is retained; no resolved method is assumed.",
+    };
+  }
+  return {
+    label: status ? "Method unavailable" : "No simulation",
+    state: "unknown",
+    method: null,
+    title: status ? "No resolved simulation method is available." : "Create or open a simulation to select FEM or FDM.",
+  };
 }
 
 export interface StatusBarEngineModel {
@@ -101,11 +161,20 @@ export function buildStatusBarEngineModel(
   solverState?: string | null,
 ): StatusBarEngineModel {
   if (!run) {
+    const state = solverState?.trim().toLowerCase();
+    if (state && !["idle", "awaiting_command", "ready", "loading"].includes(state)) {
+      return {
+        detail: state === "running" ? "run in progress" : "run metadata unavailable",
+        label: "Engine metadata pending",
+        state: "pending",
+        title: `Solver state: ${state}. Engine metadata has not been received; the method selection is shown separately.`,
+      };
+    }
     return {
-      detail: "awaiting run",
-      label: "Engine pending",
+      detail: "no active run",
+      label: "Engine not started",
       state: "pending",
-      title: "No active run metadata is available yet.",
+      title: "The simulation method is selected separately. No active engine run has started.",
     };
   }
 

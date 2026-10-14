@@ -26,9 +26,9 @@ export function buildStudyStageBaseNode({
   return {
     id: nodeId,
     kind,
-    label,
+    label: stage.pipelineLabel ?? label,
     parentId: STUDY_STAGES_NODE_ID,
-    badge,
+    badge: stage.pipelineEnabled === false ? `${badge} · disabled` : badge,
     icon,
     stageId: nodeStageId,
     stageIndex: stage.index,

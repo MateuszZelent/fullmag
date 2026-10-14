@@ -546,6 +546,28 @@ mod tests {
     }
 
     #[test]
+    fn verified_length_rejects_corruption_even_when_length_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = CasStore::open(dir.path().join("objects")).unwrap();
+        let hash = cas.put(b"original").unwrap();
+        assert_eq!(cas.verified_length(&hash).unwrap(), Some(8));
+
+        fs::write(cas.object_path(&hash).unwrap(), b"modified").unwrap();
+        let error = cas.verified_length(&hash).unwrap_err();
+        assert!(error.to_string().contains("CAS integrity error"));
+    }
+
+    #[test]
+    fn verified_length_distinguishes_empty_missing_and_invalid_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = CasStore::open(dir.path().join("objects")).unwrap();
+        let hash = cas.put(b"").unwrap();
+        assert_eq!(cas.verified_length(&hash).unwrap(), Some(0));
+        assert_eq!(cas.verified_length(&"0".repeat(64)).unwrap(), None);
+        assert!(cas.verified_length("../outside").is_err());
+    }
+
+    #[test]
     fn verified_range_hashes_full_object_and_returns_only_requested_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let cas = CasStore::open(dir.path().join("objects")).unwrap();

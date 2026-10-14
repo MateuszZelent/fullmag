@@ -12,6 +12,7 @@ import {
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
   PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
+  VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 
 import type {
@@ -20,9 +21,14 @@ import type {
   ProjectAuthoringUpdateRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
+  OutputStorageDefaultsResource,
+  VisualizationStatePatch,
+  VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { LayoutController } from "@/kernel/layout/LayoutController";
 import { ModuleRegistry } from "@/kernel/module/ModuleRegistry";
 import { createDevelopmentRestartController } from "@/kernel/development/DevelopmentRestartController";
@@ -34,6 +40,7 @@ import {
   type ProjectDocumentSnapshot,
 } from "@/kernel/persistence/ProjectDocumentController";
 import { createDevelopmentKernelOwners } from "@/kernel/development/DevelopmentKernelOwners";
+import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
 
 const HANDOFF_SCHEMA = "fullmag.project-document-development-handoff.v1";
 const ARCHIVE_BYTES = new Uint8Array([
@@ -57,6 +64,14 @@ const SESSION_ID = "session-development-owner-fixture";
 const SESSION_EPOCH = 43;
 const REPLACEMENT_SESSION_ID = "session-development-owner-fixture-restarted";
 const REPLACEMENT_SESSION_EPOCH = 1;
+const NONDEFAULT_CAMERA: VisualizationStateResource["camera"] = {
+  projection: "orthographic",
+  position: [4e-6, -3e-6, 2.5e-6],
+  target: [0.5e-6, 0.25e-6, 0],
+  up: [0, 0, 1],
+  fov_degrees: 37,
+  orthographic_scale: 2.75e-6,
+};
 
 type DevelopmentHandoffOptions = { carryUnsaved?: boolean };
 
@@ -257,6 +272,9 @@ interface ConcreteApiFixtureOptions {
   readonly sessionId?: string | null;
   readonly sessionEpoch?: number;
   readonly rejectRestartForChangedWorkspace?: boolean;
+  readonly initialCamera?: VisualizationStateResource["camera"];
+  readonly cameraPatchAck?: VisualizationStateResource["camera"];
+  readonly cameraReadback?: VisualizationStateResource["camera"];
 }
 
 interface ConcreteApiFixture {
@@ -264,12 +282,14 @@ interface ConcreteApiFixture {
   readonly calls: {
     readonly requests: Array<{ readonly method: string; readonly path: string }>;
     readonly projectOpens: ProjectArchiveRequest[];
+    readonly visualizationPatches: VisualizationStatePatch[];
   };
 }
 
 type ConcreteOwnerKernel = {
   readonly api: ControlRoomApi;
   readonly bus: EventBus<KernelEventMap>;
+  readonly cameraRegistry: CameraRegistryController;
   readonly layout: LayoutController;
   readonly modules: ModuleRegistry;
   readonly pendingForms: PendingFormRegistry;
@@ -296,7 +316,16 @@ function makeConcreteApiFixture(
   const calls = {
     requests: [] as Array<{ method: string; path: string }>,
     projectOpens: [] as ProjectArchiveRequest[],
+    visualizationPatches: [] as VisualizationStatePatch[],
   };
+  let visualizationCamera = clone(options.initialCamera ?? {
+    projection: "perspective",
+    position: [2e-6, 1.4e-6, 2e-6],
+    target: [0, 0, 0],
+    up: [0, 0, 1],
+    fov_degrees: 42,
+    orthographic_scale: null,
+  } satisfies VisualizationStateResource["camera"]);
   const api = new ControlRoomApi({
     baseUrl: "http://localhost:3251",
     expectedApiInstance: apiPin,
@@ -324,6 +353,32 @@ function makeConcreteApiFixture(
         const body = await request.json() as ProjectArchiveRequest;
         calls.projectOpens.push(clone(body));
         return jsonResponse(resource({ archive_base64: body.archive_base64 }), apiPin);
+      }
+      if ((request.method === "GET" || request.method === "PATCH") && path === VISUALIZATION_STATE_PATH) {
+        if (options.sessionId === null) {
+          return jsonResponse({ code: "fixture_no_session", message: "No visualization resource exists." }, apiPin, 404);
+        }
+        if (request.method === "PATCH") {
+          const body = await request.json() as VisualizationStatePatch;
+          calls.visualizationPatches.push(clone(body));
+          const patch = body.camera;
+          if (patch) {
+            visualizationCamera = {
+              ...visualizationCamera,
+              projection: patch.projection ?? visualizationCamera.projection,
+              position: patch.position ?? visualizationCamera.position,
+              target: patch.target ?? visualizationCamera.target,
+              up: patch.up ?? visualizationCamera.up,
+              fov_degrees: patch.fov_degrees ?? visualizationCamera.fov_degrees,
+              // Absence preserves the scale; explicit JSON null clears it.
+              orthographic_scale: patch.orthographic_scale === undefined
+                ? visualizationCamera.orthographic_scale
+                : patch.orthographic_scale,
+            };
+          }
+          return jsonResponse({ camera: clone(options.cameraPatchAck ?? visualizationCamera) }, apiPin);
+        }
+        return jsonResponse({ camera: clone(options.cameraReadback ?? visualizationCamera) }, apiPin);
       }
       if (request.method === "POST" && path === PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH
         && options.rejectRestartForChangedWorkspace) {
@@ -355,11 +410,25 @@ function makeConcreteOwnerKernel(
   return {
     api,
     bus,
+    cameraRegistry: new CameraRegistryController({
+      api: api.visualization,
+      idleFlushMs: null,
+      documentTarget: null,
+      windowTarget: null,
+    }),
     layout,
     modules,
     pendingForms,
     projectDocument: new ProjectDocumentController(api),
   };
+}
+
+function observeFixtureCamera(
+  kernel: ConcreteOwnerKernel,
+  camera: VisualizationStateResource["camera"] = NONDEFAULT_CAMERA,
+  revision = 2,
+): void {
+  kernel.cameraRegistry.observeRemoteState({ camera: clone(camera), revision } as VisualizationStateResource);
 }
 
 async function openConcreteProject(kernel: ConcreteOwnerKernel): Promise<void> {
@@ -1392,8 +1461,10 @@ async function checkDevelopmentGuardFailureAndDirtyPolicy(): Promise<void> {
   next.assertCurrent(); next.release();
 }
 
-async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void> {
-  const oldApiFixture = makeConcreteApiFixture(OLD_API_PIN);
+async function checkConcreteDevelopmentOwnerCaptureAndHydration(
+  camera: VisualizationStateResource["camera"] = NONDEFAULT_CAMERA,
+): Promise<void> {
+  const oldApiFixture = makeConcreteApiFixture(OLD_API_PIN, { initialCamera: camera });
   const kernel = makeConcreteOwnerKernel(oldApiFixture.api);
   let pauseCount = 0;
   let resumeCount = 0;
@@ -1416,6 +1487,7 @@ async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void>
       const api = makeConcreteApiFixture(apiInstance, {
         sessionId: REPLACEMENT_SESSION_ID,
         sessionEpoch: REPLACEMENT_SESSION_EPOCH,
+        initialCamera: NONDEFAULT_CAMERA,
       });
       const replacement = makeConcreteOwnerKernel(api.api);
       preparedReplacement.api = api;
@@ -1428,6 +1500,7 @@ async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void>
     },
   });
 
+  observeFixtureCamera(kernel, camera);
   const emptyCapture = await owners.capture();
   const emptyHandoff = emptyCapture.projectDocument.snapshot as Record<string, unknown>;
   assertCondition(emptyHandoff.state === "empty", "Empty owner capture did not preserve the empty document");
@@ -1442,6 +1515,7 @@ async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void>
   assertCondition(!kernel.pendingForms.getTransitionSnapshot().guarded, "Empty owner release retained the form guard");
 
   await openConcreteProject(kernel);
+  observeFixtureCamera(kernel, camera);
   kernel.pendingForms.register(Symbol("concrete owner clean form"), pendingForm());
   kernel.layout.replace({
     ...kernel.layout.get(),
@@ -1459,6 +1533,9 @@ async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void>
   }), "The absent editor owner marker changed");
   assertCondition(canonical(captured.workspace.layout) === canonical(kernel.layout.get()),
     "Actual layout owner was not captured");
+  assertCondition(captured.workspace.schema === "fullmag.development-layout-handoff.v2"
+    && canonical(captured.workspace.camera) === canonical(camera),
+  "The clean nondefault camera was not captured in workspace handoff v2");
   assertCondition((captured.projectDocument.snapshot as Record<string, unknown>).state === "ready",
     "Ready document owner was not captured");
   assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded, "Ready capture did not guard pending forms");
@@ -1485,6 +1562,12 @@ async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void>
     "Replacement API is not pinned to the acknowledged instance");
   assertCondition(hydratedApiFixture.calls.projectOpens.length === 1,
     "Project document hydration did not use the real typed projects.open facade");
+  assertCondition(hydratedApiFixture.calls.visualizationPatches.length === 1
+    && canonical(hydratedApiFixture.calls.visualizationPatches[0]?.camera) === canonical(camera),
+  "Replacement camera was not restored through the typed visualization patch facade");
+  assertCondition(hydratedApiFixture.calls.requests.filter((request) =>
+    request.method === "GET" && request.path === VISUALIZATION_STATE_PATH).length === 1,
+  "Replacement camera was not confirmed by a pinned visualization readback");
   assertCondition(publishCount === 1, "Replacement owners were not published exactly once");
   assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded && !kernel.projectDocument.canSave(),
     "Hydration released old-owner guards before the restart controller finalized");
@@ -1498,6 +1581,7 @@ async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void>
 async function checkConcreteDevelopmentOwnerMismatchCleanup(): Promise<void> {
   const apiFixture = makeConcreteApiFixture(OLD_API_PIN, { workspaceApiInstance: FOREIGN_API_PIN });
   const kernel = makeConcreteOwnerKernel(apiFixture.api);
+  observeFixtureCamera(kernel);
   await openConcreteProject(kernel);
   kernel.pendingForms.register(Symbol("mismatch clean form"), pendingForm());
   const original = clone(kernel.projectDocument.getSnapshot());
@@ -1519,12 +1603,61 @@ async function checkConcreteDevelopmentOwnerMismatchCleanup(): Promise<void> {
     "Capture mismatch submitted a restart mutation");
 }
 
+async function checkConcreteCaptureFailureDiagnostics(): Promise<void> {
+  for (const scenario of ["pause", "camera", "identity", "cleanup"] as const) {
+    const apiFixture = makeConcreteApiFixture(OLD_API_PIN, scenario === "identity"
+      ? { workspaceApiInstance: FOREIGN_API_PIN } : {});
+    const kernel = makeConcreteOwnerKernel(apiFixture.api);
+    await openConcreteProject(kernel);
+    if (scenario !== "camera" && scenario !== "cleanup") observeFixtureCamera(kernel);
+    const original = kernel.projectDocument.getSnapshot();
+    let resumes = 0;
+    const owners = createDevelopmentKernelOwners(kernel, {
+      applyPendingChanges: false,
+      carryUnsavedDocument: false,
+      pauseOldKernel: () => {
+        if (scenario === "pause") throw new Error("private fixture marker");
+        return () => {
+          resumes += 1;
+          if (scenario === "cleanup") throw new Error("private fixture marker");
+        };
+      },
+      prepareReplacement: async () => { throw new Error("Rejected capture must not prepare a replacement"); },
+      publishReplacement: async () => { throw new Error("Rejected capture must not publish a replacement"); },
+    });
+    // The cleanup case rejects the unobserved camera, then fails owner resume.
+    const controller = createDevelopmentRestartController(apiFixture.api, owners);
+    await controller.start();
+    const snapshot = controller.getSnapshot();
+    const expected = scenario === "pause" ? "Workspace activity could not be paused safely."
+      : scenario === "identity" ? "The current backend and session could not be confirmed."
+        : scenario === "cleanup" ? "guard cleanup is unconfirmed"
+          : "The current camera view is not confirmed by the backend.";
+    assertCondition(snapshot.state === "failed" && snapshot.message?.includes(expected),
+      `${scenario}: capture failure lost its safe boundary diagnostic`);
+    assertCondition(snapshot.captureCleanup === (scenario === "cleanup" ? "unconfirmed" : "confirmed"),
+      `${scenario}: capture cleanup certainty changed`);
+    assertCondition(!snapshot.message?.includes("private fixture marker"),
+      `${scenario}: capture diagnostic exposed arbitrary error text`);
+    assertCondition(snapshot.requestId === null && apiFixture.calls.requests.filter((request) =>
+      request.path === PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH).length === 0,
+    `${scenario}: refused capture submitted a restart`);
+    assertCondition(canonical(kernel.projectDocument.getSnapshot()) === canonical(original),
+      `${scenario}: refused capture changed the project document`);
+    assertCondition(resumes === (scenario === "pause" ? 0 : 1),
+      `${scenario}: capture cleanup resumed the old owner an unexpected number of times`);
+    assertCondition(!kernel.pendingForms.getTransitionSnapshot().guarded && kernel.projectDocument.canSave(),
+      `${scenario}: capture rejection retained a document or form guard`);
+  }
+}
+
 async function checkConcreteDevelopmentHydrationRefusals(): Promise<void> {
   const oldApiFixture = makeConcreteApiFixture(OLD_API_PIN);
   const kernel = makeConcreteOwnerKernel(oldApiFixture.api);
+  observeFixtureCamera(kernel);
   await openConcreteProject(kernel);
   kernel.pendingForms.register(Symbol("refusal clean form"), pendingForm());
-  let replacementMode: "fresh" | "foreign-pin" | "shared-pending-forms" = "fresh";
+  let replacementMode: "fresh" | "foreign-pin" | "shared-pending-forms" | "shared-camera" | "camera-ack-mismatch" | "camera-readback-mismatch" = "fresh";
   let prepared = 0;
   let published = 0;
   const replacements: Array<{ kernel: ConcreteOwnerKernel; api: ConcreteApiFixture }> = [];
@@ -1535,16 +1668,25 @@ async function checkConcreteDevelopmentHydrationRefusals(): Promise<void> {
     prepareReplacement: async (apiInstance) => {
       prepared += 1;
       const pin = replacementMode === "foreign-pin" ? FOREIGN_API_PIN : apiInstance;
+      const cameraMismatchOptions = replacementMode === "camera-ack-mismatch"
+        ? { cameraPatchAck: { ...NONDEFAULT_CAMERA, fov_degrees: 36 } }
+        : replacementMode === "camera-readback-mismatch"
+          ? { cameraReadback: { ...NONDEFAULT_CAMERA, fov_degrees: 36 } }
+          : {};
       const api = makeConcreteApiFixture(pin, {
         sessionId: REPLACEMENT_SESSION_ID,
         sessionEpoch: REPLACEMENT_SESSION_EPOCH,
+        ...cameraMismatchOptions,
       });
       const pendingForms = replacementMode === "shared-pending-forms"
         ? kernel.pendingForms
         : new PendingFormRegistry();
       const replacement = makeConcreteOwnerKernel(api.api, pendingForms);
-      replacements.push({ kernel: replacement, api });
-      return replacement;
+      const candidate = replacementMode === "shared-camera"
+        ? { ...replacement, cameraRegistry: kernel.cameraRegistry }
+        : replacement;
+      replacements.push({ kernel: candidate, api });
+      return candidate;
     },
     publishReplacement: async () => { published += 1; },
   });
@@ -1560,6 +1702,19 @@ async function checkConcreteDevelopmentHydrationRefusals(): Promise<void> {
     ["invalid workspace schema", (value) => {
       value.workspace = { schema: "foreign.layout.v1", layout: clone(captured.workspace.layout) };
     }],
+    ["absent confirmed session id", (value) => {
+      value.session_id = undefined;
+    }],
+    ["invalid confirmed session epoch", (value) => {
+      value.session_epoch = -1;
+    }],
+    ["invalid v2 camera bounds", (value) => {
+      const workspace = clone(value.workspace) as Record<string, unknown>;
+      const camera = clone(workspace.camera) as Record<string, unknown>;
+      camera.fov_degrees = 180;
+      workspace.camera = camera;
+      value.workspace = workspace;
+    }],
   ];
   for (const [label, mutate] of beforePrepareCases) {
     const outcome = developmentRestartOutcome(captured, NEW_API_PIN);
@@ -1572,7 +1727,7 @@ async function checkConcreteDevelopmentHydrationRefusals(): Promise<void> {
 
   const afterPrepareCases: Array<{
     readonly label: string;
-    readonly mode: "fresh" | "foreign-pin" | "shared-pending-forms";
+    readonly mode: "fresh" | "foreign-pin" | "shared-pending-forms" | "shared-camera" | "camera-ack-mismatch" | "camera-readback-mismatch";
     readonly mutate: (value: DevelopmentRestartResource) => void;
   }> = [
     { label: "invalid layout preference", mode: "fresh", mutate: (value) => {
@@ -1591,6 +1746,9 @@ async function checkConcreteDevelopmentHydrationRefusals(): Promise<void> {
     } },
     { label: "foreign-pinned replacement client", mode: "foreign-pin", mutate: () => undefined },
     { label: "replacement reuses the old pending-form registry", mode: "shared-pending-forms", mutate: () => undefined },
+    { label: "replacement reuses the old camera registry", mode: "shared-camera", mutate: () => undefined },
+    { label: "camera patch acknowledgement mismatch blocks publication", mode: "camera-ack-mismatch", mutate: () => undefined },
+    { label: "camera readback mismatch blocks publication", mode: "camera-readback-mismatch", mutate: () => undefined },
   ];
   for (const entry of afterPrepareCases) {
     replacementMode = entry.mode;
@@ -1602,18 +1760,119 @@ async function checkConcreteDevelopmentHydrationRefusals(): Promise<void> {
     assertCondition(published === 0, `${entry.label}: rejected replacement was published`);
     const replacement = replacements[replacements.length - 1];
     assertCondition(replacement !== undefined, `${entry.label}: missing replacement evidence`);
-    assertCondition(replacement.api.calls.requests.length === 0 && replacement.api.calls.projectOpens.length === 0,
-      `${entry.label}: rejected replacement reached backend or document hydration`);
+    if (entry.mode === "camera-ack-mismatch" || entry.mode === "camera-readback-mismatch") {
+      assertCondition(replacement.api.calls.projectOpens.length === 1
+        && replacement.api.calls.visualizationPatches.length === 1,
+      `${entry.label}: replacement did not exercise the typed camera patch`);
+      const readbacks = replacement.api.calls.requests.filter((request) =>
+        request.method === "GET" && request.path === VISUALIZATION_STATE_PATH).length;
+      assertCondition(readbacks === (entry.mode === "camera-readback-mismatch" ? 1 : 0),
+        `${entry.label}: camera readback count does not match the failed phase`);
+    } else {
+      assertCondition(replacement.api.calls.requests.length === 0 && replacement.api.calls.projectOpens.length === 0,
+        `${entry.label}: rejected replacement reached backend or document hydration`);
+    }
   }
+  replacementMode = "fresh";
+  const legacyOutcome = developmentRestartOutcome(captured, NEW_API_PIN);
+  legacyOutcome.workspace = { schema: "fullmag.development-layout-handoff.v1", layout: clone(captured.workspace.layout) };
+  const previousPrepared = prepared;
+  await owners.hydrate(legacyOutcome);
+  const legacyReplacement = replacements[replacements.length - 1];
+  assertCondition(prepared === previousPrepared + 1 && published === 1,
+    "Explicit v1 compatibility reader did not publish the legacy workspace");
+  assertCondition(legacyReplacement?.api.calls.visualizationPatches.length === 0
+    && legacyReplacement.api.calls.requests.every((request) => request.path !== VISUALIZATION_STATE_PATH),
+  "Legacy v1 workspace unexpectedly attempted camera restoration");
   assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded && !kernel.projectDocument.canSave(),
     "Rejected hydration released the captured owners");
   captured.assertCurrent();
   captured.release();
 }
 
+async function checkCameraMutationInvalidatesHandoff(): Promise<void> {
+  const apiFixture = makeConcreteApiFixture(OLD_API_PIN);
+  const kernel = makeConcreteOwnerKernel(apiFixture.api);
+  observeFixtureCamera(kernel);
+  const owners = createDevelopmentKernelOwners(kernel, {
+    applyPendingChanges: false,
+    carryUnsavedDocument: false,
+    pauseOldKernel: () => () => undefined,
+    prepareReplacement: async () => { throw new Error("Capture-only camera fixture cannot prepare a replacement"); },
+    publishReplacement: async () => { throw new Error("Capture-only camera fixture cannot publish a replacement"); },
+  });
+  const captured = await owners.capture();
+  kernel.cameraRegistry.patchCamera({ projection: "perspective" });
+  await expectRejected(() => captured.assertCurrent(), "camera mutation during handoff");
+  captured.release();
+}
+
+async function checkUnobservedCameraCaptureRefuses(): Promise<void> {
+  const apiFixture = makeConcreteApiFixture(OLD_API_PIN);
+  const kernel = makeConcreteOwnerKernel(apiFixture.api);
+  await openConcreteProject(kernel);
+  let resumes = 0;
+  const readResumeCount = () => resumes;
+  const owners = createDevelopmentKernelOwners(kernel, {
+    applyPendingChanges: false,
+    carryUnsavedDocument: false,
+    pauseOldKernel: () => () => { resumes += 1; },
+    prepareReplacement: async () => { throw new Error("Capture-only camera fixture cannot prepare a replacement"); },
+    publishReplacement: async () => { throw new Error("Capture-only camera fixture cannot publish a replacement"); },
+  });
+  await expectRejected(() => owners.capture(), "unobserved active-session camera capture");
+  assertCondition(!kernel.pendingForms.getTransitionSnapshot().guarded && kernel.projectDocument.canSave(),
+    "Unobserved camera refusal retained an owner guard");
+  assertCondition(readResumeCount() === 1, "Unobserved camera refusal did not resume the old kernel");
+  assertCondition(apiFixture.calls.requests.every((request) => request.path !== VISUALIZATION_STATE_PATH),
+    "Unobserved camera capture attempted a GET through the paused old API");
+
+  observeFixtureCamera(kernel);
+  const captured = await owners.capture();
+  assertCondition(canonical(captured.workspace.camera) === canonical(NONDEFAULT_CAMERA),
+    "Capture did not use the observed clean camera");
+  assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded && !kernel.projectDocument.canSave(),
+    "Observed camera capture did not retain its guards");
+  captured.release();
+  assertCondition(readResumeCount() === 2 && !kernel.pendingForms.getTransitionSnapshot().guarded && kernel.projectDocument.canSave(),
+    "Observed camera capture did not release its guards");
+  assertCondition(apiFixture.calls.requests.every((request) => request.path !== VISUALIZATION_STATE_PATH),
+    "Camera capture attempted a GET through the paused old API");
+}
+
+async function checkSessionlessCameraHandoff(): Promise<void> {
+  const oldApiFixture = makeConcreteApiFixture(OLD_API_PIN, { sessionId: null, sessionEpoch: 0 });
+  const kernel = makeConcreteOwnerKernel(oldApiFixture.api);
+  let published = 0;
+  let replacementApi: ConcreteApiFixture | undefined;
+  const owners = createDevelopmentKernelOwners(kernel, {
+    applyPendingChanges: false,
+    carryUnsavedDocument: false,
+    pauseOldKernel: () => () => undefined,
+    prepareReplacement: async (apiInstance) => {
+      replacementApi = makeConcreteApiFixture(apiInstance, { sessionId: null, sessionEpoch: 0 });
+      return makeConcreteOwnerKernel(replacementApi.api);
+    },
+    publishReplacement: async () => { published += 1; },
+  });
+  const captured = await owners.capture();
+  assertCondition(captured.sessionId === null
+    && captured.workspace.schema === "fullmag.development-layout-handoff.v2"
+    && captured.workspace.camera === null,
+  "Sessionless workspace did not encode the missing visualization resource explicitly");
+  await owners.hydrate(developmentRestartOutcome(captured, NEW_API_PIN));
+  assertCondition(published === 1 && replacementApi !== undefined,
+    "Sessionless workspace did not publish a valid replacement");
+  assertCondition(oldApiFixture.calls.requests.every((request) => request.path !== VISUALIZATION_STATE_PATH)
+    && replacementApi.calls.requests.every((request) => request.path !== VISUALIZATION_STATE_PATH),
+  "Sessionless camera handoff called the unavailable visualization endpoint");
+  captured.release();
+}
+
 async function checkConcreteRestartControllerKnownRejection(): Promise<void> {
   const apiFixture = makeConcreteApiFixture(OLD_API_PIN, { rejectRestartForChangedWorkspace: true });
   const kernel = makeConcreteOwnerKernel(apiFixture.api);
+  observeFixtureCamera(kernel);
   await openConcreteProject(kernel);
   kernel.pendingForms.register(Symbol("known rejection clean form"), pendingForm());
   let resumes = 0;
@@ -1717,8 +1976,16 @@ async function runChecks(): Promise<FixtureReport> {
     ["document handoff guard blocks mutations and preserves metadata until release", checkDevelopmentDocumentGuard],
     ["dirty handoff requires explicit carry and failed guard issuance rolls back", checkDevelopmentGuardFailureAndDirtyPolicy],
     ["concrete owner factory captures empty/document/layout and hydrates fresh pinned owners", checkConcreteDevelopmentOwnerCaptureAndHydration],
+    ["concrete owner clears the replacement camera scale through typed patch and readback", () =>
+      checkConcreteDevelopmentOwnerCaptureAndHydration({
+        ...NONDEFAULT_CAMERA, projection: "perspective", orthographic_scale: null,
+      })],
     ["concrete owner identity mismatch releases every guard without submitting", checkConcreteDevelopmentOwnerMismatchCleanup],
-    ["concrete owner hydrate rejects invalid or foreign owners and reused form registries", checkConcreteDevelopmentHydrationRefusals],
+    ["concrete capture reports a safe failing boundary without submitting or hiding uncertain cleanup", checkConcreteCaptureFailureDiagnostics],
+    ["concrete owner hydrate rejects invalid owners and withholds publication on camera mismatch", checkConcreteDevelopmentHydrationRefusals],
+    ["camera mutation invalidates a captured workspace handoff", checkCameraMutationInvalidatesHandoff],
+    ["unobserved active-session camera refuses capture and releases guards", checkUnobservedCameraCaptureRefuses],
+    ["sessionless handoff carries explicit camera absence without visualization calls", checkSessionlessCameraHandoff],
     ["restart controller releases guards after the concrete API reports known nonacceptance", checkConcreteRestartControllerKnownRejection],
     ["empty restore performs no API open", checkEmptyRestore],
     ["clean and dirty capture policy plus detached nested payload", checkCleanAndDirtyCapture],
@@ -1771,16 +2038,33 @@ function NewProblemDraftFixture() {
     registry.register(owner, pendingForm({ dirty: true }));
     const request = makeDeferred<never>();
     const state = { apiCalls: 0, historyClears: 0 };
-    // This fixture supplies only the services consumed by the production
-    // dialog. It does not construct a runtime, resource cache, or renderer.
+    const bus = new EventBus<KernelEventMap>();
+    const outputStorageDefaults: OutputStorageDefaultsResource = {
+      cleanup: "on_success",
+      data_format: "zarr",
+      existing_output: "timestamp",
+      hdf5_unavailable_reason: null,
+      output_parent: "C:\\fullmag\\output",
+      supported_formats: ["zarr", "hdf5"],
+      temp_parent: "C:\\fullmag\\temp",
+    };
     const kernel = {
-      api: { sessions: { create: () => {
-        state.apiCalls += 1;
-        return request.promise;
-      } } },
+      api: {
+        resourceCacheScope: "new-problem-draft-fixture",
+        sessions: { create: () => {
+          state.apiCalls += 1;
+          return request.promise;
+        } },
+        platform: {
+          outputStorageDefaults: async () => clone(outputStorageDefaults),
+          saveOutputStorageDefaults: async () => clone(outputStorageDefaults),
+        },
+      },
       authoringHistory: { clear: () => { state.historyClears += 1; } },
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
       pendingForms: registry,
-      resources: { invalidate: () => undefined, invalidatePrefix: () => undefined },
+      resources: new ResourceInvalidationController(bus),
     } as unknown as KernelApi;
     return { kernel, owner, registry, request, state };
   }, []);

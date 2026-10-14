@@ -18,13 +18,13 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
 import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
   interactionAvailabilityForDiscretization,
-  normalizeInteractionDiscretization,
   type InteractionDiscretization,
   type PhysicsInteractionId,
 } from "@/shared/domain/physics/interactions";
@@ -44,6 +44,9 @@ import {
   type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
+export const RIBBON_ANALYSIS_SHOW_CHART_COMMAND = "ribbon.analysis.show-chart";
+export const RIBBON_ANALYSIS_SHOW_FIELD_COMMAND = "ribbon.analysis.show-field";
+export const RIBBON_ANALYSIS_SHOW_CHART_AND_FIELD_COMMAND = "ribbon.analysis.show-chart-and-field";
 export const RIBBON_VISUALIZATION_PATCH_STATE_COMMAND =
   "ribbon.visualization.patch-state";
 export const RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND =
@@ -132,6 +135,61 @@ export function visualizationAirboxCommandInput(
 }
 
 export const RIBBON_COMMANDS: CommandContribution[] = [
+  {
+    id: RIBBON_ANALYSIS_SHOW_CHART_COMMAND,
+    title: "Show analysis chart",
+    group: "ribbon-analysis",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.layout),
+    disabledReason: (context) => (context.layout ? null : "Workspace layout is unavailable."),
+    isActive: (context) =>
+      context.layout?.get().activeViewportMainModuleId === "analysis-plots" &&
+      !context.layout.get().viewportCompanion,
+    run: (context) => {
+      context.layout?.setViewportCompanion(null);
+      context.layout?.setActiveViewportMainModule("analysis-plots");
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    },
+  },
+  {
+    id: RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
+    title: "Show field in the 3D viewport",
+    group: "ribbon-analysis",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.layout),
+    disabledReason: (context) => (context.layout ? null : "Workspace layout is unavailable."),
+    isActive: (context) =>
+      context.layout?.get().activeViewportMainModuleId === "viewport-3d" &&
+      !context.layout.get().viewportCompanion,
+    run: (context) => {
+      context.layout?.setViewportCompanion(null);
+      context.layout?.setActiveViewportMainModule("viewport-3d");
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    },
+  },
+  {
+    id: RIBBON_ANALYSIS_SHOW_CHART_AND_FIELD_COMMAND,
+    title: "Show analysis chart and 3D field side by side",
+    group: "ribbon-analysis",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.layout),
+    disabledReason: (context) => (context.layout ? null : "Workspace layout is unavailable."),
+    isActive: (context) =>
+      context.layout?.get().activeViewportMainModuleId === "analysis-plots" &&
+      context.layout.get().viewportCompanion?.moduleId === "viewport-3d",
+    run: (context) => {
+      // One viewport-3d instance, placed beside the chart (ADR 0054).
+      context.layout?.setActiveViewportMainModule("analysis-plots");
+      context.layout?.setViewportCompanion({ moduleId: "viewport-3d", placement: "beside" });
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    },
+  },
   {
     id: RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND,
     title: "Move selected object",
@@ -522,6 +580,8 @@ async function applyGlobalQuantityFromCommand(
     };
   }
 
+  const overlayController = context.analysisFieldOverlay;
+  const overlayBeforeQuantityPatch = overlayController?.getSnapshot() ?? null;
   const patch: VisualizationStatePatch = {
     active_quantity_id: input.activeQuantityId,
     quantity: { active_quantity_id: input.activeQuantityId },
@@ -541,6 +601,18 @@ async function applyGlobalQuantityFromCommand(
   }
 
   await patchVisualizationState(context, patch, { flush: true });
+  // A mode field is the viewport quantity while it is shown (ADR 0054);
+  // choosing another quantity leaves the mode visualization.
+  // The controller replaces its snapshot whenever typed identity, provenance,
+  // revision, or payload changes. Treat that object as the overlay generation
+  // so a late acknowledgement cannot clear a newer field selected meanwhile.
+  if (
+    overlayController &&
+    overlayBeforeQuantityPatch &&
+    overlayController.getSnapshot() === overlayBeforeQuantityPatch
+  ) {
+    overlayController.clear();
+  }
   return { status: "completed" };
 }
 
@@ -767,9 +839,23 @@ function selectPhysicsInteractionFromCommand(context: CommandContext): CommandRe
       status: "failed",
     };
   }
-  const objectId = spec.scope === "global" ? null : selectedObjectId;
+  const objectExchange = input.interactionId === "exchange" &&
+    input.scope !== "global" && Boolean(selectedObjectId);
+  if (objectExchange) {
+    const scene = asRecord(context.resourceData?.[MODEL_SCENE_PATH]);
+    if (!scene || !Array.isArray(scene.objects)) {
+      return { status: "failed", message: "The revisioned model scene is not ready. Wait for it to load before adding Exchange." };
+    }
+    const object = Array.isArray(scene?.objects)
+      ? scene.objects.find((candidate) => asRecord(candidate)?.id === selectedObjectId)
+      : null;
+    if (current?.ref?.type !== "scene-object" || asRecord(object)?.role !== "magnet") {
+      return { status: "failed", message: "Select a canonical magnetic scene object before adding Exchange." };
+    }
+  }
+  const objectId = objectExchange ? selectedObjectId : spec.scope === "global" ? null : selectedObjectId;
   const regionId =
-    current?.ref?.type === "scene-object" ? current.ref.regionId : undefined;
+    !objectExchange && current?.ref?.type === "scene-object" ? current.ref.regionId : undefined;
   const nodeId = objectId
     ? `model:object:${objectId}:physics:${input.interactionId}`
     : `model:physics:${input.interactionId}`;
@@ -1085,13 +1171,13 @@ function asVisualizationTargetRef(value: unknown): VisualizationTargetRef | null
 
 function asPhysicsInteractionInput(
   value: unknown,
-): { interactionId: PhysicsInteractionId } | null {
+): { interactionId: PhysicsInteractionId; scope?: "global" } | null {
   const record = asRecord(value);
   if (!record) return null;
   const interactionId = record.interactionId;
   return typeof interactionId === "string" &&
     (BACKEND_INTERACTION_IDS as readonly string[]).includes(interactionId)
-    ? { interactionId: interactionId as PhysicsInteractionId }
+    ? { interactionId: interactionId as PhysicsInteractionId, ...(record.scope === "global" ? { scope: "global" as const } : {}) }
     : null;
 }
 
@@ -1123,9 +1209,7 @@ function ribbonInteractionDiscretization(
   if (rawResource === undefined) return "fem";
   const resource = asRecord(rawResource);
   const status = asRecord(resource?.data ?? resource);
-  return normalizeInteractionDiscretization(
-    asRecord(status?.domain)?.discretization,
-  );
+  return normalizeInteractionDiscretization(resolveSessionDiscretization(status));
 }
 
 function airboxCommandDisabledReason(context: CommandContext): string | null {

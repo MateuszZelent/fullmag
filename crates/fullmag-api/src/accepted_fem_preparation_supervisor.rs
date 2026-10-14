@@ -7,6 +7,7 @@ use fullmag_session::{
     PreparationProcessLaunchCommitDisposition, SessionStore,
     FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA, FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA,
 };
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -183,6 +184,11 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
     {
         bail!("pending cancellation requires reconciliation before preparation spawn");
     }
+    let cpu_ids = host
+        .map(|host| host.preparation_cpu_ids(&active_lease.resource_id).cloned())
+        .transpose()?
+        .unwrap_or_default();
+    let thread_environment = preparation_thread_environment(&cpu_ids, host.is_some())?;
     let host_launch_token = host
         .map(|host| {
             host.ledger().authorize_preparation_launch(
@@ -198,6 +204,8 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
         preparer_executable,
         store.root(),
         &spawn_lease,
+        &cpu_ids,
+        &thread_environment,
         host_launch_token.as_deref(),
         process_timeout,
         heartbeat_interval,
@@ -307,6 +315,8 @@ fn observe_preparer<H>(
     executable: &Path,
     store_root: &Path,
     lease: &FmsPreparationResourceLease,
+    cpu_ids: &BTreeSet<u32>,
+    thread_environment: &[(&'static str, Option<String>)],
     host_launch_token: Option<&str>,
     timeout: Duration,
     heartbeat_interval: Duration,
@@ -334,17 +344,151 @@ where
         .stderr(Stdio::piped());
     if let Some(token) = host_launch_token {
         command.env("FULLMAG_HOST_PREPARATION_LAUNCH_TOKEN", token);
+        if thread_environment.is_empty() {
+            bail!(
+                "host-bound FEM preparation requires an allocation-derived thread environment"
+            );
+        }
+        for (name, value) in thread_environment {
+            match value {
+                Some(value) => {
+                    command.env(*name, value.as_str());
+                }
+                None => {
+                    command.env_remove(*name);
+                }
+            }
+        }
     } else {
         command.env_remove("FULLMAG_HOST_PREPARATION_LAUNCH_TOKEN");
+        if !thread_environment.is_empty() {
+            bail!(
+                "unbound FEM preparation cannot receive a host allocation thread environment"
+            );
+        }
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP);
+        let mut flags = windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
+        if !cpu_ids.is_empty() {
+            flags |= windows_sys::Win32::System::Threading::INHERIT_PARENT_AFFINITY;
+        }
+        command.creation_flags(flags);
     }
-    let child = OwnedWorkerProcess::spawn(&mut command)
+    let child = OwnedWorkerProcess::spawn(&mut command, cpu_ids)
         .with_context(|| format!("spawn FEM preparer `{}`", executable.display()))?;
     observe_child(child, timeout, heartbeat_interval, &mut heartbeat)
+}
+
+fn preparation_thread_environment(
+    cpu_ids: &BTreeSet<u32>,
+    host_bound: bool,
+) -> Result<Vec<(&'static str, Option<String>)>> {
+    if !host_bound {
+        return Ok(Vec::new());
+    }
+    let cpu_threads = u32::try_from(cpu_ids.len())
+        .context(
+            "preparation CPU placement has more entries than the thread policy can represent",
+        )?;
+    if cpu_threads == 0 {
+        bail!("host-bound FEM preparation has no allocated CPU IDs");
+    }
+    let count = cpu_threads.to_string();
+    let mut environment = HOST_PREPARATION_PARENT_THREAD_ENV
+        .iter()
+        .map(|name| (*name, None))
+        .collect::<Vec<_>>();
+    // Native FEM/OpenMP owns parallel work for preparation; keep Rayon serial.
+    environment.extend([
+        ("FULLMAG_CPU_THREADS", Some(count.clone())),
+        ("FULLMAG_CPU_THREADS_AUTO_RESOLVED", Some(count.clone())),
+        ("RAYON_NUM_THREADS", Some("1".into())),
+        ("FULLMAG_GMSH_THREADS", Some(count.clone())),
+        ("OMP_NUM_THREADS", Some(count.clone())),
+        ("OMP_THREAD_LIMIT", Some(count)),
+        ("OMP_DYNAMIC", Some("FALSE".into())),
+        ("OMP_NESTED", Some("FALSE".into())),
+        ("OMP_MAX_ACTIVE_LEVELS", Some("1".into())),
+        ("OPENBLAS_NUM_THREADS", Some("1".into())),
+        ("GOTO_NUM_THREADS", Some("1".into())),
+        ("MKL_NUM_THREADS", Some("1".into())),
+        ("MKL_DOMAIN_NUM_THREADS", Some("1".into())),
+        ("BLIS_NUM_THREADS", Some("1".into())),
+        ("VECLIB_MAXIMUM_THREADS", Some("1".into())),
+        ("NUMEXPR_NUM_THREADS", Some("1".into())),
+    ]);
+    Ok(environment)
+}
+
+const HOST_PREPARATION_PARENT_THREAD_ENV: [&str; 21] = [
+    "FULLMAG_CPU_THREADS",
+    "FULLMAG_CPU_THREADS_AUTO_RESOLVED",
+    "FULLMAG_NATIVE_THREADS_AUTO_RESOLVED",
+    "RAYON_NUM_THREADS",
+    "FULLMAG_GMSH_THREADS",
+    "OMP_NUM_THREADS",
+    "OMP_THREAD_LIMIT",
+    "OMP_DYNAMIC",
+    "OMP_NESTED",
+    "OMP_MAX_ACTIVE_LEVELS",
+    "OMP_PLACES",
+    "OMP_PROC_BIND",
+    "OPENBLAS_NUM_THREADS",
+    "GOTO_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "MKL_DOMAIN_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "GOMP_CPU_AFFINITY",
+    "KMP_AFFINITY",
+];
+
+#[cfg(test)]
+mod thread_environment_tests {
+    use super::preparation_thread_environment;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn host_preparation_threads_follow_cpu_placement_and_clear_parent_overrides() {
+        let environment = preparation_thread_environment(&BTreeSet::from([2, 7]), true).unwrap();
+        let value = |name: &str| {
+            environment
+                .iter()
+                .rev()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| value.as_deref())
+        };
+        let is_unset = |name: &str| {
+            environment
+                .iter()
+                .rev()
+                .find(|(key, _)| *key == name)
+                .is_some_and(|(_, value)| value.is_none())
+        };
+        assert_eq!(value("FULLMAG_CPU_THREADS"), Some("2"));
+        assert_eq!(value("FULLMAG_CPU_THREADS_AUTO_RESOLVED"), Some("2"));
+        assert_eq!(value("FULLMAG_GMSH_THREADS"), Some("2"));
+        assert_eq!(value("RAYON_NUM_THREADS"), Some("1"));
+        assert_eq!(value("OMP_NUM_THREADS"), Some("2"));
+        assert_eq!(value("OPENBLAS_NUM_THREADS"), Some("1"));
+        assert!(is_unset("GOMP_CPU_AFFINITY"));
+        assert!(is_unset("KMP_AFFINITY"));
+    }
+
+    #[test]
+    fn legacy_preparation_keeps_its_existing_environment() {
+        assert!(preparation_thread_environment(&BTreeSet::new(), false)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn host_preparation_rejects_an_empty_cpu_allocation() {
+        assert!(preparation_thread_environment(&BTreeSet::new(), true).is_err());
+    }
 }
 
 fn validate_preparer_executable(executable: &Path) -> Result<()> {

@@ -1,5 +1,8 @@
 //! Session persistence API handlers — save, load, inspect, checkpoints, recovery.
 
+#[path = "session_persistence_antenna_import.rs"]
+mod antenna_import;
+
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -1512,6 +1515,9 @@ fn publish_imported_session(
     if matches!(preflight.session.profile, SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive) {
         preflight.reachability.require_complete()
             .map_err(|error| ApiError::bad_request(format!("invalid_fms_graph: {error}")))?;
+    } else {
+        preflight.reachability.require_visualization_safe()
+            .map_err(|error| ApiError::bad_request(format!("invalid_fms_graph: {error}")))?;
     }
     let imports = session_store_root(state).join("imports");
     std::fs::create_dir_all(&imports)
@@ -1626,6 +1632,7 @@ pub(crate) async fn import_session_commit_with_context(
         ));
     }
 
+    antenna_import::normalize_registered_refs(&mut persisted, &preflight)?;
     normalize_imported_read_only(&mut persisted);
     let import_id = format!(
         "{}-{}",
@@ -1788,7 +1795,16 @@ pub(crate) async fn get_checkpoint_with_context(
             checkpoint_context_from_snapshot(snapshot, 0),
         )
     };
-    let store = open_store(&state)?;
+    // Inspect committed checkpoint bytes without acquiring a recovery writer lease.
+    let root = session_store_root(&state);
+    if !root
+        .try_exists()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+    {
+        return Err(ApiError::not_found("checkpoint not found"));
+    }
+    let store = SessionStore::open_existing(root)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
 
     let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
     if let Some(context) = context {

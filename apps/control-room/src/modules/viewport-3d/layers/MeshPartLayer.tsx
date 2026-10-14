@@ -558,6 +558,7 @@ export function createMeshPartScalarShaderMaterials({
 export const MeshPartLayer = memo(function MeshPartLayer({
   adoptionRegistry,
   colors,
+  surfaceFallbackColor,
   sessionIdentity,
   vectorColorMode,
   vectorScale,
@@ -577,6 +578,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
+  surfaceFallbackColor?: Viewport3DColors["mesh"];
   sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   vectorScale: number;
@@ -731,6 +733,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     return buildModeCompositionScalarColorBuffer({
       field: modal.buffer.field,
       geometryNodeIndices: expandSurfaceFaces ? surfaceIndices : null,
+      identity: modal.buffer.identity,
       layer: modal.buffer.layer,
       phaseRad: modeCompositionPhaseRad,
       projectionKey: [
@@ -758,6 +761,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     if (modal?.owner !== "modal" || !topologyModel) return null;
     return buildModeCompositionVectorLayerInput({
       field: modal.buffer.field,
+      identity: modal.buffer.identity,
       layer: modal.buffer.layer,
       phaseRad: modeCompositionPhaseRad,
       topologyNodeCount,
@@ -1096,7 +1100,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   ) return null;
   const meshColor = resolveMeshPartSurfaceMaterialColor(
     renderSettings,
-    colors.mesh,
+    surfaceFallbackColor ?? colors.mesh,
     resolveMeshPartMagnetizationTexturePreviewColor(
       Boolean(fieldModel?.legacyResponseOverlayActive || modalSurfaceActive),
       magnetizationTexturePreview?.color ?? null,

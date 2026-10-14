@@ -1,13 +1,15 @@
 "use client";
 
+import { GitBranch, History, LineChart, Scale, Target, Waves } from "lucide-react";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { InspectorOverviewFrame } from "../../primitives/InspectorOverviewFrame";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   buildEigenBranchSelectionRef,
   buildEigenDispersionPointSelectionRef,
   type EigenBranch,
+  type FrequencyDomainSelectionContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
@@ -30,10 +32,10 @@ export function EigenDispersionInspectorPanel({
     : null;
 
   const selectPoint = (point: EigenDispersionPoint): void => {
-    const ref = buildEigenDispersionPointSelectionRef(point, {
-      calculationMode: "dispersion_modal",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-    });
+    const ref = buildEigenDispersionPointSelectionRef(
+      point,
+      buildEigenDispersionPointHandoffContext(selection),
+    );
     kernel.selection.set(
       {
         kind: ref.kind,
@@ -64,77 +66,158 @@ export function EigenDispersionInspectorPanel({
       data-inspector-owner="frequency-domain.eigen-dispersion"
       data-inspector-surface="eigen-dispersion"
     >
-      <InspectorGroup title="Eigen Dispersion Inspector" badge={summary.badge}>
-        <FieldRow label="Canonical workflow" value="dispersion_modal -> StudyIR::Eigenmodes" />
-        <FieldRow label="Dispersion resource" value={summary.dispersionResource} />
-        <FieldRow label="Path metadata artifact" value={summary.pathMetadataArtifact} />
-        <FieldRow label="Path sampling" value={summary.pathSampling} />
-        <FieldRow label="Path labels" value={summary.pathLabels} />
-        <FieldRow label="Frequency range" value={summary.frequencyRange} />
-        <FieldRow label="k-path span" value={summary.kPathSpan} />
-        <FieldRow
-          label="Branch tracking"
-          value={`${summary.branchCount} branch(es), ${summary.trackedPointCount} tracked point(s)`}
-        />
-        <FieldRow label="Analytic reference" value={summary.analyticReference} />
-        <FieldRow label="Validation intent" value={summary.validationIntent} />
-        <FieldRow label="Floquet gate" value={summary.floquetGate} />
-        <FieldRow label="Capability summary" value={summary.capabilitySummary} />
-      </InspectorGroup>
-      <InspectorGroup
-        title="Selected Dispersion Point"
-        badge={selectedPoint ? dispersionPointLabel(selectedPoint) : "not selected"}
-      >
-        <FieldRow
-          label="Point identity"
-          value={selectedPoint ? dispersionPointLabel(selectedPoint) : "not selected"}
-        />
-        <FieldRow
-          label="k-path coordinate"
-          value={selectedPointModel ? `${formatNumber(selectedPointModel.pathCoordinate)} ${selectedPointModel.pathUnit}` : "not selected"}
-        />
-        <FieldRow
-          label="Frequency"
-          value={selectedPointModel ? formatFrequencyHz(selectedPointModel.frequencyHz) : "not selected"}
-        />
-        <FieldRow
-          label="Linewidth (FWHM)"
-          value={selectedPointModel ? formatFrequencyHz(selectedPointModel.linewidthHz) : "not selected"}
-        />
-        <FieldRow
-          label="Residual"
-          value={selectedPoint ? formatNumberOrUnavailable(selectedPoint.residualNorm) : "not selected"}
-        />
-        <FieldRow
-          label="Branch provenance"
-          value={selectedPointModel?.branchId ?? "not available"}
-        />
-        <FieldRow
-          label="Mode field"
-          value={selectedPointModel ? (selectedPointModel.fieldAvailable ? "available" : "missing") : "not selected"}
-        />
-        <FieldRow
-          label="Validation warning"
-          value={selectedPoint ? dispersionPointWarning(selectedPoint) : "not selected"}
-        />
-      </InspectorGroup>
-      <InspectorGroup title="Dispersion Chart" badge={summary.badge}>
-        <FrequencyDomainDispersionChart
-          model={summary.dispersionModel}
-          onSelectPoint={selectPoint}
-        />
-      </InspectorGroup>
-      <InspectorGroup
-        title="Dispersion Branch Table"
-        badge={`${summary.branchCount} branch(es)`}
-      >
-        <FrequencyDomainBranchTable
-          branches={summary.branchesModel.branches}
-          onSelectBranch={selectBranch}
-        />
-      </InspectorGroup>
+      {/* Shared Results Inspector recipe (spec 32 §12): metrics, one primary card, nav sections. */}
+      <InspectorOverviewFrame
+        metrics={[
+          { label: "Points", value: summary.badge, tone: summary.dispersionPointCount > 0 ? "success" : "neutral" },
+          { label: "Branches", value: String(summary.branchCount), tone: "neutral" },
+          {
+            label: "Comparison",
+            value: summary.referenceComparisonStatus.replaceAll("_", " "),
+            tone: summary.referenceComparisonStatus === "matching"
+              ? "success"
+              : summary.referenceComparisonStatus === "no_data"
+                ? "neutral"
+                : "warning",
+          },
+          { label: "Selected", value: selectedPoint ? dispersionPointLabel(selectedPoint) : "none", tone: selectedPoint ? "success" : "neutral" },
+        ]}
+        primary={
+          <>
+            <FieldRow label="Frequency range" value={summary.frequencyRange} />
+            <FieldRow label="k-path span" value={summary.kPathSpan} />
+            <FieldRow label="Path sampling" value={summary.pathSampling} />
+            <FieldRow label="Path labels" value={summary.pathLabels} />
+            <FieldRow
+              label="Branch tracking"
+              value={`${summary.branchCount} branch(es), ${summary.trackedPointCount} tracked point(s)`}
+            />
+          </>
+        }
+        primaryIcon={<Waves size={18} strokeWidth={1.5} />}
+        primaryTitle="Dispersion relation"
+        sections={[
+          {
+            id: "reference",
+            defaultOpen: true,
+            title: "Reference & comparison",
+            icon: <Scale size={16} strokeWidth={1.5} />,
+            summary: summary.referenceComparisonStatus.replaceAll("_", " "),
+            content: (
+              <>
+                <FieldRow label="Analytic reference" value={summary.analyticReference} />
+                <FieldRow label="Comparison status" value={summary.referenceComparison} />
+                <FieldRow label="Validation intent" value={summary.validationIntent} />
+              </>
+            ),
+          },
+          {
+            id: "selected-point",
+            defaultOpen: true,
+            title: "Selected Dispersion Point",
+            icon: <Target size={16} strokeWidth={1.5} />,
+            summary: selectedPoint ? dispersionPointLabel(selectedPoint) : "not selected",
+            content: (
+              <>
+                <FieldRow
+                  label="Point identity"
+                  value={selectedPoint ? dispersionPointLabel(selectedPoint) : "not selected"}
+                />
+                <FieldRow
+                  label="k-path coordinate"
+                  value={selectedPointModel ? `${formatNumber(selectedPointModel.pathCoordinate)} ${selectedPointModel.pathUnit}` : "not selected"}
+                />
+                <FieldRow
+                  label="Frequency"
+                  value={selectedPointModel ? formatFrequencyHz(selectedPointModel.frequencyHz) : "not selected"}
+                />
+                <FieldRow
+                  label="Linewidth (FWHM)"
+                  value={selectedPointModel ? formatFrequencyHz(selectedPointModel.linewidthHz) : "not selected"}
+                />
+                <FieldRow
+                  label="Residual"
+                  value={selectedPoint ? formatNumberOrUnavailable(selectedPoint.residualNorm) : "not selected"}
+                />
+                <FieldRow
+                  label="Branch provenance"
+                  value={selectedPointModel?.branchId ?? "not available"}
+                />
+                <FieldRow
+                  label="Mode field"
+                  value={selectedPointModel ? (selectedPointModel.fieldAvailable ? "available" : "missing") : "not selected"}
+                />
+                <FieldRow
+                  label="Validation warning"
+                  value={selectedPoint ? dispersionPointWarning(selectedPoint) : "not selected"}
+                />
+              </>
+            ),
+          },
+          {
+            id: "chart",
+            defaultOpen: true,
+            title: "Dispersion Chart",
+            icon: <LineChart size={16} strokeWidth={1.5} />,
+            summary: summary.badge,
+            content: (
+              <FrequencyDomainDispersionChart
+                model={summary.dispersionModel}
+                onSelectPoint={selectPoint}
+              />
+            ),
+          },
+          {
+            id: "branches",
+            defaultOpen: true,
+            title: "Dispersion Branch Table",
+            icon: <GitBranch size={16} strokeWidth={1.5} />,
+            summary: `${summary.branchCount} branch(es)`,
+            content: (
+              <FrequencyDomainBranchTable
+                branches={summary.branchesModel.branches}
+                onSelectBranch={selectBranch}
+              />
+            ),
+          },
+          {
+            id: "provenance",
+            title: "Provenance & capabilities",
+            icon: <History size={16} strokeWidth={1.5} />,
+            summary: "Eigen Dispersion Inspector",
+            defaultOpen: false,
+            content: (
+              <>
+                <FieldRow label="Canonical workflow" value="dispersion_modal -> StudyIR::Eigenmodes" />
+                <FieldRow label="Dispersion resource" value={summary.dispersionResource} />
+                <FieldRow label="Path metadata artifact" value={summary.pathMetadataArtifact} />
+                <FieldRow label="Floquet gate" value={summary.floquetGate} />
+                <FieldRow label="Capability summary" value={summary.capabilitySummary} />
+              </>
+            ),
+          },
+        ]}
+      />
     </div>
   );
+}
+
+export function buildEigenDispersionPointHandoffContext(
+  selection: InspectorPanelProps["selection"],
+): FrequencyDomainSelectionContext {
+  const ownerRef = selection.ref?.type === "frequency-domain"
+    ? selection.ref
+    : null;
+  return {
+    analysisRunId: ownerRef?.analysisRunId,
+    analysisStageId: ownerRef?.analysisStageId,
+    artifactPath: ownerRef?.artifactPath,
+    artifactRevision: ownerRef?.artifactRevision,
+    calculationMode: "dispersion_modal",
+    datasetId: ownerRef?.datasetId,
+    datasetRevision: ownerRef?.datasetRevision,
+    resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  };
 }
 
 function selectedDispersionPoint(

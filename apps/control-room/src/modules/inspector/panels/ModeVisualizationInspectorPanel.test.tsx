@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -5,6 +6,27 @@ import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+
+// The object visualization Inspector has its own route and accessibility tests;
+// here it is a stub so the test covers how the mode panel composes it.
+vi.mock("./ObjectVisualizationPanel", async (importOriginal) => {
+  const { createElement } = await import("react");
+  return {
+    ...(await importOriginal<typeof import("./ObjectVisualizationPanel")>()),
+    VisualizationTargetInspectorPanel: ({
+      children,
+      owner,
+    }: {
+      children?: ReactNode;
+      owner: { id: string; targetLabel: string };
+    }) =>
+      createElement(
+        "div",
+        { "data-inspector-owner": owner.id, "data-target-label": owner.targetLabel },
+        children,
+      ),
+  };
+});
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFrequencyDomainEigenModeFieldMetaResource: () => ({ data: null, status: "idle" }),
@@ -88,7 +110,7 @@ function modeSelection() {
 }
 
 describe("ModeVisualizationInspectorPanel", () => {
-  it("keeps one canonical mode-visualization owner with view controls", () => {
+  it("composes the object visualization Inspector with mode-only sections", () => {
     const contribution = resolveInspectorPanel({ kind: "object.mode_visualization" });
     if (!contribution) throw new Error("Missing mode visualization route");
     const Component = contribution.component;
@@ -98,9 +120,12 @@ describe("ModeVisualizationInspectorPanel", () => {
       </KernelContext.Provider>,
     );
 
-    expect(html).toContain('data-inspector-owner="mode-visualization.overview"');
-    expect(html).toContain("Mode field view");
-    expect(html).toContain("Display passes");
+    expect(html).toContain('data-inspector-owner="object.mode_visualization"');
+    expect(html).toContain('data-target-label="Sample 2, mode 5"');
+    expect(html).toContain("Complex representation");
+    expect(html).toContain("Phase &amp; animation");
+    // Display passes, coloring and vectors come from the shared object Inspector, not duplicated here.
+    expect(html).not.toContain("Render controls");
     expect(html).toContain('aria-label="Mode visualization phase slider"');
     expect(html).toContain('aria-label="Play mode phase animation"');
     expect(html).toContain('aria-label="Mode visualization path"');
@@ -181,11 +206,11 @@ describe("ModeVisualizationInspectorPanel", () => {
     );
 
     expect(html).toContain("Mode field metadata is not available");
-    expect(html).toContain('aria-label="Mode visualization 3D view"');
+    expect(html).toContain('aria-label="Mode complex representation"');
     expect(html).toContain('disabled=""');
   });
 
-  it("renders an empty state without a target ref", () => {
+  it("renders only the shared Inspector without a target ref", () => {
     const contribution = resolveInspectorPanel({ kind: "object.mode_visualization" });
     if (!contribution) throw new Error("Missing mode visualization route");
     const Component = contribution.component;
@@ -204,6 +229,7 @@ describe("ModeVisualizationInspectorPanel", () => {
       </KernelContext.Provider>,
     );
 
-    expect(html).toContain("No mode visualization target selected.");
+    expect(html).toContain('data-inspector-owner="object.mode_visualization"');
+    expect(html).not.toContain("Complex representation");
   });
 });

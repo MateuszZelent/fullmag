@@ -3,9 +3,10 @@
   --fm-ribbon-action-width: 64px;
   --fm-ribbon-group-accent: var(--fm-border-default);
   display: flex;
-  height: var(--fm-ribbon-height);
+  height: auto;
+  min-height: var(--fm-ribbon-height);
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
 }

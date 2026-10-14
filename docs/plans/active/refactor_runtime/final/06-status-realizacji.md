@@ -1,6 +1,149 @@
 # Status realizacji całego planu refaktoryzacji
+Checkpoint 14.10.2026 — [P8-53BU](p8/53bu-authenticated-restore-frame.md):
+natywny probe publikuje ramkę v2 z uwierzytelnionym request ID/generation
+i źródłowym API/PID. Konsument odróżnia legacy v1 bez awansu jego dowodu.
+Managed checks **209/209**, zero skipów; native CLI/API/desktop build-only
+**exit 0**, manifest b08a5648. Realny odbiór v2 i A→B→C nadal NOT VERIFIED;
+publiczny restart zablokowany. Procentów całego planu nie podniesiono.
 
-Najnowszy checkpoint 13.10.2026: **P8-53BE CLOSED — pierwsza bramka FDM CPU**.
+Checkpoint 14.10.2026 — [P8-53BT](p8/53bt-browser-chain-ledger.md):
+wdrożono immutable ledger maksymalnie dwóch cykli z bindingiem
+nonce/request/API/session/build i właściwą custody starego API. Końcowe
+managed checks **201/201, zero skipów**, receipt 35b7439f, source identity
+before=after. To prerequisite danych; native reader i ProofBridge v2 oraz
+rzeczywisty A→B→C nadal otwarte, publiczny restart pozostaje zablokowany.
+Procentów całego planu nie podniesiono.
+
+Checkpoint 14.10.2026 — [P8-53BS](p8/53bs-restart-remaining-gates.md):
+audyt odróżnił historyczne braki od najnowszego dowodu pojedynczego restartu
+z kamerą (81eb7f40 ponownie odczytany: completed/0, 10 checks, 27 waited).
+Potwierdzono ograniczenie harnessu do jednego cyklu i jednego Finish;
+następny przyrost to jawny łańcuch A→B→C z dwoma immutable baseline,
+świeżymi pinami i pełnym process custody. Dowód dwóch restartów oraz pełna
+macierz stanów Inspectora/fault nadal NOT VERIFIED. Procentów nie podniesiono.
+
+Checkpoint 14.10.2026 — [P8-53BR](p8/53br-explorer-physics-browser-proof.md):
+produkcyjne drzewo Explorera przeszło trzy browser scenariusze normalizacji
+fizyki (receipt `96d56620e5914b2eb596927758850904`, exit 0). Brak błędów
+strony, mutacji i nieoczekiwanych odczytów API; źródła stabilne, własny serwer
+zamknięty. Jest to dowód renderowania per obiekt na danych kontrolnych,
+nie realnego API/solvera ani wydania. **P8 i cały plan pozostają IN PROGRESS;
+procentów nie podniesiono.**
+
+Checkpoint 14.10.2026 — [P8-53BQ](p8/53bq-explorer-physics-normalization.md):
+naprawiono dwa odrębne P2 raportowania DMI oraz duplikatów interakcji.
+Rzeczywisty adapter przed poprawką odtworzył błąd (RED b3c09083), po poprawce
+**31/31 PASS** (4ff5cba7), production source typecheck PASS (a1f721ad).
+Nie zmieniono solvera ani publicznego API; unit sources pozostają NOT RUN.
+Nowy browser proof i integracja są NOT VERIFIED. Kompatybilny launcher
+TypeScript z [P8-53BP](p8/53bp-pr160-integration-gates.md) jest lokalnie
+zacommitowany w `50929f025798eed85f69b98fc63c01bec8ae3877`; push napraw
+czeka na decyzję dotyczącą automatycznego CI kompilującego unit testy.
+**P8 i cały plan pozostają IN PROGRESS; procentów nie podniesiono.**
+
+Checkpoint 14.10.2026 — nowy pakiet `cb9c2825` z poprawkami
+[P8-53BN](p8/53bn-explorer-effective-physics.md) i
+[P8-53BO](p8/53bo-grid-modal-correlation.md) przeszedł pełną natywną bramkę:
+receipt `81eb7f40d2c8428baae938f5be5bef73`, **completed / exit 0,
+10 kontroli, 27/27 procesów odebranych**. Zachowano scenę, dirty document
+revision 2 i sześć pól kamery; Grid published, Compute completed
+(10 kroków / jeden etap), normalne Close completed. Staged production
+typecheck/lint exit 0. Nie kompilowano testów jednostkowych.
+Poprawki są na branchu PR #160 (`c5b0da654`, `8327547da`), nie na remote master.
+CI sprawdza merge `9b3dd8d1627fdd6d7ab3c8005dbc49ba04148b07`
+z remote `e40295e419aaf212fb69885c573ac6d6e60c9e69` i nadal jest czerwone:
+[diagnoza integracji P8-53BP](p8/53bp-pr160-integration-gates.md).
+**P8-53 i cały plan pozostają IN PROGRESS; procentów nie podniesiono.**
+
+Aktualizacja 14.10.2026 — pełna bramka natywnego restartu z kamerą,
+autoringiem modelu i wykonaniem Grid/Compute **PASS**:
+`2998926363e84fd5b32569767c9a44b0`, exit 0, 10 kontroli, 27/27 procesów
+odebranych. Kamera ma wszystkie sześć pól identycznych przed/po;
+scena i dirty document zachowane. Compute wykonał 10 kroków i 1 etap;
+Grid, Compute oraz normalne Close zakończyły się completed w nowym API.
+Dowód dotyczy Windows/FDM CPU-reference, double/strict, małego boxu
+z komórką5nm, Uniform i jawną anizotropią. Nie kwalifikuje innych lane.
+PR #160 jest nadal otwarty; modal Grid wymaga osobnej poprawki korelacji
+requestId. **P8-53 i cały plan pozostają IN PROGRESS.**
+Szczegóły: [P8-53BM](p8/53bm-camera-preservation.md).
+
+Checkpoint 14.10.2026 — poprawka niekompletnej fizyki `2d767a5b2252855f33579f94e89158c4ba7b5798`
+jest na branchu PR #160, jeszcze nie na remote master. Nowy produkcyjny
+pakiet `1bcaf4c1` ukończony exit 0; frozen API 303 PASS, 99/99 procesów
+odebranych, receipt `a6c4edb5665f46709d61fa5b535fd3d9`. Znana odmowa
+renderowania niekompletnej fizyki zwraca 400 zamiast 500 i nie zmienia
+sceny/revision; pozostałe nieznane wyniki zachowują fail-closed.
+Generacja klienta i production source typecheck PASS.
+
+Próba browserowa `a7e054cc1fb44299b8caf33a59877b11` potwierdziła guard
+capture kamery, capture po zapisie oraz zachowanie sześciu pól kamery,
+modelu i dirty document po restarcie. Staged typecheck/lint exit 0.
+Grid doszedł do nowego wykonawcy, lecz odmówił z powodu brakującego
+rozmiaru komórki FDM w wejściu kontrolnym. Próba anulowana terminalnie,
+25/25 procesów odebranych; całej bramki nie oznaczono PASS.
+**P8-53BM/P8-53 nadal IN PROGRESS; procentów całego planu nie podniesiono.**
+Szczegóły i następny kompletny zestaw wejść: [ledger P8-53BM](p8/53bm-camera-preservation.md).
+
+Aktualizacja 14.10.2026 — nowy pakiet `cd7fe207` ukończony, exit 0.
+Realna próba `14152bbfe6a44c23a485176a4c0ff127` odtworzyła 1 obiekt,
+1 region, 1 materiał i identyczny dirty document po zmianie API instance.
+Uzupełniający odczyt nowego API potwierdził wszystkie sześć pól kamery
+identycznych przed/po; viewport 700×297, context_lost=false.
+Pełny scenariusz nie zaliczony: kontrolny obiekt nie miał magnetization
+asset, więc normalny Build Grid odmówił. Próba jawnie anulowana, 24/24
+procesów i frontend odebrane. Kolejna próba musi przypisać Uniform texture
+przed capture/restart; poprawioną kolejność opisuje
+[ledger P8-53BM](p8/53bm-camera-preservation.md).
+**P8-53BM/P8-53 nadal IN PROGRESS**, bez awansu procentów całego planu.
+
+Checkpoint 14.10.2026 — [P8-53BM](p8/53bm-camera-preservation.md):
+pakiet 94fc ukończony; poprawiono wyścig publikacji lease fixture przez
+istniejącą blokadę natywnego writera. Pełna bramka API po poprawce PASS:
+301 kontroli, exit 0, 98/98 procesów odebranych, receipt
+`ee9dc8ae88c840b09716322aba936a9c`. Regresje interpretowane: 186 PASS.
+Kanoniczny eksport OpenAPI i bramka dokumentu: 33 PASS, 6/6 procesów;
+po synchronizacji kontraktu production typecheck PASS. Poprzednia próba
+browser 57e2 nie dotarła do UI z powodu nieaktualnych wygenerowanych typów.
+Nowy build z aktualnym frontendem jest w toku. Poprawka
+`e9b32c3bf8c486e88cde3c4472f3c19a531f9fed` jest na branchu
+`codex/camera-handoff-checkpoint-20261014` w
+[PR #160](https://github.com/MateuszZelent/fullmag/pull/160), jeszcze bez
+integracji na remote master. **P8-53BM/P8-53 pozostają IN PROGRESS**:
+brak nowego dowodu kamery po restarcie, CI merge tree wymaga napraw.
+Procentów całego planu nie zwiększono na podstawie samych bramek API.
+
+Checkpoint 13.10.2026 — [P8-53BM: zachowanie kamery](p8/53bm-camera-preservation.md):
+natywny pakiet API/CLI/desktop completed exit 0; regresja API 301 kontroli
+PASS, jawne set/absent/null skali i kanoniczny OpenAPI potwierdzone.
+Fixture ownerów 35/35, a po rozszerzeniu diagnostyki capture 36/36 PASS,
+scoped lint i review PASS. Commity `6b4fceba3379d5944c3f16f5329291ca9b6cafef`
+oraz `48d3893cca7d7f7fdd0b7408051d3955039318ac` są na remote master.
+Rzeczywisty browser utworzył 1 obiekt, 1 region i 1 materiał oraz potwierdził
+niezerowy canvas bez utraty kontekstu. Restart odmówił capture przed POST;
+próba została jawnie anulowana, 19/19 procesów terminalnych. Brak dowodu
+kamery po restarcie. Następny build diagnostyki zakończył się completed,
+exit 0, manifest `3ab4d4ca2feb2a3fee1ab859e70992c8d0838d86c8f6ca65eccd0c252532b0d4`.
+Próba browser `2217069eff234263823106a5d37a1928` odmówiła przed UI przez
+dwa błędy TypeScript (17/17 procesów terminalnych); minimalne poprawki
+mają production typecheck PASS i review bez P0/P1/P2. Fixture bannera
+potwierdził osobną diagnostykę odmowy potwierdzenia kandydata, 13 kontroli.
+Regresja API nowego pakietu `caab51c039de43a38d93fc3d93c830d2` przerwała
+się po 7 kontrolach na timeout wait własnego procesu; brak pełnego PASS.
+Nowy snapshot z poprawkami TypeScript jest w budowie.
+**P8-53BM i P8-53 pozostają IN PROGRESS**; procentów
+całego planu nie zmieniono. [P8-55](p8/55-network-storage-assessment-20261013.md)
+uzupełnia ocenę Z: o niezależne bramki lokalnego writera i TEMP; nie ma
+kwalifikacji aktywnego storage SMB ani migracji.
+
+Kontynuacja P8-53: [53BH — szkic materiału po odświeżeniu](p8/53bh-inspector-first-edit-after-resource-refresh.md).
+Realny browser potwierdził odmowę restartu przy szkicu nazwy i jawny Apply
+(rewizja 1→2), następnie odtworzył błąd pierwszej edycji materiału:
+zmiana alpha wyczyściła nietknięte pola. Próba diagnostyczna została jawnie
+anulowana, wszystkie 19 procesów odebrane; nie jest to PASS restartu.
+Poprawka źródeł, 20 interpretowanych przypadków i production typecheck PASS;
+ponowny browser proof w toku. Procenty planu bez zmiany.
+
+Checkpoint 13.10.2026: **P8-53BE CLOSED — pierwsza bramka FDM CPU**.
 Build K completed exit 0, frozen-native API gate 296 kontroli PASS,
 OpenAPI/client generation i import checks PASS. Browser F→K
 `01ad57bafdca4a89881a4138c1fdbfcd`: completed exit 0, 9 kontroli;

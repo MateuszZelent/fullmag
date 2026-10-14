@@ -4,6 +4,7 @@ pub mod commands;
 pub mod common;
 pub mod compute_profiles;
 pub mod compute_preview;
+pub mod compute_nodes;
 #[allow(dead_code)]
 pub mod decimal_u64;
 pub mod development_backend;
@@ -25,6 +26,7 @@ pub mod observations;
 pub mod output_storage;
 pub mod planar_fields;
 pub mod planar_monitors;
+pub mod postprocessing_definitions;
 pub mod preparation;
 pub mod projects;
 pub mod quantities;
@@ -43,6 +45,8 @@ pub mod visualization_state;
 pub mod workspace;
 pub mod workspace_items;
 
+pub use authoring::{ParallelExecutionModeResource, ParallelExecutionResource};
 pub use frozen_spins::*;
 pub use planar_fields::*;
 pub use planar_monitors::*;
+pub use postprocessing_definitions::*;

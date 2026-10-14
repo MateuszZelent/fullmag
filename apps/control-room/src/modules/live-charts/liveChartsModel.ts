@@ -51,7 +51,7 @@ export function resolveLiveChartXAxisId(
 }
 
 /**
- * A fixed range is meaningful only when it can be represented by the rows API.
+ * Time ranges use server filters; step ranges remain local viewport bounds.
  * `step` is an accepted-step label and may be sparse, so it must not be
  * mistaken for the one-based row cursor used by `from_row`/`to_row`.
  */
@@ -60,12 +60,22 @@ export function normalizeLiveChartRangeForXAxis(
   xAxisId: string,
 ): ChartRangePreference {
   if (
-    (range.mode === "tailTime" || range.mode === "fixed") &&
+    (range.mode === "tailTime" || (range.mode === "fixed" && xAxisId !== "step")) &&
     !isLiveChartTimeXAxisId(xAxisId)
   ) {
     return { mode: "follow" };
   }
   return range;
+}
+
+export function liveChartInitialRange(
+  range: ChartRangePreference,
+): { fromValue: number; toValue: number } | null {
+  if (range.mode !== "fixed") return null;
+  return {
+    fromValue: Math.min(range.fromSI, range.toSI),
+    toValue: Math.max(range.fromSI, range.toSI),
+  };
 }
 
 export function liveChartRangesEqual(
@@ -147,6 +157,11 @@ export function buildLiveChartsTableQuery({
     return query({ cursor: undefined, fromT: latestX - normalizedRange.durationS, includeTail: false, limit: LIVE_CHART_TABLE_ROW_LIMIT });
   }
   if (normalizedRange.mode === "fixed") {
+    if (xAxisId === "step") {
+      // Step values are not row cursors. Fetch a bounded history snapshot and
+      // apply the persisted value range locally; older history is not implied.
+      return query({ cursor: undefined, includeTail: false, limit: 50_000 });
+    }
     const from = Math.min(normalizedRange.fromSI, normalizedRange.toSI);
     const to = Math.max(normalizedRange.fromSI, normalizedRange.toSI);
     return isLiveChartTimeXAxisId(xAxisId)

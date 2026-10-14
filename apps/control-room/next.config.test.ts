@@ -142,7 +142,11 @@ describe("control-room Next dev proxy config", () => {
       "utf8",
     );
 
-    expect(nextEnvSource).toContain('./.next/types/routes.d.ts');
+    // Next writes dev/ for development and the default types/ for typegen.
+    // The wrappers preserve whichever canonical entry point was present.
+    expect(nextEnvSource).toMatch(
+      /import ["']\.\/\.next\/(?:dev\/)?types\/routes\.d\.ts["'];/,
+    );
     expect(packageSource).toContain(
       '"build:audit:webpack": "node scripts/build-audit-control-room.mjs"',
     );

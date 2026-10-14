@@ -46,6 +46,44 @@ fn record_fem_mesh_payload_build() {
 
 // ----- public types -----
 
+/// Latest real admission sample for the adaptive FEM CPU eigen-k process pool.
+///
+/// This is live control-plane telemetry.  It is intentionally optional at the
+/// stage boundary: serial, FDM, GPU, and historical runs do not manufacture a
+/// pool sample.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LiveParallelExecutionTelemetry {
+    pub sampled_at_unix_ms: u64,
+    pub active_workers: u32,
+    pub admission_desired_workers: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_worker_limit: Option<u32>,
+    pub admission_pending_samples: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_workers: Option<u32>,
+    pub cpu_target_percent: f64,
+    pub memory_target_percent: f64,
+    pub memory_reserve_bytes: u64,
+    pub cpu_target_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_busy_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allocated_cpu_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_available_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_limit_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_available_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_peak_cpu_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_peak_rss_bytes: Option<u64>,
+    pub admission_reason: String,
+    #[serde(default)]
+    pub terminal: bool,
+}
+
 /// Public result type returned by [`crate::run_reference_fem_eigen`].
 ///
 /// Contains the solver status and all artifact files (spectrum, modes) written
@@ -99,55 +137,100 @@ pub struct RunResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct CertifiedFemEquilibriumFields {
     pub schema_version: String,
     pub h_ex_a_per_m: Vec<[f64; 3]>,
     pub h_demag_a_per_m: Vec<[f64; 3]>,
     pub h_ext_a_per_m: Vec<[f64; 3]>,
+    #[serde(default, deserialize_with = "deserialize_present_certificate_view", skip_serializing_if = "Option::is_none")]
+    pub h_anisotropy_a_per_m: Option<Vec<[f64; 3]>>,
     pub h_eff_a_per_m: Vec<[f64; 3]>,
     pub phi_a: Vec<f64>,
     pub content_sha256: String,
 }
 
+// Keep the producer and the independent replay validator on one numerical
+// tolerance contract.  These values describe the accepted-vs-recomputed
+// snapshot comparison; they are not modal residual tolerances.
+pub(crate) const FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M: f64 = 1.0e-6;
+pub(crate) const FEM_LINEARIZATION_FIELD_RELATIVE_TOLERANCE: f64 = 1.0e-8;
+pub(crate) const FEM_LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A: f64 = 1.0e-12;
+
+/// A missing legacy view is valid; an explicitly present null is not a view.
+fn deserialize_present_certificate_view<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 impl CertifiedFemEquilibriumFields {
+    /// Select exact producer/consumer paths without a cross-version fallback.
+    pub fn artifact_paths_for_material(material: &fullmag_ir::MaterialIR) -> (&'static str, &'static str) {
+        if material.uniaxial_anisotropy.is_some() {
+            ("equilibrium/certified_fem_equilibrium_fields.v2.json",
+             "equilibrium/recomputed_fem_linearization_certificate.v2.json")
+        } else {
+            ("equilibrium/certified_fem_equilibrium_fields.v1.json",
+             "equilibrium/recomputed_fem_linearization_certificate.v1.json")
+        }
+    }
+
+    /// Select the independent accepted endpoint payload for the same schema
+    /// family as the certified/recomputed field payload.
+    ///
+    /// A declared `Ku=0` remains a V2 material.  The presence of the
+    /// authoring field, rather than its numeric value, selects the schema so
+    /// that the anisotropy observable cannot silently disappear during a
+    /// zero-anisotropy replay.
+    pub fn accepted_artifact_path_for_material(material: &fullmag_ir::MaterialIR) -> &'static str {
+        if material.uniaxial_anisotropy.is_some() {
+            "equilibrium/accepted_fem_equilibrium_fields.v2.json"
+        } else {
+            "equilibrium/accepted_fem_equilibrium_fields.v1.json"
+        }
+    }
+
     pub fn from_fields(
-        h_ex_a_per_m: Vec<[f64; 3]>,
-        h_demag_a_per_m: Vec<[f64; 3]>,
-        h_ext_a_per_m: Vec<[f64; 3]>,
-        h_eff_a_per_m: Vec<[f64; 3]>,
-        phi_a: Vec<f64>,
+        h_ex_a_per_m: Vec<[f64; 3]>, h_demag_a_per_m: Vec<[f64; 3]>,
+        h_ext_a_per_m: Vec<[f64; 3]>, h_eff_a_per_m: Vec<[f64; 3]>, phi_a: Vec<f64>,
+    ) -> Result<Self, RunError> {
+        Self::from_optional_anisotropy_fields(h_ex_a_per_m, h_demag_a_per_m,
+            h_ext_a_per_m, None, h_eff_a_per_m, phi_a)
+    }
+
+    pub fn from_fields_with_anisotropy(
+        h_ex_a_per_m: Vec<[f64; 3]>, h_demag_a_per_m: Vec<[f64; 3]>,
+        h_ext_a_per_m: Vec<[f64; 3]>, h_anisotropy_a_per_m: Vec<[f64; 3]>,
+        h_eff_a_per_m: Vec<[f64; 3]>, phi_a: Vec<f64>,
+    ) -> Result<Self, RunError> {
+        Self::from_optional_anisotropy_fields(h_ex_a_per_m, h_demag_a_per_m,
+            h_ext_a_per_m, Some(h_anisotropy_a_per_m), h_eff_a_per_m, phi_a)
+    }
+
+    fn from_optional_anisotropy_fields(
+        h_ex_a_per_m: Vec<[f64; 3]>, h_demag_a_per_m: Vec<[f64; 3]>,
+        h_ext_a_per_m: Vec<[f64; 3]>, h_anisotropy_a_per_m: Option<Vec<[f64; 3]>>,
+        h_eff_a_per_m: Vec<[f64; 3]>, phi_a: Vec<f64>,
     ) -> Result<Self, RunError> {
         let node_count = h_eff_a_per_m.len();
-        if node_count == 0
-            || h_ex_a_per_m.len() != node_count
-            || h_demag_a_per_m.len() != node_count
-            || h_ext_a_per_m.len() != node_count
-            || phi_a.len() != node_count
-            || [
-                &h_ex_a_per_m,
-                &h_demag_a_per_m,
-                &h_ext_a_per_m,
-                &h_eff_a_per_m,
-            ]
-            .into_iter()
-            .flat_map(|values| values.iter())
-            .flat_map(|value| value.iter())
-            .any(|value| !value.is_finite())
+        let mut views = vec![&h_ex_a_per_m, &h_demag_a_per_m, &h_ext_a_per_m, &h_eff_a_per_m];
+        if let Some(anisotropy) = &h_anisotropy_a_per_m { views.push(anisotropy); }
+        if node_count == 0 || phi_a.len() != node_count
+            || views.iter().any(|values| values.len() != node_count)
+            || views.iter().flat_map(|values| values.iter()).flatten().any(|value| !value.is_finite())
             || phi_a.iter().any(|value| !value.is_finite())
         {
-            return Err(RunError {
-                message: "certified FEM equilibrium fields are incomplete or non-finite"
-                    .to_string(),
-            });
+            return Err(RunError { message: "certified FEM equilibrium fields are incomplete or non-finite".to_string() });
         }
         let mut value = Self {
-            schema_version: "CertifiedFemEquilibriumFields.v1".to_string(),
-            h_ex_a_per_m,
-            h_demag_a_per_m,
-            h_ext_a_per_m,
-            h_eff_a_per_m,
-            phi_a,
-            content_sha256: String::new(),
+            schema_version: if h_anisotropy_a_per_m.is_some() {
+                "CertifiedFemEquilibriumFields.v2"
+            } else { "CertifiedFemEquilibriumFields.v1" }.to_string(),
+            h_ex_a_per_m, h_demag_a_per_m, h_ext_a_per_m, h_anisotropy_a_per_m,
+            h_eff_a_per_m, phi_a, content_sha256: String::new(),
         };
         value.content_sha256 = certified_equilibrium_fields_sha256(&value);
         Ok(value)
@@ -158,13 +241,16 @@ pub(crate) fn certified_equilibrium_fields_sha256(
     fields: &CertifiedFemEquilibriumFields,
 ) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"CertifiedFemEquilibriumFields.v1\0");
-    for vectors in [
+    hash.update(fields.schema_version.as_bytes());
+    hash.update([0u8]);
+    let mut views = vec![
         &fields.h_ex_a_per_m,
         &fields.h_demag_a_per_m,
         &fields.h_ext_a_per_m,
         &fields.h_eff_a_per_m,
-    ] {
+    ];
+    if let Some(anisotropy) = &fields.h_anisotropy_a_per_m { views.insert(2, anisotropy); }
+    for vectors in views {
         hash.update((vectors.len() as u64).to_le_bytes());
         for vector in vectors {
             for value in vector {
@@ -196,6 +282,8 @@ pub struct RecomputedFemLinearizationCertificateV1 {
     pub max_h_ex_difference_a_per_m: f64,
     pub max_h_demag_difference_a_per_m: f64,
     pub max_h_ext_difference_a_per_m: f64,
+    #[serde(default, deserialize_with = "deserialize_present_certificate_view", skip_serializing_if = "Option::is_none")]
+    pub max_h_anisotropy_difference_a_per_m: Option<f64>,
     pub max_h_eff_difference_a_per_m: f64,
     pub max_phi_difference_a: f64,
     pub field_absolute_tolerance_a_per_m: f64,
@@ -207,15 +295,39 @@ pub struct RecomputedFemLinearizationCertificateV1 {
 pub fn recomputed_fem_linearization_certificate_sha256(
     certificate: &RecomputedFemLinearizationCertificateV1,
 ) -> Result<String, RunError> {
-    let mut preimage = certificate.clone();
-    preimage.content_sha256.clear();
-    let encoded = serde_json::to_vec(&preimage).map_err(|error| RunError {
-        message: format!("failed to encode recomputed FEM linearization certificate: {error}"),
-    })?;
+    let encoded = recomputed_fem_linearization_certificate_preimage_bytes(certificate)?;
     let mut hash = Sha256::new();
-    hash.update(b"RecomputedFemLinearizationCertificate.v1\0");
+    hash.update(certificate.schema_version.as_bytes());
+    hash.update([0u8]);
     hash.update((encoded.len() as u64).to_le_bytes());
     hash.update(encoded);
+    Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+/// Return the exact UTF-8 JSON bytes used by the historical certificate
+/// digest.  This is deliberately separate from the certificate digest so a
+/// downstream replay implementation can verify Rust's serde bytes without
+/// reserializing the JSON in another language.
+pub fn recomputed_fem_linearization_certificate_preimage_bytes(
+    certificate: &RecomputedFemLinearizationCertificateV1,
+) -> Result<Vec<u8>, RunError> {
+    let mut preimage = certificate.clone();
+    preimage.content_sha256.clear();
+    serde_json::to_vec(&preimage).map_err(|error| RunError {
+        message: format!("failed to encode recomputed FEM linearization certificate: {error}"),
+    })
+}
+
+/// Digest the exact certificate preimage bytes without the historical
+/// schema/length framing.  The framed certificate digest remains the source
+/// of truth for compatibility; this auxiliary digest proves the bytes that
+/// were published beside the certificate.
+pub fn recomputed_fem_linearization_certificate_preimage_sha256(
+    certificate: &RecomputedFemLinearizationCertificateV1,
+) -> Result<String, RunError> {
+    let bytes = recomputed_fem_linearization_certificate_preimage_bytes(certificate)?;
+    let mut hash = Sha256::new();
+    hash.update(bytes);
     Ok(format!("sha256:{:x}", hash.finalize()))
 }
 
@@ -531,6 +643,12 @@ pub struct LiveFieldMaterializationStatus {
 #[allow(non_snake_case)]
 pub struct StepStats {
     pub step: u64,
+    /// Semantic kind of this step record. Historical JSON without a kind is unclassified.
+    #[serde(default = "fullmag_quantities::StepDataKind::legacy_unclassified")]
+    pub kind: fullmag_quantities::StepDataKind,
+    /// Typed solver progress, present only when `kind` is `SolverProgress`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_progress: Option<fullmag_quantities::SolverProgress>,
     pub time: f64,
     pub dt: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -939,6 +1057,8 @@ impl Default for StepStats {
     fn default() -> Self {
         Self {
             step: 0,
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             time: 0.0,
             dt: 0.0,
             pseudo_time_s: None,
@@ -1633,6 +1753,21 @@ pub(crate) fn split_rotated_only_dmi_energy(rotated_dmi_only: bool, aggregate: f
 }
 
 impl StepStats {
+    /// Check kind/channel coherence and keep solver progress out of object samples.
+    pub fn validate_record_kind(&self) -> Result<(), &'static str> {
+        self.kind
+            .validate_solver_progress(self.solver_progress.as_ref())?;
+        if self.kind.is_solver_progress() && !self.per_object_scalars.is_empty() {
+            return Err("solver progress records cannot carry per-object scalar samples");
+        }
+        Ok(())
+    }
+
+    /// Whether this row can be interpreted as a physical observation.
+    pub fn is_physical_observation(&self) -> bool {
+        self.kind.is_physical_observation() && self.validate_record_kind().is_ok()
+    }
+
     pub(crate) fn set_dmi_energy_components(
         &mut self,
         interfacial_dmi: f64,
@@ -1646,6 +1781,8 @@ impl StepStats {
     /// Extract solver diagnostics (non-physics telemetry).
     pub fn to_diagnostics(&self) -> fullmag_quantities::StepDiagnostics {
         fullmag_quantities::StepDiagnostics {
+            kind: self.kind,
+            solver_progress: self.solver_progress.clone(),
             step: self.step,
             time: self.time,
             dt: self.dt,
@@ -1697,8 +1834,17 @@ impl StepStats {
     }
 
     /// Extract per-step physical scalar observations.
+    ///
+    /// Invalid in-memory kind/channel pairs are quarantined as legacy so their
+    /// numeric compatibility fields cannot qualify; V2 validation then rejects
+    /// the mismatch against diagnostics.
     pub fn to_quantity_row(&self) -> fullmag_quantities::GlobalQuantityRow {
         fullmag_quantities::GlobalQuantityRow {
+            kind: if self.validate_record_kind().is_ok() {
+                self.kind
+            } else {
+                fullmag_quantities::StepDataKind::LegacyUnclassified
+            },
             step: self.step,
             time: self.time,
             mx: self.mx,
@@ -1722,6 +1868,86 @@ impl StepStats {
             max_torque_T: self.max_torque_T,
             per_object_scalars: self.per_object_scalars.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod step_data_kind_tests {
+    use super::StepStats;
+    use fullmag_quantities::{SolverProgress, StepDataKind};
+    use std::collections::HashMap;
+
+    #[test]
+    fn physical_object_id_does_not_override_explicit_record_kind() {
+        let mut physical = StepStats {
+            e_total: 4.25,
+            ..StepStats::default()
+        };
+        physical.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            HashMap::from([("percent".into(), 75.0)]),
+        );
+        assert!(physical.is_physical_observation());
+        assert_eq!(physical.to_quantity_row().scalar_value("e_total"), Some(4.25));
+
+        let progress = StepStats {
+            kind: StepDataKind::SolverProgress,
+            solver_progress: Some(SolverProgress::FemEigen {
+                metrics: HashMap::from([("percent".into(), 75.0)]),
+            }),
+            ..StepStats::default()
+        };
+        assert!(progress.validate_record_kind().is_ok());
+        assert!(!progress.is_physical_observation());
+        assert_eq!(progress.to_quantity_row().scalar_value("e_total"), None);
+        let diagnostics = progress.to_diagnostics();
+        assert_eq!(diagnostics.kind, StepDataKind::SolverProgress);
+        assert!(diagnostics.solver_progress.is_some());
+    }
+
+    #[test]
+    fn typed_channel_round_trips_and_missing_legacy_kind_stays_unqualified() {
+        let progress = StepStats {
+            kind: StepDataKind::SolverProgress,
+            solver_progress: Some(SolverProgress::FemEigen {
+                metrics: HashMap::from([("residual".into(), 2.5e-7)]),
+            }),
+            ..StepStats::default()
+        };
+        let encoded = serde_json::to_value(&progress).expect("typed progress serializes");
+        let decoded: StepStats = serde_json::from_value(encoded).expect("typed progress parses");
+        assert_eq!(decoded.kind, StepDataKind::SolverProgress);
+        match decoded.solver_progress.expect("typed channel is present") {
+            SolverProgress::FemEigen { metrics } => assert_eq!(metrics["residual"], 2.5e-7),
+        }
+
+        let mut legacy_value = serde_json::to_value(StepStats {
+            e_total: 2.5,
+            ..StepStats::default()
+        })
+        .expect("physical row serializes");
+        legacy_value.as_object_mut().expect("object value").remove("kind");
+        let legacy: StepStats = serde_json::from_value(legacy_value).expect("legacy row parses");
+        assert_eq!(legacy.kind, StepDataKind::LegacyUnclassified);
+        assert_eq!(legacy.e_total, 2.5);
+        assert_eq!(legacy.to_quantity_row().scalar_value("e_total"), None);
+    }
+
+    #[test]
+    fn contradictory_step_stats_cannot_qualify_scalar_placeholders() {
+        let invalid = StepStats {
+            kind: StepDataKind::PhysicalObservation,
+            solver_progress: Some(SolverProgress::FemEigen {
+                metrics: HashMap::new(),
+            }),
+            e_total: 8.0,
+            ..StepStats::default()
+        };
+        assert!(invalid.validate_record_kind().is_err());
+        assert!(!invalid.is_physical_observation());
+        let row = invalid.to_quantity_row();
+        assert_eq!(row.kind, StepDataKind::LegacyUnclassified);
+        assert_eq!(row.scalar_value("e_total"), None);
     }
 }
 
@@ -2365,7 +2591,9 @@ impl FemStageExecutionContext {
             fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) => {
                 StageFemMeshIdentity::from_fem_frequency_response_plan(plan)
             }
-            fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_) => {
+            fullmag_ir::BackendPlanIR::Fdm(_)
+            | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
+            | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_) => {
                 return None;
             }
         };
@@ -2577,7 +2805,9 @@ impl StageFemMeshAsset {
             fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) => {
                 Some(Self::build_from_fem_frequency_response_plan(plan))
             }
-            fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_) => None,
+            fullmag_ir::BackendPlanIR::Fdm(_)
+            | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
+            | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_) => None,
         }
     }
 
@@ -2827,6 +3057,7 @@ fn mesh_part_role_name(role: &FemMeshPartRole) -> &'static str {
     match role {
         FemMeshPartRole::Air => "air",
         FemMeshPartRole::MagneticObject => "magnetic_object",
+        FemMeshPartRole::Conductor => "conductor",
         FemMeshPartRole::Interface => "interface",
         FemMeshPartRole::OuterBoundary => "outer_boundary",
     }
@@ -2851,6 +3082,14 @@ impl fmt::Display for RunError {
 }
 
 impl std::error::Error for RunError {}
+
+impl From<fullmag_antenna_artifacts::ArtifactError> for RunError {
+    fn from(error: fullmag_antenna_artifacts::ArtifactError) -> Self {
+        Self {
+            message: error.message,
+        }
+    }
+}
 
 impl From<fullmag_plan::PlanError> for RunError {
     fn from(e: fullmag_plan::PlanError) -> Self {
@@ -4661,6 +4900,124 @@ pub(crate) struct StateObservables {
 }
 
 #[cfg(test)]
+mod certified_field_version_tests {
+    use super::{certified_equilibrium_fields_sha256, CertifiedFemEquilibriumFields};
+    use crate::fem::eigen_equilibrium_contract::validate_certified_equilibrium_fields;
+
+    fn fields(with_anisotropy: bool) -> CertifiedFemEquilibriumFields {
+        let ex = vec![[1.0, 0.0, 0.0]];
+        let demag = vec![[2.0, 0.0, 0.0]];
+        let ext = vec![[8.0, 0.0, 0.0]];
+        if with_anisotropy {
+            CertifiedFemEquilibriumFields::from_fields_with_anisotropy(
+                ex, demag, ext, vec![[4.0, 0.0, 0.0]], vec![[15.0, 0.0, 0.0]], vec![0.0],
+            ).unwrap()
+        } else {
+            CertifiedFemEquilibriumFields::from_fields(
+                ex, demag, ext, vec![[11.0, 0.0, 0.0]], vec![0.0],
+            ).unwrap()
+        }
+    }
+
+    #[test]
+    fn legacy_field_bytes_and_binary_digest_are_frozen() {
+        let value = fields(false);
+        assert_eq!(value.content_sha256,
+            "sha256:534a654a6ca21daff11b59fc99026f02ab3f02f3f341bec6c8ead73df73fe730");
+        assert_eq!(serde_json::to_string(&value).unwrap(),
+            r#"{"schema_version":"CertifiedFemEquilibriumFields.v1","h_ex_a_per_m":[[1.0,0.0,0.0]],"h_demag_a_per_m":[[2.0,0.0,0.0]],"h_ext_a_per_m":[[8.0,0.0,0.0]],"h_eff_a_per_m":[[11.0,0.0,0.0]],"phi_a":[0.0],"content_sha256":"sha256:534a654a6ca21daff11b59fc99026f02ab3f02f3f341bec6c8ead73df73fe730"}"#);
+        validate_certified_equilibrium_fields(&value, 1).unwrap();
+    }
+
+    #[test]
+    fn anisotropy_digest_matches_independent_little_endian_fixture() {
+        let value = fields(true);
+        assert_eq!(value.content_sha256,
+            "sha256:3b4b095aa8a9ed90102425a27ed8cceab494f88816dbd4f5101d14883d278a54");
+        validate_certified_equilibrium_fields(&value, 1).unwrap();
+        let mut legacy_schema = value.clone();
+        legacy_schema.schema_version = "CertifiedFemEquilibriumFields.v1".to_string();
+        legacy_schema.content_sha256 = certified_equilibrium_fields_sha256(&legacy_schema);
+        assert!(validate_certified_equilibrium_fields(&legacy_schema, 1).is_err());
+        let mut absent_view = value.clone();
+        absent_view.h_anisotropy_a_per_m = None;
+        absent_view.content_sha256 = certified_equilibrium_fields_sha256(&absent_view);
+        assert!(validate_certified_equilibrium_fields(&absent_view, 1).is_err());
+    }
+
+    #[test]
+    fn legacy_refresh_certificate_bytes_and_digest_are_frozen() {
+        // Independent literal preimage encoded by the historical v1 contract.
+        let frozen_json = r#"{"schema_version":"RecomputedFemLinearizationCertificate.v1","status":"matched","recompute_provider":"native_fem_final_state_refresh.v1","node_count":1,"equilibrium_content_sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mesh_topology_sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","equilibrium_material_signature":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","equilibrium_static_physics_signature":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","equilibrium_boundary_signature":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","accepted_fields_content_sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","recomputed_fields_content_sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","max_h_ex_difference_a_per_m":0.0,"max_h_demag_difference_a_per_m":0.0,"max_h_ext_difference_a_per_m":0.0,"max_h_eff_difference_a_per_m":0.0,"max_phi_difference_a":0.0,"field_absolute_tolerance_a_per_m":0.0,"field_relative_tolerance":0.0,"phi_absolute_tolerance_a":0.0,"content_sha256":"sha256:ed9805381c87f09d4b3f0a47b822b1ce8e0dbaa81c5511fccb205987e21fb2f9"}"#;
+        let certificate: super::RecomputedFemLinearizationCertificateV1 =
+            serde_json::from_str(frozen_json).unwrap();
+        assert!(certificate.max_h_anisotropy_difference_a_per_m.is_none());
+        assert_eq!(serde_json::to_string(&certificate).unwrap(), frozen_json);
+        assert_eq!(super::recomputed_fem_linearization_certificate_sha256(&certificate).unwrap(),
+            "sha256:ed9805381c87f09d4b3f0a47b822b1ce8e0dbaa81c5511fccb205987e21fb2f9");
+        let preimage = super::recomputed_fem_linearization_certificate_preimage_bytes(&certificate)
+            .unwrap();
+        // Use the frozen producer bytes: serializing Value would sort object
+        // keys and would not reproduce the typed serde field order.
+        let expected_preimage = frozen_json.replace(
+            &format!("\"content_sha256\":\"{}\"", certificate.content_sha256),
+            "\"content_sha256\":\"\"",
+        );
+        assert_eq!(preimage.as_slice(), expected_preimage.as_bytes());
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            super::recomputed_fem_linearization_certificate_preimage_sha256(&certificate)
+                .unwrap(),
+            format!("sha256:{:x}", Sha256::digest(&preimage))
+        );
+        let mut explicit_null = serde_json::to_value(&certificate).unwrap();
+        explicit_null["max_h_anisotropy_difference_a_per_m"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<super::RecomputedFemLinearizationCertificateV1>(explicit_null).is_err());
+    }
+
+    #[test]
+    fn declared_zero_ku_selects_v2_paths_without_legacy_fallback() {
+        let mut material = fullmag_ir::MaterialIR::default();
+        assert_eq!(CertifiedFemEquilibriumFields::artifact_paths_for_material(&material),
+            ("equilibrium/certified_fem_equilibrium_fields.v1.json",
+             "equilibrium/recomputed_fem_linearization_certificate.v1.json"));
+        assert_eq!(CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(&material),
+            "equilibrium/accepted_fem_equilibrium_fields.v1.json");
+        material.uniaxial_anisotropy = Some(0.0);
+        assert_eq!(CertifiedFemEquilibriumFields::artifact_paths_for_material(&material),
+            ("equilibrium/certified_fem_equilibrium_fields.v2.json",
+             "equilibrium/recomputed_fem_linearization_certificate.v2.json"));
+        assert_eq!(CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(&material),
+            "equilibrium/accepted_fem_equilibrium_fields.v2.json");
+    }
+
+    #[test]
+    fn explicit_null_and_unknown_certificate_views_are_rejected() {
+        for with_anisotropy in [false, true] {
+            let mut value = serde_json::to_value(fields(with_anisotropy)).unwrap();
+            value["h_anisotropy_a_per_m"] = serde_json::Value::Null;
+            assert!(serde_json::from_value::<CertifiedFemEquilibriumFields>(value).is_err());
+        }
+        let mut value = serde_json::to_value(fields(false)).unwrap();
+        value["h_fake_a_per_m"] = serde_json::json!([[0.0, 0.0, 0.0]]);
+        assert!(serde_json::from_value::<CertifiedFemEquilibriumFields>(value).is_err());
+    }
+
+    #[test]
+    fn rehashed_anisotropy_field_requires_measured_effective_sum() {
+        let mut value = fields(true);
+        value.h_anisotropy_a_per_m.as_mut().unwrap()[0][0] = 5.0;
+        value.content_sha256 = certified_equilibrium_fields_sha256(&value);
+        assert!(validate_certified_equilibrium_fields(&value, 1).is_err());
+        value.h_eff_a_per_m[0][0] = 16.0;
+        value.content_sha256 = certified_equilibrium_fields_sha256(&value);
+        validate_certified_equilibrium_fields(&value, 1).unwrap();
+        value.h_anisotropy_a_per_m.as_mut().unwrap()[0][0] = f64::NAN;
+        assert!(validate_certified_equilibrium_fields(&value, 1).is_err());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
@@ -4761,10 +5118,12 @@ mod tests {
             enable_demag: false,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            charge_transport_plans: Vec::new(),
             spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -4855,6 +5214,7 @@ mod tests {
             mode_tracking: None,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
         }
     }
 

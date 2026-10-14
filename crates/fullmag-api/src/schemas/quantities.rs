@@ -263,7 +263,12 @@ mod tests {
     #[test]
     fn api_catalog_preserves_all_canonical_quantities_and_shape_planes() {
         let catalog = QuantityCatalogResponse::build();
-        assert_eq!(catalog.quantities.len(), 53);
+        let canonical = fullmag_quantities::QuantityCatalogResponse::build();
+        let canonical_ids: Vec<_> = canonical.quantities.iter().map(|entry| &entry.id).collect();
+        let api_ids: Vec<_> = catalog.quantities.iter().map(|entry| &entry.id).collect();
+        assert_eq!(api_ids, canonical_ids, "API must preserve the canonical catalog");
+        let unique_ids: std::collections::BTreeSet<_> = api_ids.iter().collect();
+        assert_eq!(unique_ids.len(), api_ids.len(), "catalog IDs must be unique");
 
         let frozen_spins = catalog
             .quantities

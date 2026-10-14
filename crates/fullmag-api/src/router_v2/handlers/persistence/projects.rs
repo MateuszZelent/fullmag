@@ -32,9 +32,10 @@ use crate::error::ApiError;
 use crate::schemas::projects::{
     ProjectArchiveDurability, ProjectArchiveRequest, ProjectAuthoringUpdateRequest,
     ProjectBatchSubmitRequest, ProjectBatchSubmitResource, ProjectBatchAxisSummaryResource,
-    ProjectBatchCasesQuery, ProjectBatchCasesResource, ProjectBatchCaseState,
-    ProjectBatchCaseSummaryResource, ProjectBatchExpansionState, ProjectBatchListQuery,
-    ProjectBatchFailurePolicy, ProjectBatchListResource, ProjectBatchSummaryResource,
+    ProjectBatchCasesQuery, ProjectBatchCasesResource, ProjectBatchCasePublishedRunResource,
+    ProjectBatchCaseState, ProjectBatchCaseSummaryResource, ProjectBatchCaseTaskSummaryResource,
+    ProjectBatchExpansionState, ProjectBatchListQuery, ProjectBatchFailurePolicy,
+    ProjectBatchListResource, ProjectBatchSummaryResource,
     ProjectCreateRequest, ProjectDocumentMode, ProjectDocumentResource, ProjectMigrationResource,
     ProjectRunCatalogState, ProjectRunExecutionState, ProjectRunListQuery, ProjectRunListResource,
     ProjectRunMaterializationResource, ProjectRunMinimumResourceBudgetResource,
@@ -51,6 +52,9 @@ const AUTHORING_SOURCE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 #[path = "execution_profile_submission.rs"]
 mod execution_profile_submission;
+
+#[path = "run_intent_preparation.rs"]
+pub(crate) mod run_intent_preparation;
 
 /// Removes only the known generated source file.  The helper owns its
 /// `scene-export-*.json` lifecycle; any unexpected file left in the private
@@ -177,6 +181,107 @@ fn project_run_task_resource(
         created_at: intent.created_at.to_rfc3339(),
     });
     Ok(resource)
+}
+
+fn project_batch_case_published_run(
+    store: &fullmag_session::SessionStore,
+    batch_intent: &fullmag_session::FmsBatchIntent,
+    project_id: &ProjectId,
+    case: &fullmag_application::BatchCase,
+    child_intent: fullmag_session::FmsRunIntent,
+) -> Result<ProjectBatchCasePublishedRunResource, ApiError> {
+    let expected_run_id = case.specification.run_id.as_str();
+    let expected_idempotency_key =
+        batch_case_idempotency_key(&batch_intent.batch_id, &case.case_id);
+    if child_intent.run_id != expected_run_id
+        || child_intent.idempotency_key != expected_idempotency_key
+    {
+        return Err(ApiError::internal(format!(
+            "published batch case `{}` has a mismatched child run identity",
+            case.case_id
+        )));
+    }
+
+    let specification: RunSpecification =
+        serde_json::from_value(child_intent.specification.clone()).map_err(|error| {
+            ApiError::internal(format!("invalid durable batch child RunSpec: {error}"))
+        })?;
+    let fingerprint = specification
+        .fingerprint()
+        .map_err(|error| {
+            ApiError::internal(format!("invalid durable batch child RunSpec: {error}"))
+        })?;
+    let mut expected_specification = case.specification.clone();
+    // Case materialization deterministically binds per-case StudyPlan/catalog
+    // digests. Every other RunSpecification field must remain the accepted
+    // manifest value.
+    expected_specification.study.plan_sha256 = specification.study.plan_sha256.clone();
+    expected_specification.study_catalog_sha256 = specification.study_catalog_sha256.clone();
+    if specification != expected_specification
+        || specification.run_id.as_str() != expected_run_id
+        || specification.snapshot.project_id.as_str() != project_id.as_str()
+        || case.specification.snapshot.project_id.as_str() != project_id.as_str()
+        || child_intent.payload_sha256 != fingerprint
+        || child_intent.definition_object_ref.as_deref()
+            != Some(batch_intent.definition_object_ref.as_str())
+        || child_intent.study_object_ref.as_deref()
+            != Some(specification.study.plan_sha256.as_str())
+        || child_intent.study_catalog_object_ref.as_deref()
+            != Some(specification.study_catalog_sha256.as_str())
+        || child_intent.asset_object_refs != batch_intent.asset_object_refs
+    {
+        return Err(ApiError::internal(format!(
+            "published batch case `{}` child intent differs from its accepted identity",
+            case.case_id
+        )));
+    }
+
+    let catalog = store
+        .read_run_catalog(expected_run_id)
+        .map_err(|error| ApiError::internal(format!("read batch child task catalog: {error:#}")))?;
+    let (catalog_state, catalog_revision, tasks) = match catalog {
+        Some(catalog) => {
+            if catalog.run_id != expected_run_id || catalog.tasks.is_empty() {
+                return Err(ApiError::internal(format!(
+                    "published batch case `{}` has an incomplete child task catalog",
+                    case.case_id
+                )));
+            }
+            let tasks = catalog
+                .tasks
+                .into_iter()
+                .map(|task| ProjectBatchCaseTaskSummaryResource {
+                    task_id: task.task_id,
+                    lifecycle: task.lifecycle.into(),
+                })
+                .collect();
+            (
+                ProjectRunCatalogState::Materialized,
+                Some(catalog.revision),
+                tasks,
+            )
+        }
+        None => (
+            ProjectRunCatalogState::PendingMaterialization,
+            None,
+            Vec::new(),
+        ),
+    };
+
+    Ok(ProjectBatchCasePublishedRunResource {
+        run_id: child_intent.run_id,
+        catalog_state,
+        catalog_revision,
+        tasks,
+    })
+}
+
+fn batch_case_idempotency_key(batch_id: &str, case_id: &str) -> String {
+    let identity = format!("{batch_id}\0{case_id}");
+    format!(
+        "batch-case-{}",
+        fullmag_session::hex_sha256(identity.as_bytes())
+    )
 }
 
 #[utoipa::path(
@@ -610,10 +715,11 @@ pub async fn list_batches(
         ProjectBatchCasesQuery
     ),
     responses(
-        (status = 200, description = "Page of planned cases from the immutable expansion manifest", body = ProjectBatchCasesResource),
+        (status = 200, description = "Page of manifest cases with verified published child run and task catalog lifecycle", body = ProjectBatchCasesResource),
         (status = 400, description = "Invalid page size or cursor"),
         (status = 404, description = "Accepted batch is missing"),
-        (status = 409, description = "Batch belongs to another project")
+        (status = 409, description = "Batch belongs to another project"),
+        (status = 500, description = "Durable manifest, child run, or task catalog is incomplete or inconsistent")
     ),
     tag = "persistence"
 )]
@@ -677,6 +783,13 @@ pub async fn list_batch_cases(
             .read_batch_expansion_progress(&batch_id)
             .map_err(|error| ApiError::internal(format!("read batch expansion progress: {error:#}")))?;
         let published_case_count = progress.map_or(0, |progress| progress.next_case_index);
+        let total_case_count = u64::try_from(manifest.cases.len())
+            .map_err(|_| ApiError::internal("batch manifest case count exceeds u64"))?;
+        if published_case_count > total_case_count {
+            return Err(ApiError::internal(
+                "batch expansion cursor exceeds the immutable manifest",
+            ));
+        }
         let start = if let Some(cursor) = cursor {
             fullmag_session::repository_path::validate_store_id(&cursor)
                 .map_err(|error| ApiError::bad_request(format!("invalid case cursor: {error}")))?;
@@ -707,17 +820,56 @@ pub async fn list_batch_cases(
         };
         let cases = page
             .into_iter()
-            .map(|(case_index, case)| ProjectBatchCaseSummaryResource {
-                case_id: case.case_id.clone(),
-                planned_run_id: case.specification.run_id.as_str().into(),
-                parameter_tuple: case.parameter_tuple.clone(),
-                state: if (case_index as u64) < published_case_count {
-                    ProjectBatchCaseState::PendingMaterialization
-                } else {
-                    ProjectBatchCaseState::PendingExpansion
-                },
+            .map(|(case_index, case)| {
+                let case_index = u64::try_from(case_index)
+                    .map_err(|_| ApiError::internal("batch case index exceeds u64"))?;
+                let child_intent = store
+                    .read_run_intent(case.specification.run_id.as_str())
+                    .map_err(|error| {
+                        ApiError::internal(format!("read batch child run intent: {error:#}"))
+                    })?;
+                let published_run = match child_intent {
+                    Some(child_intent) => {
+                        if case_index > published_case_count {
+                            return Err(ApiError::internal(format!(
+                                "batch case `{}` has a durable child beyond the contiguous expansion cursor",
+                                case.case_id
+                            )));
+                        }
+                        Some(project_batch_case_published_run(
+                            &store,
+                            &intent,
+                            &project_id,
+                            case,
+                            child_intent,
+                        )?)
+                    }
+                    None if case_index < published_case_count => {
+                        return Err(ApiError::internal(format!(
+                            "batch expansion cursor includes case `{}` without a durable child run",
+                            case.case_id
+                        )));
+                    }
+                    None => None,
+                };
+                let state = match published_run.as_ref().map(|run| run.catalog_state) {
+                    Some(ProjectRunCatalogState::Materialized) => {
+                        ProjectBatchCaseState::Materialized
+                    }
+                    Some(ProjectRunCatalogState::PendingMaterialization) => {
+                        ProjectBatchCaseState::PendingMaterialization
+                    }
+                    None => ProjectBatchCaseState::PendingExpansion,
+                };
+                Ok(ProjectBatchCaseSummaryResource {
+                    case_id: case.case_id.clone(),
+                    planned_run_id: case.specification.run_id.as_str().into(),
+                    parameter_tuple: case.parameter_tuple.clone(),
+                    state,
+                    published_run,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, ApiError>>()?;
         Ok::<_, ApiError>(ProjectBatchCasesResource {
             batch_id,
             axes,

@@ -12,6 +12,11 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from windows.development_antenna_scene_assets import (
+    AntennaSceneValidationError,
+    validate_antenna_scene_collections,
+)
+
 
 class SceneAssetError(ValueError):
     """The scene's file references cannot be inventoried completely and safely."""
@@ -28,7 +33,9 @@ _SCENE_FIELDS = frozenset({
     "version", "revision", "scene", "universe", "objects", "couplings", "materials",
     "magnetization_assets", "field_drives", "monitors", "selections",
     "magnetization_constraints", "current_modules", "current_transports",
-    "spin_transports", "spin_torques", "oersted_fields", "study", "outputs", "editor",
+    "spin_transports", "spin_torques", "oersted_fields", "antenna_port_modes",
+    "antenna_field_solve_stages", "antenna_target_projections", "solved_antenna_drives",
+    "antenna_spectrum_requests", "study", "outputs", "editor",
 })
 
 
@@ -166,6 +173,15 @@ _EQUILIBRIUM_SOURCE_FIELDS = {
     "eigenmodes": ("equilibrium_source", "eigen_equilibrium_source"),
     "frequency_response": ("equilibrium_source", "frequency_equilibrium_source"),
 }
+_EIGEN_SOLVER_OVERRIDE_FIELDS = frozenset({
+    "eigen_solver_rtol",
+    "eigen_solver_residual_tolerance",
+    "eigen_solver_max_outer_iterations",
+    "eigen_solver_max_linear_iterations",
+})
+# Mirrors fullmag.model.study._MAX_FEM_EIGEN_SOLVER_ITERATIONS, the native
+# signed iteration limit enforced by the SceneDocument exporter.
+_MAX_FEM_EIGEN_SOLVER_ITERATIONS = (1 << 31) - 1
 _FLAT_ENTRYPOINT_STAGE_KINDS = {
     "flat_relax": "relax",
     "flat_run": "run",
@@ -191,7 +207,8 @@ _EQUILIBRIUM_PAYLOAD_FIELDS = frozenset({
     "eigen_frequency_max", "eigen_frequency_min", "eigen_include_demag", "eigen_k_path",
     "eigen_k_sampling", "eigen_k_vector", "eigen_magnetostatic_bc", "eigen_normalization",
     "eigen_operator", "eigen_spin_wave_bc", "eigen_spin_wave_bc_config", "eigen_target",
-    "eigen_target_frequency", "frequency_min", "frequency_max",
+    "eigen_target_frequency", "eigen_solver_rtol", "eigen_solver_residual_tolerance", "eigen_solver_max_outer_iterations",
+    "eigen_solver_max_linear_iterations", "frequency_min", "frequency_max",
 })
 _LOAD_STATE_PAYLOAD_FIELDS = frozenset({
     "action", "artifact_name", "dataset", "entrypoint_kind", "format", "kind",
@@ -891,6 +908,62 @@ def _walk_load_state_fields(
         _add_reference(references, state_path[0], state_path[1])
 
 
+def _validate_eigen_solver_overrides(
+    stage_kind: str,
+    payload: dict[str, Any],
+    payload_parts: tuple[str | int, ...],
+) -> None:
+    for field in sorted(_EIGEN_SOLVER_OVERRIDE_FIELDS):
+        value = payload.get(field)
+        field_parts = (*payload_parts, field)
+        if stage_kind != "eigenmodes":
+            if value is not None and value != "":
+                raise SceneAssetError(
+                    f"{field} is only supported for eigenmodes at {_pointer(field_parts)}"
+                )
+            continue
+
+        if value is None or (isinstance(value, str) and value == ""):
+            continue
+        # Match the exporter: a nonempty canonical value takes precedence.
+        # Preserve the authored alias without activating an ignored fallback.
+        if field == "eigen_solver_residual_tolerance" and payload.get("eigen_solver_rtol") not in (None, ""):
+            continue
+        if field in {"eigen_solver_rtol", "eigen_solver_residual_tolerance"}:
+            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                raise SceneAssetError(
+                    f"{field} must be a finite positive number at {_pointer(field_parts)}"
+                )
+            try:
+                numeric_value = float(value)
+            except (OverflowError, TypeError, ValueError) as error:
+                raise SceneAssetError(
+                    f"{field} must be a finite positive number at {_pointer(field_parts)}"
+                ) from error
+            if not math.isfinite(numeric_value) or numeric_value <= 0.0:
+                raise SceneAssetError(
+                    f"{field} must be a finite positive number at {_pointer(field_parts)}"
+                )
+            continue
+
+        if isinstance(value, str):
+            try:
+                value = int(value)
+            except ValueError as error:
+                raise SceneAssetError(
+                    f"{field} must be a positive integer at {_pointer(field_parts)}"
+                ) from error
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise SceneAssetError(
+                f"{field} must be a positive integer at {_pointer(field_parts)}"
+            )
+        if value > _MAX_FEM_EIGEN_SOLVER_ITERATIONS:
+            raise SceneAssetError(
+                f"{field} exceeds the native signed iteration limit "
+                f"({_MAX_FEM_EIGEN_SOLVER_ITERATIONS}) at {_pointer(field_parts)}"
+            )
+
+
 def _walk_study_stage_payload(
     stage_kind: str,
     payload: dict[str, Any],
@@ -899,6 +972,7 @@ def _walk_study_stage_payload(
 ) -> None:
     if stage_kind in _EQUILIBRIUM_ARTIFACT_FIELDS:
         _reject_unknown_fields(payload, _EQUILIBRIUM_PAYLOAD_FIELDS, payload_parts, f"{stage_kind} payload")
+        _validate_eigen_solver_overrides(stage_kind, payload, payload_parts)
         for field in ("table_autosave",):
             if field in payload:
                 _validate_table_autosave(payload[field], (*payload_parts, field))
@@ -1065,6 +1139,10 @@ def _collect_references(scene: dict[str, Any]) -> list[_AssetReference]:
     unknown = set(scene) - _SCENE_FIELDS
     if unknown:
         raise SceneAssetError(f"Unsupported scene fields: {', '.join(sorted(unknown)[:4])}; asset ownership is unknown")
+    try:
+        validate_antenna_scene_collections(scene)
+    except AntennaSceneValidationError as error:
+        raise SceneAssetError(str(error)) from error
     references: list[_AssetReference] = []
     asset_ids = _validate_magnetization_registry(scene, references)
 

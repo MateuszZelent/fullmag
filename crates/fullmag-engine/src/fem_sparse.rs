@@ -420,6 +420,25 @@ pub struct LobpcgProgress {
     pub requested_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LobpcgControlAction {
+    Continue,
+    Stop,
+    Pause,
+}
+
+#[derive(Debug, Clone)]
+pub enum LobpcgProgressOutcome {
+    Completed {
+        eigenpairs: Vec<SparseEigenpair>,
+        report: LobpcgReport,
+    },
+    Interrupted {
+        action: LobpcgControlAction,
+        report: LobpcgReport,
+    },
+}
+
 /// A single real eigenpair from the sparse eigensolver.
 #[derive(Debug, Clone)]
 pub struct SparseEigenpair {
@@ -460,19 +479,53 @@ pub fn lobpcg_generalized_with_progress(
     k: usize,
     tol: f64,
     max_iter: u32,
-    mut progress: Option<&mut dyn FnMut(LobpcgProgress)>,
+    progress: Option<&mut dyn FnMut(LobpcgProgress)>,
 ) -> Result<(Vec<SparseEigenpair>, LobpcgReport), LinearSolveError> {
+    let mut legacy_progress = progress;
+    let mut callback = |event| {
+        if let Some(callback) = legacy_progress.as_deref_mut() {
+            callback(event);
+        }
+        LobpcgControlAction::Continue
+    };
+    match lobpcg_generalized_with_control(a, b, k, tol, max_iter, &mut callback)? {
+        LobpcgProgressOutcome::Completed { eigenpairs, report } => Ok((eigenpairs, report)),
+        LobpcgProgressOutcome::Interrupted { .. } => {
+            unreachable!("legacy progress callback cannot interrupt LOBPCG")
+        }
+    }
+}
+
+pub fn lobpcg_generalized_with_control(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    k: usize,
+    tol: f64,
+    max_iter: u32,
+    progress: &mut dyn FnMut(LobpcgProgress) -> LobpcgControlAction,
+) -> Result<LobpcgProgressOutcome, LinearSolveError> {
+    lobpcg_generalized_impl(a, b, k, tol, max_iter, progress)
+}
+
+fn lobpcg_generalized_impl(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    k: usize,
+    tol: f64,
+    max_iter: u32,
+    progress: &mut dyn FnMut(LobpcgProgress) -> LobpcgControlAction,
+) -> Result<LobpcgProgressOutcome, LinearSolveError> {
     let n = a.nrows;
     if n == 0 || k == 0 {
-        return Ok((
-            Vec::new(),
-            LobpcgReport {
+        return Ok(LobpcgProgressOutcome::Completed {
+            eigenpairs: Vec::new(),
+            report: LobpcgReport {
                 iterations: 0,
                 max_residual: 0.0,
                 converged: true,
                 converged_count: 0,
             },
-        ));
+        });
     }
     let k = k.min(n);
 
@@ -561,19 +614,22 @@ pub fn lobpcg_generalized_with_progress(
         report.iterations = iter + 1;
         report.max_residual = max_res;
         report.converged_count = n_converged;
-        if let Some(callback) = progress.as_deref_mut() {
-            callback(LobpcgProgress {
-                iteration: iter + 1,
-                max_iterations: max_iter,
-                max_residual: max_res,
-                converged_count: n_converged,
-                requested_count: k,
-            });
-        }
-
+        let action = progress(LobpcgProgress {
+            iteration: iter + 1,
+            max_iterations: max_iter,
+            max_residual: max_res,
+            converged_count: n_converged,
+            requested_count: k,
+        });
         if n_converged >= k {
             report.converged = true;
             break;
+        }
+        if action != LobpcgControlAction::Continue {
+            return Ok(LobpcgProgressOutcome::Interrupted {
+                action,
+                report: report.clone(),
+            });
         }
 
         // B-orthogonalize W against X (and itself), filter degenerate columns
@@ -889,7 +945,7 @@ pub fn lobpcg_generalized_with_progress(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    Ok((eigenpairs, report))
+    Ok(LobpcgProgressOutcome::Completed { eigenpairs, report })
 }
 
 /// B-orthogonalize a set of column vectors using modified Gram-Schmidt
@@ -1366,6 +1422,32 @@ mod tests {
             coo.add(i, i, 1.0);
         }
         coo.into_csr()
+    }
+
+    #[test]
+    fn lobpcg_control_stops_after_the_requested_progress_boundary() {
+        let a = tridiagonal_laplacian(20);
+        let b = identity_csr(20);
+        let mut callbacks = 0;
+        let mut progress = |_| {
+            callbacks += 1;
+            LobpcgControlAction::Pause
+        };
+
+        let outcome = lobpcg_generalized_with_control(&a, &b, 3, 1e-12, 200, &mut progress)
+            .expect("controlled LOBPCG should return the interruption outcome");
+
+        match outcome {
+            LobpcgProgressOutcome::Interrupted { action, report } => {
+                assert_eq!(action, LobpcgControlAction::Pause);
+                assert_eq!(report.iterations, 1);
+                assert!(!report.converged);
+            }
+            LobpcgProgressOutcome::Completed { .. } => {
+                panic!("an active Pause must stop before another iteration")
+            }
+        }
+        assert_eq!(callbacks, 1);
     }
 
     #[test]

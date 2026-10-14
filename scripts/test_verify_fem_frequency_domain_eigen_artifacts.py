@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+from contextlib import redirect_stderr
 import hashlib
 import io
 import json
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -141,6 +143,7 @@ def write_eigen_fixture(
         "branch_id": 0,
         "mode_field_id": field_id,
         "mode_field_resource_key": field_resource,
+        "mode_field_available": True,
         "frequency_hz": frequency_hz_override if frequency_hz_override is not None else 1.0e9,
         "frequency_real_hz": 1.0e9,
         "frequency_imag_hz": 0.0,
@@ -182,6 +185,7 @@ def write_eigen_fixture(
         "mode_count": 1,
         "samples": [
             {
+                "sample_id": "k-sample-0000",
                 "sample_index": 0,
                 "label": "G",
                 "k_vector": [0.0, 0.0, 0.0],
@@ -195,6 +199,8 @@ def write_eigen_fixture(
     (root / "eigen" / "spectrum.v2.json").write_text(json.dumps(spectrum))
 
     branch_point = {
+        "sample_id": "k-sample-0000",
+        "mode_id": "sample-0000/mode-0000",
         "sample_index": 0,
         "raw_mode_index": 0,
         "frequency_hz": (
@@ -219,6 +225,7 @@ def write_eigen_fixture(
         ),
         "mode_field_id": field_id,
         "mode_field_resource_key": field_resource,
+        "mode_field_available": True,
     }
     if omit_branch_tracking_source:
         del branch_point["tracking_score_source"]
@@ -241,27 +248,27 @@ def write_eigen_fixture(
     }
     (root / "eigen" / "branches.v2.json").write_text(json.dumps(branches))
     dispersion_header = (
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
-        "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
-        "residual_norm,overlap_score,tracking_score_source,mode_field_id,"
+        "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
+        "label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
+        "residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,"
         "mode_field_resource_key"
     )
     dispersion_row = (
-        "0,0,0,0,0,G,0,0,"
+        "0,k-sample-0000,0,0,0,0,G,0,sample-0000/mode-0000,0,"
         f"{dispersion_frequency_hz_override if dispersion_frequency_hz_override is not None else 1.0e9},"
-        "6.283185307179586e9,0,1.0e-9,,seed,"
+        "6.283185307179586e9,0,1.0e-9,,seed,true,"
         f"{field_id},{field_resource}"
     )
     if omit_dispersion_mode_field_columns:
         dispersion_header = (
-            "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
-            "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
-            "residual_norm,overlap_score,tracking_score_source"
+            "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
+            "label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
+            "residual_norm,overlap_score,tracking_score_source,mode_field_available"
         )
         dispersion_row = (
-            "0,0,0,0,0,G,0,0,"
+            "0,k-sample-0000,0,0,0,0,G,0,sample-0000/mode-0000,0,"
             f"{dispersion_frequency_hz_override if dispersion_frequency_hz_override is not None else 1.0e9},"
-            "6.283185307179586e9,0,1.0e-9,,seed"
+            "6.283185307179586e9,0,1.0e-9,,seed,true"
         )
     if omit_dispersion_overlap_score:
         dispersion_header, dispersion_row = drop_csv_columns(
@@ -668,6 +675,59 @@ def run_validator(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
+
+def install_artifact_generation(
+    root: Path,
+    *,
+    schema: str,
+    omit_members: set[str] | None = None,
+) -> tuple[str, dict[str, bytes]]:
+    omitted = omit_members or set()
+    payloads = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+    payloads = {name: raw for name, raw in payloads.items() if name not in omitted}
+    members = {
+        name: {
+            "byte_length": len(raw),
+            "sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        }
+        for name, raw in sorted(payloads.items())
+    }
+    body = {
+        "schema_version": schema,
+        "producer": {
+            "run_id": "run-generation-test",
+            "stage_id": "stage-eigen",
+            "stage_kind": "eigenmodes",
+        },
+        "members": members,
+    }
+    canonical = json.dumps(
+        body, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    generation_id = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    marker = json.dumps(
+        {"generation_id": generation_id, "content": body},
+        ensure_ascii=False,
+        indent=2,
+        allow_nan=False,
+    ).encode("utf-8")
+    if schema == "frequency_domain_artifact_generation.v2":
+        member_root = root / "frequency_domain" / "generations" / generation_id[7:]
+        for relative, raw in payloads.items():
+            path = member_root.joinpath(*relative.split("/"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        marker_path = root / "frequency_domain" / "generation.v2.json"
+    else:
+        marker_path = root / "frequency_domain" / "generation.v1.json"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_bytes(marker)
+    return generation_id, payloads
 
 
 def equilibrium_artifact_v7_digest(artifact: dict[str, object]) -> str:
@@ -1175,10 +1235,10 @@ def expand_reference_floquet_fixture_to_k_path(
     branch_points = []
     dispersion_rows = [
         (
-            "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
-            "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,"
+            "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
+            "label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,"
             "analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,"
-            "residual_norm,overlap_score,tracking_score_source,mode_field_id,"
+            "residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,"
             "mode_field_resource_key"
         )
     ]
@@ -1258,6 +1318,7 @@ def expand_reference_floquet_fixture_to_k_path(
         mode_summary = spectrum["samples"][0]["modes"][0].copy()
         mode_summary.update(
             {
+                "mode_field_available": True,
                 "mode_field_id": field_id,
                 "mode_field_resource_key": field_resource,
                 "frequency_hz": frequency_hz,
@@ -1269,6 +1330,7 @@ def expand_reference_floquet_fixture_to_k_path(
         )
         samples.append(
             {
+                "sample_id": f"k-path-sample-{sample_index:04d}",
                 "sample_index": sample_index,
                 "label": label,
                 "k_vector": list(k_vector),
@@ -1281,6 +1343,8 @@ def expand_reference_floquet_fixture_to_k_path(
         tracking_confidence = 1.0 if sample_index == 0 else 0.8
         branch_points.append(
             {
+                "sample_id": f"k-path-sample-{sample_index:04d}",
+                "mode_id": f"sample-{sample_index:04d}/mode-0000",
                 "sample_index": sample_index,
                 "raw_mode_index": 0,
                 "frequency_hz": frequency_hz,
@@ -1295,13 +1359,15 @@ def expand_reference_floquet_fixture_to_k_path(
                 "modal_overlap_available": sample_index != 0,
                 "mode_field_id": field_id,
                 "mode_field_resource_key": field_resource,
+                "mode_field_available": True,
             }
         )
         dispersion_rows.append(
-            f"{sample_index},{path_s},{k_vector[0]},{k_vector[1]},{k_vector[2]},{label},0,0,{frequency_hz},{omega},"
+            f"{sample_index},k-path-sample-{sample_index:04d},{path_s},{k_vector[0]},{k_vector[1]},{k_vector[2]},{label},0,"
+            f"sample-{sample_index:04d}/mode-0000,0,{frequency_hz},{omega},"
             f",,,0,1.0e-9,{'' if sample_index == 0 else '0.8'},"
             f"{'seed' if sample_index == 0 else 'modal_overlap_weighted_score'},"
-            f"{field_id},{field_resource}"
+            f"true,{field_id},{field_resource}"
         )
         mode_paths.append(f"eigen/modes/sample_{sample_index:04d}/mode_0000.json")
         mode_resources.append(meta_resource)
@@ -1979,12 +2045,14 @@ def annotate_low_k_de_bv_dispersion_csv(
 
     fieldnames = [
         "sample_index",
+        "sample_id",
         "path_s_rad_per_m",
         "kx_rad_per_m",
         "ky_rad_per_m",
         "kz_rad_per_m",
         "label",
         "raw_mode_index",
+        "mode_id",
         "branch_id",
         "frequency_hz",
         "omega_rad_s",
@@ -1995,6 +2063,7 @@ def annotate_low_k_de_bv_dispersion_csv(
         "residual_norm",
         "overlap_score",
         "tracking_score_source",
+        "mode_field_available",
         "mode_field_id",
         "mode_field_resource_key",
     ]
@@ -2022,10 +2091,16 @@ def low_k_de_bv_expected_frequency_hz(
         * k_norm
         / (MU0 * saturation_magnetisation)
     )
+    kd = k_norm * film_thickness
     p_factor = (
         0.0
-        if k_norm == 0.0
-        else 1.0 - (1.0 - math.exp(-k_norm * film_thickness)) / (k_norm * film_thickness)
+        if kd == 0.0
+        else (
+            kd
+            * (0.5 + kd * (-1.0 / 6.0 + kd * (1.0 / 24.0 + kd * (-1.0 / 120.0 + kd / 720.0))))
+            if abs(kd) < 1.0e-4
+            else 1.0 + math.expm1(-kd) / kd
+        )
     )
     common = h0 + exchange_field
     if geometry == "damon_eshbach":
@@ -2166,6 +2241,115 @@ def test_validator_accepts_eigen_artifact_bundle(tmp_path: Path) -> None:
     result = run_validator(tmp_path)
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_uses_one_cached_immutable_generation_for_alias_and_csv_reads(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    generation_id, payloads = install_artifact_generation(
+        tmp_path, schema="frequency_domain_artifact_generation.v2"
+    )
+    (tmp_path / "eigen" / "spectrum.v2.json").write_text("stale root alias")
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import verify_fem_frequency_domain_eigen_artifacts as validator
+    from comsol_modal_field_certificate import ArtifactBundleReader
+
+    original_init = ArtifactBundleReader.__init__
+    original_read_bytes = ArtifactBundleReader.read_bytes
+    reader_count = 0
+    uncached_reads: dict[str, int] = {}
+
+    def counted_init(self, *args, **kwargs):
+        nonlocal reader_count
+        reader_count += 1
+        original_init(self, *args, **kwargs)
+
+    def counted_read(self, relative: str, *, maximum_bytes: int | None = None) -> bytes:
+        if relative not in self._raw:
+            uncached_reads[relative] = uncached_reads.get(relative, 0) + 1
+        return original_read_bytes(self, relative, maximum_bytes=maximum_bytes)
+
+    stderr = io.StringIO()
+    with patch.object(ArtifactBundleReader, "__init__", counted_init), patch.object(
+        ArtifactBundleReader, "read_bytes", counted_read
+    ), redirect_stderr(stderr):
+        result = validator.main([str(tmp_path)])
+
+    assert result == 0, stderr.getvalue()
+    assert reader_count == 1
+    assert uncached_reads
+    assert all(count == 1 for count in uncached_reads.values())
+    assert uncached_reads["eigen/dispersion.csv"] == 1
+    assert "immutable_verified" in stderr.getvalue()
+    assert generation_id in stderr.getvalue()
+    assert "eigen/spectrum.v2.json" in payloads
+
+
+def test_validator_keeps_v1_capture_byte_verified_but_mutable(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    install_artifact_generation(
+        tmp_path, schema="frequency_domain_artifact_generation.v1"
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert '"generation_binding_status": "byte_verified_mutable"' in result.stderr
+    assert '"immutable": false' in result.stderr
+
+
+def test_validator_rejects_missing_v2_member_even_when_root_alias_exists(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    install_artifact_generation(
+        tmp_path,
+        schema="frequency_domain_artifact_generation.v2",
+        omit_members={"eigen/spectrum.v2.json"},
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "missing required artifact generation member" in result.stderr
+
+
+def test_corrupt_v2_marker_does_not_fall_back_to_valid_v1(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    install_artifact_generation(
+        tmp_path, schema="frequency_domain_artifact_generation.v1"
+    )
+    marker = tmp_path / "frequency_domain" / "generation.v2.json"
+    marker.write_bytes(b"{\"generation_id\":")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "generation" in result.stderr.lower()
+
+
+def test_validator_fails_if_final_generation_fence_errors(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    install_artifact_generation(
+        tmp_path, schema="frequency_domain_artifact_generation.v2"
+    )
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import verify_fem_frequency_domain_eigen_artifacts as validator
+    from comsol_modal_field_certificate import ArtifactBundleReader
+
+    stderr = io.StringIO()
+
+    def fail_fence(self) -> None:
+        raise OSError("injected final fence failure")
+
+    with patch.object(ArtifactBundleReader, "ensure_current", fail_fence), redirect_stderr(
+        stderr
+    ), unittest.TestCase().assertRaises(SystemExit) as raised:
+        validator.main([str(tmp_path)])
+    assert "during verification" in str(raised.exception)
+    assert "injected final fence failure" in str(raised.exception)
 
 
 def test_validator_accepts_closed_k_path_sampling_metadata(tmp_path: Path) -> None:
@@ -2578,6 +2762,119 @@ def test_validator_rejects_dispersion_tracking_source_drift_from_branch_point(
     assert "dispersion row 0.tracking_score_source" in (
         result.stderr + result.stdout
     )
+
+
+def test_validator_rejects_dispersion_sample_id_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    dispersion_path = tmp_path / "eigen" / "dispersion.csv"
+    header, row = dispersion_path.read_text().splitlines()
+    row = set_csv_column(header, row, "sample_id", "k-sample-9999")
+    dispersion_path.write_text("\n".join([header, row]))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.sample_id" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_mode_id_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    dispersion_path = tmp_path / "eigen" / "dispersion.csv"
+    header, row = dispersion_path.read_text().splitlines()
+    row = set_csv_column(header, row, "mode_id", "sample-0000/mode-9999")
+    dispersion_path.write_text("\n".join([header, row]))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.mode_id" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_branch_point_sample_id_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    branches_path = tmp_path / "eigen" / "branches.v2.json"
+    branches = json.loads(branches_path.read_text())
+    branches["branches"][0]["points"][0]["sample_id"] = "k-sample-9999"
+    branches_path.write_text(json.dumps(branches))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "branch point.sample_id" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_unavailable_dispersion_field_with_resource_key(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    dispersion_path = tmp_path / "eigen" / "dispersion.csv"
+    header, row = dispersion_path.read_text().splitlines()
+    row = set_csv_column(header, row, "mode_field_available", "false")
+    dispersion_path.write_text("\n".join([header, row]))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "mode_field_available" in (result.stderr + result.stdout)
+
+
+def test_production_modal_k_path_requires_stable_identity_columns(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    dispersion_path = tmp_path / "eigen" / "dispersion.csv"
+    header, *rows = dispersion_path.read_text().splitlines()
+    header, rows = drop_csv_columns(
+        header,
+        rows[0],
+        {"sample_id", "mode_id", "mode_field_available"},
+    )
+    dispersion_path.write_text("\n".join([header, rows]))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "sample_id" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_stable_mode_identity_without_unavailable_field_link(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+
+    spectrum_path = tmp_path / "eigen" / "spectrum.v2.json"
+    spectrum = json.loads(spectrum_path.read_text())
+    spectrum_mode = spectrum["samples"][0]["modes"][0]
+    spectrum_mode["mode_field_available"] = False
+    spectrum_mode["mode_field_resource_key"] = None
+    spectrum_path.write_text(json.dumps(spectrum))
+
+    branches_path = tmp_path / "eigen" / "branches.v2.json"
+    branches = json.loads(branches_path.read_text())
+    branch_point = branches["branches"][0]["points"][0]
+    branch_point["mode_field_available"] = False
+    branch_point["mode_field_resource_key"] = None
+    branches_path.write_text(json.dumps(branches))
+
+    dispersion_path = tmp_path / "eigen" / "dispersion.csv"
+    header, row = dispersion_path.read_text().splitlines()
+    row = set_csv_column(header, row, "mode_field_available", "false")
+    row = set_csv_column(header, row, "mode_field_resource_key", "")
+    dispersion_path.write_text("\n".join([header, row]))
+
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifacts"]["mode_field_storage_format"] = "none"
+    manifest["artifacts"]["mode_field_zarr_store_path"] = None
+    manifest["artifacts"]["mode_metadata_paths"] = []
+    manifest["resources"]["mode_field_resources"] = []
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_validator_rejects_dispersion_path_s_drift_from_spectrum(
@@ -3348,7 +3645,7 @@ def test_validator_rejects_reference_full_2x2_floquet_without_dispersion_path_me
     result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_reference_full_2x2_floquet_without_dispersion_capabilities(
@@ -4269,7 +4566,7 @@ def test_validator_rejects_production_modal_k_path_without_dispersion_path_metad
     result = run_validator(tmp_path, "--require-production-modal-k-path")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_production_modal_k_path_with_non_eigen_stage_id(
@@ -5241,7 +5538,7 @@ def test_validator_rejects_reference_full_2x2_floquet_without_k_path(
     result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_flat_reference_full_2x2_floquet_dispersion(
@@ -5713,6 +6010,34 @@ def test_validator_accepts_gpu_modal_k0_kittel_provenance(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_validator_accepts_gpu_kittel_v2_without_root_summary_alias(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+    mark_gpu_modal_k0_kittel_fixture(tmp_path)
+    install_artifact_generation(
+        tmp_path, schema="frequency_domain_artifact_generation.v2"
+    )
+    (tmp_path / "validation/kittel_k0_pbc/summary.v1.json").unlink()
+
+    result = run_validator(
+        tmp_path,
+        "--require-k0-kittel-field-sweep",
+        "--require-gpu-modal-k0-kittel-provenance",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_validator_accepts_gpu_modal_k0_periodic_airbox_provenance(
     tmp_path: Path,
 ) -> None:
@@ -5920,7 +6245,7 @@ def test_validator_rejects_exchange_only_nonreciprocal_reference_dispersion(
     assert "exchange-only reciprocal dispersion" in (result.stderr + result.stdout)
 
 
-def test_validator_accepts_low_k_de_bv_analytic_dispersion(
+def test_validator_accepts_legacy_low_k_de_bv_analytic_dispersion(
     tmp_path: Path,
 ) -> None:
     k_vectors = (
@@ -6038,6 +6363,53 @@ def test_validator_rejects_low_k_de_bv_missing_frequency_source(
 
     assert result.returncode != 0
     assert "manifest.validation.dispersion_frequency_source" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_low_k_de_bv_without_numeric_comparison(
+    tmp_path: Path,
+) -> None:
+    k_vectors = (
+        (0.0, 0.0, 0.0),
+        (1.5e6, 0.0, 0.0),
+        (3.0e6, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
+        (0.0, 1.5e6, 0.0),
+        (0.0, 3.0e6, 0.0),
+    )
+    frequencies = tuple(
+        low_k_de_bv_expected_frequency_hz(
+            k, "backward_volume" if index < 3 else "damon_eshbach"
+        )
+        for index, k in enumerate(k_vectors)
+    )
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=k_vectors,
+    )
+    write_low_k_de_bv_dispersion_metadata(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"].update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver",
+            "dispersion_reference_model": None,
+            "dynamic_demag_operator_source": "numeric_modal_solver",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        "--require-reference-full-2x2-floquet",
+        "--require-low-k-de-bv-analytic-dispersion",
+    )
+
+    assert result.returncode != 0
+    assert "must distinguish analytic_reference_model from numeric_modal_solver_with_analytic_comparison" in (
         result.stderr + result.stdout
     )
 
@@ -6310,6 +6682,65 @@ def test_validator_accepts_nearest_target_without_frequency_window(
     result = run_validator(tmp_path)
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_native_numeric_source_without_reference_model(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("validation", {}).update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver",
+            "dispersion_reference_model": None,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_reference_model_without_numeric_comparison(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("validation", {}).update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver",
+            "dispersion_reference_model": "kalinikos_slab_n0",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion_reference_model must be null" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_comparison_without_reference_model(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("validation", {}).update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver_with_analytic_comparison",
+            "dispersion_reference_model": None,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.validation.dispersion_reference_model" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_accepts_exp_i_omega_t_phase_convention(tmp_path: Path) -> None:
@@ -6659,6 +7090,124 @@ def test_validator_rejects_typed_field_sweep_path_escape(tmp_path: Path) -> None
     assert "field_sweep.cross_artifact_refs[1].artifact" in (result.stderr + result.stdout)
 
 
+def test_validator_accepts_numeric_de_bv_comparison_and_rejects_fake_demag(tmp_path: Path) -> None:
+    k_vectors = ((0., 0., 0.), (1.5e6, 0., 0.), (3e6, 0., 0.),
+                 (0., 0., 0.), (0., 1.5e6, 0.), (0., 3e6, 0.))
+    frequencies = tuple(low_k_de_bv_expected_frequency_hz(k, "backward_volume" if i < 3 else "damon_eshbach") for i, k in enumerate(k_vectors))
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path, frequencies_hz=frequencies, k_vectors_rad_m=k_vectors)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    write_low_k_de_bv_dispersion_metadata(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"].update({
+        "dispersion_frequency_source": "numeric_modal_solver_with_analytic_comparison",
+        "dispersion_reference_model": "kalinikos_slab_n0",
+        "dynamic_demag_operator_source": "numeric_modal_solver",
+    })
+    manifest_path.write_text(json.dumps(manifest))
+    result = run_validator(tmp_path, "--require-production-modal-k-path", "--require-low-k-de-bv-analytic-dispersion")
+    assert result.returncode == 0, result.stderr + result.stdout
+    manifest["validation"]["dynamic_demag_operator_source"] = "analytic_thin_film_de_bv_reference_not_fem_demag_k"
+    manifest_path.write_text(json.dumps(manifest))
+    result = run_validator(tmp_path, "--require-production-modal-k-path", "--require-low-k-de-bv-analytic-dispersion")
+    assert result.returncode != 0
+    assert "dynamic_demag_operator_source" in result.stderr + result.stdout
+
+def test_validator_rejects_unavailable_branch_ambiguity_count_reported_as_zero(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    branches_path = tmp_path / "eigen" / "branches.v2.json"
+    branches = json.loads(branches_path.read_text())
+    branches["diagnostics"].update(
+        {
+            "ambiguous_assignment_count": 0,
+            "ambiguous_assignment_count_available": False,
+            "ambiguous_assignment_count_unavailable_reason": (
+                "assignment_ambiguity_metric_not_computed"
+            ),
+        }
+    )
+    branches_path.write_text(json.dumps(branches))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "ambiguous_assignment_count must be null when unavailable" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_accepts_unavailable_branch_ambiguity_count_as_null(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    branches_path = tmp_path / "eigen" / "branches.v2.json"
+    branches = json.loads(branches_path.read_text())
+    branches["diagnostics"].update(
+        {
+            "ambiguous_assignment_count": None,
+            "ambiguous_assignment_count_available": False,
+            "ambiguous_assignment_count_unavailable_reason": (
+                "assignment_ambiguity_metric_not_computed"
+            ),
+        }
+    )
+    branches_path.write_text(json.dumps(branches))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_unavailable_spectrum_ambiguity_count_reported_as_zero(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    spectrum_path = tmp_path / "eigen" / "spectrum.v2.json"
+    spectrum = json.loads(spectrum_path.read_text())
+    spectrum["diagnostics_summary"] = {
+        "ambiguous_assignment_count": 0,
+        "ambiguous_assignment_count_available": False,
+        "ambiguous_assignment_count_unavailable_reason": (
+            "assignment_ambiguity_metric_not_computed"
+        ),
+    }
+    spectrum_path.write_text(json.dumps(spectrum))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "ambiguous_assignment_count must be null when unavailable" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_kittel_gate_rejects_unmeasured_periodic_mode_seam(tmp_path: Path) -> None:
+    import csv
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path, frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+    path = tmp_path / "validation/kittel_k0_pbc/points.v1.csv"
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        names = reader.fieldnames
+        rows = list(reader)
+    rows[0]["max_periodic_seam_mismatch"] = ""
+    with path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=names)
+        writer.writeheader()
+        writer.writerows(rows)
+    result = run_validator(tmp_path, "--require-k0-kittel-field-sweep")
+    assert result.returncode != 0
+    assert "max_periodic_seam_mismatch" in result.stderr + result.stdout
 def validate_field_sweep_envelope_fixture(root: Path, artifact: dict) -> None:
     from scripts.verify_fem_frequency_domain_eigen_artifacts import validate_typed_modal_field_sweep
 

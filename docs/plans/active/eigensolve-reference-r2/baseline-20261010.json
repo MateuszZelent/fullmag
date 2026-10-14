@@ -1,0 +1,32 @@
+{
+  "schema_version": "eigensolve_r2_implementation_baseline.v1",
+  "owner": "codex:01a09ee1-29e6-7d51-98f0-082c5539a0d6",
+  "worktree": "C:\\git\\fullmag\\worktrees\\eigensolve-dispersion-plan-20260912",
+  "branch": "codex/eigensolve-dispersion-plan-20260912",
+  "local_head": "1827c3436f80ff17396c285d13c0e269eecf4b25",
+  "remote_head": "26790b5fde5324ba46618807e5c01db3e2154e65",
+  "input_documents": {
+    "docs/audits/2026-10-10-eigensolve-fullmag-tetrax-tetmag-comsol.md": "3f99e1eb2a9d7d7574fa8409b447335cd8d7f0ab0eab8c6919aa44219b9e038e",
+    "docs/plans/active/2026-10-10-eigensolve-reference-adaptation-and-physics.md": "dc4a1bda27f6dd48f55ce994a5b78f11c06a32882b09c069fba3e3b8f0e961f7"
+  },
+  "source_sha256": {
+    "crates/fullmag-runner/src/fem/eigen_output.rs": "541f041cb66ce44d3fefa9fb05baa7f8afd1f1eeafef4f94a7d87c2a2d5ea835",
+    "crates/fullmag-runner/src/fem/eigen_execution.rs": "38d92cd96408cf6404b6fd4e5a5daf13eba0d40ef064176b94dc297feca83fab",
+    "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs": "09ed4a737f5c3f15b1f4ddf55e2e737abd7f1860430e90ccfdbe37e10969c1bb",
+    "crates/fullmag-runner/src/fem/eigen_tests.rs": "fa8ddcb0e705e41cd5022c93cfa327cbd9b0a684606d7e332bff8b605c7de72f",
+    "crates/fullmag-runner/src/fem/eigen_native_result.rs": "8e5c5618df81d74be4ab9e9cfe5cf597157e6250f6f053f8e0bec2e79bf76af7",
+    "crates/fullmag-runner/src/fem/eigen_native_window.rs": "03bc4cec34c9d4c58c2e1dd13219234873483bb479453d6f78204f0b8a457294",
+    "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp": "a7ea6e047e09c6107dacfa4a84283dcac18a7fb74a785473d828760b81cff2c3",
+    "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp": "c068bed20853c86a99abed0db8d451d8e2d7cc91a98fdfbd62610e0c54786408",
+    "backends/fem/cpu/frequency_domain/mfem_modal_operator_payload.cpp": "fdc9212e154df250f139a72250aafe2416021f9c8ae4b505366f067c32ed2b48",
+    "docs/physics/0600-fem-eigenmodes-linearized-llg.md": "c67072ceada32b9e474f762160be86e887a7aa8a2039e80d4d6e0b0eb4991072",
+    "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md": "051e36fb1cb8dd74fc348a2f9d0f30c88885eb46db1624ec393da6fb9dfdb649"
+  },
+  "verification": "source identity only; FEM/GPU runtime NOT VERIFIED",
+  "restrictions": [
+    "no local test/build execution",
+    "tests in GitHub Actions only",
+    "preserve active index/HEAD/stash",
+    "no merge or cleanup"
+  ]
+}

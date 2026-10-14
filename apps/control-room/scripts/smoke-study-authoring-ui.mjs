@@ -1144,7 +1144,10 @@ function frequencyDomainManifest() {
     },
     response_cancel_requested: null,
     result_manifest: {
+      artifact_set_id: "study-authoring-smoke-frequency-artifact-set",
       artifact_path: "frequency_domain/manifest.v1.json",
+      content_digest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      mesh_generation_id: "study-authoring-smoke-mesh-generation-7",
       missing_reason: null,
       payload: {
         drive: {
@@ -1181,7 +1184,11 @@ function frequencyDomainManifest() {
       },
       resource_key:
         "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+      revision: "study-authoring-smoke-result-manifest-rev-2",
+      run_id: "study-authoring-smoke-run",
       schema_version: "frequency_domain_result_manifest.v1",
+      session_id: "study-authoring-smoke",
+      stage_id: "frequency-response-3",
       status: "ready",
     },
     response_progress: {
@@ -1251,28 +1258,42 @@ function frequencyDomainSpectrum() {
 
 function frequencyDomainBranches() {
   return {
+    artifact_set_id: "study-authoring-smoke-frequency-artifact-set",
     artifact_path: "eigen/branches.v2.json",
+    content_digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    mesh_generation_id: "study-authoring-smoke-mesh-generation-7",
     missing_reason: null,
     payload: {
       branches: [],
       schema_version: "eigen_branches.v2",
       solver_model: "linearized_llg_reference",
     },
+    revision: "study-authoring-smoke-branches-rev-5",
     resource_key:
       "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+    run_id: "study-authoring-smoke-run",
+    session_id: "study-authoring-smoke",
     schema_version: "frequency_domain_eigen_branches.v2",
+    stage_id: "frequency-response-3",
     status: "ready",
   };
 }
 
 function frequencyDomainDispersion() {
   return {
+    artifact_set_id: "study-authoring-smoke-frequency-artifact-set",
     artifact_path: "eigen/dispersion.csv",
     content_type: "text/csv",
+    content_digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    mesh_generation_id: "study-authoring-smoke-mesh-generation-7",
     missing_reason: null,
+    revision: "study-authoring-smoke-dispersion-rev-6",
     resource_key:
       "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+    run_id: "study-authoring-smoke-run",
+    session_id: "study-authoring-smoke",
     schema_version: "frequency_domain_eigen_dispersion.csv",
+    stage_id: "frequency-response-3",
     status: "ready",
     text: "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
   };

@@ -17,7 +17,7 @@ import { buildHysteresisStageNode } from "./hysteresisStageNode";
 import { buildRelaxStageNode } from "./relaxStageNode";
 import { buildRunStageNode } from "./runStageNode";
 import { buildSaveStateStageNode } from "./saveStateStageNode";
-import { STUDY_STAGES_NODE_ID } from "./studyStageCommon";
+import { buildStudyStageBaseNode, STUDY_STAGES_NODE_ID } from "./studyStageCommon";
 
 const STUDY_ADD_STAGE_COMMANDS = [
   "study.add-relax-stage",
@@ -119,6 +119,15 @@ function buildStudyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
   const normalized = stage.kind.toLowerCase();
   if (normalized === "relax") return buildRelaxStageNode(stage);
   if (normalized === "add_field_drive") return buildAddFieldDriveStageNode(stage);
+  if (normalized === "antenna_field_solve") {
+    return buildStudyStageBaseNode({
+      badge: "field solve",
+      icon: "wave",
+      kind: "study.stage.antenna_field_solve",
+      label: `Antenna Field Solve ${stage.index + 1}`,
+      stage,
+    });
+  }
   if (normalized === "table_autosave") return buildTableAutosaveStageNode(stage);
   if (normalized === "autosave") return buildAutosaveStageNode(stage);
   if (normalized === "fft_response") return buildFftResponseStageNode(stage);

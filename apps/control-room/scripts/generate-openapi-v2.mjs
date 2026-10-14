@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import {
   normalizeOpenApiBuildIdentity,
   validateManagedOpenApiIdentity,
+  validateManagedSnapshotOpenApiReceipt,
   validateNativeOpenApiReceipt,
 } from "./normalize-openapi-build-identity.mjs";
 
@@ -17,10 +18,25 @@ const { values } = parseArgs({
     "expected-commit": { type: "string" },
     "expected-snapshot": { type: "string" },
     "native-receipt": { type: "string" },
+    "managed-snapshot-receipt": { type: "string" },
+    "expected-source-digest": { type: "string" },
   },
   allowPositionals: false,
 });
 let document;
+const snapshotReceipt = values["managed-snapshot-receipt"];
+if (snapshotReceipt !== undefined && values["native-receipt"] !== undefined) {
+  throw new Error("Native and managed snapshot receipts are mutually exclusive");
+}
+if (snapshotReceipt !== undefined && values.input === undefined) {
+  throw new Error("A managed snapshot receipt requires --input; Cargo fallback is not allowed");
+}
+if (snapshotReceipt !== undefined && values["expected-source-digest"] === undefined) {
+  throw new Error("A managed snapshot receipt requires an expected source digest");
+}
+if (values["expected-source-digest"] !== undefined && snapshotReceipt === undefined) {
+  throw new Error("An expected source digest requires a managed snapshot receipt; no Cargo fallback");
+}
 if (values["native-receipt"] !== undefined && values.input === undefined) {
   throw new Error("A native receipt requires --input; Cargo fallback is not allowed");
 }
@@ -34,7 +50,27 @@ if (values.input !== undefined) {
     "Managed OpenAPI input",
   );
   document = JSON.parse(bytes.toString("utf8"));
-  if (values["native-receipt"] !== undefined) {
+  if (snapshotReceipt !== undefined) {
+    if (!isAbsolute(snapshotReceipt)) {
+      throw new Error("Managed snapshot receipt path must be absolute");
+    }
+    const receiptPath = resolve(snapshotReceipt);
+    if (resolve(values.input) !== resolve(dirname(receiptPath), "stdout.raw.json")) {
+      throw new Error("Managed snapshot input must be receipt-parent/stdout.raw.json");
+    }
+    const receiptBytes = readBoundedRegularFile(receiptPath, 16 * 1024 * 1024, "Managed snapshot receipt");
+    const proofBytes = readBoundedRegularFile(join(dirname(receiptPath), "proof.json"),
+      16 * 1024 * 1024, "Managed snapshot proof");
+    validateManagedSnapshotOpenApiReceipt(document,
+      JSON.parse(receiptBytes.toString("utf8")), JSON.parse(proofBytes.toString("utf8")), {
+        expectedCommit: values["expected-commit"],
+        expectedSnapshot: values["expected-snapshot"],
+        expectedSourceDigest: values["expected-source-digest"],
+        inputSha256: createHash("sha256").update(bytes).digest("hex"),
+        inputByteLength: bytes.length,
+        receiptSha256: createHash("sha256").update(receiptBytes).digest("hex"),
+      });
+  } else if (values["native-receipt"] !== undefined) {
     const receiptPath = values["native-receipt"];
     if (!isAbsolute(receiptPath)) {
       throw new Error("Native OpenAPI receipt path must be absolute");

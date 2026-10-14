@@ -183,6 +183,7 @@ export const HudTextSprite = forwardRef<
   Sprite,
   {
     anchor?: [number, number];
+    depthTest?: boolean;
     opacity?: number;
     position: [number, number, number];
     renderOrder?: number;
@@ -192,6 +193,7 @@ export const HudTextSprite = forwardRef<
 >(function HudTextSprite(
   {
     anchor = [0.5, 0.5],
+    depthTest = false,
     opacity = 1,
     position,
     renderOrder = WIDGET_RENDER_ORDER + 5,
@@ -210,7 +212,7 @@ export const HudTextSprite = forwardRef<
       scale={[widthPx, heightPx, 1]}
     >
       <spriteMaterial
-        depthTest={false}
+        depthTest={depthTest}
         depthWrite={false}
         map={texture}
         opacity={opacity}

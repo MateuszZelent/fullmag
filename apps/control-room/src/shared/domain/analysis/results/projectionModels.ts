@@ -1,22 +1,73 @@
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
+import type { ChartSeries } from "../chartSeries";
 import type {
+  AnalysisResultDatasetManifestResource,
   AnalysisResultProjectionResource,
   AnalysisResultProjectionSelectionEntry,
   AnalysisResultProductKind,
 } from "./types";
-import type { ChartSeries } from "../chartSeries";
 
 const MAX_RESULT_PROJECTION_POINTS = 5_000;
 
+export type AnalysisResultSpectrumOutputScope =
+  components["schemas"]["AnalysisResultSpectrumOutputScope"];
+
+export interface AnalysisResultProjectionScopeView {
+  kind: "unknown" | "none" | "global" | "per_sample";
+  sampleId: string | null;
+}
+
+export interface AnalysisResultProjectionChartOptions {
+  requestedSpectrumOutputScopes?: readonly AnalysisResultSpectrumOutputScope[] | null;
+  selectedSampleId?: string | null;
+  selectedSpectrumOutputScope?: AnalysisResultSpectrumOutputScope | null;
+}
+
 export interface AnalysisResultProjectionChartModel {
+  exportSeries?: readonly ChartSeries[];
+  requestedSpectrumOutputScopes?: readonly AnalysisResultSpectrumOutputScope[] | null;
   series: readonly ChartSeries[];
   selectionBySeriesId: Readonly<Record<string, readonly AnalysisResultProjectionSelectionEntry[]>>;
+  scopeView?: AnalysisResultProjectionScopeView;
+}
+
+/** Missing or malformed scope metadata stays unknown; an explicit empty array stays empty. */
+export function analysisResultSpectrumOutputScopes(
+  manifest: AnalysisResultDatasetManifestResource | null | undefined,
+): readonly AnalysisResultSpectrumOutputScope[] | null {
+  const candidate = manifest?.spectrum_output_scopes;
+  if (
+    !Array.isArray(candidate) ||
+    !candidate.every((scope) => scope === "per_sample" || scope === "global")
+  ) {
+    return null;
+  }
+  return candidate;
 }
 
 export function buildAnalysisResultProjectionChartModel(
   resource: AnalysisResultProjectionResource | null | undefined,
   productKind: AnalysisResultProductKind | null = null,
+  options: AnalysisResultProjectionChartOptions = {},
 ): AnalysisResultProjectionChartModel {
-  if (!resource) return { series: [], selectionBySeriesId: {} };
+  const requestedSpectrumOutputScopes =
+    productKind === "modal_eigen"
+      ? options.requestedSpectrumOutputScopes ?? null
+      : null;
+  const scopeView = projectionScopeView(
+    requestedSpectrumOutputScopes,
+    options.selectedSampleId ?? null,
+    options.selectedSpectrumOutputScope ?? null,
+  );
+  if (!resource) {
+    return {
+      exportSeries: [],
+      requestedSpectrumOutputScopes,
+      series: [],
+      selectionBySeriesId: {},
+      scopeView,
+    };
+  }
 
   const selectionByOrdinal = new Map(
     resource.selection_index.map((entry) => [entry.ordinal, entry]),
@@ -30,26 +81,38 @@ export function buildAnalysisResultProjectionChartModel(
     productKind === "dynamic_structure_factor"
       ? "analysis.spin_wave"
       : "analysis.frequency_domain";
-  const series = resource.series.map((sourceSeries) => {
+  const scopedSeries = resource.series.map((sourceSeries) => {
     const seriesId = `${resource.projection_id}:${sourceSeries.series_id}`;
-    const visiblePoints = boundedProjectionPoints(sourceSeries.points);
+    const completePoints = projectionPointsForScope(
+      sourceSeries.points,
+      selectionByOrdinal,
+      scopeView,
+    );
+    const visiblePoints = boundedProjectionPoints(completePoints);
     selectionBySeriesId[seriesId] = visiblePoints.flatMap((point) => {
       const selection = selectionByOrdinal.get(point.ordinal);
       return selection ? [selection] : [];
     });
-    return {
+    const createSeries = (points: readonly AnalysisResultProjectionResource["series"][number]["points"][number][]): ChartSeries => ({
       dataRevision: resource.projection_revision,
       id: seriesId,
       label: sourceSeries.label,
-      points: visiblePoints.map((point) => ({
-        branchId: selectionByOrdinal.get(point.ordinal)?.branch_id ?? null,
-        itemId: selectionByOrdinal.get(point.ordinal)?.item_id ?? null,
-        label: point.item_id ?? point.sample_id ?? `point ${point.ordinal}`,
-        rowIndex: point.ordinal,
-        sampleId: selectionByOrdinal.get(point.ordinal)?.sample_id ?? null,
-        x: point.x ?? Number.NaN,
-        y: point.y ?? point.value ?? Number.NaN,
-      })),
+      points: points.map((point) => {
+        const selection = selectionByOrdinal.get(point.ordinal);
+        const itemId = selection?.item_id ?? point.item_id ?? null;
+        const sampleId = selection?.sample_id ?? point.sample_id ?? null;
+        return {
+          branchId: projectionPointIsGap(point)
+            ? selection?.branch_id ?? null
+            : selection?.branch_id ?? point.branch_id ?? null,
+          itemId,
+          label: itemId ?? sampleId ?? `point ${point.ordinal}`,
+          rowIndex: point.ordinal,
+          sampleId,
+          x: point.x ?? Number.NaN,
+          y: point.y ?? point.value ?? Number.NaN,
+        };
+      }),
       quantity: resource.axis_labels.y ?? resource.axis_mapping.y ?? "result",
       source: {
         kind: sourceKind,
@@ -71,10 +134,59 @@ export function buildAnalysisResultProjectionChartModel(
       status: projectionStatus(resource),
       unit: resource.axis_units.y ?? "unknown",
       xUnit: resource.axis_units.x ?? "unknown",
-    } satisfies ChartSeries;
+    });
+    return {
+      export: createSeries(completePoints),
+      visible: createSeries(visiblePoints),
+    };
   });
 
-  return { selectionBySeriesId, series };
+  return {
+    exportSeries: scopedSeries.map((entry) => entry.export),
+    requestedSpectrumOutputScopes,
+    series: scopedSeries.map((entry) => entry.visible),
+    selectionBySeriesId,
+    scopeView,
+  };
+}
+
+function projectionScopeView(
+  requestedScopes: readonly AnalysisResultSpectrumOutputScope[] | null,
+  selectedSampleId: string | null,
+  selectedSpectrumOutputScope: AnalysisResultSpectrumOutputScope | null,
+): AnalysisResultProjectionScopeView {
+  if (requestedScopes === null) return { kind: "unknown", sampleId: null };
+  if (requestedScopes.length === 0) return { kind: "none", sampleId: null };
+  if (selectedSpectrumOutputScope && requestedScopes.includes(selectedSpectrumOutputScope)) {
+    return selectedSpectrumOutputScope === "per_sample"
+      ? { kind: "per_sample", sampleId: selectedSampleId }
+      : { kind: "global", sampleId: null };
+  }
+  if (selectedSampleId && requestedScopes.includes("per_sample")) {
+    return { kind: "per_sample", sampleId: selectedSampleId };
+  }
+  if (requestedScopes.includes("global")) return { kind: "global", sampleId: null };
+  if (requestedScopes.includes("per_sample")) {
+    return { kind: "per_sample", sampleId: null };
+  }
+  return { kind: "unknown", sampleId: null };
+}
+
+function projectionPointsForScope(
+  points: AnalysisResultProjectionResource["series"][number]["points"],
+  selectionByOrdinal: ReadonlyMap<number, AnalysisResultProjectionSelectionEntry>,
+  scopeView: AnalysisResultProjectionScopeView,
+) {
+  if (scopeView.kind === "none") return [];
+  if (scopeView.kind === "per_sample") {
+    if (!scopeView.sampleId) return [];
+    return points.filter((point) => {
+      const sampleId =
+        selectionByOrdinal.get(point.ordinal)?.sample_id ?? point.sample_id ?? null;
+      return sampleId === scopeView.sampleId;
+    });
+  }
+  return points;
 }
 
 function boundedProjectionPoints(

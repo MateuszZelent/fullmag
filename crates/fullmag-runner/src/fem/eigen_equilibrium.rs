@@ -1,8 +1,6 @@
-use super::eigen_anisotropy::volume_anisotropy_field;
 use super::eigen_digest::{is_sha256_digest, shared_domain_content_digest};
 use super::eigen_equilibrium_contract::{
-    validate_certified_equilibrium_fields, AcceptedFemRelaxStageHandoff,
-    LoadedEquilibriumArtifactV7,
+    validate_certified_equilibrium_fields, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
 };
 use super::eigen_math::{cross, vector_norm};
 use super::eigen_policy::resolved_demag_realization;
@@ -10,6 +8,7 @@ use super::eigen_reduction::validate_tangent_frame_transport_support;
 use super::eigen_shared_domain::max_vector_field_difference;
 use super::eigen_shared_domain_geometry::shared_domain_robin_beta_m;
 use super::eigen_types::AcceptedEquilibriumCriterion;
+use super::equilibrium_identity::constant_uniaxial_descriptor;
 use crate::types::ExecutedRun;
 use crate::types::RunError;
 use fullmag_engine::fem::FemLlgProblem;
@@ -20,16 +19,43 @@ use fullmag_engine::LlgConfig;
 use fullmag_engine::MaterialParameters;
 use fullmag_engine::TimeIntegrator;
 use fullmag_engine::Vector3;
+use fullmag_engine::{CubicAnisotropyConfig, UniaxialAnisotropyConfig};
 
-fn max_vector_field_difference_on_magnetic_nodes(
+// The relaxation producer and the modal consumer evaluate the same static
+// fields through different native code paths.  A pure absolute tolerance
+// rejects otherwise identical fields once the applied field is large, while a
+// pure relative tolerance is unsafe around a zero field.  Keep both terms
+// explicit so the handoff contract remains auditable in SI units.
+// The exchange field can be mathematically zero for a uniform equilibrium,
+// while the accepted and recomputed FEM vectors still differ by a few ulps
+// after projection through the shared mesh.  Keep this floor tiny relative to
+// physical fields (~1e5 A/m), but above that representation noise.
+const FIELD_HANDOFF_ABS_TOL_A_PER_M: f64 = 1.0e-7;
+const FIELD_HANDOFF_REL_TOL: f64 = 1.0e-12;
+
+pub(super) fn max_vector_field_difference_on_magnetic_nodes(
     left: &[Vector3],
     right: &[Vector3],
     magnetic_node_volumes: &[f64],
 ) -> Option<f64> {
-    if left.len() != right.len() || left.len() != magnetic_node_volumes.len() {
+    if left.len() != right.len()
+        || left.len() != magnetic_node_volumes.len()
+        || left
+            .iter()
+            .chain(right)
+            .flatten()
+            .any(|value| !value.is_finite())
+        || magnetic_node_volumes
+            .iter()
+            .any(|volume| !volume.is_finite() || *volume < 0.0)
+    {
         return None;
     }
-    left.iter()
+    // Field extensions into air-only nodes are representation conventions,
+    // not magnetic degrees of freedom. Validate every input value above,
+    // then compare fields on the magnetic mass support only.
+    let difference = left
+        .iter()
         .zip(right)
         .zip(magnetic_node_volumes)
         .filter(|(_, volume)| **volume > 0.0)
@@ -38,7 +64,47 @@ fn max_vector_field_difference_on_magnetic_nodes(
                 .map(|axis| (left[axis] - right[axis]).abs())
                 .fold(0.0, f64::max)
         })
-        .reduce(f64::max)
+        .reduce(f64::max)?;
+    difference.is_finite().then_some(difference)
+}
+
+fn max_vector_field_amplitude(left: &[Vector3], right: &[Vector3]) -> Option<f64> {
+    if left.len() != right.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .chain(right)
+            .flat_map(|field| field.iter().copied())
+            .map(f64::abs)
+            .fold(0.0, f64::max),
+    )
+}
+
+fn max_vector_field_amplitude_on_magnetic_nodes(
+    left: &[Vector3],
+    right: &[Vector3],
+    magnetic_node_volumes: &[f64],
+) -> Option<f64> {
+    if left.len() != right.len() || left.len() != magnetic_node_volumes.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .zip(right)
+            .zip(magnetic_node_volumes)
+            .filter(|(_, volume)| **volume > 0.0)
+            .flat_map(|((left, right), _)| left.iter().chain(right).copied())
+            .map(f64::abs)
+            .fold(0.0, f64::max),
+    )
+}
+
+fn field_handoff_tolerance(scale_a_per_m: f64) -> Option<f64> {
+    if !scale_a_per_m.is_finite() {
+        return None;
+    }
+    Some(FIELD_HANDOFF_ABS_TOL_A_PER_M + FIELD_HANDOFF_REL_TOL * scale_a_per_m.max(1.0))
 }
 use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
@@ -51,11 +117,13 @@ pub(super) fn prepare_single_k_stage_continuation(
     let mut prepared = plan.clone();
     prepared.equilibrium = EquilibriumSourceIR::Provided;
     prepared.equilibrium_magnetization = handoff.equilibrium_magnetization.clone();
+    handoff.validate_provided_continuation_plan(&prepared)?;
     Ok(prepared)
 }
 
 pub(super) fn bind_stage_continuation_artifacts(
     run: &mut ExecutedRun,
+    plan: &FemEigenPlanIR,
     handoff: &AcceptedFemRelaxStageHandoff,
 ) -> Result<(), RunError> {
     if run.initial_magnetization != handoff.equilibrium_magnetization
@@ -71,6 +139,13 @@ pub(super) fn bind_stage_continuation_artifacts(
         "content_sha256": handoff.content_sha256,
         "equilibrium_content_sha256": handoff.equilibrium_content_sha256,
     });
+    let modal_source_mesh_topology =
+        plan.mesh
+            .mixed_topology_fingerprint_v3()
+            .map_err(|error| RunError {
+                message: format!("modal source mesh identity is invalid: {error}"),
+            })?;
+    let handoff_source_mesh_topology = handoff.source_mesh_topology_sha256.clone();
     let mut bound_summary = false;
     for artifact in &mut run.auxiliary_artifacts {
         let is_summary = artifact.relative_path == "eigen/metadata/eigen_summary.json";
@@ -123,8 +198,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.content_sha256),
                 );
                 diagnostics.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                diagnostics.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
                 diagnostics.insert(
                     "relax_to_eigen_handoff".to_string(),
@@ -141,8 +220,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                 serde_json::json!(handoff.content_sha256),
                             );
                             mode.insert(
+                                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff_source_mesh_topology.clone()),
+                            );
+                            mode.insert(
                                 "source_mesh_topology_sha256".to_string(),
-                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                                serde_json::json!(modal_source_mesh_topology.clone()),
                             );
                         }
                     }
@@ -158,8 +241,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.equilibrium_content_sha256),
                 );
                 object.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                object.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
             } else if is_solver_diagnostics {
                 object.insert(
@@ -167,8 +254,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.content_sha256),
                 );
                 object.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                object.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
                 if let Some(samples) = object
                     .get_mut("sample_solver_diagnostics")
@@ -184,8 +275,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                 serde_json::json!(handoff.content_sha256),
                             );
                             diagnostics.insert(
+                                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff_source_mesh_topology.clone()),
+                            );
+                            diagnostics.insert(
                                 "source_mesh_topology_sha256".to_string(),
-                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                                serde_json::json!(modal_source_mesh_topology.clone()),
                             );
                         }
                     }
@@ -209,8 +304,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                     serde_json::json!(handoff.content_sha256),
                                 );
                                 mode.insert(
+                                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                                );
+                                mode.insert(
                                     "source_mesh_topology_sha256".to_string(),
-                                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                                    serde_json::json!(modal_source_mesh_topology.clone()),
                                 );
                             }
                         }
@@ -230,6 +329,59 @@ pub(super) fn bind_stage_continuation_artifacts(
             message: "relax_stage_handoff_missing_eigen_summary".to_string(),
         });
     }
+    let has_published_linearization_state = run.auxiliary_artifacts.iter().any(|artifact| {
+        matches!(
+            artifact.relative_path.as_str(),
+            "eigen/metadata/linearization_state.v6.json"
+                | "eigen/metadata/linearization_state.v7.json"
+        ) && !artifact.bytes.is_empty()
+    });
+    if handoff.verified_replay().is_some() && has_published_linearization_state {
+        let identity_prefix = run.auxiliary_artifacts.iter().find_map(|artifact| {
+            artifact
+                .relative_path
+                .strip_suffix("linearization_identity.v2.json")
+                .filter(|prefix| prefix.starts_with("eigen/metadata/sample_") && !artifact.bytes.is_empty())
+                .map(str::to_string)
+        });
+        let Some(identity_prefix) = identity_prefix else {
+            return Err(RunError {
+                message:
+                    "relax_stage_handoff_verified_replay_sidecars_missing_after_modal_publication"
+                        .to_string(),
+            });
+        };
+        let has_triplet = [
+            [
+                "accepted_fem_equilibrium_fields.v1.json",
+                "accepted_fem_equilibrium_fields.v2.json",
+            ],
+            [
+                "certified_fem_equilibrium_fields.v1.json",
+                "certified_fem_equilibrium_fields.v2.json",
+            ],
+            [
+                "recomputed_fem_linearization_certificate.v1.json",
+                "recomputed_fem_linearization_certificate.v2.json",
+            ],
+        ]
+        .into_iter()
+        .all(|family| {
+            family.into_iter().any(|filename| {
+                let path = format!("{identity_prefix}{filename}");
+                run.auxiliary_artifacts
+                    .iter()
+                    .any(|artifact| artifact.relative_path == path && !artifact.bytes.is_empty())
+            })
+        });
+        if !has_triplet {
+            return Err(RunError {
+                message:
+                    "relax_stage_handoff_verified_replay_sidecars_missing_after_modal_publication"
+                        .to_string(),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -243,12 +395,15 @@ pub(super) fn materialize_equilibrium(
         Vec<Vector3>,
         u64,
         EffectiveFieldObservables,
-        Option<LoadedEquilibriumArtifactV7>,
+        Option<LoadedEquilibriumArtifact>,
     ),
     RunError,
 > {
     let source_artifact = if let EquilibriumSourceIR::Artifact { path } = &plan.equilibrium {
-        Some(load_equilibrium_artifact_v7(path, plan.mesh.nodes.len())?)
+        Some(load_certified_equilibrium_artifact(
+            path,
+            plan.mesh.nodes.len(),
+        )?)
     } else {
         None
     };
@@ -275,38 +430,30 @@ pub(super) fn materialize_equilibrium(
             message: format!("LLG: {}", error),
         })?
         .with_precession_enabled(false);
-    // Compute volume anisotropy field at equilibrium guess so that the
-    // relaxation includes the anisotropy contribution.  Because the FEM
-    // engine treats per_node_field as static, we recompute it once after
-    // an initial relaxation pass (self-consistent field iteration).
-    let aniso_per_node: Option<Vec<Vector3>> = {
-        let has_uni = plan
-            .material
-            .uniaxial_anisotropy
-            .map_or(false, |k| k.abs() > 0.0);
-        let has_cub = plan
-            .material
-            .cubic_anisotropy_kc1
-            .map_or(false, |k| k.abs() > 0.0);
-        if has_uni || has_cub {
-            Some(
-                equilibrium_guess
-                    .iter()
-                    .map(|m| volume_anisotropy_field(*m, plan))
-                    .collect(),
-            )
-        } else {
-            None
-        }
-    };
+    // Keep anisotropy in its own field/energy channel. A frozen per-node
+    // external field misclassifies its Zeeman energy and does not follow m0.
+    let uniaxial_anisotropy = constant_uniaxial_descriptor(&plan.material)?
+        .map(|(ku1, axis)| UniaxialAnisotropyConfig {
+            ku1,
+            ku2: plan.material.uniaxial_anisotropy_k2.unwrap_or(0.0),
+            axis,
+        });
+    let cubic_anisotropy = plan.material.cubic_anisotropy_kc1
+        .map(|kc1| CubicAnisotropyConfig {
+            kc1,
+            kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+            kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
+            axis1: plan.material.cubic_anisotropy_axis1.unwrap_or([1.0, 0.0, 0.0]),
+            axis2: plan.material.cubic_anisotropy_axis2.unwrap_or([0.0, 1.0, 0.0]),
+        });
     let terms = EffectiveFieldTerms {
         exchange: plan.enable_exchange,
         demag: plan.enable_demag,
         external_field: plan.external_field,
-        per_node_field: aniso_per_node,
+        per_node_field: None,
         magnetoelastic: None,
-        uniaxial_anisotropy: None,
-        cubic_anisotropy: None,
+        uniaxial_anisotropy,
+        cubic_anisotropy,
         interfacial_dmi: None,
         rotated_interfacial_dmi: None,
         bulk_dmi: None,
@@ -378,10 +525,22 @@ pub(super) fn materialize_equilibrium(
                         ),
                     }
                 })?;
-                if !difference.is_finite() || difference > 1.0e-8 {
+                let scale = max_vector_field_amplitude(accepted, recomputed).ok_or_else(|| {
+                    RunError {
+                        message: format!(
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted and recomputed field shapes differ"
+                        ),
+                    }
+                })?;
+                let tolerance = field_handoff_tolerance(scale).ok_or_else(|| RunError {
+                    message: format!(
+                        "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed field scale is not finite"
+                    ),
+                })?;
+                if !difference.is_finite() || difference > tolerance {
                     return Err(RunError {
                         message: format!(
-                            "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds 1.000e-8 A/m"
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds tolerance {tolerance:.3e} A/m (field scale {scale:.3e} A/m)"
                         ),
                     });
                 }
@@ -392,6 +551,25 @@ pub(super) fn materialize_equilibrium(
             &handoff.certified_fields.h_ex_a_per_m,
             &observables.exchange_field,
         )?;
+        let uniaxial = constant_uniaxial_descriptor(&plan.material)?;
+        if handoff.certified_fields.h_anisotropy_a_per_m.is_some() != uniaxial.is_some() {
+            return Err(RunError {
+                message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string(),
+            });
+        }
+        if let (Some(accepted), Some((ku, axis))) =
+            (&handoff.certified_fields.h_anisotropy_a_per_m, uniaxial)
+        {
+            let amplitude = 2.0 * ku / (fullmag_engine::MU0 * plan.material.saturation_magnetisation);
+            let recomputed: Vec<Vector3> = state.magnetization().iter()
+                .zip(&magnetic_node_volumes)
+                .map(|(m, volume)| {
+                    if *volume <= 0.0 { return [0.0; 3]; }
+                    let projection = m[0] * axis[0] + m[1] * axis[1] + m[2] * axis[2];
+                    axis.map(|component| amplitude * projection * component)
+                }).collect();
+            require_recomputed_match("h_anisotropy0", accepted, &recomputed)?;
+        }
         let h_ext_difference = max_vector_field_difference_on_magnetic_nodes(
             &handoff.certified_fields.h_ext_a_per_m,
             &observables.external_field,
@@ -400,10 +578,21 @@ pub(super) fn materialize_equilibrium(
         .ok_or_else(|| RunError {
             message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted and recomputed field shapes differ or the mesh has no magnetic nodes".to_string(),
         })?;
-        if !h_ext_difference.is_finite() || h_ext_difference > 1.0e-8 {
+        let h_ext_scale = max_vector_field_amplitude_on_magnetic_nodes(
+            &handoff.certified_fields.h_ext_a_per_m,
+            &observables.external_field,
+            &magnetic_node_volumes,
+        )
+        .ok_or_else(|| RunError {
+            message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted and recomputed field shapes differ or the mesh has no magnetic nodes".to_string(),
+        })?;
+        let h_ext_tolerance = field_handoff_tolerance(h_ext_scale).ok_or_else(|| RunError {
+            message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed field scale is not finite".to_string(),
+        })?;
+        if !h_ext_difference.is_finite() || h_ext_difference > h_ext_tolerance {
             return Err(RunError {
                 message: format!(
-                    "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed maximum magnetic-node difference {h_ext_difference:.3e} exceeds 1.000e-8 A/m"
+                    "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed maximum magnetic-node difference {h_ext_difference:.3e} exceeds tolerance {h_ext_tolerance:.3e} A/m (field scale {h_ext_scale:.3e} A/m)"
                 ),
             });
         }
@@ -505,10 +694,10 @@ pub(super) fn materialize_equilibrium(
     ))
 }
 
-pub(super) fn load_equilibrium_artifact_v7(
+pub(super) fn load_certified_equilibrium_artifact(
     path: &str,
     expected_len: usize,
-) -> Result<LoadedEquilibriumArtifactV7, RunError> {
+) -> Result<LoadedEquilibriumArtifact, RunError> {
     let raw = std::fs::read_to_string(path).map_err(|error| RunError {
         message: format!("failed to read equilibrium artifact '{}': {}", path, error),
     })?;
@@ -517,7 +706,7 @@ pub(super) fn load_equilibrium_artifact_v7(
     })?;
     let object = value.as_object().ok_or_else(|| RunError {
         message: format!(
-            "equilibrium artifact '{}' must be a certified equilibrium_artifact.v7 object; raw vector payloads are rejected",
+            "equilibrium artifact '{}' must be a certified equilibrium_artifact.v7/v8 object; raw vector payloads are rejected",
             path
         ),
     })?;
@@ -528,7 +717,7 @@ pub(super) fn load_equilibrium_artifact_v7(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| RunError {
                 message: format!(
-                    "equilibrium artifact '{}' is missing required v7 field '{}'",
+                    "equilibrium artifact '{}' is missing required equilibrium field '{}'",
                     path, name
                 ),
             })
@@ -540,12 +729,44 @@ pub(super) fn load_equilibrium_artifact_v7(
                 .to_string(),
         });
     }
-    if schema_version != "equilibrium_artifact.v7" {
+    if !matches!(
+        schema_version,
+        "equilibrium_artifact.v7" | "equilibrium_artifact.v8"
+    ) {
         return Err(RunError {
             message: format!(
-                "equilibrium artifact '{}' must use schema equilibrium_artifact.v7",
+                "equilibrium artifact '{}' must use schema equilibrium_artifact.v7 or equilibrium_artifact.v8",
                 path
             ),
+        });
+    }
+    if schema_version == "equilibrium_artifact.v8" {
+        let valid_digest = |value: &str| {
+            is_sha256_digest(value)
+                && value[7..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        };
+        if required_string("material_identity_kind")? != "canonical_equilibrium_material.v2"
+            || required_string("material_provenance_scope")? != "materialization_plan"
+            || !valid_digest(required_string("material_signature")?)
+            || !valid_digest(required_string("material_provenance_signature")?)
+        {
+            return Err(RunError {
+                message: "equilibrium_artifact_v8_material_identity_invalid".to_string(),
+            });
+        }
+    } else if [
+        "material_identity_kind",
+        "material_provenance_signature",
+        "material_provenance_scope",
+    ]
+    .iter()
+    .any(|name| object.contains_key(*name))
+    {
+        return Err(RunError {
+            message: "equilibrium_artifact_v7_cannot_advertise_canonical_material_identity"
+                .to_string(),
         });
     }
     if object
@@ -580,10 +801,10 @@ pub(super) fn load_equilibrium_artifact_v7(
         .expect("the equilibrium artifact object was validated above");
     digest_object.remove("content_sha256");
     digest_object.remove("equilibrium_id");
-    let recomputed_content_sha256 =
-        shared_domain_content_digest("equilibrium_artifact_v7", &digest_payload)?;
+    let recomputed_content_sha256 = shared_domain_content_digest(schema_version, &digest_payload)?;
     let expected_equilibrium_id = format!(
-        "equilibrium_artifact.v7:{}",
+        "{}:{}",
+        schema_version,
         recomputed_content_sha256
             .strip_prefix("sha256:")
             .unwrap_or(&recomputed_content_sha256)
@@ -867,7 +1088,7 @@ pub(super) fn load_equilibrium_artifact_v7(
                 path
             ),
         })?;
-    Ok(LoadedEquilibriumArtifactV7 {
+    Ok(LoadedEquilibriumArtifact {
         value: value.clone(),
         m0,
         h_eff0,
@@ -896,5 +1117,107 @@ pub(super) fn load_equilibrium_artifact_v7(
 }
 
 fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vector3>, RunError> {
-    Ok(load_equilibrium_artifact_v7(path, expected_len)?.m0)
+    Ok(load_certified_equilibrium_artifact(path, expected_len)?.m0)
+}
+
+#[cfg(test)]
+mod magnetic_field_replay_tests {
+    use super::max_vector_field_difference_on_magnetic_nodes;
+
+    #[test]
+    fn finite_air_extension_does_not_change_magnetic_comparison() {
+        let stored = [[79577.47154594767, 0.0, 0.0]; 3];
+        let replay = [stored[0], [0.0; 3], stored[2]];
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&stored, &replay, &[1.0, 0.0, 2.0]),
+            Some(0.0),
+        );
+    }
+
+    #[test]
+    fn every_magnetic_node_and_component_is_compared_without_weight_scaling() {
+        let stored = [[0.0; 3]; 3];
+        let replay = [[0.0, 0.0, 2.0e-8], [79577.0, 0.0, 0.0], [0.0, 3.0e-8, 0.0]];
+        let difference = max_vector_field_difference_on_magnetic_nodes(
+            &stored,
+            &replay,
+            &[1.0e-27, 0.0, 2.0e-27],
+        )
+        .unwrap();
+        assert_eq!(difference, 3.0e-8);
+        assert!(difference > 1.0e-8);
+    }
+
+    #[test]
+    fn mismatched_shapes_and_empty_magnetic_support_fail() {
+        let fields = [[0.0; 3]; 2];
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&fields, &fields[..1], &[1.0, 0.0]),
+            None
+        );
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&fields, &fields, &[1.0]),
+            None
+        );
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&fields, &fields, &[0.0, 0.0]),
+            None
+        );
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&[], &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_magnetic_weights_fail_even_at_air_nodes() {
+        let fields = [[0.0; 3]; 2];
+        for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                max_vector_field_difference_on_magnetic_nodes(&fields, &fields, &[1.0, invalid]),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn nonfinite_fields_fail_on_both_sides_even_outside_magnetic_support() {
+        let fields = [[0.0; 3]; 2];
+        for node in 0..2 {
+            for axis in 0..3 {
+                for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                    let mut malformed = fields;
+                    malformed[node][axis] = invalid;
+                    assert_eq!(
+                        max_vector_field_difference_on_magnetic_nodes(
+                            &malformed,
+                            &fields,
+                            &[1.0, 0.0]
+                        ),
+                        None
+                    );
+                    assert_eq!(
+                        max_vector_field_difference_on_magnetic_nodes(
+                            &fields,
+                            &malformed,
+                            &[1.0, 0.0]
+                        ),
+                        None
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finite_input_subtraction_overflow_fails() {
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(
+                &[[f64::MAX, 0.0, 0.0]],
+                &[[-f64::MAX, 0.0, 0.0]],
+                &[1.0],
+            ),
+            None
+        );
+    }
 }

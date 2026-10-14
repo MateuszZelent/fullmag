@@ -845,6 +845,36 @@ mod tests {
     }
 
     #[test]
+    fn captured_identity_rejects_a_selection_only_change() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/runtime/antenna-standalone-pipeline.json"
+        )).unwrap();
+        let mut problem: ProblemIR = serde_json::from_value(fixture["ir"].clone()).unwrap();
+        let mut second = problem.antenna_field_solve_stages[0].clone();
+        second.id = "second-definition".into();
+        problem.antenna_field_solve_stages.push(second);
+        let fullmag_ir::StudyIR::AntennaFieldSolve { selection, .. } = &mut problem.study else { unreachable!() };
+        *selection = Some(fullmag_ir::AntennaFieldSolveSelectionIR { stage_id: "inspect_antenna".into(), port_mode_id: "port".into() });
+        let references = capture_study_input_references("source", &problem).unwrap();
+        let mut entry = StudyProblemCatalogEntry::from_step(&study().steps[0], problem);
+        entry.model = references.model;
+        entry.solver_config = references.solver_config;
+        entry.discretization = references.discretization;
+        entry.captured_input_identity = Some(references.identity.clone());
+        entry.validate_captured_input_identity(STUDY_PROBLEM_CATALOG_SCHEMA_V3).unwrap();
+        let before = serde_json::to_value(&entry.problem).unwrap();
+        let fullmag_ir::StudyIR::AntennaFieldSolve { selection: Some(selection), .. } = &mut entry.problem.study else { unreachable!() };
+        selection.stage_id = "second-definition".into();
+        let changed = capture_study_input_references("source", &entry.problem).unwrap();
+        assert_ne!(changed.identity.problem_sha256, references.identity.problem_sha256);
+        let mut expected = before;
+        expected["study"]["selection"]["stage_id"] = "second-definition".into();
+        assert_eq!(serde_json::to_value(&entry.problem).unwrap(), expected);
+        assert!(entry.validate_captured_input_identity(STUDY_PROBLEM_CATALOG_SCHEMA_V3)
+            .unwrap_err().to_string().contains("ProblemIR bytes differ from the captured digest"));
+    }
+
+    #[test]
     fn captured_identity_rejects_changed_problem_bytes_identity_and_references() {
         let mut changed_problem = captured_entry();
         changed_problem

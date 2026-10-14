@@ -182,7 +182,8 @@ async fn get_object_topological_charge_legacy(
     let requested_method = query.method;
     let requested_snapshot = query.snapshot_id.as_deref().unwrap_or("latest");
     let field_summary = resolved_field_summary;
-    let mesh = snapshot.fem_mesh.as_ref();
+    // A retained FEM artifact must not change the topology of current FDM field data.
+    let mesh = snapshot.fem_mesh.as_ref().filter(|_| !is_fdm_snapshot(&snapshot));
     let field_revision = field_summary
         .as_ref()
         .map(|_| field_quantity_revision(&snapshot, &query.quantity_id).max(1));
@@ -401,7 +402,7 @@ pub async fn get_object_topological_charge(
             return Ok(Json(resource));
         }
     }
-    let fdm_qualification = (snapshot.fem_mesh.is_none()
+    let fdm_qualification = (is_fdm_snapshot(&snapshot)
         && query.support
             == crate::schemas::analysis_extensions::TopologicalChargeSupportMode::Midplane)
         .then(|| {

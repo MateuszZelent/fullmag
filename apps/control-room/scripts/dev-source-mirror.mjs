@@ -466,7 +466,10 @@ export class DevSourceMirror {
         return;
       }
     }
-    throw new DevSourceMirrorError("Source changed continuously while mirroring the staged Control Room");
+    throw new DevSourceMirrorError(
+      "Source changed continuously while mirroring the staged Control Room",
+      { cause: { code: "EAGAIN" } },
+    );
   }
 
   schedule() {
@@ -479,7 +482,14 @@ export class DevSourceMirror {
     }
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      void this.drain().catch((error) => this.fail(error));
+      void this.drain().catch((error) => {
+        if (error instanceof DevSourceMirrorError && error.cause?.code === "EAGAIN") {
+          // Live editing can outlast one bounded scan; keep the watcher alive.
+          this.schedule();
+        } else {
+          this.fail(error);
+        }
+      });
     }, this.debounceMs);
   }
 

@@ -29,6 +29,7 @@ import {
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
   primitiveDraftOverlayObject,
+  primitiveObjectSurfaceColor,
 } from "./PrimitiveObjectLayerModel";
 
 function primitiveObject(
@@ -124,17 +125,11 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
       "utf8",
     );
-    const modelSource = readFileSync(
-      fileURLToPath(new URL("./PrimitiveObjectLayerModel.ts", import.meta.url)),
-      "utf8",
-    );
-
     expect(source).toContain("<meshBasicMaterial");
     expect(source).not.toContain("<meshStandardMaterial");
-    expect(modelSource).not.toContain("computeVertexNormals");
   });
 
-  it("keeps Primitive field-free and driven only by its monochrome local style", () => {
+  it("keeps Primitive field-free and routes its presentation through the color resolver", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
       "utf8",
@@ -144,16 +139,40 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       source.indexOf("function PrimitiveObjectGizmo"),
     );
 
-    expect(primitiveSurfaceSource).toContain("renderSettings.primitiveMonoColor");
-    expect(primitiveSurfaceSource).toContain(
-      'renderSettings.surfaceColorSource === "solid"',
-    );
+    expect(primitiveSurfaceSource).toContain("primitiveObjectSurfaceColor(object, renderSettings, colors)");
     expect(primitiveSurfaceSource).toContain("renderPlan.primitive.opacity");
     expect(primitiveSurfaceSource).toContain("renderPlan.points.visible");
     expect(primitiveSurfaceSource).toContain("pointColorFromSettings");
     expect(primitiveSurfaceSource).not.toContain("fieldModel");
     expect(primitiveSurfaceSource).not.toContain("scalarColors");
     expect(primitiveSurfaceSource).not.toContain("magnetizationTexturePreview");
+  });
+
+  it("uses the antenna theme by default while preserving literal color overrides", () => {
+    const colors: Viewport3DColors = {
+      accent: "#89b4fa",
+      antenna: "#f9e2af",
+      background: "#11111b",
+      field: "#a6e3a1",
+      mesh: "#313244",
+      textPrimary: "#cdd6f4",
+      textSecondary: "#bac2de",
+      wire: "#6c7086",
+    };
+    expect(primitiveObjectSurfaceColor({ role: "antenna" }, DEFAULT_OBJECT_VISUALIZATION, colors))
+      .toBe(colors.antenna);
+    expect(primitiveObjectSurfaceColor({ role: "magnetic" }, DEFAULT_OBJECT_VISUALIZATION, colors))
+      .toBe(colors.mesh);
+    expect(primitiveObjectSurfaceColor({ role: "antenna" }, {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      surfaceColorSource: "solid",
+      shaderMonoColor: "#123456",
+    }, colors)).toBe("#123456");
+    expect(primitiveObjectSurfaceColor({ role: "antenna" }, {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      surfaceColorSource: "orientation",
+      primitiveMonoColor: "#654321",
+    }, colors)).toBe("#654321");
   });
 
   it("creates primitive geometry variants from object bounds", () => {

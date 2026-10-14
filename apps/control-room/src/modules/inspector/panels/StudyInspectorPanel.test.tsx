@@ -3,7 +3,10 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Accordion } from "@/shared/ui/Accordion";
 
-import type { CommandDetailResource } from "@/kernel/api/apiTypes";
+import type {
+  CommandDetailResource,
+  StageExecutionResource,
+} from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 
 vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
@@ -74,6 +77,7 @@ describe("StudyInspectorPanel", () => {
         scene_revision: 1,
         stages_revision: 1,
       },
+      session: { session_epoch: "session-1@1", session_id: "session-1" },
       run: null,
     } as NonNullable<Parameters<typeof studyInspectorRuntimeStatusEquals>[0]>;
     const next = {
@@ -88,6 +92,12 @@ describe("StudyInspectorPanel", () => {
     };
 
     expect(studyInspectorRuntimeStatusEquals(previous, next)).toBe(false);
+    expect(
+      studyInspectorRuntimeStatusEquals(previous, {
+        ...previous,
+        session: { session_epoch: "session-1@2", session_id: "session-1" },
+      }),
+    ).toBe(false);
   });
 
   it("derives K0 production readiness by selected equilibrium provenance", () => {
@@ -278,6 +288,115 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("occurred");
     expect(html).toContain("cuda_unavailable");
     expect(html).toContain("CUDA device unavailable; using the reference CPU engine.");
+  });
+
+  it("distinguishes retained StageExecution telemetry from a refresh error without scoped data", () => {
+    const model = {
+      boundary: testBoundary(),
+      requested: testRequested(),
+      runtime: {
+        activeStageLabel: "Run 1",
+        commandBadge: "idle",
+        commandError: null,
+        commandId: null,
+        commandLabel: "No queued commands",
+        maxTorque: "unavailable",
+        progressPercent: 0,
+        relaxEnergyStop: null,
+        relaxTimeStop: null,
+        relaxTorqueStop: null,
+        runId: "run-1",
+        state: "running",
+      },
+      selectedStage: null,
+      stages: [],
+    } as never;
+    const renderRuntime = (
+      stageExecution: {
+        data: StageExecutionResource | null;
+        error: Error | null;
+        refreshError?: Error | null;
+        status: "error" | "stale";
+      },
+    ) =>
+      renderToStaticMarkup(
+        <StudyRuntimeSection
+          commandDisabledReason={() => null}
+          model={model}
+          onOpenCommand={() => undefined}
+          runCommand={() => undefined}
+          stageExecution={stageExecution}
+          stepValue="n/a"
+        />,
+      );
+    const lastGoodSnapshot = {
+      revision: 8,
+      run_id: "run-1",
+      session_epoch: "session-1@1",
+      session_id: "session-1",
+    } as StageExecutionResource;
+
+    const refreshErrorHtml = renderRuntime({
+      data: lastGoodSnapshot,
+      error: new Error("connection reset"),
+      status: "error",
+    });
+    expect(refreshErrorHtml).toContain('data-kind="warning"');
+    expect(refreshErrorHtml).toContain("last confirmed telemetry");
+    expect(refreshErrorHtml).toContain("connection reset");
+
+    const noSnapshotHtml = renderRuntime({
+      data: null,
+      error: new Error("session changed during refresh"),
+      status: "error",
+    });
+    expect(noSnapshotHtml).toContain('data-kind="error"');
+    expect(noSnapshotHtml).toContain("No snapshot is available");
+    expect(noSnapshotHtml).toContain("session changed during refresh");
+    expect(noSnapshotHtml).not.toContain("last confirmed telemetry");
+
+    const staleHtml = renderRuntime({
+      data: lastGoodSnapshot,
+      error: null,
+      status: "stale",
+    });
+    expect(staleHtml).toContain('data-kind="warning"');
+    expect(staleHtml).toContain("while refresh is pending");
+
+    const staleRefreshErrorHtml = renderRuntime({
+      data: lastGoodSnapshot,
+      error: null,
+      refreshError: new Error("retry failed"),
+      status: "stale",
+    });
+    expect(staleRefreshErrorHtml).toContain('data-kind="warning"');
+    expect(staleRefreshErrorHtml).toContain("last confirmed telemetry");
+    expect(staleRefreshErrorHtml).toContain("retry failed");
+
+    const staleRefreshErrorWithoutSnapshotHtml = renderRuntime({
+      data: null,
+      error: null,
+      refreshError: new Error("retry failed without scoped data"),
+      status: "stale",
+    });
+    expect(staleRefreshErrorWithoutSnapshotHtml).toContain('data-kind="error"');
+    expect(staleRefreshErrorWithoutSnapshotHtml).toContain(
+      "No snapshot is available for the current session/run scope.",
+    );
+    expect(staleRefreshErrorWithoutSnapshotHtml).toContain(
+      "retry failed without scoped data",
+    );
+
+    const staleWithoutSnapshotHtml = renderRuntime({
+      data: null,
+      error: null,
+      status: "stale",
+    });
+    expect(staleWithoutSnapshotHtml).toContain('data-kind="warning"');
+    expect(staleWithoutSnapshotHtml).toContain(
+      "no snapshot matches the current session/run scope",
+    );
+    expect(staleWithoutSnapshotHtml).not.toContain("last confirmed telemetry");
   });
 
   it("renders global advanced adaptive guard controls", () => {
@@ -1327,6 +1446,14 @@ describe("StudyInspectorPanel", () => {
             requestedDevice: "gpu",
             requestedMode: "strict",
             requestedPrecision: "single",
+            parallelExecution: {
+              mode: "adaptive",
+              maxCpuPercent: "90",
+              maxMemoryPercent: "80",
+              memoryReserveMiB: "1024",
+              maxWorkers: "",
+              threadsPerWorker: "1",
+            },
             solver: {
               adaptiveTimestep: null,
               demagInterval: "",
@@ -1409,6 +1536,7 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Study solver override JSON object");
     expect(html).toContain("FEM demag policy");
     expect(html).toContain("Current CPU threads");
+    expect(html).toContain("serial mode ignores these targets");
     expect(html).toContain("LLG is not advertised by the active session.");
     expect(html).toContain(
       "Adaptive execution is qualified only for double precision.",
@@ -1433,6 +1561,14 @@ describe("StudyInspectorPanel", () => {
           requestedDevice: "auto",
           requestedMode: "strict",
           requestedPrecision: "double",
+          parallelExecution: {
+            mode: "adaptive",
+            maxCpuPercent: "90",
+            maxMemoryPercent: "80",
+            memoryReserveMiB: "1024",
+            maxWorkers: "",
+            threadsPerWorker: "1",
+          },
           solver: {
             adaptiveTimestep: null,
             demagInterval: "",

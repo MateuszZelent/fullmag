@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 
 import {
   useAnalysisResultDatasetManifestResource,
@@ -11,9 +11,11 @@ import type { KernelApi } from "@/kernel/types";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { isAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import {
+  analysisResultSpectrumOutputScopes,
   analysisResultSelectionForProjection,
   analysisResultSelectionRef,
   buildAnalysisResultProjectionChartModel,
+  type AnalysisResultSpectrumOutputScope,
   type AnalysisResultDatasetManifestResource,
   type AnalysisResultProjectionResource,
   type AnalysisResultSelectionRef,
@@ -60,6 +62,49 @@ export function useAnalysisResultProjectionController(
     )
       ? resultProjection.data
       : null;
+  const requestedSpectrumOutputScopes = useMemo(
+    () => analysisResultSpectrumOutputScopes(resultManifest.data),
+    [resultManifest.data],
+  );
+  const spectrumScopeIdentity = JSON.stringify([
+    selectedResultSelection?.runId ?? null,
+    selectedResultSelection?.datasetId ?? null,
+    selectedResultSelection?.datasetRevision ?? null,
+    requestedSpectrumOutputScopes,
+  ]);
+  const [spectrumScopeChoice, setSpectrumScopeChoice] = useState<{
+    identity: string;
+    scope: AnalysisResultSpectrumOutputScope;
+  } | null>(null);
+  const selectedSpectrumOutputScope = useMemo(() => {
+    const requested = requestedSpectrumOutputScopes;
+    if (!requested || requested.length === 0) return null;
+    if (
+      spectrumScopeChoice?.identity === spectrumScopeIdentity &&
+      requested.includes(spectrumScopeChoice.scope)
+    ) {
+      return spectrumScopeChoice.scope;
+    }
+    if (
+      selectedResultSelection?.sampleId &&
+      requested.includes("per_sample")
+    ) {
+      return "per_sample";
+    }
+    if (requested.includes("global")) return "global";
+    return requested.includes("per_sample") ? "per_sample" : null;
+  }, [
+    requestedSpectrumOutputScopes,
+    selectedResultSelection?.sampleId,
+    spectrumScopeChoice,
+    spectrumScopeIdentity,
+  ]);
+  const onSpectrumOutputScopeSelect = useCallback(
+    (scope: AnalysisResultSpectrumOutputScope) => {
+      setSpectrumScopeChoice({ identity: spectrumScopeIdentity, scope });
+    },
+    [spectrumScopeIdentity],
+  );
   useLayoutEffect(() => {
     if (!selectedResultSelection) return;
     const activeOverlay = kernel.analysisFieldOverlay.getSnapshot();
@@ -75,12 +120,29 @@ export function useAnalysisResultProjectionController(
       buildAnalysisResultProjectionChartModel(
         renderableResultProjection,
         resultManifest.data?.product_kind ?? null,
+        {
+          requestedSpectrumOutputScopes,
+          selectedSampleId: selectedResultSelection?.sampleId ?? null,
+          selectedSpectrumOutputScope,
+        },
       ),
-    [renderableResultProjection, resultManifest.data?.product_kind],
+    [
+      renderableResultProjection,
+      requestedSpectrumOutputScopes,
+      resultManifest.data?.product_kind,
+      selectedSpectrumOutputScope,
+      selectedResultSelection?.sampleId,
+    ],
   );
   const onResultProjectionPointSelect = useCallback(
     (entry: AnalysisResultProjectionSelection) => {
       if (!selectedResultSelection || !renderableResultProjection) return;
+      if (selectedSpectrumOutputScope) {
+        setSpectrumScopeChoice({
+          identity: spectrumScopeIdentity,
+          scope: selectedSpectrumOutputScope,
+        });
+      }
       const selection = analysisResultSelectionFromProjectionPoint(
         selectedResultSelection,
         renderableResultProjection,
@@ -97,11 +159,23 @@ export function useAnalysisResultProjectionController(
         "analysis-plots",
       );
     },
-    [kernel.selection, renderableResultProjection, selectedResultSelection],
+    [
+      kernel.selection,
+      renderableResultProjection,
+      selectedResultSelection,
+      selectedSpectrumOutputScope,
+      spectrumScopeIdentity,
+    ],
   );
   const onResultProjectionSelect = useCallback(
     (projectionId: string) => {
       if (!selectedResultSelection) return;
+      if (selectedSpectrumOutputScope) {
+        setSpectrumScopeChoice({
+          identity: spectrumScopeIdentity,
+          scope: selectedSpectrumOutputScope,
+        });
+      }
       const selection = analysisResultSelectionForProjection(
         selectedResultSelection,
         projectionId,
@@ -117,13 +191,19 @@ export function useAnalysisResultProjectionController(
         "analysis-plots",
       );
     },
-    [kernel.selection, selectedResultSelection],
+    [
+      kernel.selection,
+      selectedResultSelection,
+      selectedSpectrumOutputScope,
+      spectrumScopeIdentity,
+    ],
   );
 
   if (!selectedResultSelection) return undefined;
   return {
     kernel,
     model: resultProjectionModel,
+    onSpectrumOutputScopeSelect,
     onProjectionSelect: onResultProjectionSelect,
     onPointSelect: onResultProjectionPointSelect,
     projections: resultManifest.data?.projections ?? [],

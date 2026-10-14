@@ -150,6 +150,9 @@ pub fn schedule_next_ready_accepted_task_with_host(
     resource_offer: ResourceLease,
     host: &crate::host_runtime::HostRuntimeAdmission,
 ) -> Result<Option<ScheduledAcceptedTask>> {
+    if !host.has_current_compute_snapshot()? {
+        return Ok(None);
+    }
     let placement = host.solver_placement(&resource_offer.resource_id)?;
     let gpu_offer = resource_offer.kind == ResourceKind::Gpu;
     let ledger = host.ledger();
@@ -165,6 +168,9 @@ pub fn schedule_next_ready_accepted_task_with_host(
             }
         },
         |task, claim, inputs| {
+            if !host.has_current_compute_snapshot()? {
+                return Ok(None);
+            }
             let request = crate::host_allocation::host_request_for_task_claim(
                 store, ledger, claim, placement,
             )?;
@@ -184,6 +190,9 @@ pub fn resume_next_admitted_accepted_task_with_host(
     resource_id: &str,
     host: &crate::host_runtime::HostRuntimeAdmission,
 ) -> Result<Option<ScheduledAcceptedTask>> {
+    if !host.has_current_compute_snapshot()? {
+        return Ok(None);
+    }
     let intent = store
         .read_run_intent(run_id.as_str())?
         .context("accepted scheduler recovery requires an immutable run intent")?;

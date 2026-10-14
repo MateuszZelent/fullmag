@@ -1,4 +1,5 @@
 //! A Windows worker cannot start solver descendants before job assignment.
+use std::collections::BTreeSet;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::process::{Child, Command, ExitStatus};
@@ -15,7 +16,7 @@ pub(super) struct OwnedWorkerProcess {
 }
 
 impl OwnedWorkerProcess {
-    pub(super) fn spawn(command: &mut Command) -> io::Result<Self> {
+    pub(super) fn spawn(command: &mut Command, cpu_ids: &BTreeSet<u32>) -> io::Result<Self> {
         #[cfg(windows)]
         {
             use std::process::Stdio;
@@ -24,10 +25,11 @@ impl OwnedWorkerProcess {
                 .arg(startup_gate::STARTUP_GATE_FLAG)
                 .arg(startup_gate::STARTUP_GATE_VERSION)
                 .stdin(Stdio::piped());
-            Self::spawn_in_job(command, job)
+            Self::spawn_in_job(command, job, cpu_ids)
         }
         #[cfg(not(windows))]
         {
+            configure_cpu_affinity(command, cpu_ids)?;
             Ok(Self {
                 child: command.spawn()?,
                 startup_failure: None,
@@ -36,7 +38,11 @@ impl OwnedWorkerProcess {
     }
 
     #[cfg(windows)]
-    fn spawn_in_job(command: &mut Command, job: WindowsJob) -> io::Result<Self> {
+    fn spawn_in_job(
+        command: &mut Command,
+        job: WindowsJob,
+        cpu_ids: &BTreeSet<u32>,
+    ) -> io::Result<Self> {
         use std::io::Write;
         let mut child = command.spawn()?;
         if let Err(error) = job.assign(&child) {
@@ -56,6 +62,26 @@ impl OwnedWorkerProcess {
                 job: Some(job),
                 startup_failure: Some(format!(
                     "job assignment failed before startup release: {error}"
+                )),
+            });
+        }
+        if let Err(error) = set_process_cpu_affinity(&child, cpu_ids) {
+            // The worker is still at the stdin barrier and has no solver.
+            drop(child.stdin.take());
+            let _ = child.kill();
+            if let Err(cleanup) = child.wait() {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "CPU affinity failed before startup release: {error}; gated worker cleanup failed: {cleanup}"
+                    ),
+                ));
+            }
+            return Ok(Self {
+                child,
+                job: Some(job),
+                startup_failure: Some(format!(
+                    "CPU affinity failed before startup release: {error}"
                 )),
             });
         }
@@ -141,6 +167,293 @@ impl OwnedWorkerProcess {
             job: None,
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn configure_cpu_affinity(command: &mut Command, cpu_ids: &BTreeSet<u32>) -> io::Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    if cpu_ids.is_empty() {
+        return Ok(());
+    }
+    let words = linux_cpu_affinity_words(cpu_ids, linux_kernel_affinity_mask_bytes()?)?;
+    let byte_len = words
+        .len()
+        .checked_mul(std::mem::size_of::<usize>())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "CPU mask size overflow"))?;
+    let mut observed_words = vec![0usize; words.len()];
+    unsafe {
+        command.pre_exec(move || {
+            if libc::sched_setaffinity(0, byte_len, words.as_ptr().cast()) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::sched_getaffinity(0, byte_len, observed_words.as_mut_ptr().cast()) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if observed_words != words {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL));
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_kernel_affinity_mask_bytes() -> io::Result<usize> {
+    const MAX_CPU_AFFINITY_BYTES: usize = 16 * 1024 * 1024;
+    let mut byte_len = std::mem::size_of::<usize>();
+    loop {
+        let word_count = byte_len.div_ceil(std::mem::size_of::<usize>());
+        let mut mask = vec![0usize; word_count];
+        let result = unsafe {
+            libc::sched_getaffinity(0, byte_len, mask.as_mut_ptr().cast())
+        };
+        if result == 0 {
+            return Ok(byte_len);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINVAL) {
+            return Err(error);
+        }
+        if byte_len >= MAX_CPU_AFFINITY_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "kernel CPU affinity mask exceeds the supported bound",
+            ));
+        }
+        byte_len = byte_len
+            .checked_mul(2)
+            .unwrap_or(MAX_CPU_AFFINITY_BYTES)
+            .min(MAX_CPU_AFFINITY_BYTES);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cpu_affinity_words(
+    cpu_ids: &BTreeSet<u32>,
+    minimum_bytes: usize,
+) -> io::Result<Vec<usize>> {
+    const MAX_CPU_AFFINITY_BYTES: usize = 16 * 1024 * 1024;
+    let Some(max_cpu_id) = cpu_ids.iter().next_back().copied() else {
+        return Ok(Vec::new());
+    };
+    let max_cpu_id = usize::try_from(max_cpu_id)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "CPU ID exceeds usize"))?;
+    let word_bits = usize::BITS as usize;
+    let requested_word_count = max_cpu_id
+        .checked_div(word_bits)
+        .and_then(|word| word.checked_add(1))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "CPU mask size overflow"))?;
+    let minimum_word_count = minimum_bytes.div_ceil(std::mem::size_of::<usize>());
+    let word_count = requested_word_count.max(minimum_word_count);
+    let byte_len = word_count
+        .checked_mul(std::mem::size_of::<usize>())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "CPU mask size overflow"))?;
+    if byte_len > MAX_CPU_AFFINITY_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CPU affinity mask exceeds the supported bound",
+        ));
+    }
+    let mut words = vec![0usize; word_count];
+    for cpu_id in cpu_ids {
+        let cpu_id = usize::try_from(*cpu_id)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "CPU ID exceeds usize"))?;
+        words[cpu_id / word_bits] |= 1usize << (cpu_id % word_bits);
+    }
+    Ok(words)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_cpu_affinity_tests {
+    use super::{linux_cpu_affinity_words, linux_kernel_affinity_mask_bytes, OwnedWorkerProcess};
+    use std::collections::BTreeSet;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn cpu_ids_form_a_dynamic_mask_with_the_kernel_minimum_width() {
+        let second_word_cpu = usize::BITS + 1;
+        let words = linux_cpu_affinity_words(
+            &BTreeSet::from([0, second_word_cpu]),
+            std::mem::size_of::<usize>(),
+        )
+        .unwrap();
+        assert_eq!(words, vec![1, 2]);
+
+        let words = linux_cpu_affinity_words(
+            &BTreeSet::from([0]),
+            2 * std::mem::size_of::<usize>(),
+        )
+        .unwrap();
+        assert_eq!(words, vec![1, 0]);
+    }
+
+    #[test]
+    fn cpu_affinity_mask_rejects_unbounded_cpu_ids() {
+        assert!(linux_cpu_affinity_words(
+            &BTreeSet::from([u32::MAX]),
+            std::mem::size_of::<usize>(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn spawned_process_observes_the_exact_requested_affinity_mask() {
+        let byte_len = linux_kernel_affinity_mask_bytes().unwrap();
+        let word_count = byte_len.div_ceil(std::mem::size_of::<usize>());
+        let mut allowed_words = vec![0usize; word_count];
+        assert_eq!(
+            unsafe { libc::sched_getaffinity(0, byte_len, allowed_words.as_mut_ptr().cast()) },
+            0,
+            "read current allowed CPU mask"
+        );
+        let cpu_id = allowed_words
+            .iter()
+            .enumerate()
+            .find_map(|(word_index, word)| {
+                (*word != 0).then(|| {
+                    u32::try_from(
+                        word_index * usize::BITS as usize + word.trailing_zeros() as usize,
+                    )
+                    .unwrap()
+                })
+            })
+            .expect("current process must have an allowed CPU");
+        let requested_cpu_ids = BTreeSet::from([cpu_id]);
+        let expected_words = linux_cpu_affinity_words(&requested_cpu_ids, byte_len).unwrap();
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "exec sleep 5"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut worker = OwnedWorkerProcess::spawn(&mut command, &requested_cpu_ids).unwrap();
+        let mut observed_words = vec![0usize; word_count];
+        let readback = unsafe {
+            libc::sched_getaffinity(
+                libc::pid_t::try_from(worker.id()).unwrap(),
+                byte_len,
+                observed_words.as_mut_ptr().cast(),
+            )
+        };
+        let readback_error = (readback == -1).then(std::io::Error::last_os_error);
+        let kill_result = worker.kill();
+        let wait_result = worker.wait();
+
+        assert_eq!(readback, 0, "read child CPU mask: {readback_error:?}");
+        assert_eq!(observed_words, expected_words);
+        kill_result.unwrap();
+        wait_result.unwrap();
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
+fn configure_cpu_affinity(_command: &mut Command, cpu_ids: &BTreeSet<u32>) -> io::Result<()> {
+    if cpu_ids.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "CPU affinity enforcement is unsupported on this operating system",
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn set_process_cpu_affinity(child: &Child, cpu_ids: &BTreeSet<u32>) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    let Some((group, mask)) = windows_cpu_affinity_group_mask(cpu_ids)? else {
+        return Ok(());
+    };
+    let handle = child.as_raw_handle();
+    let mut group_count = 1u16;
+    let mut process_groups = [0u16; 1];
+    if unsafe { GetProcessGroupAffinity(handle, &mut group_count, process_groups.as_mut_ptr()) }
+        == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if group_count != 1 || process_groups[0] != group {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "worker process group differs from its pinned CPU group",
+        ));
+    }
+    if unsafe { SetProcessAffinityMask(handle, mask) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut observed_process_mask = 0usize;
+    let mut observed_system_mask = 0usize;
+    if unsafe {
+        GetProcessAffinityMask(
+            handle,
+            &mut observed_process_mask,
+            &mut observed_system_mask,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if observed_process_mask != mask || observed_system_mask & mask != mask {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Windows applied a narrower CPU affinity mask than requested",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_cpu_affinity_group_mask(
+    cpu_ids: &BTreeSet<u32>,
+) -> io::Result<Option<(u16, usize)>> {
+    let Some(first_cpu) = cpu_ids.iter().next().copied() else {
+        return Ok(None);
+    };
+    let group = u16::try_from(first_cpu / 64)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "CPU group exceeds u16"))?;
+    let mut mask = 0usize;
+    for cpu_id in cpu_ids {
+        let cpu_group = u16::try_from(*cpu_id / 64)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "CPU group exceeds u16"))?;
+        if cpu_group != group {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "one worker CPU affinity mask cannot span processor groups",
+            ));
+        }
+        let group_local_id = *cpu_id % 64;
+        if group_local_id >= usize::BITS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "CPU ID exceeds the process affinity mask width",
+            ));
+        }
+        mask |= 1usize << group_local_id;
+    }
+    Ok(Some((group, mask)))
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetProcessGroupAffinity(
+        process: windows_sys::Win32::Foundation::HANDLE,
+        group_count: *mut u16,
+        group_array: *mut u16,
+    ) -> i32;
+    fn SetProcessAffinityMask(
+        process: windows_sys::Win32::Foundation::HANDLE,
+        affinity_mask: usize,
+    ) -> i32;
+    fn GetProcessAffinityMask(
+        process: windows_sys::Win32::Foundation::HANDLE,
+        process_affinity_mask: *mut usize,
+        system_affinity_mask: *mut usize,
+    ) -> i32;
 }
 
 impl Deref for OwnedWorkerProcess {
@@ -286,6 +599,20 @@ mod tests {
     }
 
     #[test]
+    fn windows_cpu_affinity_maps_one_processor_group_and_rejects_cross_group_masks() {
+        assert_eq!(
+            windows_cpu_affinity_group_mask(&BTreeSet::new()).unwrap(),
+            None
+        );
+        assert_eq!(
+            windows_cpu_affinity_group_mask(&BTreeSet::from([65, 67])).unwrap(),
+            Some((1, 0b1010))
+        );
+        assert!(windows_cpu_affinity_group_mask(&BTreeSet::from([63, 64])).is_err());
+        assert!(windows_cpu_affinity_group_mask(&BTreeSet::from([u32::MAX])).is_err());
+    }
+
+    #[test]
     fn kill_normal_exit_and_owner_drop_end_solver_descendants() {
         let directory =
             std::env::temp_dir().join(format!("fullmag-job-tree-{}", uuid::Uuid::new_v4()));
@@ -326,8 +653,12 @@ Start-Sleep -Seconds 60
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit());
             // The fixture implements the same stdin barrier without worker CLI flags.
-            let mut owned =
-                OwnedWorkerProcess::spawn_in_job(&mut command, WindowsJob::new().unwrap()).unwrap();
+            let mut owned = OwnedWorkerProcess::spawn_in_job(
+                &mut command,
+                WindowsJob::new().unwrap(),
+                &BTreeSet::new(),
+            )
+            .unwrap();
             let stdout = owned.stdout.take().unwrap();
             let (sender, receiver) = std::sync::mpsc::channel();
             let reader = std::thread::spawn(move || {

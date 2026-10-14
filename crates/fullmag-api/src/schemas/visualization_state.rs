@@ -977,8 +977,14 @@ pub struct VisualizationCameraPatch {
     pub up: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fov_degrees: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orthographic_scale: Option<f64>,
+    // Absent preserves the scale; explicit null clears it.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<f64>)]
+    pub orthographic_scale: Option<Option<f64>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

@@ -1,4 +1,5 @@
 import type { LiveStatusResource } from "../api/apiTypes";
+import { resolveSessionDiscretization } from "../resources/sessionDiscretization";
 
 export type RunOutcomeStatus = "ready" | "failed" | "cancelled";
 
@@ -81,7 +82,7 @@ export function observeRunLifecycle(
       }
     : null;
   return {
-    discretization: status.domain?.discretization ?? null,
+    discretization: resolveSessionDiscretization(status),
     run,
     sessionKey: `${sessionId}\u0000${sessionEpoch}`,
     solverState,
@@ -137,7 +138,8 @@ export function runOutcomeFromStatusTransition(
   const startMs = options.activeSinceMs ?? runStartMs(run.startedAt) ?? nowMs;
   const durationSeconds = Math.max(0, Math.round(((nowMs - startMs) / 1000) * 10) / 10);
   const device = run.resolvedDevice.trim();
-  const backend = (next.discretization ?? prev.discretization)?.trim().toUpperCase();
+  // Attribute the outcome to the method observed for the active run, not a later UI/domain refresh.
+  const backend = prev.discretization?.trim().toUpperCase();
   return {
     run_id: run.runId,
     started_at: new Date(startMs).toISOString(),
@@ -168,7 +170,13 @@ export function advanceRunOutcomeTracker(
   if (phase === "active") {
     if (observation.run === null) return { tracker: INITIAL_RUN_OUTCOME_TRACKER, outcome: null };
     if (active && sameSession && active.observation.run?.runId === observation.run.runId) {
-      return { tracker: { active: { observation, sinceMs: active.sinceMs } }, outcome: null };
+      // A transient unresolved capability refresh must not erase the method
+      // already observed for this exact run in the same session.
+      const retainedObservation = {
+        ...observation,
+        discretization: observation.discretization ?? active.observation.discretization,
+      };
+      return { tracker: { active: { observation: retainedObservation, sinceMs: active.sinceMs } }, outcome: null };
     }
     return { tracker: { active: { observation, sinceMs: nowMs } }, outcome: null };
   }

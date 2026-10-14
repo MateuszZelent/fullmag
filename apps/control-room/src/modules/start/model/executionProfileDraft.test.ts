@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { ExecutionProfile } from "@/kernel/api/apiTypes";
 
-import { newProfileDraft, profileFromDraft } from "./executionProfileDraft";
+import {
+  duplicateProfileDraft,
+  newProfileDraft,
+  profileFromDraft,
+} from "./executionProfileDraft";
 
 const GIB = 1024 ** 3;
 
@@ -42,6 +46,21 @@ function profileDraft(source?: ExecutionProfile) {
 }
 
 describe("execution profile resource drafts", () => {
+  it("duplicates an immutable version under a new profile identity", () => {
+    const source = profile();
+    const duplicate = duplicateProfileDraft(source, "exec:copy-123");
+
+    expect(duplicate.profile).toEqual({
+      ...source,
+      profile_id: "exec:copy-123",
+      version: "1",
+    });
+    expect(duplicate.threads).toBe("4");
+    expect(duplicate.ramGiB).toBe("24");
+    expect(source.profile_id).toBe("exec:gpu-sweep");
+    expect(source.version).toBe("3");
+  });
+
   it("round-trips resource reservations while editing another profile field", () => {
     const draft = profileDraft(profile());
 

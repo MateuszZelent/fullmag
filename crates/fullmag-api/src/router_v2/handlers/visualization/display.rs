@@ -914,7 +914,7 @@ fn validate_camera_patch(camera: &VisualizationCameraPatch) -> Result<(), ApiErr
             "camera.fov_degrees must be between 1 and 179",
         ));
     }
-    if matches!(camera.orthographic_scale, Some(value) if !value.is_finite() || value <= 0.0) {
+    if matches!(camera.orthographic_scale, Some(Some(value)) if !value.is_finite() || value <= 0.0) {
         return Err(ApiError::bad_request(
             "camera.orthographic_scale must be greater than zero",
         ));
@@ -1747,7 +1747,7 @@ fn apply_camera_patch(camera: &mut VisualizationCameraState, patch: &Visualizati
         camera.fov_degrees = fov_degrees;
     }
     if let Some(orthographic_scale) = patch.orthographic_scale {
-        camera.orthographic_scale = Some(orthographic_scale);
+        camera.orthographic_scale = orthographic_scale;
     }
 }
 
@@ -2167,11 +2167,14 @@ async fn synchronize_observation_quantities(state: &Arc<AppState>) -> Result<u64
     let visualization =
         build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref());
     let observation_quantities = observation_quantities_for_visualization_state(&visualization);
-    apply_observation_quantities(&mut selection, observation_quantities);
+    // Every caller has already advanced the display revision for the
+    // mutation that led here. Reconcile the derived demand under that same
+    // revision so one API mutation emits one observable revision.
+    set_observation_quantities(&mut selection, observation_quantities);
     Ok(selection.revision)
 }
 
-fn apply_observation_quantities(
+fn set_observation_quantities(
     selection: &mut CurrentDisplaySelection,
     observation_quantities: Vec<String>,
 ) -> bool {
@@ -2179,6 +2182,16 @@ fn apply_observation_quantities(
         return false;
     }
     selection.observation_quantities = observation_quantities;
+    true
+}
+
+fn apply_observation_quantities(
+    selection: &mut CurrentDisplaySelection,
+    observation_quantities: Vec<String>,
+) -> bool {
+    if !set_observation_quantities(selection, observation_quantities) {
+        return false;
+    }
     selection.revision = selection.revision.wrapping_add(1);
     true
 }
@@ -2708,6 +2721,42 @@ struct QuantityProjection {
     auto_contrast: bool,
     contrast_min: Option<f64>,
     contrast_max: Option<f64>,
+}
+
+#[cfg(test)]
+mod camera_patch_tests {
+    use super::*;
+
+    #[test]
+    fn scale_patch_distinguishes_absent_clear_and_set() {
+        for (payload, expected) in [
+            (serde_json::json!({}), Some(2.0)),
+            (serde_json::json!({"orthographic_scale": null}), None),
+            (serde_json::json!({"orthographic_scale": 4.0}), Some(4.0)),
+        ] {
+            let patch: VisualizationCameraPatch =
+                serde_json::from_value(payload.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&patch).unwrap(), payload);
+            assert!(validate_camera_patch(&patch).is_ok());
+            let mut camera = default_camera_visualization();
+            camera.orthographic_scale = Some(2.0);
+            let mut expected_camera = camera.clone();
+            expected_camera.orthographic_scale = expected;
+            apply_camera_patch(&mut camera, &patch);
+            assert_eq!(camera, expected_camera);
+            assert!(validate_camera_state(&camera).is_ok());
+        }
+    }
+
+    #[test]
+    fn scale_patch_still_rejects_nonpositive_and_nonfinite_values() {
+        let mut patch: VisualizationCameraPatch =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        for value in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            patch.orthographic_scale = Some(Some(value));
+            assert!(validate_camera_patch(&patch).is_err());
+        }
+    }
 }
 
 #[cfg(test)]

@@ -32,12 +32,19 @@ _SCENE_DOCUMENT_FIELDS = frozenset(
         "magnetization_assets",
         "current_modules",
         "current_transports",
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
         "couplings",
         "field_drives",
         "monitors",
         "study",
         "outputs",
         "editor",
+        # Rust authoring validates this non-physical Results metadata before lowering.
+        "analysis",
         "selections",
         "magnetization_constraints",
         "spin_torques",
@@ -55,6 +62,8 @@ _STUDY_FIELDS = frozenset(
         "requested_precision",
         "requested_mode",
         "requested_cpu_threads",
+        "parallel_execution",
+        "pbc",
         "execution_profile",
         "execution_layers",
         "compute_resources",
@@ -248,7 +257,9 @@ def _scene_capture_to_ir(
     runtime_metadata = result.get("problem_meta", {}).get("runtime_metadata")
     if isinstance(runtime_metadata, dict):
         runtime_metadata["output_storage_source_dir"] = str(capture.source_root)
-        runtime_metadata["output_storage_source_stem"] = capture.source_stem
+        # The capture bootstrap is synthetic, not an authored script filename.
+        # Preserve the Problem-name fallback used by output storage.
+        runtime_metadata.pop("output_storage_source_stem", None)
         study_pipeline = _scene_capture_study_pipeline(capture)
         if study_pipeline is not None:
             runtime_metadata["study_pipeline"] = copy.deepcopy(study_pipeline)
@@ -278,7 +289,12 @@ def scene_document_to_problem_ir(
     requested_mode: str,
     source_root: str | Path | None = None,
 ) -> dict[str, object]:
-    """Return the canonical, geometry-light ProblemIR for a SceneDocument."""
+    """Return the canonical, geometry-light ProblemIR for a SceneDocument.
+
+    The caller must pass a SceneDocument validated by Rust authoring. Its
+    non-physical analysis Results metadata is intentionally excluded from
+    ProblemIR.
+    """
 
     with _capture_scene_document(
         scene_document,
@@ -301,15 +317,23 @@ def scene_document_to_execution_config(
     requested_precision: str,
     requested_mode: str,
     source_root: str | Path | None = None,
+    materialize_geometry_assets: bool = False,
 ) -> dict[str, object]:
-    """Return the canonical base IR and ordered stage IRs for a SceneDocument."""
+    """Capture stages without solving; geometry realization is execution-only opt-in.
+
+    The default remains geometry-light authoring. Opt-in uses the existing
+    canonical geometry/lead producers, preserving their validation and device
+    restrictions. It is not a native preparation receipt or a field result.
+    """
+
+    if not isinstance(materialize_geometry_assets, bool):
+        raise TypeError("materialize_geometry_assets must be a bool")
 
     raw_study = scene_document.get("study") if isinstance(scene_document, Mapping) else None
     raw_pipeline = (
         raw_study.get("study_pipeline") if isinstance(raw_study, Mapping) else None
     )
-    raw_nodes = raw_pipeline.get("nodes") if isinstance(raw_pipeline, Mapping) else None
-    scene_pipeline_owns_stage_expansion = isinstance(raw_nodes, list) and bool(raw_nodes)
+    scene_pipeline_owns_stage_expansion = raw_pipeline is not None
 
     with _capture_scene_document(
         scene_document,
@@ -323,7 +347,7 @@ def scene_document_to_execution_config(
     ) as capture:
         study_pipeline = _scene_capture_study_pipeline(capture)
         run_capture = capture
-        if study_pipeline is not None and study_pipeline.get("nodes"):
+        if study_pipeline is not None:
             # The shared Rust materializer expands typed Scene pipeline nodes.
             # Leave explicit Python stages empty so macros/groups remain the
             # single execution source instead of being shadowed by flattened
@@ -341,7 +365,7 @@ def scene_document_to_execution_config(
                     workspace_problem=base_problem,
                 ),
             )
-        base_ir = _scene_capture_to_ir(run_capture, include_geometry_assets=False)
+        base_ir = _scene_capture_to_ir(run_capture, include_geometry_assets=materialize_geometry_assets)
         return export_run_config(
             run_capture.loaded,
             base_ir,
@@ -352,7 +376,7 @@ def scene_document_to_execution_config(
                 runtime_device_override=(
                     capture.device if capture.device in {"cpu", "gpu"} else None
                 ),
-                include_geometry_assets=False,
+                include_geometry_assets=materialize_geometry_assets,
                 source_root=capture.source_root,
                 source_stem=capture.source_stem,
                 study_pipeline=_scene_capture_study_pipeline(capture),
@@ -386,6 +410,15 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
         names = ", ".join(sorted(str(name) for name in unknown_scene_fields))
         raise ValueError(f"scene_document_unlowered_fields: {names}")
 
+    for collection in (
+        "antenna_port_modes", "antenna_field_solve_stages",
+        "antenna_target_projections", "solved_antenna_drives",
+        "antenna_spectrum_requests",
+    ):
+        values = scene.get(collection, [])
+        if not isinstance(values, list):
+            raise ValueError(f"SceneDocument.{collection} must be a list")
+
     outputs = scene.get("outputs")
     if outputs is not None and not isinstance(outputs, Mapping):
         raise ValueError("SceneDocument.outputs must be an object")
@@ -408,6 +441,15 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
         if unknown_study_fields:
             names = ", ".join(sorted(str(name) for name in unknown_study_fields))
             raise ValueError(f"scene_document_unlowered_study_fields: {names}")
+
+        pipeline = study.get("study_pipeline")
+        if pipeline is not None:
+            if not isinstance(pipeline, Mapping):
+                raise ValueError("SceneDocument.study.study_pipeline must be an object")
+            if pipeline.get("version", "study_pipeline.v1") != "study_pipeline.v1":
+                raise ValueError("scene_document_study_pipeline_version_not_supported")
+            if not isinstance(pipeline.get("nodes", []), list):
+                raise ValueError("SceneDocument.study.study_pipeline.nodes must be a list")
 
         mesh_interfaces = study.get("mesh_interfaces", [])
         if not isinstance(mesh_interfaces, list):

@@ -1,0 +1,62 @@
+{
+  "document": {
+    "path": "docs/physics/de-smoke-nearest-selected-only.md"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source_visible / unvalidated"},
+    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "Ścieżka diagnostyczna dotyczy CPU."},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "Brak zmiany FDM."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "Brak zmiany FDM."}
+  ],
+  "equations": [
+    {"id": "eq-de-smoke-nearest-selection", "symbols": ["j_*", "f_j", "f_target"], "sources": ["source-pilot-model", "source-native-diagnostics"]},
+    {"id": "eq-de-smoke-omega-frequency", "symbols": ["f_target", "omega_target"], "sources": ["source-native-diagnostics"]}
+  ],
+  "symbols": [
+    {"id": "j_*", "latex": "j_*", "meaning": "indeks modu najbliższego celowi", "si_unit": "1"},
+    {"id": "f_j", "latex": "f_j", "meaning": "częstotliwość j-tego modu", "si_unit": "Hz"},
+    {"id": "f_target", "latex": "f_{\\mathrm{target}}", "meaning": "jawna docelowa częstotliwość", "si_unit": "Hz"},
+    {"id": "omega_target", "latex": "\\omega_{\\mathrm{target}}", "meaning": "docelowa częstość kątowa native", "si_unit": "rad s^-1"}
+  ],
+  "sources": [
+    {"id": "source-pilot-model", "path": "examples/fem_de_smoke_numeric.py", "symbol": "MODAL_TARGET", "responsibility": "Publikuje target nearest, target frequency i selected-only metadata."},
+    {"id": "source-engine-mu0", "path": "crates/fullmag-engine/src/lib.rs", "symbol": "MU0", "responsibility": "Definiuje kanoniczną stałą SI zgodną z metadata modelu."},
+    {"id": "source-pilot-wrapper", "path": "scripts/run_de_100nm_pilot.py", "symbol": "_modal_selection", "responsibility": "Ogranicza nearest do pojedynczego k i zapisuje jawny request."},
+    {"id": "source-nearest-controller", "path": "scripts/run_nonzero_k_validation_controller.py", "symbol": "validation_cases", "responsibility": "Definiuje sześć rzeczywistych, sekwencyjnych przypadków Γ/±DE/±BV; konfiguracja przypina surowy SHA kontrolera kapsuły, a validate_controller_source wiąże z nim wykonywany plik także przy różnych końcach linii checkoutu."},
+    {"id": "source-nearest-targets", "path": "scripts/run_nonzero_k_validation_controller.py", "symbol": "selected_only_arguments", "responsibility": "Przekazuje pinned shift wyboru modu i nie traktuje go jako wyniku solvera."},
+    {"id": "source-native-diagnostics", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "void write_production_schur_diagnostics", "responsibility": "Publikuje target_kind, target_omega_rad_s, spectrum_completeness i window_complete."},
+    {"id": "source-row-validator", "path": "scripts/validate_de_smoke_rows.py", "symbol": "validate_selected_only_diagnostics", "responsibility": "Sprawdza faktyczny solver.v1.json i zgodność celu."},
+    {"id": "source-comparison", "path": "scripts/compare_de_100nm_pilot.py", "symbol": "load_comparison_input", "responsibility": "Rozpoznaje selected-only i wykonuje referencję dopiero po odczycie native rows."},
+    {"id": "source-nearest-collector", "path": "scripts/collect_signed_de_bv_dispersion.py", "symbol": "collect_selected_only", "responsibility": "Wiąże sześć rzeczywistych nearest Γ/±DE/±BV z kolejnością kontrolera, przypiętym targetem, receiptami, modelem, siatką, residualem i native targetem."},
+    {"id": "source-nearest-plot", "path": "scripts/plot_de_bv_dispersion_comparison.py", "symbol": "validate_selected_only_record", "responsibility": "Ponownie sprawdza receipt, metadata, native target, residual oraz zgodność mu0 i external induction przed rysowaniem selected-only."},
+    {"id": "source-model-tests", "path": "scripts/test_de_smoke_model.py", "symbol": "test_nearest_single_k_target_is_explicitly_selected_only", "responsibility": "Sprawdza authoring nearest."},
+    {"id": "source-wrapper-tests", "path": "scripts/test_run_de_100nm_pilot.py", "symbol": "test_nearest_pilot_is_single_k_selected_only_and_fail_closed", "responsibility": "Sprawdza CLI i routing."},
+    {"id": "source-validator-tests", "path": "scripts/test_validate_de_smoke_rows.py", "symbol": "test_selected_only_native_diagnostics_require_exact_target", "responsibility": "Sprawdza natywny contract selected-only."},
+    {"id": "source-compare-tests", "path": "scripts/test_compare_de_100nm_pilot.py", "symbol": "test_nearest_alias_is_selected_only_and_validates_native_contract", "responsibility": "Sprawdza routing porównania."},
+    {"id": "source-collector-tests", "path": "scripts/test_signed_de_bv_dispersion.py", "symbol": "test_nearest_collector_keeps_actual_gamma_and_signed_samples_without_reflection", "responsibility": "Sprawdza agregację rzeczywistych signed-k bez syntetycznego odbicia."},
+    {"id": "source-plot-tests", "path": "scripts/test_plot_de_bv_dispersion_comparison.py", "symbol": "test_plot_selected_only_rechecks_native_target_and_scope", "responsibility": "Sprawdza selected-only receipt, native target i residual przed wykresem."},
+    {"id": "source-controller-tests", "path": "scripts/test_nonzero_k_validation_controller.py", "symbol": "test_execution_rejects_modified_controller_before_running_pilots", "responsibility": "Sprawdza zgodność hashy wykonywanego pliku i immutable capsule; test przygotowania używa dokładnych bajtów kapsuły LF."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "--spectral-target", "type": "str", "default": "frequency_window", "si_unit": "1", "validation": "frequency_window|nearest", "meaning": "modal target selection", "backend_support": "FEM CPU diagnostic", "problem_ir": "EigenTargetIR"},
+      {"python": "--nearest-target-frequency-ghz", "type": "float", "default": "10.0", "si_unit": "GHz", "validation": "finite and positive", "meaning": "nearest modal target", "backend_support": "FEM CPU diagnostic", "problem_ir": "EigenTargetIR.nearest.frequency_hz"}
+    ],
+    "notes": ["Nie zmienia się ProblemIR ani publiczny C ABI; są to jawne opcje diagnostycznego wrappera."]
+  },
+  "python_api": {
+    "authoring": "study.stages.add_eigenmodes(target=\"nearest\", target_frequency=...)",
+    "units": {"target_frequency": "Hz", "wavevector": "rad/m"}
+  },
+  "validation": {
+    "interpreted": "scripts/test_de_smoke_model.py; scripts/test_run_de_100nm_pilot.py; scripts/test_validate_de_smoke_rows.py; scripts/test_compare_de_100nm_pilot.py",
+    "native_runtime": "NOT VERIFIED",
+    "managed_runner": "NOT VERIFIED",
+    "scientific_qualification": "NOT VERIFIED"
+  },
+  "limitations": [
+    "selected-only nie jest pełnym oknem częstotliwości ani relacją dyspersji",
+    "analityka jest tylko postsolve referencją i nie dostarcza częstotliwości native",
+    "brak świeżego managed runtime, zbieżności siatki i porównania COMSOL"
+  ]
+}

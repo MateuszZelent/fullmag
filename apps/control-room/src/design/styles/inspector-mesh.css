@@ -566,3 +566,256 @@ button.fm-mesh-detail-list__item:focus-visible {
   display: grid;
   gap: var(--fm-space-2);
 }
+
+/* ── FEM Mesh Readiness Guide (Quest Assistant) ── */
+.fm-mesh-guide {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 76%, transparent);
+}
+
+.fm-mesh-guide__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-mesh-guide__title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-mesh-guide__icon {
+  flex-shrink: 0;
+  color: var(--fm-accent);
+}
+
+.fm-mesh-guide__title {
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 650;
+}
+
+.fm-mesh-guide__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--fm-control-height-compact);
+  min-height: var(--fm-control-height-compact);
+  padding: 0 var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-elevated);
+  color: var(--fm-text-secondary);
+}
+
+.fm-mesh-guide__toggle:hover,
+.fm-mesh-guide__toggle:focus-visible {
+  border-color: var(--fm-border-strong);
+  background: var(--fm-bg-hover);
+  color: var(--fm-text-primary);
+}
+
+.fm-mesh-guide__progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--fm-radius-pill);
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-canvas);
+}
+
+.fm-mesh-guide__progress-fill {
+  height: 100%;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-accent);
+  transition: width var(--fm-transition-fast);
+}
+
+.fm-mesh-guide[data-fem-mesh-guide-status="ready"] .fm-mesh-guide__progress-fill {
+  background: var(--fm-success);
+}
+
+.fm-mesh-guide[data-fem-mesh-guide-status="stale"] .fm-mesh-guide__progress-fill,
+.fm-mesh-guide[data-fem-mesh-guide-status="quality-warning"] .fm-mesh-guide__progress-fill {
+  background: var(--fm-warning);
+}
+
+.fm-mesh-guide[data-fem-mesh-guide-status="blocked"] .fm-mesh-guide__progress-fill,
+.fm-mesh-guide[data-fem-mesh-guide-status="failed"] .fm-mesh-guide__progress-fill {
+  background: var(--fm-danger);
+}
+
+.fm-mesh-guide__next-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+}
+
+.fm-mesh-guide__next-text {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.fm-mesh-guide__headline {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.fm-mesh-guide__detail {
+  margin: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.35;
+}
+
+.fm-mesh-guide__quest-list {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-mesh-guide__quest-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-left: 2px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 64%, transparent);
+}
+
+.fm-mesh-guide__quest-item[data-quest-recommended="true"] {
+  border-color: var(--fm-border-strong);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 92%, transparent);
+}
+
+.fm-mesh-guide__quest-item[data-quest-status="ready"] {
+  border-left-color: var(--fm-success);
+}
+
+.fm-mesh-guide__quest-item[data-quest-status="recommended"],
+.fm-mesh-guide__quest-item[data-quest-status="in-progress"] {
+  border-left-color: var(--fm-accent);
+}
+
+.fm-mesh-guide__quest-item[data-quest-status="stale"],
+.fm-mesh-guide__quest-item[data-quest-status="warning"],
+.fm-mesh-guide__quest-item[data-quest-status="missing"] {
+  border-left-color: var(--fm-warning);
+}
+
+.fm-mesh-guide__quest-item[data-quest-status="failed"],
+.fm-mesh-guide__quest-item[data-quest-status="blocked"] {
+  border-left-color: var(--fm-danger);
+}
+
+.fm-mesh-guide__quest-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.fm-mesh-guide__quest-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--fm-text-secondary);
+}
+
+.fm-mesh-guide__quest-item[data-quest-status="ready"] .fm-mesh-guide__quest-step {
+  color: var(--fm-success);
+}
+
+.fm-mesh-guide__quest-item[data-quest-status="stale"] .fm-mesh-guide__quest-step,
+.fm-mesh-guide__quest-item[data-quest-status="warning"] .fm-mesh-guide__quest-step,
+.fm-mesh-guide__quest-item[data-quest-status="missing"] .fm-mesh-guide__quest-step {
+  color: var(--fm-warning);
+}
+
+.fm-mesh-guide__quest-item[data-quest-status="failed"] .fm-mesh-guide__quest-step,
+.fm-mesh-guide__quest-item[data-quest-status="blocked"] .fm-mesh-guide__quest-step {
+  color: var(--fm-danger);
+}
+
+.fm-mesh-guide__quest-copy {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.fm-mesh-guide__quest-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-1);
+}
+
+.fm-mesh-guide__quest-title {
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+}
+
+.fm-mesh-guide__quest-summary {
+  margin: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 550;
+}
+
+.fm-mesh-guide__hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-1);
+  margin: var(--fm-space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-mesh-guide__hints li {
+  padding: 1px var(--fm-space-1);
+  border-radius: var(--fm-radius-sm);
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-mesh-guide__quest-actions {
+  display: flex;
+  align-items: center;
+}
+

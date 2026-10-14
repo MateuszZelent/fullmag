@@ -20,7 +20,8 @@ const TITLES: Readonly<Record<string, string>> = {
 function laneLabel(lane: AirboxInspectorLane): string {
   if (lane === "fdm") return "FDM structured grid";
   if (lane === "fem") return "FEM shared-domain mesh";
-  return "runtime lane conflict";
+  if (lane === "conflict") return "runtime lane conflict";
+  return "runtime lane unresolved";
 }
 
 function statusForSelection(selection: Selection, lane: AirboxInspectorLane) {

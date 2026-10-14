@@ -3,11 +3,15 @@ import type { ControlRoomApi } from "../api/ControlRoomApi";
 import { isApiInstanceId } from "../api/apiInstancePin";
 
 /** An owner may confirm a rejected capture only after its own cleanup succeeds. */
+export type DevelopmentRestartCaptureReason = "capture_rejected" | "pending_changes"
+  | "document_capture" | "workspace_pause" | "camera_observation"
+  | "workspace_identity" | "workspace_layout" | "candidate_confirmation";
+
 export class DevelopmentRestartCaptureError extends Error {
   readonly cleanupConfirmed: boolean;
-  readonly reason: "capture_rejected" | "pending_changes";
+  readonly reason: DevelopmentRestartCaptureReason;
 
-  constructor(cleanupConfirmed: boolean, reason: "capture_rejected" | "pending_changes" = "capture_rejected") {
+  constructor(cleanupConfirmed: boolean, reason: DevelopmentRestartCaptureReason = "capture_rejected") {
     super(cleanupConfirmed ? "Workspace capture was rejected after confirmed cleanup." : "Workspace capture cleanup is unconfirmed.");
     this.name = "DevelopmentRestartCaptureError";
     this.cleanupConfirmed = cleanupConfirmed;
@@ -113,9 +117,7 @@ export class DevelopmentRestartController {
         this.captureCleanup = cleanupConfirmed ? "confirmed" : "unconfirmed";
         this.update("failed", !cleanupConfirmed
           ? "Workspace capture failed and guard cleanup is unconfirmed. Keep the workspace protected."
-          : error instanceof DevelopmentRestartCaptureError && error.reason === "pending_changes"
-            ? "Apply or revert pending Inspector changes before restarting. No restart was submitted."
-            : "Workspace capture failed; no restart was submitted.");
+          : captureFailureMessage(error));
       }
     } finally {
       this.busy = false;
@@ -182,6 +184,30 @@ export class DevelopmentRestartController {
     for (const listener of this.listeners) {
       try { listener(); } catch { /* Subscribers cannot change a confirmed restart outcome. */ }
     }
+  }
+}
+
+function captureFailureMessage(error: unknown): string {
+  if (!(error instanceof DevelopmentRestartCaptureError)) {
+    return "Workspace capture failed; no restart was submitted.";
+  }
+  switch (error.reason) {
+    case "pending_changes":
+      return "Apply or revert pending Inspector changes before restarting. No restart was submitted.";
+    case "document_capture":
+      return "The open project could not be preserved. No restart was submitted.";
+    case "workspace_pause":
+      return "Workspace activity could not be paused safely. Wait for requests and visual changes to finish before restarting. No restart was submitted.";
+    case "camera_observation":
+      return "The current camera view is not confirmed by the backend. Wait for view synchronization before restarting. No restart was submitted.";
+    case "workspace_identity":
+      return "The current backend and session could not be confirmed. No restart was submitted.";
+    case "workspace_layout":
+      return "The workspace changed or its layout could not be preserved. No restart was submitted.";
+    case "candidate_confirmation":
+      return "The ready build and protected workspace could not be confirmed together. No restart was submitted.";
+    default:
+      return "Workspace capture failed; no restart was submitted.";
   }
 }
 

@@ -1,0 +1,4595 @@
+"""Interpreted tests for the fail-closed COMSOL scientific gate."""
+
+from __future__ import annotations
+
+import csv
+import copy
+import hashlib
+import json
+import importlib.util
+import itertools
+import math
+import struct
+import subprocess
+from collections.abc import Mapping
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import validate_comsol_dispersion_scientific_gate as gate
+import frequency_domain_generation as generation
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "packages/fullmag-py/src"))
+PARAMETERS = REPO_ROOT / "docs/guides/comsol-dispersion-benchmark/parameters.json"
+KPATH = REPO_ROOT / "docs/guides/comsol-dispersion-benchmark/kpath.csv"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _tracking_fixture_payload(branches):
+    """Synthetic assignment records for contract tests, never physical tracking evidence."""
+    branches = copy.deepcopy(branches)
+    policy = dict(method="overlap_hungarian", overlap_floor=0.5,
+                  frequency_window_hz=None, max_branch_gap=0)
+    for branch in branches:
+        previous = None
+        for point in branch["points"]:
+            seed = previous is None
+            source = "seed" if seed else "modal_overlap_weighted_score"
+            point["tracking_score_source"] = source
+            point["overlap_prev"] = None if seed else 1.0
+            point["tracking_edge"] = dict(
+                policy=policy.copy(), score_source=source,
+                metric="unavailable" if seed else "consistent_p1_tet4_cartesian_nodal_envelope",
+                transition="seed" if seed else "pair",
+                previous_sample_index=None if seed else previous["sample_index"],
+                previous_raw_mode_index=None if seed else previous["raw_mode_index"],
+                skipped_sample_count=0, subspace=None,
+            )
+            previous = point
+    return dict(schema_version="eigen_branches.v2", branches=branches,
+                tracking_policy_availability="complete", tracking_method=policy["method"],
+                overlap_floor=policy["overlap_floor"], frequency_window_hz=None)
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2), encoding="utf-8")
+
+
+def _install_test_generation(root: Path, payloads: dict[str, bytes], *, schema: str) -> tuple[str, bytes]:
+    members = {
+        name: {
+            "byte_length": len(payload),
+            "sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        }
+        for name, payload in sorted(payloads.items())
+    }
+    body = {
+        "schema_version": schema,
+        "producer": None,
+        "members": members,
+    }
+    canonical = json.dumps(
+        body, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    generation_id = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    marker = json.dumps(
+        {"generation_id": generation_id, "content": body},
+        ensure_ascii=False, indent=2, allow_nan=False,
+    ).encode("utf-8")
+    if schema == generation.SCHEMA_V2:
+        member_root = root / generation.GENERATION_DIRECTORY / generation_id[7:]
+        marker_relative = generation.IMMUTABLE_COMMIT_PATH
+    else:
+        member_root = root
+        marker_relative = generation.COMMIT_PATH
+    for relative, payload in payloads.items():
+        path = member_root.joinpath(*relative.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    marker_path = root.joinpath(*marker_relative.split("/"))
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_bytes(marker)
+    return generation_id, marker
+
+
+def _primary_generation_payloads(
+    case_dir: Path,
+    *,
+    include_c0_field: bool = False,
+    include_primary_equilibrium: bool = True,
+) -> dict[str, bytes]:
+    logical_paths = {
+        "metadata.json",
+        "eigen/spectrum.v2.json",
+        "eigen/branches.v2.json",
+        "eigen/dispersion.csv",
+        "frequency_domain/manifest.v1.json",
+        "eigen/diagnostics/solver.v1.json",
+        gate.EVIDENCE_RELATIVE_PATH.as_posix(),
+    }
+    if include_primary_equilibrium:
+        branches = json.loads((case_dir / "eigen/branches.v2.json").read_bytes())
+        selected_pairs = set()
+        for branch in branches.get("branches", []):
+            for point in branch.get("points", []):
+                sample_index = point.get("sample_index")
+                raw_mode_index = point.get("raw_mode_index")
+                if type(sample_index) is int and type(raw_mode_index) is int:
+                    selected_pairs.add((sample_index, raw_mode_index))
+        for sample_index, raw_mode_index in selected_pairs:
+            logical_paths.add(
+                f"eigen/modes/sample_{sample_index:04d}/mode_{raw_mode_index:04d}.json"
+            )
+            if include_c0_field:
+                logical_paths.add(
+                    f"eigen/mode_fields/sample_{sample_index:04d}/mode_{raw_mode_index:04d}/vector.bin"
+                )
+
+        manifest = json.loads((case_dir / "frequency_domain/manifest.v1.json").read_bytes())
+        manifest_artifacts = manifest.get("artifacts", {})
+        for key in (
+            "equilibrium_artifact_v8_path",
+            "equilibrium_artifact_v8_paths",
+            "linearization_state_v7_path",
+            "linearization_state_v7_paths",
+            "equilibrium_artifact_v7_path",
+            "equilibrium_artifact_v7_paths",
+            "linearization_state_v6_path",
+            "linearization_state_v6_paths",
+            "linearization_identity_v2_paths",
+            "linearization_identity_preimage_v1_paths",
+        ):
+            value = manifest_artifacts.get(key)
+            if isinstance(value, str):
+                logical_paths.add(value)
+            elif isinstance(value, list):
+                logical_paths.update(item for item in value if isinstance(item, str))
+    return {relative: (case_dir / relative).read_bytes() for relative in sorted(logical_paths)}
+
+
+def _refresh_primary_artifact_binding(case_dir: Path, relative_path: str, binding_key: str) -> None:
+    evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["artifact_bindings"][binding_key] = _sha256(case_dir / relative_path)
+    _write_json(evidence_path, evidence)
+
+
+def _native_mode_diagnostics(mode):
+    """Synthetic values using the actual native modal diagnostics field names."""
+    frequency = mode["frequency_real_hz"]
+    mode.update({
+        "phasor_convention": "exp_i_omega_t", "eigenvalue_mapping": "lambda_eq_i_omega",
+        "eigenvalue_real": 0.0, "eigenvalue_imag": math.tau * frequency,
+        "omega_rad_s": math.tau * frequency, "residual_absolute_l2": 1e-12,
+        "residual_relative_l2": 1e-12, "residual_linf": 1e-12, "mass_norm": 1.0,
+        "tangent_leakage_mean_abs": 0.0, "tangent_leakage_max_abs": 0.0,
+        "gamma0_rad_s_per_A_m": 221100.0, "mu0_T_m_per_A": 1.2566370614359173e-6,
+        "gamma_rad_s_T": 221100.0 / 1.2566370614359173e-6,
+        "damping_rate_hz": 0.0, "linewidth_fwhm_hz": 0.0,
+    })
+
+
+def _a1_fixture_mesh(geometry, *, shape="circle", radius=None, center=(0.0, 0.0), segments=64):
+    """Build a small resolved Tet4 ring fixture for the A1 geometry contract."""
+    period = float(geometry["lattice_period_m"])
+    thickness = float(geometry["film_size_m"][2])
+    radius = float(geometry["hole_radius_m"] if radius is None else radius)
+    half = 0.5 * period
+    if shape == "slab":
+        cross_section = [(-half, -half), (half, -half), (half, half), (-half, half)]
+        triangles = [(0, 1, 2), (0, 2, 3)]
+    else:
+        # Synthetic contract fixture: refine the cylindrical wall with the
+        # declared nominal mesh tier. This is not a FEM convergence result.
+        if segments < 4 or segments % 4:
+            raise AssertionError("A1 wall fixture requires a multiple of four segments")
+        inner = []
+        outer = []
+        for index in range(segments):
+            angle = math.tau * index / segments
+            cosine, sine = math.cos(angle), math.sin(angle)
+            inner_y_scale = 0.8 if shape == "ellipse" else 1.0
+            inner.append((
+                center[0] + radius * cosine,
+                center[1] + inner_y_scale * radius * sine,
+            ))
+            outer_radius = min(
+                half / abs(cosine) if abs(cosine) > 1.0e-15 else math.inf,
+                half / abs(sine) if abs(sine) > 1.0e-15 else math.inf,
+            )
+            outer.append((outer_radius * cosine, outer_radius * sine))
+        cross_section = inner + outer
+        triangles = []
+        for index in range(segments):
+            following = (index + 1) % segments
+            triangles.extend((
+                (index, segments + index, segments + following),
+                (index, segments + following, following),
+            ))
+
+    cross_count = len(cross_section)
+    z_min, z_max = -0.5 * thickness, 0.5 * thickness
+    nodes = [[x, y, z_min] for x, y in cross_section]
+    nodes.extend([x, y, z_max] for x, y in cross_section)
+    tetrahedra = []
+    for triangle in triangles:
+        lower = sorted(triangle)
+        upper = [cross_count + index for index in lower]
+        tetrahedra.extend((
+            [lower[0], lower[1], lower[2], upper[2]],
+            [lower[0], lower[1], upper[1], upper[2]],
+            [lower[0], upper[0], upper[1], upper[2]],
+        ))
+    tetrahedra = [_orient_fixture_tet4(nodes, cell) for cell in tetrahedra]
+
+    periodic_node_pairs = []
+    tolerance = 1.0e-12 * max(period, thickness)
+    for layer in (0, 1):
+        layer_offset = layer * cross_count
+        for axis, pair_id in ((0, "x_faces"), (1, "y_faces")):
+            other_axis = 1 - axis
+            negative = [
+                index for index, point in enumerate(cross_section)
+                if abs(point[axis] + half) <= tolerance
+            ]
+            positive = [
+                index for index, point in enumerate(cross_section)
+                if abs(point[axis] - half) <= tolerance
+            ]
+            for left in negative:
+                matches = [
+                    right for right in positive
+                    if abs(cross_section[left][other_axis] - cross_section[right][other_axis]) <= tolerance
+                ]
+                if len(matches) != 1:
+                    raise AssertionError(f"fixture cannot pair {pair_id} boundary node {left}")
+                periodic_node_pairs.append({
+                    "pair_id": pair_id,
+                    "node_a": layer_offset + left,
+                    "node_b": layer_offset + matches[0],
+                })
+
+    return nodes, tetrahedra, periodic_node_pairs
+
+
+def _orient_fixture_tet4(nodes, cell):
+    """Orient a fixture Tet4 to the native positive signed-Jacobian rule."""
+    a, b, c, d = (nodes[index] for index in cell)
+    ab = [b[axis] - a[axis] for axis in range(3)]
+    ac = [c[axis] - a[axis] for axis in range(3)]
+    ad = [d[axis] - a[axis] for axis in range(3)]
+    determinant = (
+        ab[0] * (ac[1] * ad[2] - ac[2] * ad[1])
+        - ab[1] * (ac[0] * ad[2] - ac[2] * ad[0])
+        + ab[2] * (ac[0] * ad[1] - ac[1] * ad[0])
+    )
+    if determinant < 0.0:
+        cell = [cell[1], cell[0], cell[2], cell[3]]
+        determinant = -determinant
+    if not math.isfinite(determinant) or determinant <= 0.0:
+        raise AssertionError("A1 fixture contains a degenerate Tet4")
+    return cell
+
+
+def _native_metadata(case, mesh_id, airbox_m, requested_modes):
+    config_path = REPO_ROOT / "tests/standard_problems/mumag/comsol_nonzero_k_dispersion/config.py"
+    spec = importlib.util.spec_from_file_location("comsol_gate_fixture_config", config_path)
+    config = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = config
+    spec.loader.exec_module(config)
+    guide = config.guide_metadata(next(c for c in config.available_cases() if c.key == case))
+    guide["geometry"]["air_padding_each_side_m"] = airbox_m
+    film_min, film_max = [-1e-7, -1e-7, -5e-9], [1e-7, 1e-7, 5e-9]
+    nodes = [[x, y, z] for z in (film_min[2], film_max[2]) for y in (film_min[1], film_max[1]) for x in (film_min[0], film_max[0])]
+    node_pairs = [
+        {"pair_id": "x_faces", "node_a": index, "node_b": index + 1}
+        for index in (0, 2, 4, 6)
+    ] + [
+        {"pair_id": "y_faces", "node_a": index, "node_b": index + 2}
+        for index in (0, 1, 4, 5)
+    ]
+    tet4_connectivity = [
+        [0, 1, 3, 7],
+        [0, 3, 2, 7],
+        [0, 2, 6, 7],
+        [0, 6, 4, 7],
+        [0, 4, 5, 7],
+        [0, 5, 1, 7],
+    ]
+    if case == "a1":
+        tier = {"mesh-L1": 0, "mesh-L2": 1, "mesh-L3": 2}.get(mesh_id, 0)
+        nodes, tet4_connectivity, node_pairs = _a1_fixture_mesh(
+            guide["geometry"], segments=64 * (2 ** tier)
+        )
+    canonical_cells = {
+        "types": ["tet4"] * len(tet4_connectivity),
+        "offsets": list(range(0, 4 * len(tet4_connectivity) + 1, 4)),
+        "nodes": [node for cell in tet4_connectivity for node in cell],
+        "global_ordinals": list(range(len(tet4_connectivity))), "mesh_parts": ["magnetic"] * len(tet4_connectivity),
+    }
+    demag = case != "c0"
+    plan = {
+        "kind": "fem_eigen", "mesh_name": mesh_id,
+        "mesh": {"mesh_name": mesh_id, "nodes": nodes,
+            "cells": canonical_cells, "element_markers": [1] * len(tet4_connectivity),
+            "facets": {"types": [], "roles": [], "offsets": [0], "nodes": [], "global_ordinals": []},
+            "boundary_markers": [], "periodic_node_pairs": node_pairs,
+            "periodic_boundary_pairs": [
+                {"pair_id": "x_faces", "marker_a": 1, "marker_b": 2, "translation": [2e-7, 0.0, 0.0]},
+                {"pair_id": "y_faces", "marker_a": 3, "marker_b": 4, "translation": [0.0, 2e-7, 0.0]},
+            ]},
+        "mesh_parts": [
+            {
+                "id": "magnetic_object",
+                "role": "magnetic_object",
+                "element_selector": {
+                    "kind": "element_range",
+                    "start": 0,
+                    "count": len(tet4_connectivity),
+                },
+            },
+        ],
+        "hmax": (
+            guide["mesh"]["near_film_hmax_m"] / (2 ** tier) if case == "a1"
+            else {"mesh-L1": 5e-9, "mesh-L2": 2.5e-9, "mesh-L3": 1.25e-9}.get(mesh_id, 5e-9)
+        ), "fe_order": 1,
+        "material": {"name": "Permalloy", "saturation_magnetisation": 800000.0,
+            "exchange_stiffness": 1.3e-11, "damping": 0.5,
+            "uniaxial_anisotropy": None, "anisotropy_axis": None},
+        "gyromagnetic_ratio": 221100.0, "external_field": [79577.47154594767, 0.0, 0.0],
+        "operator": {"kind": "full_2x2", "include_demag": demag},
+        "enable_demag": demag, "enable_exchange": True,
+        "equilibrium_magnetization": [[1.0, 0.0, 0.0] for _ in nodes],
+        "damping_policy": "ignore", "count": requested_modes,
+        "target": {
+            "kind": "frequency_window",
+            "frequency_min_hz": guide["eigensolve"]["frequency_window_hz"][0],
+            "frequency_max_hz": guide["eigensolve"]["frequency_window_hz"][1],
+        },
+        "solver_policy": {
+            "residual_tolerance": guide["eigensolve"]["eigen_solver"]["relative_tolerance"],
+            "max_outer_iterations": guide["eigensolve"]["eigen_solver"]["max_outer_iterations"],
+            "max_linear_iterations": guide["eigensolve"]["eigen_solver"]["max_linear_iterations"],
+        },
+        "spin_wave_bc": {"kind": "floquet" if demag else "periodic", "pair_ids": ["x_faces", "y_faces"]},
+        "demag_realization": "poisson_dirichlet" if demag else None,
+        "air_box_config": {"factor": 1.0 + 2.0 * airbox_m / 1e-8,
+            "grading": 1.4, "boundary_marker": 99, "bc_kind": "dirichlet"},
+        "domain_frame": {"object_bounds_min": film_min, "object_bounds_max": film_max,
+            "mesh_bounds_min": [-1e-7, -1e-7, -5e-9 - airbox_m],
+            "mesh_bounds_max": [1e-7, 1e-7, 5e-9 + airbox_m]},
+    }
+    return {"problem_meta": {"runtime_metadata": {"comsol_nonzero_k_dispersion": guide}},
+            "execution_plan": {"backend_plan": plan}}
+
+
+def _replace_a1_fixture_mesh(metadata, *, shape="circle", radius=None, center=(0.0, 0.0)):
+    """Replace only resolved mesh evidence while keeping authored A1 claims fixed."""
+    guide = metadata["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]
+    plan = metadata["execution_plan"]["backend_plan"]
+    nodes, tetrahedra, periodic_node_pairs = _a1_fixture_mesh(
+        guide["geometry"], shape=shape, radius=radius, center=center,
+    )
+    plan["hmax"] = guide["mesh"]["near_film_hmax_m"]
+    return _rewrite_a1_fixture_cells(
+        metadata, tetrahedra, nodes=nodes, periodic_node_pairs=periodic_node_pairs,
+    )
+
+
+def _rewrite_a1_fixture_cells(
+    metadata, tetrahedra, *, nodes=None, periodic_node_pairs=None, magnetic_cell_count=None,
+):
+    """Keep selectors, cell labels, markers, and nodal fields aligned."""
+    plan = metadata["execution_plan"]["backend_plan"]
+    plan_mesh = plan["mesh"]
+    if nodes is not None:
+        plan_mesh["nodes"] = nodes
+    if periodic_node_pairs is not None:
+        plan_mesh["periodic_node_pairs"] = periodic_node_pairs
+    if magnetic_cell_count is None:
+        magnetic_cell_count = len(tetrahedra)
+    if not 0 < magnetic_cell_count <= len(tetrahedra):
+        raise AssertionError("A1 fixture requires a nonempty magnetic Tet4 support")
+    air_cell_count = len(tetrahedra) - magnetic_cell_count
+    plan_mesh["cells"] = {
+        "types": ["tet4"] * len(tetrahedra),
+        "offsets": list(range(0, 4 * len(tetrahedra) + 1, 4)),
+        "nodes": [node for cell in tetrahedra for node in cell],
+        "global_ordinals": list(range(len(tetrahedra))),
+        "mesh_parts": ["magnetic"] * magnetic_cell_count + ["transition_air"] * air_cell_count,
+    }
+    plan_mesh["element_markers"] = [1] * len(tetrahedra)
+    plan["mesh_parts"] = [
+        {
+            "id": "magnetic_object",
+            "role": "magnetic_object",
+            "element_selector": {
+                "kind": "element_range",
+                "start": 0,
+                "count": magnetic_cell_count,
+            },
+        },
+    ]
+    if air_cell_count:
+        plan["mesh_parts"].append({
+            "id": "shared_air",
+            "role": "air",
+            "element_selector": {
+                "kind": "element_range",
+                "start": magnetic_cell_count,
+                "count": air_cell_count,
+            },
+        })
+    plan["equilibrium_magnetization"] = [
+        [1.0, 0.0, 0.0] for _ in plan_mesh["nodes"]
+    ]
+    return metadata
+
+
+def _append_a1_shared_air_tet(metadata):
+    """Add one air Tet4 sharing a top face without changing magnetic support."""
+    plan_mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+    cells = plan_mesh["cells"]
+    tetrahedra = [
+        cells["nodes"][cells["offsets"][index]:cells["offsets"][index + 1]]
+        for index in range(len(cells["types"]))
+    ]
+    magnetic_cell_count = len(tetrahedra)
+    nodes = copy.deepcopy(plan_mesh["nodes"])
+    top_z = max(point[2] for point in nodes)
+    face_patterns = ((0, 1, 3), (1, 2, 3), (2, 0, 3), (0, 2, 1))
+    face_incidence = {}
+    for cell in tetrahedra:
+        for pattern in face_patterns:
+            face = tuple(cell[index] for index in pattern)
+            face_incidence.setdefault(tuple(sorted(face)), []).append(face)
+    candidates = []
+    for incident_faces in face_incidence.values():
+        if len(incident_faces) == 1:
+            face = incident_faces[0]
+            if all(nodes[index][2] == top_z for index in face):
+                candidates.append(face)
+    if not candidates:
+        raise AssertionError("A1 fixture has no exposed top face for shared air support")
+    face = candidates[0]
+    new_node = len(nodes)
+    nodes.append([
+        math.fsum(nodes[index][0] for index in face) / 3.0,
+        math.fsum(nodes[index][1] for index in face) / 3.0,
+        top_z + 1.0e-6,
+    ])
+    air_tet = _orient_fixture_tet4(nodes, [*face, new_node])
+    tetrahedra.append(air_tet)
+    return _rewrite_a1_fixture_cells(
+        metadata,
+        tetrahedra,
+        nodes=nodes,
+        magnetic_cell_count=magnetic_cell_count,
+    )
+
+
+def _write_mode_fields(root, samples):
+    """Synthetic native-layout Bloch fields, not a FEM eigenmode calculation."""
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["nodes"]
+    from comsol_mesh_identity import mesh_topology_fingerprint_v3
+    mesh_signature = mesh_topology_fingerprint_v3(metadata["execution_plan"]["backend_plan"]["mesh"])
+    field_samples = {sample["sample_index"] for sample in samples}
+    for sample in samples:
+        index = sample["sample_index"]
+        k = sample["k_vector"]
+        for mode in sample["modes"][:8]:
+            raw = mode["raw_mode_index"]
+            mode_metadata = {
+                "sample_index": index,
+                "raw_mode_index": raw,
+                "k_vector": k,
+                "frequency_real_hz": mode["frequency_real_hz"],
+                "frequency_imag_hz": mode["frequency_imag_hz"],
+                "source_mesh_topology_sha256": mesh_signature,
+                "source_mesh_identity": {
+                    "indexing": "full_domain_node_order",
+                    "node_count": len(nodes),
+                    "mesh_generation_id": "mesh-generation-primary",
+                },
+            }
+            if index in field_samples:
+                values = []
+                for node in nodes:
+                    argument = sum(a * b for a, b in zip(k, node))
+                    phase = complex(math.cos(argument), -math.sin(argument))
+                    for value in (0j, phase, 1j * phase):
+                        values.extend((value.real, value.imag))
+                data = struct.pack(f"<{len(values)}d", *values)
+                relative = f"eigen/mode_fields/sample_{index:04}/mode_{raw:04}/vector.bin"
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+                mode_metadata.update({
+                    "payload_encoding": "f64_interleaved_real_imag_xyz",
+                    "binary_layout": "complex_f64_pairs_little_endian",
+                    "component_basis": "global_xyz",
+                    "mode_field_sample_count": len(nodes),
+                    "compatibility_binary_payload_path": relative,
+                    "payload_sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
+                })
+            _write_json(
+                root / f"eigen/modes/sample_{index:04}/mode_{raw:04}.json",
+                mode_metadata,
+            )
+
+def _attach_ks_equilibrium(root):
+    """Synthetic accepted state for gate contracts; no native solve claim."""
+    from test_equilibrium_payload_validation import _fresh_artifact, _refresh_digest
+    from verify_fem_frequency_domain_eigen_artifacts import serde_json_compact_bytes
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2
+    metadata = json.loads((root / "metadata.json").read_text())
+    plan = metadata["execution_plan"]["backend_plan"]
+    signature = mesh_topology_fingerprint_v2(plan["mesh"])
+    eq = _fresh_artifact(root / "synthetic_reference")
+    eq["external_field_a_per_m"] = plan["external_field"]
+    eq["m0"] = plan["equilibrium_magnetization"]
+    eq["mesh_signature"] = signature
+    for key in ("material_signature", "physics_signature", "boundary_signature", "static_demag_signature"):
+        eq[key] = key
+    from comsol_equilibrium_artifacts import physics_signature_from_plan
+    eq["physics_signature"] = physics_signature_from_plan(plan)
+    digest = _refresh_digest(eq)
+    state = {key: eq[key] for key in ("mesh_signature", "material_signature", "physics_signature", "boundary_signature", "static_demag_signature")}
+    state.update(schema_version="LinearizationState.v6", accepted_for_frequency_operator=True,
+                 source_equilibrium_id=eq["equilibrium_id"], source_equilibrium_artifact=digest, m0=eq["m0"])
+    state_digest = "sha256:" + hashlib.sha256(serde_json_compact_bytes(state)).hexdigest()
+    state.update(content_sha256=state_digest, linearization_state_id="LinearizationState.v6:" + state_digest.removeprefix("sha256:"))
+    paths = ("eigen/metadata/sample_0000/equilibrium_artifact.v7.json", "eigen/metadata/sample_0000/linearization_state.v6.json")
+    for path, payload in zip(paths, (eq, state)):
+        _write_json(root / path, payload)
+    manifest_path = root / "frequency_domain/manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("artifacts", {}).update(equilibrium_artifact_v7_paths=[paths[0]], linearization_state_v6_paths=[paths[1]])
+    _write_json(manifest_path, manifest)
+    mode_path = root / "eigen/modes/sample_0000/mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    from comsol_mesh_identity import mesh_topology_fingerprint_v3
+    mode.update(
+        equilibrium_artifact_sha256=digest,
+        linearization_state_sha256=state_digest,
+        source_mesh_topology_sha256=mesh_topology_fingerprint_v3(plan["mesh"]),
+    )
+    _write_json(mode_path, mode)
+
+
+def _primary_equilibrium_material_preimage(material):
+    ku = material.get("uniaxial_anisotropy")
+    ms_field = material.get("ms_field")
+    axis = material.get("anisotropy_axis")
+    zero_axis = axis is not None and all(float(value) == 0.0 for value in axis)
+    physical_v2 = ku is not None and not (
+        float(ku) == 0.0 and (ms_field is not None or zero_axis)
+    )
+    preimage = {
+        "schema_version": (
+            "EquilibriumMaterialSignaturePreimage.v2"
+            if physical_v2
+            else "EquilibriumMaterialSignaturePreimage.v1"
+        ),
+        "saturation_magnetisation_a_per_m": material["saturation_magnetisation"],
+        "exchange_stiffness_j_per_m": material["exchange_stiffness"],
+        "saturation_magnetisation_field_a_per_m": ms_field,
+        "exchange_stiffness_field_j_per_m": material.get("a_field"),
+    }
+    if physical_v2:
+        raw_axis = axis if axis is not None else [0.0, 0.0, 1.0]
+        scale = max(abs(float(value)) for value in raw_axis)
+        if scale == 0.0:
+            raise ValueError("canonical fixture material axis must be non-zero")
+        scaled = [float(value) / scale for value in raw_axis]
+        norm = math.hypot(math.hypot(scaled[0], scaled[1]), scaled[2])
+        first = next(value for value in scaled if value != 0.0)
+        orientation = 1.0 if first > 0.0 else -1.0
+        canonical_axis = [
+            0.0 if orientation * value / norm == 0.0 else orientation * value / norm
+            for value in scaled
+        ]
+        preimage.update({
+            "uniaxial_anisotropy_j_per_m3": 0.0 if float(ku) == 0.0 else ku,
+            "canonical_uniaxial_axis": canonical_axis,
+        })
+    return preimage
+
+
+def _attach_primary_equilibria(root: Path, samples, *, producer_material=None) -> None:
+    """Attach accepted, content-bound synthetic states for the public gate path."""
+    from test_equilibrium_payload_validation import _fresh_artifact, _refresh_digest
+    from verify_fem_frequency_domain_eigen_artifacts import (
+        equilibrium_artifact_v8_digest,
+        linearization_state_v7_digest,
+        serde_json_compact_bytes,
+    )
+    from comsol_equilibrium_artifacts import physics_signature_from_plan
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2, mesh_topology_fingerprint_v3
+    from fem_equilibrium_identity_replay import framed_digest
+    from fem_linearization_identity_replay import IDENTITY_FIELDS
+
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    plan = metadata["execution_plan"]["backend_plan"]
+    consumer_material = plan["material"]
+    source_material = copy.deepcopy(
+        consumer_material if producer_material is None else producer_material
+    )
+    consumer_is_canonical = consumer_material.get("uniaxial_anisotropy") is not None
+    producer_is_canonical = source_material.get("uniaxial_anisotropy") is not None
+    canonical_state_family = consumer_is_canonical
+    producer_plan = copy.deepcopy(plan)
+    producer_plan["material"] = source_material
+    mesh = plan["mesh"]
+    mesh_signature = mesh_topology_fingerprint_v2(mesh)
+    modal_mesh_signature = mesh_topology_fingerprint_v3(mesh)
+    producer_material_json = json.dumps(source_material, separators=(",", ":"), ensure_ascii=False)
+    producer_material_bytes = producer_material_json.encode("utf-8")
+    producer_material_signature = "sha256:" + hashlib.sha256(producer_material_bytes).hexdigest()
+    consumer_material_json = json.dumps(consumer_material, separators=(",", ":"), ensure_ascii=False)
+    consumer_material_bytes = consumer_material_json.encode("utf-8")
+    consumer_material_signature = "sha256:" + hashlib.sha256(consumer_material_bytes).hexdigest()
+    material_preimage = _primary_equilibrium_material_preimage(source_material)
+    material_preimage_json = json.dumps(material_preimage, separators=(",", ":"), ensure_ascii=False)
+    material_signature = framed_digest(
+        material_preimage["schema_version"],
+        material_preimage_json.encode("utf-8"),
+    )
+    static_preimage = {
+        "schema_version": "EquilibriumStaticPhysicsSignaturePreimage.v1",
+        "enable_exchange": producer_plan["enable_exchange"],
+        "enable_demag": producer_plan["enable_demag"],
+        "external_field_a_per_m": producer_plan.get("external_field"),
+    }
+    static_preimage_json = json.dumps(static_preimage, separators=(",", ":"), ensure_ascii=False)
+    static_signature = framed_digest(
+        "EquilibriumStaticPhysicsSignaturePreimage.v1",
+        static_preimage_json.encode("utf-8"),
+    )
+    boundary_preimage = {
+        "schema_version": "EquilibriumBoundarySignaturePreimage.v1",
+        "exchange_bc": "neumann",
+        "demag_realization": producer_plan.get("demag_realization"),
+        "air_box_config": producer_plan.get("air_box_config"),
+        "periodic_node_pairs": mesh.get("periodic_node_pairs", []),
+        "periodic_boundary_pairs": mesh.get("periodic_boundary_pairs", []),
+    }
+    boundary_preimage_json = json.dumps(boundary_preimage, separators=(",", ":"), ensure_ascii=False)
+    boundary_signature = framed_digest(
+        "EquilibriumBoundarySignaturePreimage.v1",
+        boundary_preimage_json.encode("utf-8"),
+    )
+    source_run_id = "synthetic-source-run"
+    source_stage_id = "synthetic-source-stage"
+    source_stage_kind = "relaxation"
+    source_snapshot = "a" * 64
+    equilibrium_template = _fresh_artifact(root / "_synthetic_reference")
+    equilibrium_paths = []
+    state_paths = []
+    state_digests = {}
+    identity_paths = []
+    identity_preimage_paths = []
+    identity_hashes = {}
+
+    for sample in samples:
+        sample_index = sample["sample_index"]
+        folder = f"sample_{sample_index:04d}"
+        equilibrium_schema = (
+            "equilibrium_artifact.v8" if canonical_state_family else "equilibrium_artifact.v7"
+        )
+        state_schema = "LinearizationState.v7" if canonical_state_family else "LinearizationState.v6"
+        equilibrium_filename = (
+            "equilibrium_artifact.v8.json" if canonical_state_family else "equilibrium_artifact.v7.json"
+        )
+        state_filename = (
+            "linearization_state.v7.json" if canonical_state_family else "linearization_state.v6.json"
+        )
+        equilibrium_relative = f"eigen/metadata/{folder}/{equilibrium_filename}"
+        state_relative = f"eigen/metadata/{folder}/{state_filename}"
+        equilibrium = copy.deepcopy(equilibrium_template)
+        equilibrium.update({
+            "schema_version": equilibrium_schema,
+            "external_field_a_per_m": producer_plan["external_field"],
+            "m0": producer_plan["equilibrium_magnetization"],
+            "mesh_signature": mesh_signature,
+            "material_signature": material_signature if consumer_is_canonical else producer_material_signature,
+            "physics_signature": physics_signature_from_plan(producer_plan),
+            "boundary_signature": boundary_signature,
+            "static_demag_signature": static_signature,
+            "producer_run_id": source_run_id,
+        })
+        if consumer_is_canonical:
+            equilibrium.update({
+                "material_identity_kind": "canonical_equilibrium_material.v2",
+                "material_provenance_signature": consumer_material_signature,
+                "material_provenance_scope": "materialization_plan",
+            })
+            equilibrium_digest = equilibrium_artifact_v8_digest(equilibrium)
+            equilibrium["content_sha256"] = equilibrium_digest
+            equilibrium["equilibrium_id"] = (
+                "equilibrium_artifact.v8:" + equilibrium_digest.removeprefix("sha256:")
+            )
+        else:
+            equilibrium_digest = _refresh_digest(equilibrium)
+
+        linearization_state = {
+            key: equilibrium[key]
+            for key in (
+                "mesh_signature",
+                "material_signature",
+                "physics_signature",
+                "boundary_signature",
+                "static_demag_signature",
+            )
+        }
+        linearization_state.update({
+            "schema_version": state_schema,
+            "accepted_for_frequency_operator": True,
+            "source_equilibrium_id": equilibrium["equilibrium_id"],
+            "source_equilibrium_artifact": equilibrium_digest,
+            "m0": producer_plan["equilibrium_magnetization"],
+        })
+        if consumer_is_canonical:
+            linearization_state.update({
+                "material_identity_kind": "canonical_equilibrium_material.v2",
+                "material_provenance_signature": consumer_material_signature,
+                "material_provenance_scope": "materialization_plan",
+            })
+            state_digest = linearization_state_v7_digest(linearization_state)
+            linearization_state.update({
+                "content_sha256": state_digest,
+                "linearization_state_id": (
+                    "LinearizationState.v7:" + state_digest.removeprefix("sha256:")
+                ),
+            })
+        else:
+            state_digest = "sha256:" + hashlib.sha256(
+                serde_json_compact_bytes(linearization_state)
+            ).hexdigest()
+            linearization_state.update({
+                "content_sha256": state_digest,
+                "linearization_state_id": (
+                    "LinearizationState.v6:" + state_digest.removeprefix("sha256:")
+                ),
+            })
+        _write_json(root / equilibrium_relative, equilibrium)
+        _write_json(root / state_relative, linearization_state)
+        equilibrium_paths.append(equilibrium_relative)
+        state_paths.append(state_relative)
+        state_digests[sample_index] = (equilibrium_digest, state_digest)
+
+        magnetization = producer_plan["equilibrium_magnetization"]
+        m0_digest = hashlib.sha256()
+        m0_digest.update(b"RecomputedFemLinearizationCertificate.m0.v1\0")
+        m0_digest.update(struct.pack("<Q", len(magnetization)))
+        for vector in magnetization:
+            for value in vector:
+                m0_digest.update(struct.pack("<d", float(value)))
+        equilibrium_content_signature = "sha256:" + m0_digest.hexdigest()
+
+        producer_payload_version = 2 if producer_is_canonical else 1
+        identity = {key: "fixture" for key in sorted(IDENTITY_FIELDS)}
+        identity.update({
+            "schema_version": "linearization_identity.v2",
+            "sample_index": sample_index,
+            "equilibrium_artifact_schema": equilibrium_schema,
+            "linearization_state_schema": state_schema,
+            "accepted_fields_schema": f"CertifiedFemEquilibriumFields.v{producer_payload_version}",
+            "certified_fields_schema": f"CertifiedFemEquilibriumFields.v{producer_payload_version}",
+            "recomputed_certificate_schema": f"RecomputedFemLinearizationCertificate.v{producer_payload_version}",
+            "handoff_schema_version": "AcceptedFemRelaxStageHandoff.v3",
+            "handoff_content_sha256": "sha256:" + "b" * 64,
+            "source_run_id": source_run_id,
+            "source_stage_id": source_stage_id,
+            "source_stage_kind": source_stage_kind,
+            "producer_plan_snapshot_sha256": "sha256:" + "c" * 64,
+            "consumer_plan_snapshot_sha256": "sha256:" + "d" * 64,
+            "producer_build_identity": {"source_snapshot_sha256": source_snapshot},
+            "consumer_build_identity": {"source_snapshot_sha256": source_snapshot},
+            "producer_source_snapshot_sha256": source_snapshot,
+            "consumer_source_snapshot_sha256": source_snapshot,
+            "cross_build_policy": "same_source_snapshot",
+            "source_mesh_topology_sha256": modal_mesh_signature,
+            "modal_mesh_topology_fingerprint_v3": modal_mesh_signature,
+            "node_count": len(mesh["nodes"]),
+            "equilibrium_content_sha256": equilibrium_content_signature,
+            "equilibrium_artifact_path": equilibrium_relative,
+            "equilibrium_artifact_sha256": equilibrium_digest,
+            "linearization_state_path": state_relative,
+            "linearization_state_sha256": state_digest,
+            "equilibrium_material_signature": material_signature,
+            "equilibrium_material_preimage_json": material_preimage_json,
+            "equilibrium_static_physics_signature": static_signature,
+            "equilibrium_static_physics_preimage_json": static_preimage_json,
+            "equilibrium_boundary_signature": boundary_signature,
+            "equilibrium_boundary_preimage_json": boundary_preimage_json,
+            "material_signature": material_signature if consumer_is_canonical else consumer_material_signature,
+            "material_identity_kind": (
+                "canonical_equilibrium_material.v2" if consumer_is_canonical else "raw_material.v1"
+            ),
+            "material_provenance_signature": consumer_material_signature,
+            "material_provenance_scope": "materialization_plan",
+            "material_provenance_preimage_json": consumer_material_json,
+            "producer_material_provenance_signature": producer_material_signature,
+            "producer_material_provenance_preimage_json": producer_material_json,
+            "accepted_fields_content_sha256": "sha256:" + "e" * 64,
+            "accepted_fields_path": f"eigen/metadata/{folder}/accepted_fields.v{producer_payload_version}.json",
+            "certified_fields_content_sha256": "sha256:" + "f" * 64,
+            "certified_fields_path": f"eigen/metadata/{folder}/certified_fields.v{producer_payload_version}.json",
+            "recomputed_certificate_content_sha256": "sha256:" + "1" * 64,
+            "recomputed_certificate_path": f"eigen/metadata/{folder}/recomputed_certificate.v{producer_payload_version}.json",
+            "accepted_fields_bytes_sha256": "sha256:" + "2" * 64,
+            "certified_fields_bytes_sha256": "sha256:" + "3" * 64,
+            "recomputed_certificate_bytes_sha256": "sha256:" + "4" * 64,
+            "recomputed_certificate_preimage_json": "{}",
+            "recomputed_certificate_preimage_sha256": "sha256:" + "5" * 64,
+            "content_sha256": "",
+        })
+        identity_preimage_json = json.dumps(identity, separators=(",", ":"), ensure_ascii=False)
+        identity_preimage_bytes = identity_preimage_json.encode("utf-8")
+        identity_digest = "sha256:" + hashlib.sha256(
+            b"linearization_identity.v2\0"
+            + struct.pack("<Q", len(identity_preimage_bytes))
+            + identity_preimage_bytes
+        ).hexdigest()
+        identity["content_sha256"] = identity_digest
+        identity_relative = f"eigen/metadata/{folder}/linearization_identity.v2.json"
+        identity_preimage_relative = f"eigen/metadata/{folder}/linearization_identity_preimage.v1.json"
+        _write_json(root / identity_relative, identity)
+        _write_json(root / identity_preimage_relative, {
+            "schema_version": "linearization_identity_preimage.v1",
+            "identity_schema": "linearization_identity.v2",
+            "identity_preimage_json": identity_preimage_json,
+            "identity_preimage_sha256": "sha256:" + hashlib.sha256(identity_preimage_bytes).hexdigest(),
+            "identity_content_sha256": identity_digest,
+        })
+        identity_paths.append(identity_relative)
+        identity_preimage_paths.append(identity_preimage_relative)
+        identity_hashes[str(sample_index)] = identity_digest
+        for mode in sample["modes"]:
+            mode_relative = (
+                f"eigen/modes/sample_{sample_index:04d}/mode_{mode['raw_mode_index']:04d}.json"
+            )
+            mode_path = root / mode_relative
+            mode_metadata = json.loads(mode_path.read_text(encoding="utf-8"))
+            mode_metadata.update({
+                "equilibrium_artifact_sha256": equilibrium_digest,
+                "linearization_state_sha256": state_digest,
+                "source_mesh_topology_sha256": modal_mesh_signature,
+            })
+            _write_json(mode_path, mode_metadata)
+
+    first_equilibrium_digest, first_state_digest = state_digests[min(state_digests)]
+    handoff_preimage = {
+        "schema_version": "AcceptedFemEigenEquilibriumHandoff.v1",
+        "stage_fem_mesh_generation_id": "mesh-generation-primary",
+        "source_mesh_topology_sha256": modal_mesh_signature,
+        "equilibrium_artifact_sha256": first_equilibrium_digest,
+        "linearization_state_sha256": first_state_digest,
+    }
+    handoff_digest = "sha256:" + hashlib.sha256(
+        serde_json_compact_bytes(handoff_preimage)
+    ).hexdigest()
+    handoff = dict(handoff_preimage, content_sha256=handoff_digest)
+    for sample in samples:
+        sample_index = sample["sample_index"]
+        for mode in sample["modes"]:
+            mode_path = root / (
+                f"eigen/modes/sample_{sample_index:04d}/mode_{mode['raw_mode_index']:04d}.json"
+            )
+            mode_metadata = json.loads(mode_path.read_text(encoding="utf-8"))
+            mode_metadata.update({
+                "relax_to_eigen_handoff_sha256": handoff_digest,
+                "relax_to_eigen_source_mesh_topology_sha256": modal_mesh_signature,
+            })
+            _write_json(mode_path, mode_metadata)
+    diagnostics_path = root / "eigen/diagnostics/solver.v1.json"
+    solver_diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    solver_diagnostics.update({
+        "relax_to_eigen_handoff": handoff,
+        "relax_to_eigen_handoff_sha256": handoff_digest,
+        "relax_to_eigen_source_mesh_topology_sha256": modal_mesh_signature,
+    })
+    _write_json(diagnostics_path, solver_diagnostics)
+    manifest_path = root / "frequency_domain/manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifacts = manifest.setdefault("artifacts", {})
+    for key in (
+        "equilibrium_artifact_v8_paths",
+        "linearization_state_v7_paths",
+        "equilibrium_artifact_v7_paths",
+        "linearization_state_v6_paths",
+    ):
+        artifacts.pop(key, None)
+    if canonical_state_family:
+        artifacts.update({
+            "equilibrium_artifact_v8_paths": equilibrium_paths,
+            "linearization_state_v7_paths": state_paths,
+        })
+    else:
+        artifacts.update({
+            "equilibrium_artifact_v7_paths": equilibrium_paths,
+            "linearization_state_v6_paths": state_paths,
+        })
+    artifacts.update({
+        "linearization_identity_v2_paths": identity_paths,
+        "linearization_identity_preimage_v1_paths": identity_preimage_paths,
+        "linearization_identity_sha256_by_sample": identity_hashes,
+    })
+    _write_json(manifest_path, manifest)
+
+def _rewrite_primary_identity(root: Path, sample_index: int, **changes) -> None:
+    identity_path = root / f"eigen/metadata/sample_{sample_index:04d}/linearization_identity.v2.json"
+    preimage_path = root / f"eigen/metadata/sample_{sample_index:04d}/linearization_identity_preimage.v1.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity.update(changes)
+    preimage = dict(identity, content_sha256="")
+    raw = json.dumps(preimage, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    digest = "sha256:" + hashlib.sha256(
+        b"linearization_identity.v2\0" + struct.pack("<Q", len(raw)) + raw
+    ).hexdigest()
+    identity["content_sha256"] = digest
+    _write_json(identity_path, identity)
+    _write_json(preimage_path, {
+        "schema_version": "linearization_identity_preimage.v1",
+        "identity_schema": "linearization_identity.v2",
+        "identity_preimage_json": raw.decode("utf-8"),
+        "identity_preimage_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "identity_content_sha256": digest,
+    })
+    manifest_path = root / "frequency_domain/manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["linearization_identity_sha256_by_sample"][str(sample_index)] = digest
+    _write_json(manifest_path, manifest)
+
+def _rewrite_primary_consumer_material(root: Path, sample_index: int, material) -> None:
+    raw = json.dumps(material, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    _rewrite_primary_identity(
+        root,
+        sample_index,
+        material_provenance_preimage_json=raw.decode("utf-8"),
+        material_provenance_signature="sha256:" + hashlib.sha256(raw).hexdigest(),
+    )
+
+def _rewrite_mode_field_with_z_sign_profile(root: Path, *, sample_index: int = 0, raw_mode_index: int = 0) -> None:
+    """Rewrite one KS payload with a z+/z- envelope while preserving Bloch seams."""
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    plan = metadata["execution_plan"]["backend_plan"]
+    nodes = plan["mesh"]["nodes"]
+    spectrum = json.loads((root / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))
+    sample = next(item for item in spectrum["samples"] if item["sample_index"] == sample_index)
+    k = sample["k_vector"]
+    values = []
+    for node in nodes:
+        argument = sum(a * b for a, b in zip(k, node))
+        phase = complex(math.cos(argument), -math.sin(argument))
+        sign = -1.0 if node[2] > 0.0 else 1.0
+        for value in (0j, sign * phase, 1j * sign * phase):
+            values.extend((value.real, value.imag))
+    data = struct.pack(f"<{len(values)}d", *values)
+    relative = f"eigen/mode_fields/sample_{sample_index:04}/mode_{raw_mode_index:04}/vector.bin"
+    (root / relative).write_bytes(data)
+    mode_path = root / f"eigen/modes/sample_{sample_index:04}/mode_{raw_mode_index:04}.json"
+    mode = json.loads(mode_path.read_text(encoding="utf-8"))
+    mode["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
+    _write_json(mode_path, mode)
+
+def _synthetic_window_certificate(mode_count, *, include_before_cap=False):
+    """Structurally valid synthetic certificate fields; never solver evidence."""
+    certificate = {
+        "policy": "certified_count",
+        "status": "certified",
+        "certification_method": "contour_interval_count",
+        "estimated_modes_in_window": mode_count,
+        "certified_modes_in_window": mode_count,
+        "returned_modes": mode_count,
+        "result_truncated": False,
+        "additional_modes_may_exist": False,
+    }
+    if include_before_cap:
+        certificate["accepted_modes_before_cap"] = mode_count
+    return certificate
+
+
+def _synthetic_solver_diagnostics(case, requested_modes, modes_per_sample):
+    parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+    window = list(parameters["eigen_search"]["frequency_window_hz"])
+    sample_count = 1 if case == "c0" else gate.EXPECTED_PATH_SAMPLE_COUNT
+    samples = [
+        {
+            "sample_index": sample_index,
+            "diagnostics": {
+                "requested_mode_count": requested_modes,
+                "requested_window_hz": list(window),
+                "resolved_search_window_hz": list(window),
+                "window_completeness": _synthetic_window_certificate(modes_per_sample),
+            },
+        }
+        for sample_index in range(sample_count)
+    ]
+    return {
+        "requested_mode_count": requested_modes,
+        "requested_window_hz": list(window),
+        "resolved_search_window_hz": list(window),
+        "window_completeness": _synthetic_window_certificate(sample_count * modes_per_sample),
+        "sample_solver_diagnostics": samples,
+    }
+
+
+def _write_native_context(root, case, mesh_id, airbox_m, requested_modes, samples):
+    """Write synthetic native-shaped metadata, not a solver result."""
+    metadata = _native_metadata(case, mesh_id, airbox_m, requested_modes)
+    authored_window = metadata["problem_meta"]["runtime_metadata"][
+        "comsol_nonzero_k_dispersion"
+    ]["eigensolve"]["frequency_window_hz"]
+    per_sample = []
+    for sample in samples:
+        count = len(sample.get("modes", []))
+        per_sample.append({
+            "sample_index": sample["sample_index"],
+            "diagnostics": {
+                "requested_mode_count": requested_modes,
+                "requested_window_hz": list(authored_window),
+                "resolved_search_window_hz": list(authored_window),
+                "window_completeness": _synthetic_window_certificate(count),
+            },
+        })
+    total_modes = sum(len(sample.get("modes", [])) for sample in samples)
+    _write_json(root / "metadata.json", metadata)
+    _write_json(root / "eigen/diagnostics/solver.v1.json", {
+        "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+        "solver_model": gate.PRODUCTION_SOLVER_MODEL, "production_native_solver_available": True,
+        "validation_only": False, "complete": True, "status": "ready",
+        "requested_mode_count": requested_modes,
+        "requested_window_hz": list(authored_window),
+        "resolved_search_window_hz": list(authored_window),
+        "window_completeness": _synthetic_window_certificate(total_modes),
+        "sample_solver_diagnostics": per_sample,
+        "sample_count": len(samples), "mode_count": sum(len(sample["modes"]) for sample in samples),
+    })
+
+
+def _canonical_path() -> list[dict[str, str]]:
+    with KPATH.open(encoding="utf-8", newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+def _canonical_test_material(name="Permalloy", *, ku=12000.0, axis=None):
+    return {
+        "name": name,
+        "saturation_magnetisation": 800000.0,
+        "exchange_stiffness": 1.3e-11,
+        "damping": 0.5,
+        "uniaxial_anisotropy": ku,
+        "anisotropy_axis": [0.0, 0.0, 1.0] if axis is None else axis,
+    }
+
+def _bundle_descriptor(case_dir: Path, root: str) -> dict[str, object]:
+    relative_paths = {
+        "metadata": f"{root}/metadata.json",
+        "metadata": f"{root}/metadata.json",
+        "diagnostics": f"{root}/eigen/diagnostics/solver.v1.json",
+        "spectrum": f"{root}/eigen/spectrum.v2.json",
+        "branches": f"{root}/eigen/branches.v2.json",
+        "manifest": f"{root}/frequency_domain/manifest.v1.json",
+        "diagnostics": f"{root}/eigen/diagnostics/solver.v1.json",
+    }
+    return {
+        "root": root,
+        "artifacts": {
+            logical: {"path": path, "sha256": _sha256(case_dir / path)}
+            for logical, path in relative_paths.items()
+        },
+    }
+
+
+def _write_bundle(
+    case_dir: Path,
+    root: str,
+    samples: list[dict[str, object]],
+    branches: list[dict[str, object]],
+    *,
+    mesh_id: str,
+    airbox_m: float,
+    requested_modes: int,
+) -> dict[str, object]:
+    for sample in samples:
+        for mode in sample["modes"]:
+            _native_mode_diagnostics(mode)
+    _write_native_context(case_dir / root, case_dir.name, mesh_id, airbox_m, requested_modes, samples)
+    _write_json(case_dir / root / "eigen/spectrum.v2.json", {
+        "schema_version": "eigen_spectrum.v2",
+        "sample_count": len(samples),
+        "mode_count": sum(len(sample["modes"]) for sample in samples),
+        "samples": samples,
+    })
+    _write_json(case_dir / root / "eigen/branches.v2.json", _tracking_fixture_payload(branches))
+    _write_json(case_dir / root / "frequency_domain/manifest.v1.json", {
+        "schema_version": "frequency_domain_manifest.v1",
+        "analysis_family": "magnetic_frequency_domain", "study_product": "modal_eigen",
+        "resolved_execution": {"reference_or_production": "production"},
+        "solver_model": "full_2x2_herring_kittel",
+        "mesh_identity": mesh_id,
+        "geometry": {"air_padding_each_side_m": airbox_m},
+        "requested_mode_count": requested_modes,
+        "validation": {
+            "dispersion_frequency_source": gate.NUMERIC_FREQUENCY_SOURCE,
+            "dynamic_demag_operator_source": None if case_dir.name == "c0" else "numeric_modal_solver",
+        },
+    })
+    return _bundle_descriptor(case_dir, root)
+
+
+def _write_signed_k_bundle(case_dir: Path, *, negative_k: bool, band_count: int = 8):
+    primary_spectrum = json.loads((case_dir / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))
+    primary_branches = json.loads((case_dir / "eigen/branches.v2.json").read_text(encoding="utf-8"))["branches"]
+    samples = copy.deepcopy(primary_spectrum["samples"])
+    branches = copy.deepcopy(primary_branches[:band_count])
+    for sample in samples:
+        vector = sample["k_vector"]
+        sign = -1.0 if negative_k else 1.0
+        sample["k_vector"] = [sign * float(value) for value in vector]
+        sample["modes"] = sample["modes"][:band_count]
+    return _write_bundle(
+        case_dir,
+        "validation/signed_k/negative_run",
+        samples,
+        branches,
+        mesh_id="mesh-L1",
+        airbox_m=2.0e-6,
+        requested_modes=24,
+    )
+
+
+def _scaled_payload(
+    samples: list[dict[str, object]], branches: list[dict[str, object]], scale: float
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    scaled_samples = json.loads(json.dumps(samples))
+    scaled_branches = json.loads(json.dumps(branches))
+    for sample in scaled_samples:
+        for mode in sample["modes"]:
+            mode["frequency_real_hz"] *= scale
+    for branch in scaled_branches:
+        for point in branch["points"]:
+            point["frequency_real_hz"] *= scale
+    return scaled_samples, scaled_branches
+
+
+def _evidence(
+    case_dir: Path,
+    case: str,
+    base_artifacts: dict[str, str],
+    *,
+    ks_bv: dict[str, object] | None = None,
+    ks_de: dict[str, object] | None = None,
+    convergence_runs: dict[str, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    sample_indices = gate.EXPECTED_CONTROL_SAMPLES if case in gate.PATH_CASES else (0,)
+    bands = range(gate.EXPECTED_TARGET_BANDS if case in gate.PATH_CASES else 1)
+    comparisons = [{"sample_index": sample, "branch_id": band} for sample in sample_indices for band in bands]
+    runs = convergence_runs or {}
+    convergence: dict[str, object] = {
+        "mesh": {"status": "pass", "runs": {"coarse": runs.get("mesh_coarse"), "medium": runs.get("mesh_medium"), "fine": runs.get("mesh_fine")}, "comparisons": comparisons},
+        "airbox": {"status": "pass", "runs": {"coarse": runs.get("airbox_coarse"), "medium": runs.get("airbox_medium"), "fine": runs.get("airbox_fine")}, "comparisons": comparisons},
+        "mode_count": {"status": "pass", "baseline_requested_modes": 24, "check_requested_modes": 48, "runs": {"baseline": runs.get("modes_24"), "check": runs.get("modes_48")}, "comparisons": comparisons},
+    }
+    if case == "c0":
+        convergence["airbox"] = {"status": "not_applicable", "reason": "C0 disables dynamic demagnetization by construction"}
+    controls: dict[str, object] = {"kittel": {"status": "pass"}}
+    if case == "c1":
+        controls["kalinikos_slab_n0"] = {
+            "status": "pass",
+            "samples": [
+                {"geometry": "backward_volume", "k_rad_per_m": 1.0e7, "sample_index": 0, "branch_id": 0, "run": ks_bv},
+                {"geometry": "damon_eshbach", "k_rad_per_m": 1.0e7, "sample_index": 0, "branch_id": 0, "run": ks_de},
+            ],
+        }
+    return {
+        "schema_version": gate.EVIDENCE_SCHEMA,
+        "case_id": case,
+        "numeric_run": {"frequency_source": gate.NUMERIC_FREQUENCY_SOURCE, "analytic_solver_used_for_frequencies": False, "dynamic_demag_operator_source": None if case == "c0" else "numeric_modal_solver"},
+        "artifact_bindings": base_artifacts,
+        "analytic_controls": controls,
+        "convergence": convergence,
+    }
+
+
+def _make_case(root: Path, case: str = "c1", *, primary_material=None, producer_material=None) -> Path:
+    case_dir = root / case
+    path_rows = _canonical_path()
+    parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+    samples: list[dict[str, object]] = []
+    requested_modes = 1 if case == "c0" else 24
+    target_bands = 1 if case == "c0" else gate.EXPECTED_TARGET_BANDS
+    branches: list[dict[str, object]] = [
+        {"branch_id": band, "label": f"band_{band}", "points": []}
+        for band in range(target_bands)
+    ]
+    for index, row in enumerate(path_rows if case in gate.PATH_CASES else [path_rows[0]]):
+        k = tuple(float(row[key]) for key in ("kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m"))
+        if case == "c0":
+            frequencies = [parameters["controls_infinite_film_hz"]["no_demag_gamma"]]
+        elif index == 0:
+            frequencies = [parameters["controls_finite_dirichlet_box"]["with_demag_gamma_hz"] + band * 1.0e8 for band in range(gate.EXPECTED_TARGET_BANDS)]
+        else:
+            # The path includes the oblique X→M and M→Γ segments.  Build the
+            # fixture from the same arbitrary-angle n=0 oracle that the gate
+            # recomputes from each exported k-vector; using kx/BV here would
+            # make the fixture fail for the right physical reason.
+            sin_squared_phi = gate._sin_squared_phi_from_k_vector(k)
+            analytic_frequency = gate._kalinikos_frequency_hz_general_phi(
+                math.sqrt(k[0] * k[0] + k[1] * k[1]), sin_squared_phi, parameters
+            )
+            frequencies = [
+                (analytic_frequency or 10.0e9) + band * 1.0e8
+                for band in range(gate.EXPECTED_TARGET_BANDS)
+            ]
+        modes = [
+            {"raw_mode_index": band, "frequency_real_hz": frequency, "frequency_imag_hz": 0.0}
+            for band, frequency in enumerate(frequencies)
+        ]
+        samples.append({"sample_index": index, "k_vector": list(k), "modes": modes})
+        for band, frequency in enumerate(frequencies):
+            branches[band]["points"].append({
+                "sample_index": index,
+                "raw_mode_index": band,
+                "frequency_real_hz": frequency,
+                "frequency_imag_hz": 0.0,
+                "tracking_confidence": 1.0,
+            })
+    for sample in samples:
+        for mode in sample["modes"]:
+            _native_mode_diagnostics(mode)
+    _write_native_context(case_dir, case, "mesh-L1", 2e-6, requested_modes, samples)
+    if primary_material is not None:
+        metadata_path = case_dir / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["execution_plan"]["backend_plan"]["material"] = copy.deepcopy(primary_material)
+        _write_json(metadata_path, metadata)
+    _write_json(case_dir / "eigen/spectrum.v2.json", {
+        "schema_version": "eigen_spectrum.v2",
+        "sample_count": len(samples),
+        "mode_count": sum(len(sample["modes"]) for sample in samples),
+        "samples": samples,
+    })
+    _write_json(case_dir / "eigen/branches.v2.json", _tracking_fixture_payload(branches))
+    dispersion = case_dir / "eigen/dispersion.csv"
+    dispersion.parent.mkdir(parents=True, exist_ok=True)
+    with dispersion.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=[
+                "sample_index", "kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m",
+                "frequency_hz", "raw_mode_index", "branch_id",
+                "analytic_frequency_hz", "relative_error", "validation_geometry",
+            ],
+        )
+        writer.writeheader()
+        for sample in samples:
+            for mode in sample["modes"]:
+                vector = tuple(float(value) for value in sample["k_vector"])
+                sin_squared_phi = gate._sin_squared_phi_from_k_vector(vector)
+                analytic_frequency = (
+                    gate._kalinikos_frequency_hz_general_phi(
+                        math.sqrt(vector[0] * vector[0] + vector[1] * vector[1]),
+                        sin_squared_phi,
+                        parameters,
+                    )
+                    if case == "c1" and sin_squared_phi is not None
+                    else None
+                )
+                geometry = (
+                    "backward_volume"
+                    if sin_squared_phi is not None and sin_squared_phi <= 1.0e-12
+                    else "damon_eshbach"
+                    if sin_squared_phi is not None and abs(sin_squared_phi - 1.0) <= 1.0e-12
+                    else "oblique"
+                    if case == "c1"
+                    else ""
+                )
+                writer.writerow({
+                    "sample_index": sample["sample_index"],
+                    "kx_rad_per_m": sample["k_vector"][0],
+                    "ky_rad_per_m": sample["k_vector"][1],
+                    "kz_rad_per_m": sample["k_vector"][2],
+                    "frequency_hz": mode["frequency_real_hz"],
+                    "raw_mode_index": mode["raw_mode_index"],
+                    "branch_id": mode["raw_mode_index"],
+                    "analytic_frequency_hz": analytic_frequency if analytic_frequency is not None else "",
+                    "relative_error": gate._relative_error(mode["frequency_real_hz"], analytic_frequency) if analytic_frequency is not None else "",
+                    "validation_geometry": geometry,
+                })
+    _write_json(case_dir / "frequency_domain/manifest.v1.json", {
+        "schema_version": "frequency_domain_manifest.v1",
+        "analysis_family": "magnetic_frequency_domain", "study_product": "modal_eigen",
+        "resolved_execution": {"reference_or_production": "production"},
+        "solver_model": "full_2x2_herring_kittel",
+        "mesh_identity": "base-mesh",
+        "geometry": {"air_padding_each_side_m": 2.0e-6},
+        "validation": {
+            "dispersion_frequency_source": gate.NUMERIC_FREQUENCY_SOURCE,
+            "dynamic_demag_operator_source": None if case == "c0" else "numeric_modal_solver",
+        },
+    })
+    _write_mode_fields(case_dir, samples)
+    _attach_primary_equilibria(case_dir, samples, producer_material=producer_material)
+    base_bindings = {
+        "metadata_sha256": _sha256(case_dir / "metadata.json"),
+        "solver_diagnostics_sha256": _sha256(case_dir / "eigen/diagnostics/solver.v1.json"),
+        "spectrum_v2_sha256": _sha256(case_dir / "eigen/spectrum.v2.json"),
+        "branches_v2_sha256": _sha256(case_dir / "eigen/branches.v2.json"),
+        "dispersion_csv_sha256": _sha256(case_dir / "eigen/dispersion.csv"),
+        "manifest_sha256": _sha256(case_dir / "frequency_domain/manifest.v1.json"),
+    }
+    ks_bv = ks_de = None
+    convergence_runs: dict[str, dict[str, object]] = {}
+    if case == "c1":
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        bv_frequency = gate._kalinikos_frequency_hz(1.0e7, "backward_volume", parameters)
+        de_frequency = gate._kalinikos_frequency_hz(1.0e7, "damon_eshbach", parameters)
+        ks_samples = [{"sample_index": 0, "k_vector": [1.0e7, 0.0, 0.0], "modes": [{"raw_mode_index": 0, "frequency_real_hz": bv_frequency, "frequency_imag_hz": 0.0}]}]
+        ks_branches = [{"branch_id": 0, "points": [{"sample_index": 0, "raw_mode_index": 0, "frequency_real_hz": bv_frequency, "frequency_imag_hz": 0.0}]}]
+        ks_bv = _write_bundle(case_dir, "validation/ks/bv", ks_samples, ks_branches, mesh_id="ks-bv", airbox_m=2.0e-6, requested_modes=1)
+        ks_samples_de = [{"sample_index": 0, "k_vector": [0.0, 1.0e7, 0.0], "modes": [{"raw_mode_index": 0, "frequency_real_hz": de_frequency, "frequency_imag_hz": 0.0}]}]
+        ks_branches_de = [{"branch_id": 0, "points": [{"sample_index": 0, "raw_mode_index": 0, "frequency_real_hz": de_frequency, "frequency_imag_hz": 0.0}]}]
+        ks_de = _write_bundle(case_dir, "validation/ks/de", ks_samples_de, ks_branches_de, mesh_id="ks-de", airbox_m=2.0e-6, requested_modes=1)
+        _write_mode_fields(case_dir / "validation/ks/bv", ks_samples)
+        _write_mode_fields(case_dir / "validation/ks/de", ks_samples_de)
+        for direction in ("bv", "de"):
+            _attach_ks_equilibrium(case_dir / f"validation/ks/{direction}")
+        ks_bv = _bundle_descriptor(case_dir, "validation/ks/bv")
+        ks_de = _bundle_descriptor(case_dir, "validation/ks/de")
+    held_fixed_modes = requested_modes
+    comparison_runs = (
+        ("mesh_coarse", "mesh-L1", 2.0e-6, 1.0, held_fixed_modes),
+        ("mesh_medium", "mesh-L2", 2.0e-6, 1.00005, held_fixed_modes),
+        ("mesh_fine", "mesh-L3", 2.0e-6, 1.0001, held_fixed_modes),
+        ("airbox_coarse", "mesh-L1", 2.0e-6, 1.0, held_fixed_modes),
+        ("airbox_medium", "mesh-L1", 4.0e-6, 1.00005, held_fixed_modes),
+        ("airbox_fine", "mesh-L1", 8.0e-6, 1.0001, held_fixed_modes),
+        # The independent requested-mode convergence study retains its
+        # canonical 24-to-48 comparison even for the one-mode C0 primary case.
+        ("modes_24", "mesh-L1", 2.0e-6, 1.0, 24),
+        ("modes_48", "mesh-L1", 2.0e-6, 1.00005, 48),
+    )
+    for name, mesh_id, airbox, scale, modes in comparison_runs:
+        scaled_samples, scaled_branches = _scaled_payload(samples, branches, scale)
+        convergence_runs[name] = _write_bundle(case_dir, f"validation/convergence/{name}", scaled_samples, scaled_branches, mesh_id=mesh_id, airbox_m=airbox, requested_modes=modes)
+    evidence = _evidence(case_dir, case, base_bindings, ks_bv=ks_bv, ks_de=ks_de, convergence_runs=convergence_runs)
+    _write_json(case_dir / gate.EVIDENCE_RELATIVE_PATH, evidence)
+    return case_dir
+
+
+def _install_cross_run_field_inputs(
+    case_dir: Path, *, check_source_raw=None, check_mesh_shift=False, check_rotated_samples=None,
+):
+    """Create real loader-bound field bytes for synthetic convergence bundles."""
+    from comsol_magnetic_support import magnetic_element_indices, tet4_cells
+    from comsol_mesh_identity import mesh_topology_fingerprint_v3
+    from comsol_tracking_metric import Tet4TrackingMetric
+
+    evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    section = evidence["convergence"]["mode_count"]
+    samples_expected = gate.EXPECTED_CONTROL_SAMPLES
+    check_rotated_samples = set(check_rotated_samples or ())
+    bundle_roots = {
+        "baseline": section["runs"]["baseline"]["root"],
+        "check": section["runs"]["check"]["root"],
+    }
+    if check_mesh_shift:
+        root = case_dir / bundle_roots["check"]
+        metadata_path = root / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["nodes"]
+        for node in nodes:
+            node[0] += 3.0e-9
+        _write_json(metadata_path, metadata)
+        section["runs"]["check"] = _bundle_descriptor(case_dir, bundle_roots["check"])
+
+    branch_selectors: dict[int, list[int]] = {sample: [] for sample in samples_expected}
+    for comparison in section["comparisons"]:
+        sample_index, branch_id = comparison["sample_index"], comparison["branch_id"]
+        root = case_dir / bundle_roots["baseline"]
+        branch_doc = json.loads((root / "eigen/branches.v2.json").read_text(encoding="utf-8"))
+        branch = next(item for item in branch_doc["branches"] if item["branch_id"] == branch_id)
+        point = next(item for item in branch["points"] if item["sample_index"] == sample_index)
+        branch_selectors[sample_index].append(point["raw_mode_index"])
+
+    candidate_raw_by_sample: dict[int, list[int]] = {}
+    for name, relative_root in bundle_roots.items():
+        root = case_dir / relative_root
+        spectrum = json.loads((root / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))
+        selected_samples = [sample for sample in spectrum["samples"]
+                            if sample["sample_index"] in samples_expected]
+        _write_mode_fields(root, selected_samples)
+        metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+        plan = metadata["execution_plan"]["backend_plan"]
+        mesh = plan["mesh"]
+        fingerprint = mesh_topology_fingerprint_v3(mesh)
+        metric = Tet4TrackingMetric(
+            mesh["nodes"], tet4_cells(mesh), magnetic_element_indices(mesh, plan.get("mesh_parts")),
+        )
+        support = metric.support.tolist()
+        support_index = {int(node): index for index, node in enumerate(support)}
+        metric_record = {
+            "schema": "fullmag.tracking_consistent_p1_metric.v1",
+            "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
+            "source_mesh_topology_sha256": fingerprint,
+            "physical_node_indices": support,
+            "tetra": [[support_index[int(node)] for node in cell] for cell in metric.cells.tolist()],
+            "volumes_m3": metric.volumes_m3.tolist(),
+        }
+        for sample in selected_samples:
+            sample_index = sample["sample_index"]
+            candidate_raw_by_sample[sample_index] = [mode["raw_mode_index"] for mode in sample["modes"]]
+            for mode in sample["modes"]:
+                raw = mode["raw_mode_index"]
+                mode_path = root / f"eigen/modes/sample_{sample_index:04d}/mode_{raw:04d}.json"
+                mode_metadata = json.loads(mode_path.read_text(encoding="utf-8"))
+                mode_metadata["tracking_consistent_p1_metric"] = metric_record
+                _write_json(mode_path, mode_metadata)
+                source_raw = raw
+                if name == "check" and isinstance(check_source_raw, Mapping):
+                    source_raw = check_source_raw.get(raw, raw)
+                source_raw = int(source_raw)
+                plane_levels = sorted({float(node[2]) for node in mesh["nodes"]})
+                if len(plane_levels) != 2:
+                    raise AssertionError("synthetic field matcher fixture requires two z planes")
+                pattern = [0.0] * 6
+                if name == "check" and sample_index in check_rotated_samples and raw in (0, 1):
+                    pattern[0] = pattern[1] = 1.0 / math.sqrt(2.0)
+                    if raw == 1:
+                        pattern[1] = -pattern[1]
+                elif source_raw < 6:
+                    pattern[source_raw] = 1.0
+                elif source_raw == 6:
+                    pattern[0] = pattern[1] = 1.0 / math.sqrt(2.0)
+                else:
+                    pattern[2] = pattern[3] = 1.0 / math.sqrt(2.0)
+                values = []
+                k_vector = sample["k_vector"]
+                for node in mesh["nodes"]:
+                    plane = 0 if float(node[2]) == plane_levels[0] else 1
+                    argument = sum(a * b for a, b in zip(k_vector, node))
+                    phase = complex(math.cos(argument), -math.sin(argument))
+                    for component in range(3):
+                        value = pattern[plane * 3 + component] * phase
+                        values.extend((value.real, value.imag))
+                data = struct.pack(f"<{len(values)}d", *values)
+                vector_path = root / f"eigen/mode_fields/sample_{sample_index:04d}/mode_{raw:04d}/vector.bin"
+                vector_path.write_bytes(data)
+                mode_metadata = json.loads(mode_path.read_text(encoding="utf-8"))
+                mode_metadata["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
+                _write_json(mode_path, mode_metadata)
+
+    section["cross_run_fields"] = {
+        "policy": {
+            "overlap_floor": 0.99,
+            "ambiguity_tolerance": 1.0e-6,
+            "degeneration_relative_tolerance": 1.0e-12,
+        },
+        "baseline_clusters": [
+            {"sample_index": sample, "groups": [[raw] for raw in branch_selectors[sample]]}
+            for sample in samples_expected
+        ],
+        "check_clusters": [
+            {"sample_index": sample, "groups": [[raw] for raw in candidate_raw_by_sample[sample]]}
+            for sample in samples_expected
+        ],
+    }
+    _write_json(evidence_path, evidence)
+
+
+def _bind_check_frequencies_to_baseline_raw_ids(case_dir: Path, *, rotate_degenerate_pair=False):
+    """Make run-local aliases agree while preserving or swapping field-bound frequencies."""
+    evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    section = evidence["convergence"]["mode_count"]
+    baseline_root = section["runs"]["baseline"]["root"]
+    check_root = section["runs"]["check"]["root"]
+    roots = {"baseline": baseline_root, "check": check_root}
+    spectra = {}
+    branches = {}
+    for name, root in roots.items():
+        spectra[name] = json.loads((case_dir / root / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))
+        branches[name] = json.loads((case_dir / root / "eigen/branches.v2.json").read_text(encoding="utf-8"))
+    baseline_frequencies = {
+        (sample["sample_index"], mode["raw_mode_index"]): float(mode["frequency_real_hz"])
+        for sample in spectra["baseline"]["samples"] for mode in sample["modes"]
+    }
+    if rotate_degenerate_pair:
+        sample = next(item for item in spectra["baseline"]["samples"] if item["sample_index"] == 0)
+        modes = {mode["raw_mode_index"]: mode for mode in sample["modes"]}
+        base = float(modes[0]["frequency_real_hz"])
+        modes[0]["frequency_real_hz"] = base
+        # Exact degeneracy permits a rotated basis without changing the
+        # fundamental branch selected at the seed on the rest of the path.
+        modes[1]["frequency_real_hz"] = base
+        baseline_frequencies[(0, 0)] = modes[0]["frequency_real_hz"]
+        baseline_frequencies[(0, 1)] = modes[1]["frequency_real_hz"]
+
+    for name, root in roots.items():
+        spectrum = spectra[name]
+        for sample in spectrum["samples"]:
+            sample_index = sample["sample_index"]
+            for mode in sample["modes"]:
+                raw = mode["raw_mode_index"]
+                frequency = baseline_frequencies.get((sample_index, raw), float(mode["frequency_real_hz"]))
+                if name == "check" and rotate_degenerate_pair and sample_index == 0 and raw in (0, 1):
+                    frequency = baseline_frequencies[(0, 1 - raw)]
+                mode["frequency_real_hz"] = frequency
+                _native_mode_diagnostics(mode)
+        spectrum_by_identity = {
+            (sample["sample_index"], mode["raw_mode_index"]): mode
+            for sample in spectrum["samples"] for mode in sample["modes"]
+        }
+        for branch in branches[name]["branches"]:
+            for point in branch["points"]:
+                mode = spectrum_by_identity.get((point["sample_index"], point["raw_mode_index"]))
+                if mode is None:
+                    continue
+                point["frequency_real_hz"] = mode["frequency_real_hz"]
+                point["frequency_imag_hz"] = mode["frequency_imag_hz"]
+        _write_json(case_dir / root / "eigen/spectrum.v2.json", spectrum)
+        _write_json(case_dir / root / "eigen/branches.v2.json", branches[name])
+        section["runs"][name] = _bundle_descriptor(case_dir, root)
+    _write_json(evidence_path, evidence)
+
+
+class ScientificGateTests(unittest.TestCase):
+    def test_benchmark_config_consumes_canonical_search_sheet(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        c0 = _native_metadata("c0", "mesh-L1", 2.0e-6, 1)
+        c1 = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        for metadata, expected_count in ((c0, 1), (c1, 24)):
+            eigensolve = metadata["problem_meta"]["runtime_metadata"][
+                "comsol_nonzero_k_dispersion"
+            ]["eigensolve"]
+            self.assertEqual(eigensolve["requested_mode_count"], expected_count)
+            self.assertEqual(
+                eigensolve["frequency_window_hz"],
+                parameters["eigen_search"]["frequency_window_hz"],
+            )
+
+    def test_primary_search_parameters_bind_count_and_window_without_requiring_full_cap(self):
+        metadata = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        diagnostics = _synthetic_solver_diagnostics("c1", 24, 8)
+        reasons = []
+        check = gate._validate_primary_search_parameters(
+            metadata, diagnostics, "c1",
+            json.loads(PARAMETERS.read_text(encoding="utf-8")), reasons,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+        self.assertEqual(check["requested_mode_count"], 24)
+        self.assertEqual(
+            diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["window_completeness"]["returned_modes"],
+            8,
+        )
+
+        def rejects(mutate, expected_text):
+            changed_metadata = copy.deepcopy(metadata)
+            changed_diagnostics = copy.deepcopy(diagnostics)
+            mutate(changed_metadata, changed_diagnostics)
+            local_reasons = []
+            result = gate._validate_primary_search_parameters(
+                changed_metadata, changed_diagnostics, "c1",
+                json.loads(PARAMETERS.read_text(encoding="utf-8")), local_reasons,
+            )
+            self.assertEqual(result["status"], "fail", local_reasons)
+            self.assertTrue(any(expected_text in reason for reason in local_reasons), local_reasons)
+
+        def self_consistent_eight(metadata, diagnostics):
+            metadata["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"]["requested_mode_count"] = 8
+            metadata["execution_plan"]["backend_plan"]["count"] = 8
+            diagnostics["requested_mode_count"] = 8
+            for entry in diagnostics["sample_solver_diagnostics"]:
+                entry["diagnostics"]["requested_mode_count"] = 8
+
+        rejects(self_consistent_eight, "canonical requested mode cap 24")
+        rejects(
+            lambda meta, diag: meta["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"].update(target="nearest"),
+            "target must be frequency_window",
+        )
+        rejects(
+            lambda meta, diag: meta["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"].update(frequency_window_hz=[1.0e6, 40.0e9]),
+            "does not match canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: meta["execution_plan"]["backend_plan"]["target"].update(frequency_max_hz=40.0e9),
+            "canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: diag.update(requested_mode_count=8),
+            "canonical requested mode cap 24",
+        )
+        rejects(
+            lambda meta, diag: diag.update(resolved_search_window_hz=[2.0e6, 31.0e9]),
+            "does not cover canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: diag.update(resolved_search_window_hz=[-1.0e6, 31.0e9]),
+            "nonnegative lower bound",
+        )
+        rejects(
+            lambda meta, diag: diag.pop("sample_solver_diagnostics"),
+            "lack per-sample search requests",
+        )
+        rejects(
+            lambda meta, diag: diag["sample_solver_diagnostics"][30]["diagnostics"].update(requested_mode_count=8),
+            "canonical requested mode cap 24",
+        )
+        rejects(
+            lambda meta, diag: diag["sample_solver_diagnostics"][30]["diagnostics"].update(requested_window_hz=[1.0e6, 40.0e9]),
+            "does not match canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: diag["sample_solver_diagnostics"].pop(30),
+            "sample indices exactly",
+        )
+
+        extended = copy.deepcopy(diagnostics)
+        extended["resolved_search_window_hz"] = [0.5e6, 31.0e9]
+        for entry in extended["sample_solver_diagnostics"]:
+            entry["diagnostics"]["resolved_search_window_hz"] = [0.5e6, 31.0e9]
+        reasons = []
+        check = gate._validate_primary_search_parameters(
+            metadata, extended, "c1",
+            json.loads(PARAMETERS.read_text(encoding="utf-8")), reasons,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+
+        c0_metadata = _native_metadata("c0", "mesh-L1", 2.0e-6, 1)
+        c0_diagnostics = _synthetic_solver_diagnostics("c0", 1, 1)
+        reasons = []
+        c0_check = gate._validate_primary_search_parameters(
+            c0_metadata, c0_diagnostics, "c0",
+            json.loads(PARAMETERS.read_text(encoding="utf-8")), reasons,
+        )
+        self.assertEqual(c0_check["status"], "pass", reasons)
+        self.assertEqual(c0_check["requested_mode_count"], 1)
+
+    def test_primary_window_completeness_requires_native_certificate_per_sample(self):
+        diagnostics = _synthetic_solver_diagnostics("c1", 24, 8)
+        spectrum = {"samples": [
+            {"sample_index": index, "modes": [{"raw_mode_index": mode} for mode in range(8)]}
+            for index in range(gate.EXPECTED_PATH_SAMPLE_COUNT)
+        ]}
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            diagnostics, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+        self.assertEqual(check["per_sample_statuses"]["30"], "pass")
+
+        aggregate_not_certified = copy.deepcopy(diagnostics)
+        aggregate_not_certified["window_completeness"]["status"] = "not_certified"
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            aggregate_not_certified, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "not_verified")
+        self.assertTrue(any("aggregate window status" in reason for reason in reasons), reasons)
+
+        explicitly_truncated = copy.deepcopy(diagnostics)
+        explicitly_truncated["window_completeness"]["status"] = "truncated_by_requested_count"
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            explicitly_truncated, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "not_verified")
+        self.assertTrue(any("truncated_by_requested_count" in reason for reason in reasons), reasons)
+
+        one_sample_not_certified = copy.deepcopy(diagnostics)
+        one_sample_not_certified["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["status"] = "not_certified"
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            one_sample_not_certified, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "not_verified")
+        self.assertTrue(any("sample 30 window status" in reason for reason in reasons), reasons)
+
+        false_certificate = copy.deepcopy(diagnostics)
+        false_certificate["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["additional_modes_may_exist"] = True
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            false_certificate, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("additional modes may exist" in reason for reason in reasons), reasons)
+
+        contradictory_count = copy.deepcopy(diagnostics)
+        contradictory_count["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["returned_modes"] = 24
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            contradictory_count, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("certified counts contradict" in reason for reason in reasons), reasons)
+
+        c0_diagnostics = _synthetic_solver_diagnostics("c0", 1, 1)
+        c0_spectrum = {"samples": [{"sample_index": 0, "modes": [{"raw_mode_index": 0}]}]}
+        reasons = []
+        c0_check = gate._validate_primary_window_completeness(
+            c0_diagnostics, c0_spectrum, "c0", reasons, requested_mode_count=1,
+        )
+        self.assertEqual(c0_check["status"], "pass", reasons)
+
+        optional_count = copy.deepcopy(diagnostics)
+        for entry in optional_count["sample_solver_diagnostics"]:
+            entry["diagnostics"]["window_completeness"]["accepted_modes_before_cap"] = 8
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            optional_count, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+
+        contradictory_optional_count = copy.deepcopy(optional_count)
+        contradictory_optional_count["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["accepted_modes_before_cap"] = 9
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            contradictory_optional_count, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("accepted_modes_before_cap contradicts" in reason for reason in reasons), reasons)
+
+        over_cap = copy.deepcopy(diagnostics)
+        over_cap_count = over_cap["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]
+        over_cap_count.update(
+            estimated_modes_in_window=25,
+            certified_modes_in_window=25,
+            returned_modes=25,
+        )
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            over_cap, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("exceeds the canonical requested mode cap" in reason for reason in reasons), reasons)
+
+        for malformed_samples in (None, 61):
+            with self.subTest(malformed_samples=malformed_samples):
+                malformed_spectrum = {"samples": malformed_samples}
+                reasons = []
+                check = gate._validate_primary_window_completeness(
+                    diagnostics, malformed_spectrum, "c1", reasons,
+                    requested_mode_count=24,
+                )
+                self.assertEqual(check["status"], "not_verified")
+                self.assertTrue(any("samples must be an array" in reason for reason in reasons), reasons)
+
+    def test_validate_case_accepts_contour_counts_without_optional_counter_and_rejects_over_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            diagnostics_path = case_dir / "eigen/diagnostics/solver.v1.json"
+            diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            first_completeness = diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["window_completeness"]
+            self.assertNotIn("accepted_modes_before_cap", first_completeness)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["checks"]["primary_search_parameters"]["status"], "pass")
+            self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "pass", report["reasons"])
+
+            for entry in diagnostics["sample_solver_diagnostics"]:
+                completeness = entry["diagnostics"]["window_completeness"]
+                completeness["accepted_modes_before_cap"] = completeness["returned_modes"]
+            _write_json(diagnostics_path, diagnostics)
+            _refresh_primary_artifact_binding(
+                case_dir, "eigen/diagnostics/solver.v1.json", "solver_diagnostics_sha256",
+            )
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "pass", report["reasons"])
+
+            completeness = diagnostics["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]
+            completeness.update(
+                estimated_modes_in_window=25,
+                certified_modes_in_window=25,
+                returned_modes=25,
+                accepted_modes_before_cap=25,
+            )
+            _write_json(diagnostics_path, diagnostics)
+            _refresh_primary_artifact_binding(
+                case_dir, "eigen/diagnostics/solver.v1.json", "solver_diagnostics_sha256",
+            )
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "fail")
+        self.assertTrue(
+            any("exceeds the canonical requested mode cap" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+        self.assertEqual(report["status"], "not_qualified")
+
+    def test_validate_case_malformed_spectrum_samples_fail_closed_without_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            valid_spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+            for malformed_samples in (None, 61):
+                with self.subTest(malformed_samples=malformed_samples):
+                    changed = copy.deepcopy(valid_spectrum)
+                    changed["samples"] = malformed_samples
+                    _write_json(spectrum_path, changed)
+                    _refresh_primary_artifact_binding(
+                        case_dir, "eigen/spectrum.v2.json", "spectrum_v2_sha256",
+                    )
+                    report = gate.validate_case(
+                        case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+                    )
+                    self.assertEqual(
+                        report["checks"]["primary_window_completeness"]["status"],
+                        "not_verified",
+                        report["reasons"],
+                    )
+                    self.assertTrue(
+                        any("primary spectrum samples must be an array" in reason for reason in report["reasons"]),
+                        report["reasons"],
+                    )
+                    self.assertEqual(report["status"], "not_qualified")
+                    _write_json(spectrum_path, valid_spectrum)
+                    _refresh_primary_artifact_binding(
+                        case_dir, "eigen/spectrum.v2.json", "spectrum_v2_sha256",
+                    )
+
+    def test_metadata_requires_explicit_eigen_solver_iteration_policy(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        metadata = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        metadata["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"]["eigen_solver"]["max_outer_iterations"] = 0
+        reasons = []
+        valid = gate._validate_benchmark_metadata(
+            metadata,
+            "c1",
+            parameters,
+            "primary",
+            reasons,
+            require_uniform_slab=True,
+        )
+        self.assertFalse(valid)
+        self.assertTrue(any("max_outer_iterations" in reason for reason in reasons), reasons)
+
+    def test_resolved_backend_policy_cannot_fall_back_to_petcs_defaults(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        metadata = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        metadata["execution_plan"]["backend_plan"]["solver_policy"]["max_linear_iterations"] = 0
+        reasons = []
+        valid = gate._validate_benchmark_metadata(
+            metadata,
+            "c1",
+            parameters,
+            "primary",
+            reasons,
+            require_uniform_slab=True,
+        )
+        self.assertFalse(valid)
+        self.assertTrue(any("backend_plan.solver_policy.max_linear_iterations" in reason for reason in reasons), reasons)
+
+    def test_override_kpath_is_compared_to_repository_vectors_not_trusted(self):
+        canonical = _canonical_path()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "override.csv"
+            for kind in ("all_gamma", "changed_vector", "duplicate_index", "renumbered"):
+                rows = copy.deepcopy(canonical)
+                if kind == "all_gamma":
+                    for row in rows:
+                        row.update(kx_rad_per_m="0", ky_rad_per_m="0", kz_rad_per_m="0")
+                elif kind == "changed_vector":
+                    rows[1]["ky_rad_per_m"] = "1"
+                elif kind == "duplicate_index":
+                    rows.append(copy.deepcopy(rows[0]))
+                else:
+                    rows[0]["jpath"] = "100"
+                with self.subTest(kind=kind):
+                    with path.open("w", encoding="utf-8", newline="") as stream:
+                        writer = csv.DictWriter(stream, fieldnames=list(canonical[0]))
+                        writer.writeheader()
+                        writer.writerows(rows)
+                    expected, check, reasons = gate._canonical_path_rows(path)
+                    self.assertEqual(check["status"], "fail")
+                    self.assertTrue(reasons)
+                    self.assertEqual(expected, gate._path_rows(KPATH)[0])
+                    self.assertNotEqual(expected[1], (0.0, 0.0, 0.0))
+
+    def test_semantically_identical_kpath_copy_and_missing_reference(self):
+        canonical = _canonical_path()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "copy.csv"
+            with path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(canonical[0]))
+                writer.writeheader()
+                for row in canonical:
+                    row = dict(row)
+                    for key in ("kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m"):
+                        row[key] = format(float(row[key]), ".17e")
+                    writer.writerow(row)
+            expected, check, reasons = gate._canonical_path_rows(path)
+            self.assertEqual(check["status"], "pass", reasons)
+            self.assertEqual(len(expected), 61)
+            with mock.patch.object(gate, "CANONICAL_KPATH", Path(directory) / "missing.csv"):
+                expected, check, reasons = gate._canonical_path_rows(path)
+            self.assertEqual(check["status"], "fail")
+            self.assertEqual(expected, {})
+            self.assertTrue(any("cannot read canonical k-path" in reason for reason in reasons))
+
+    def test_validate_case_has_mandatory_canonical_kpath_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_dir = _make_case(root, "c1")
+            override = root / "all-gamma.csv"
+            rows = _canonical_path()
+            with override.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                for row in rows:
+                    row = dict(row)
+                    row.update(kx_rad_per_m="0", ky_rad_per_m="0", kz_rad_per_m="0")
+                    writer.writerow(row)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=override)
+            self.assertEqual(report["checks"]["canonical_kpath"]["status"], "fail")
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertTrue(any("required scientific check canonical_kpath" in reason for reason in report["reasons"]))
+            valid = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(valid["checks"]["canonical_kpath"]["status"], "pass")
+
+    def test_canonical_path_requires_an_explicit_pure_de_auxiliary_control(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        control = parameters["analytic_controls"]["kalinikos_slab_n0"]
+        self.assertEqual(control["damon_eshbach_k_vector_rad_per_m"], [0.0, 1.0e7, 0.0])
+        rows = _canonical_path()
+        sin_squared = []
+        for row in rows:
+            kx, ky = float(row["kx_rad_per_m"]), float(row["ky_rad_per_m"])
+            norm_squared = kx * kx + ky * ky
+            sin_squared.append(0.0 if norm_squared == 0.0 else ky * ky / norm_squared)
+        self.assertEqual(len(rows), gate.EXPECTED_PATH_SAMPLE_COUNT)
+        self.assertEqual(max(sin_squared), 0.5)
+        self.assertFalse(any(abs(value - 1.0) < 1.0e-12 for value in sin_squared))
+
+    def test_seed_branch_selection_uses_frequency_not_branch_id(self):
+        modes = {(sample, raw): 1.0e9 + raw * 1.0e8 for sample in range(61) for raw in range(8)}
+        branches = []
+        for branch_id in range(8):
+            raw = 1 if branch_id == 0 else 0 if branch_id == 1 else branch_id
+            branches.append({
+                "branch_id": branch_id,
+                "points": [
+                    {
+                        "sample_index": sample,
+                        "raw_mode_index": raw,
+                        "frequency_real_hz": modes[(sample, raw)],
+                        "frequency_imag_hz": 0.0,
+                    }
+                    for sample in range(61)
+                ],
+            })
+        reasons = []
+        selected, check = gate._validate_branches(
+            {"branches": branches}, "c1", modes, reasons,
+            quality_mode_map=modes,
+        )
+        self.assertEqual(len(selected), 8)
+        self.assertEqual(check["status"], "fail")
+        self.assertEqual(check["selected_branch_ids"][0], 1)
+        self.assertEqual(check["fundamental_branch_check"], "pass")
+        self.assertFalse(any("lowest positive branch" in reason for reason in reasons), reasons)
+
+    def test_lowest_eight_multiset_accepts_degeneracy_at_cutoff(self):
+        mode_map = {}
+        branches = []
+        selected_raw = (0, 10, 11, 12, 13, 14, 15, 20)
+        for raw in range(24):
+            branch_id = (raw * 7) % 24
+            points = []
+            for sample in range(61):
+                if raw == 0:
+                    frequency = 1.0e9
+                elif raw in range(10, 16):
+                    frequency = (raw - 8) * 1.0e9
+                elif raw == 20:
+                    frequency = 8.0e9
+                elif raw == 2:
+                    # At sample zero this mode lies above the cutoff; later it
+                    # ties the selected raw-20 mode at the eighth frequency.
+                    frequency = 9.0e9 if sample == 0 else 8.0e9
+                else:
+                    frequency = 20.0e9 + raw * 1.0e9
+                mode_map[(sample, raw)] = frequency
+                points.append({
+                    "sample_index": sample,
+                    "raw_mode_index": raw,
+                    "frequency_real_hz": frequency,
+                    "frequency_imag_hz": 0.0,
+                    "tracking_confidence": 1.0,
+                })
+            branches.append({"branch_id": branch_id, "points": points})
+        payload = _tracking_fixture_payload(branches)
+        reasons = []
+        selected, check = gate._validate_branches(
+            payload, "c1", mode_map, reasons,
+            quality_mode_map=mode_map,
+        )
+        self.assertEqual([point["raw_mode_index"] for point in selected[0]["points"][:1]], [0])
+        self.assertEqual(
+            [branch["branch_id"] for branch in selected],
+            [(raw * 7) % 24 for raw in selected_raw],
+        )
+        self.assertEqual(check["lowest_frequency_multiset_check"], "pass", reasons)
+        self.assertTrue(check["selected_raw_ids_unique"])
+        self.assertEqual(check["status"], "pass", reasons)
+
+    def test_a1_selected_branches_may_cross_without_fundamental_identity(self):
+        mode_map = {}
+        branches = []
+        for raw in range(8):
+            points = []
+            for sample in range(61):
+                frequency = 1.0e9 + raw * 1.0e8
+                if sample >= 30 and raw in (0, 1):
+                    frequency = 1.0e9 + (1 - raw) * 1.0e8
+                mode_map[(sample, raw)] = frequency
+                points.append({
+                    "sample_index": sample,
+                    "raw_mode_index": raw,
+                    "frequency_real_hz": frequency,
+                    "frequency_imag_hz": 0.0,
+                    "tracking_confidence": 1.0,
+                })
+            branches.append({"branch_id": raw, "points": points})
+        payload = _tracking_fixture_payload(branches)
+
+        a1_reasons = []
+        selected_a1, a1_check = gate._validate_branches(
+            payload, "a1", mode_map, a1_reasons,
+            quality_mode_map=mode_map,
+        )
+        self.assertEqual(len(selected_a1), 8)
+        self.assertEqual(a1_check["status"], "pass", a1_reasons)
+        self.assertEqual(a1_check["selected_branch_ids"], list(range(8)))
+        self.assertEqual(a1_check["lowest_frequency_multiset_check"], "pass")
+        self.assertEqual(a1_check["fundamental_branch_check"], "not_applicable")
+        self.assertEqual(a1_reasons, [])
+
+        # The same crossing remains invalid for C1 because selected[0] is the
+        # branch consumed by its homogeneous-film analytic n=0 oracle.
+        c1_reasons = []
+        _selected_c1, c1_check = gate._validate_branches(
+            payload, "c1", mode_map, c1_reasons,
+            quality_mode_map=mode_map,
+        )
+        self.assertEqual(c1_check["lowest_frequency_multiset_check"], "pass")
+        self.assertEqual(c1_check["fundamental_branch_check"], "fail")
+        self.assertEqual(c1_check["status"], "fail")
+        self.assertTrue(any("lowest positive branch" in reason for reason in c1_reasons), c1_reasons)
+
+    def test_spectrum_keeps_quality_failures_out_of_physical_ranking(self):
+        modes = []
+        for raw, frequency in ((0, 1.0e9), (1, 0.5e9)):
+            mode = {
+                "raw_mode_index": raw,
+                "frequency_real_hz": frequency,
+                "frequency_imag_hz": 0.0,
+            }
+            _native_mode_diagnostics(mode)
+            if raw == 1:
+                mode["residual_relative_l2"] = gate.MAX_EIGEN_RESIDUAL
+            modes.append(mode)
+        reasons = []
+        _samples, mode_map, quality_map = gate._validate_spectrum(
+            {"sample_count": 1, "samples": [{"sample_index": 0, "k_vector": [0.0, 0.0, 0.0], "modes": modes}]},
+            "c0", {}, reasons,
+        )
+        self.assertIn((0, 1), mode_map)
+        self.assertNotIn((0, 1), quality_map)
+        self.assertIn((0, 0), quality_map)
+        self.assertTrue(any("residual_relative_l2" in reason for reason in reasons), reasons)
+        branches = {"branches": [
+            {"branch_id": raw, "points": [{
+                "sample_index": 0,
+                "raw_mode_index": raw,
+                "frequency_real_hz": mode["frequency_real_hz"],
+                "frequency_imag_hz": mode["frequency_imag_hz"],
+            }]} for raw, mode in enumerate(modes)
+        ]}
+        selected, check = gate._validate_branches(
+            branches, "c0", mode_map, reasons,
+            quality_mode_map=quality_map,
+        )
+        self.assertEqual([branch["branch_id"] for branch in selected], [0])
+        self.assertEqual(check["lowest_frequency_multiset_check"], "pass")
+
+    def test_airbox_boundary_sweep_is_not_compared_to_primary_same_physics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            # Make the expected finite-boundary trend visible while keeping
+            # adjacent increments decreasing: 2->4 um = 0.06%, 4->8 um =
+            # 0.02%.  The 8 um result is 0.08% from primary, which is a
+            # legitimate boundary shift but would fail the old 2e-4 check.
+            for root_name, scale in (("medium", 1.0006), ("fine", 1.0008)):
+                descriptor = evidence["convergence"]["airbox"]["runs"][root_name]
+                root = case_dir / descriptor["root"]
+                spectrum_path = root / "eigen/spectrum.v2.json"
+                branches_path = root / "eigen/branches.v2.json"
+                spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+                branches = json.loads(branches_path.read_text(encoding="utf-8"))
+                for sample in spectrum["samples"]:
+                    for mode in sample["modes"]:
+                        mode["frequency_real_hz"] *= scale
+                        _native_mode_diagnostics(mode)
+                for branch in branches["branches"]:
+                    for point in branch["points"]:
+                        point["frequency_real_hz"] *= scale
+                _write_json(spectrum_path, spectrum)
+                _write_json(branches_path, branches)
+                evidence["convergence"]["airbox"]["runs"][root_name] = _bundle_descriptor(
+                    case_dir, descriptor["root"]
+                )
+            _write_json(evidence_path, evidence)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["campaign_contract_status"], "pass", report["reasons"][:12])
+        airbox_check = report["checks"]["airbox_convergence"]
+        self.assertEqual(airbox_check["status"], "not_verified", report["reasons"][:12])
+        self.assertEqual(airbox_check["numeric_status"], "pass", report["reasons"][:12])
+        self.assertEqual(airbox_check["physical_identity_status"], "not_verified")
+        self.assertTrue(airbox_check["adjacent_comparisons"])
+        self.assertTrue(all(
+            item["comparison_reference"] == "adjacent_airbox_boundary_sweep"
+            for item in airbox_check["adjacent_comparisons"]
+        ))
+        self.assertTrue(all(
+            item["tolerance"] == gate.AIRBOX_CONVERGENCE_RELATIVE_TOLERANCE
+            for item in airbox_check["adjacent_comparisons"]
+        ))
+
+    def test_nonzero_k_oracle_does_not_apply_scalar_finite_airbox_correction(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        narrow = copy.deepcopy(parameters)
+        wide = copy.deepcopy(parameters)
+        narrow["geometry"]["air_padding_each_side_m"] = 2.0e-6
+        wide["geometry"]["air_padding_each_side_m"] = 8.0e-6
+        for k, sin_squared_phi in ((1.0e7, 0.0), (1.0e7, 1.0), (2.0e7, 0.25)):
+            with self.subTest(k=k, sin_squared_phi=sin_squared_phi):
+                self.assertAlmostEqual(
+                    gate._kalinikos_frequency_hz_general_phi(k, sin_squared_phi, narrow),
+                    gate._kalinikos_frequency_hz_general_phi(k, sin_squared_phi, wide),
+                    places=6,
+                )
+
+    def test_comparison_label_cannot_override_missing_native_execution(self):
+        for changes in ({"production_native_solver_available": False}, {"validation_only": True}):
+            with self.subTest(changes=changes):
+                manifest = {"validation": {
+                    "dispersion_frequency_source": gate.NUMERIC_FREQUENCY_SOURCE,
+                    "dynamic_demag_operator_source": "numeric_modal_solver",
+                }}
+                diagnostics = {"solver_model": gate.PRODUCTION_SOLVER_MODEL,
+                    "production_native_solver_available": True, "validation_only": False, **changes}
+                reasons = []
+                result = gate._validate_numeric_source(manifest, diagnostics, "c1", reasons)
+                self.assertEqual(result["status"], "fail")
+                self.assertTrue(reasons)
+
+    def test_csv_corruption_is_rejected_after_rebinding_current_file_hash(self):
+        for defect in ("nan", "frequency_mismatch", "duplicate_mode", "k_mismatch"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c1")
+                csv_path = case_dir / "eigen/dispersion.csv"
+                with csv_path.open(encoding="utf-8", newline="") as stream:
+                    reader = csv.DictReader(stream)
+                    fields, rows = reader.fieldnames, list(reader)
+                if defect == "nan":
+                    rows[-1]["frequency_hz"] = "NaN"
+                elif defect == "frequency_mismatch":
+                    rows[-1]["frequency_hz"] = str(float(rows[-1]["frequency_hz"]) * 1.1)
+                elif defect == "duplicate_mode":
+                    rows[-1] = dict(rows[-2])
+                else:
+                    rows[-1]["kx_rad_per_m"] = "1234567"
+                with csv_path.open("w", encoding="utf-8", newline="") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+                evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                evidence["artifact_bindings"]["dispersion_csv_sha256"] = _sha256(csv_path)
+                _write_json(evidence_path, evidence)
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+                self.assertEqual(report["status"], "not_qualified")
+                self.assertTrue(any("dispersion.csv" in reason for reason in report["reasons"]))
+                self.assertFalse(any("binding does not match" in reason for reason in report["reasons"]))
+
+    def test_cli_serializes_real_gate_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            process = subprocess.run(
+                [sys.executable, "-B", str(REPO_ROOT / "scripts/validate_comsol_dispersion_scientific_gate.py"),
+                 str(case_dir), "--case", "c0", "--parameters", str(PARAMETERS)],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertEqual(process.returncode, 1, process.stderr)
+            report = json.loads(process.stdout)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertEqual(report["checks"]["mesh_convergence"]["numeric_status"], "pass")
+            self.assertEqual(report["checks"]["mesh_convergence"]["physical_identity_status"], "not_verified")
+            self.assertEqual(report["checks"]["modal_field_phase"]["status"], "pass")
+            self.assertEqual(report["checks"]["modal_potential_phase"]["status"], "not_applicable")
+            self.assertIn("eigen/spectrum.v2.json", report["artifact_bindings"])
+
+    def test_c0_modal_potential_phase_is_not_applicable_with_validated_demag_off_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            report = gate.validate_case(case_dir, "c0", parameters_path=PARAMETERS)
+            field_check = report["checks"]["modal_field_phase"]
+            potential_check = report["checks"]["modal_potential_phase"]
+
+            self.assertEqual(field_check["status"], "pass")
+            self.assertEqual(potential_check["status"], "not_applicable")
+            self.assertEqual(potential_check["phase_status"], "not_applicable")
+            self.assertEqual(potential_check["gauge_status"], "not_applicable")
+            self.assertEqual(potential_check["applicability_status"], "validated_demag_disabled")
+            self.assertIn("does not solve a dynamic scalar potential", potential_check["reason"])
+            self.assertEqual(report["campaign_contract_status"], "pass")
+            self.assertEqual(report["checks"]["mesh_convergence"]["numeric_status"], "pass")
+            self.assertEqual(report["checks"]["mesh_convergence"]["numeric_basis"], "legacy_run_local_branch_id")
+            self.assertEqual(report["checks"]["mesh_convergence"]["physical_identity_status"], "not_verified")
+            self.assertEqual(report["checks"]["mode_count_convergence"]["numeric_status"], "not_verified")
+            self.assertEqual(report["checks"]["mode_count_convergence"]["numeric_basis"], "same_mesh_field_matched_frequency_multiset")
+            self.assertEqual(report["checks"]["mode_count_convergence"]["physical_identity_status"], "not_verified")
+            self.assertEqual(report["status"], "not_qualified")
+
+    def test_c0_contradictory_demag_metadata_prevents_not_applicable_potential_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            metadata_path = case_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            plan = metadata["execution_plan"]["backend_plan"]
+            plan["operator"]["include_demag"] = True
+            plan["enable_demag"] = True
+            _write_json(metadata_path, metadata)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_bindings"]["metadata_sha256"] = _sha256(metadata_path)
+            _write_json(evidence_path, evidence)
+
+            report = gate.validate_case(case_dir, "c0", parameters_path=PARAMETERS)
+            potential_check = report["checks"]["modal_potential_phase"]
+
+            self.assertNotEqual(potential_check["status"], "not_applicable")
+            self.assertEqual(potential_check["applicability_status"], "not_verified")
+            self.assertTrue(any("enable_demag does not match case c0" in reason for reason in report["reasons"]))
+            self.assertEqual(report["status"], "not_qualified")
+
+    def test_modal_potential_phase_rejects_mode_from_different_mesh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            manifest_path = case_dir / "frequency_domain/manifest.v1.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["validation"]["dynamic_demag_operator_source"] = "numeric_modal_solver"
+            _write_json(manifest_path, manifest)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_bindings"]["manifest_sha256"] = _sha256(manifest_path)
+            _write_json(evidence_path, evidence)
+            mode_path = case_dir / "eigen/modes/sample_0000/mode_0000.json"
+            mode = json.loads(mode_path.read_text(encoding="utf-8"))
+            mode["source_mesh_topology_sha256"] = "sha256:" + "f" * 64
+            _write_json(mode_path, mode)
+
+            report = gate.validate_case(case_dir, "c0", parameters_path=PARAMETERS)
+            potential_check = report["checks"]["modal_potential_phase"]
+
+            self.assertEqual(potential_check["mesh_identity_status"], "fail")
+            self.assertEqual(potential_check["status"], "fail")
+            self.assertTrue(any("topology differs from the numeric mesh" in reason
+                                for reason in potential_check["reasons"]))
+
+    def test_rehashed_wrong_phase_is_not_qualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            metadata_path = case_dir / "eigen/modes/sample_0010/mode_0000.json"
+            mode = json.loads(metadata_path.read_text(encoding="utf-8"))
+            path = case_dir / mode["compatibility_binary_payload_path"]
+            data = path.read_bytes()
+            values = list(struct.unpack(f"<{len(data)//8}d", data))
+            values[8] += 0.5
+            data = struct.pack(f"<{len(values)}d", *values)
+            path.write_bytes(data)
+            mode["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
+            _write_json(metadata_path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertTrue(any("phase residual" in reason for reason in report["reasons"]))
+            self.assertFalse(any("payload_sha256 does not match" in reason for reason in report["reasons"]))
+
+    def test_bundle_phase_residual_uses_certificate_tolerance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+            spectrum["samples"][10]["modes"][0]["phase_constraint_residual"] = 2.0e-8
+            _write_json(spectrum_path, spectrum)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_bindings"]["spectrum_v2_sha256"] = _sha256(spectrum_path)
+            _write_json(evidence_path, evidence)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertTrue(any("phase constraint residual" in reason for reason in report["reasons"]))
+
+    def test_valid_gamma_field_cannot_substitute_for_nonzero_k_sample(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            metadata_path = case_dir / "eigen/modes/sample_0010/mode_0000.json"
+            mode = json.loads(metadata_path.read_text(encoding="utf-8"))
+            values = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0] * mode["mode_field_sample_count"]
+            data = struct.pack(f"<{len(values)}d", *values)
+            (case_dir / mode["compatibility_binary_payload_path"]).write_bytes(data)
+            mode["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
+            mode["k_vector"] = [0.0, 0.0, 0.0]
+            _write_json(metadata_path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertEqual(report["checks"]["modal_field_phase"]["status"], "fail")
+            self.assertTrue(any("wavevector differs from the numeric spectrum" in reason for reason in report["reasons"]))
+            self.assertFalse(any("phase residual" in reason for reason in report["reasons"]))
+
+    def test_modal_field_phase_covers_every_selected_path_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            field_check = report["checks"]["modal_field_phase"]
+            coverage = field_check["selection_coverage"]
+
+            self.assertEqual(field_check["status"], "pass")
+            self.assertTrue(coverage["complete"])
+            self.assertEqual(coverage["expected_sample_count"], 61)
+            self.assertEqual(coverage["observed_sample_count"], 61)
+            self.assertEqual(coverage["expected_modes_per_sample"], 8)
+            self.assertEqual(coverage["expected_mode_count"], 488)
+            self.assertEqual(coverage["selected_mode_count"], 488)
+            self.assertEqual(coverage["unique_selected_mode_count"], 488)
+            self.assertEqual(coverage["certificate_mode_count"], 488)
+            self.assertEqual(coverage["validated_mode_count"], 488)
+            self.assertEqual(coverage["missing_sample_indices"], [])
+            self.assertTrue(all(count == 8 for count in coverage["selected_raw_mode_count_by_sample"].values()))
+
+            requested = field_check["requested_modes"]
+            requested_pairs = {
+                (item["sample_index"], item["raw_mode_index"])
+                for item in requested
+            }
+            self.assertEqual(len(requested), 488)
+            self.assertEqual(len(requested_pairs), 488)
+            for sample_index in range(61):
+                self.assertEqual(
+                    len({raw for sample, raw in requested_pairs if sample == sample_index}),
+                    8,
+                )
+
+    def test_missing_or_corrupt_j30_modal_field_fails_phase_check(self):
+        for damage in ("missing", "corrupt"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c1")
+                branch_document = json.loads(
+                    (case_dir / "eigen/branches.v2.json").read_text(encoding="utf-8")
+                )
+                first_branch = next(
+                    branch for branch in branch_document["branches"]
+                    if branch["branch_id"] == 0
+                )
+                point = next(
+                    point for point in first_branch["points"]
+                    if point["sample_index"] == 30
+                )
+                raw_mode = point["raw_mode_index"]
+                mode_path = case_dir / f"eigen/modes/sample_0030/mode_{raw_mode:04}.json"
+                mode = json.loads(mode_path.read_text(encoding="utf-8"))
+                vector_path = case_dir / mode["compatibility_binary_payload_path"]
+                if damage == "missing":
+                    vector_path.unlink()
+                else:
+                    data = vector_path.read_bytes()
+                    values = list(struct.unpack(f"<{len(data)//8}d", data))
+                    values[8] += 0.5
+                    data = struct.pack(f"<{len(values)}d", *values)
+                    vector_path.write_bytes(data)
+                    mode["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
+                    _write_json(mode_path, mode)
+
+                report = gate.validate_case(
+                    case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH
+                )
+                field_check = report["checks"]["modal_field_phase"]
+                self.assertEqual(field_check["status"], "fail")
+                self.assertFalse(field_check["selection_coverage"]["complete"])
+                if damage == "missing":
+                    replay = report["checks"]["tracking_field_metric_replay"]
+                    self.assertEqual(replay["status"], "missing")
+                    self.assertTrue(any("tracking field payload missing" in reason for reason in replay["reasons"]))
+                    self.assertEqual(report["qualification"], "NOT VERIFIED")
+                self.assertTrue(
+                    any("sample_0030" in reason for reason in field_check.get("reasons", [])),
+                                    field_check.get("reasons"),
+                )
+
+    def test_missing_modal_field_prevents_qualification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            (case_dir / "eigen/mode_fields/sample_0010/mode_0000/vector.bin").unlink()
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertEqual(report["checks"]["modal_field_phase"]["status"], "fail")
+
+    def test_convergence_keeps_target_and_finite_element_order_fixed(self):
+        for vary, field, original_value, changed_value in (
+            ("mode_count", "target", {"kind": "frequency_window", "frequency_min_hz": 1e6, "frequency_max_hz": 30e9}, {"kind": "frequency_window", "frequency_min_hz": 1e6, "frequency_max_hz": 40e9}),
+            ("mesh", "fe_order", 1, 2),
+        ):
+            with self.subTest(vary=vary):
+                original = _native_metadata("c1", "mesh-L1", 2e-6, 24)
+                original["execution_plan"]["backend_plan"][field] = original_value
+                changed = json.loads(json.dumps(original))
+                changed["execution_plan"]["backend_plan"][field] = changed_value
+                self.assertNotEqual(gate._backend_signature(original, vary=vary), gate._backend_signature(changed, vary=vary))
+
+    def test_cross_run_numeric_agreement_and_producer_claims_do_not_verify_mode_identity(self):
+        for producer_claim in (False, True):
+            with self.subTest(producer_claim=producer_claim), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c1")
+                evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+                evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                section = evidence["convergence"]["mode_count"]
+                baseline_root = section["runs"]["baseline"]["root"]
+                check_root = section["runs"]["check"]["root"]
+                self.assertNotIn("mode_fields", section["runs"]["baseline"]["artifacts"])
+                self.assertNotIn("mode_fields", section["runs"]["check"]["artifacts"])
+                baseline_spectrum = json.loads(
+                    (case_dir / baseline_root / "eigen/spectrum.v2.json").read_text(encoding="utf-8")
+                )
+                baseline_branches = json.loads(
+                    (case_dir / baseline_root / "eigen/branches.v2.json").read_text(encoding="utf-8")
+                )["branches"]
+                check_spectrum_path = case_dir / check_root / "eigen/spectrum.v2.json"
+                check_branches_path = case_dir / check_root / "eigen/branches.v2.json"
+                check_spectrum = json.loads(check_spectrum_path.read_text(encoding="utf-8"))
+                check_branches_payload = json.loads(check_branches_path.read_text(encoding="utf-8"))
+                check_branches = check_branches_payload["branches"]
+                baseline_frequencies = {
+                    (sample["sample_index"], mode["raw_mode_index"]): mode["frequency_real_hz"]
+                    for sample in baseline_spectrum["samples"]
+                    for mode in sample["modes"]
+                }
+                for sample in check_spectrum["samples"]:
+                    for mode in sample["modes"]:
+                        key = (sample["sample_index"], mode["raw_mode_index"])
+                        if key in baseline_frequencies:
+                            mode["frequency_real_hz"] = baseline_frequencies[key]
+                            _native_mode_diagnostics(mode)
+                baseline_branch_ids = {branch["branch_id"] for branch in baseline_branches}
+                for branch in check_branches:
+                    for point in branch["points"]:
+                        key = (point["sample_index"], point["raw_mode_index"])
+                        if branch["branch_id"] in baseline_branch_ids and key in baseline_frequencies:
+                            point["frequency_real_hz"] = baseline_frequencies[key]
+                _write_json(check_spectrum_path, check_spectrum)
+                _write_json(check_branches_path, check_branches_payload)
+                section["runs"]["check"] = _bundle_descriptor(case_dir, check_root)
+                if producer_claim:
+                    section["cross_run_mode_matching"] = {
+                        "status": "pass",
+                        "matches": [{
+                            "sample_index": 0,
+                            "branch_id": 0,
+                            "left_mode_field_sha256": "sha256:" + "0" * 64,
+                            "right_mode_field_sha256": "sha256:" + "1" * 64,
+                        }],
+                    }
+                _write_json(evidence_path, evidence)
+                baseline_point = baseline_branches[0]["points"][0]
+                check_point = check_branches[0]["points"][0]
+                self.assertEqual(baseline_branches[0]["branch_id"], check_branches[0]["branch_id"])
+                self.assertEqual(baseline_point["frequency_real_hz"], check_point["frequency_real_hz"])
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+                check = report["checks"]["mode_count_convergence"]
+                self.assertEqual(check["numeric_status"], "not_verified", report["reasons"][:12])
+                self.assertEqual(check["relative_changes"], {})
+                self.assertEqual(check["numeric_basis"], "same_mesh_field_matched_frequency_multiset")
+                self.assertTrue(all(value == 0.0 for value in check["legacy_run_local_relative_changes"].values()))
+                self.assertTrue(all(row["basis"] == "legacy_run_local_branch_id"
+                                    for row in check["legacy_run_local_comparisons"]))
+                self.assertTrue(all(row["run_local_branch_ids"]["primary"] is not None
+                                    for row in check["legacy_run_local_comparisons"]))
+                self.assertEqual(len(check["legacy_run_local_primary_relative_changes"]), 56)
+                self.assertEqual(len(check["legacy_run_local_check_to_primary_relative_changes"]), 56)
+                self.assertEqual(check["physical_identity_status"], "not_verified")
+                self.assertEqual(check["status"], "not_verified")
+                self.assertIn("run-local branch_id and frequency", check["physical_identity_reason"])
+                cross_run = check["cross_run_field_match"]
+                self.assertEqual(cross_run["status"], "not_verified")
+                self.assertTrue(cross_run["diagnostic_only"])
+                self.assertIn("no explicit cross_run_fields", cross_run["reasons"][0])
+                self.assertEqual(report["status"], "not_qualified")
+
+    def test_convergence_cross_run_fields_use_bound_loader_and_report_requested_vs_published(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            _install_cross_run_field_inputs(case_dir)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+
+            check = report["checks"]["mode_count_convergence"]
+            diagnostic = check["cross_run_field_match"]
+            self.assertEqual(check["numeric_status"], "pass", report["reasons"][:12])
+            self.assertEqual(check["physical_identity_status"], "not_verified")
+            self.assertEqual(diagnostic["status"], "pass", diagnostic["reasons"])
+            self.assertTrue(diagnostic["diagnostic_only"])
+            self.assertEqual(diagnostic["qualification"], "NOT VERIFIED")
+            self.assertEqual(diagnostic["physical_identity_status"], "not_verified")
+            self.assertEqual(check["numeric_basis"], "same_mesh_field_matched_frequency_multiset")
+            self.assertEqual(check["comparison_count"], 56)
+            self.assertEqual(check["frequency_comparison"]["status"], "pass")
+            self.assertEqual(check["frequency_comparison"]["target_mode_count"], 56)
+            self.assertEqual(check["frequency_comparison"]["right_candidate_mode_count"], 56)
+            self.assertEqual(check["frequency_comparison"]["unmatched_right_mode_count"], 0)
+            self.assertEqual(diagnostic["inventory"]["baseline_requested_mode_count"], 24)
+            self.assertEqual(diagnostic["inventory"]["baseline_diagnostics_requested_mode_count"], 24)
+            self.assertEqual(diagnostic["inventory"]["check_requested_mode_count"], 48)
+            self.assertEqual(diagnostic["inventory"]["check_diagnostics_requested_mode_count"], 48)
+            self.assertEqual(len(diagnostic["inventory"]["per_sample"]), 7)
+            self.assertTrue(all(item["baseline_selected_target_count"] == 8
+                                for item in diagnostic["inventory"]["per_sample"]))
+            self.assertTrue(all(item["check_published_mode_count"] == 8
+                                and item["check_quality_admitted_positive_frequency_mode_count"] == 8
+                                for item in diagnostic["inventory"]["per_sample"]))
+            check_evidence = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))
+            check_spectrum_descriptor_hash = check_evidence["convergence"]["mode_count"]["runs"]["check"]["artifacts"]["spectrum"]["sha256"]
+            baseline_spectrum_descriptor_hash = check_evidence["convergence"]["mode_count"]["runs"]["baseline"]["artifacts"]["spectrum"]["sha256"]
+            self.assertEqual(diagnostic["spectrum_bindings"]["check"]["sha256"], check_spectrum_descriptor_hash)
+            self.assertEqual(diagnostic["spectrum_bindings"]["baseline"]["sha256"], baseline_spectrum_descriptor_hash)
+            self.assertEqual(len(diagnostic["field_match"]["samples"]), 7)
+            self.assertTrue(all(sample["status"] == "pass" for sample in diagnostic["field_match"]["samples"]))
+
+    def test_convergence_field_match_uses_bound_fields_and_rejects_orthogonal_loss(self):
+        for check_source_raw, expected_status, expected_numeric_status in (
+            ({}, "pass", "pass"),
+            ({0: 1}, "not_verified", "not_verified"),
+        ):
+            with self.subTest(check_source_raw=check_source_raw), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c1")
+                _install_cross_run_field_inputs(case_dir, check_source_raw=check_source_raw)
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+                check = report["checks"]["mode_count_convergence"]
+                diagnostic = check["cross_run_field_match"]
+                self.assertEqual(check["numeric_status"], expected_numeric_status, report["reasons"][:12])
+                self.assertEqual(check["physical_identity_status"], "not_verified")
+                self.assertEqual(diagnostic["status"], expected_status, diagnostic["reasons"])
+                if expected_status == "pass":
+                    first_sample = diagnostic["field_match"]["samples"][0]
+                    pairs = first_sample["assignment"]["assigned_pairs"]
+                    raw_mapping = {
+                        pair["left_raw_mode_indices"][0]: pair["right_raw_mode_indices"][0]
+                        for pair in pairs
+                    }
+                    expected_mapping = {raw: check_source_raw.get(raw, raw) for raw in (0, 1)}
+                    self.assertEqual(raw_mapping[0], expected_mapping[0])
+                    self.assertEqual(raw_mapping[1], expected_mapping[1])
+                else:
+                    self.assertTrue(any("overlap_floor" in reason for reason in diagnostic["field_match"]["samples"][0]["reasons"]))
+
+    def test_mode_count_swapped_fields_reject_a_run_local_branch_id_false_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            _bind_check_frequencies_to_baseline_raw_ids(case_dir)
+            evidence = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))
+            baseline_root = evidence["convergence"]["mode_count"]["runs"]["baseline"]["root"]
+            baseline_spectrum = json.loads(
+                (case_dir / baseline_root / "eigen/spectrum.v2.json").read_text(encoding="utf-8")
+            )
+            sample_zero = next(sample for sample in baseline_spectrum["samples"] if sample["sample_index"] == 0)
+            frequencies = {mode["raw_mode_index"]: mode["frequency_real_hz"] for mode in sample_zero["modes"]}
+            self.assertGreater(
+                gate._relative_error(frequencies[0], frequencies[1]),
+                gate.CONVERGENCE_RELATIVE_TOLERANCE,
+            )
+            _install_cross_run_field_inputs(case_dir, check_source_raw={0: 1, 1: 0})
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+
+            check = report["checks"]["mode_count_convergence"]
+            diagnostic = check["cross_run_field_match"]
+            self.assertEqual(check["numeric_status"], "fail", report["reasons"][:12])
+            self.assertEqual(check["numeric_basis"], "same_mesh_field_matched_frequency_multiset")
+            self.assertEqual(check["legacy_comparison_count"], 56)
+            self.assertTrue(all(value == 0.0 for value in check["legacy_run_local_relative_changes"].values()))
+            self.assertGreater(check["max_relative_change"], gate.CONVERGENCE_RELATIVE_TOLERANCE)
+            self.assertEqual(check["frequency_comparison"]["status"], "fail")
+            self.assertEqual(diagnostic["status"], "pass")
+            pairs = diagnostic["field_match"]["samples"][0]["assignment"]["assigned_pairs"]
+            mapping = {pair["left_raw_mode_indices"][0]: pair["right_raw_mode_indices"][0] for pair in pairs}
+            self.assertEqual(mapping[0], 1)
+            self.assertEqual(mapping[1], 0)
+            self.assertEqual(check["frequency_comparison"]["target_mode_count"], 56)
+            self.assertEqual(check["frequency_comparison"]["right_candidate_mode_count"], 56)
+
+    def test_mode_count_rotated_degenerate_cluster_compares_frequency_multisets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            _bind_check_frequencies_to_baseline_raw_ids(case_dir, rotate_degenerate_pair=True)
+            _install_cross_run_field_inputs(case_dir, check_rotated_samples={0})
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            cross_run_fields = evidence["convergence"]["mode_count"]["cross_run_fields"]
+            for label in ("baseline_clusters", "check_clusters"):
+                sample = next(row for row in cross_run_fields[label] if row["sample_index"] == 0)
+                sample["groups"] = [
+                    sample["groups"][0] + sample["groups"][1],
+                    *sample["groups"][2:],
+                ]
+            _write_json(evidence_path, evidence)
+
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            check = report["checks"]["mode_count_convergence"]
+            self.assertEqual(check["numeric_status"], "pass", report["reasons"][:12])
+            degenerate = next(
+                row for row in check["frequency_comparison"]["comparisons"]
+                if row["sample_index"] == 0 and row["rank"] == 2
+            )
+            self.assertEqual(degenerate["baseline_frequency_multiset_hz"], degenerate["check_frequency_multiset_hz"])
+            self.assertEqual(len(degenerate["frequency_ordinal_relative_changes"]), 2)
+            self.assertIn("member_identity", degenerate)
+            self.assertIn("not_asserted", degenerate["member_identity"])
+
+    def test_mode_count_malformed_explicit_match_threshold_fails_numeric_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            _install_cross_run_field_inputs(case_dir)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["convergence"]["mode_count"]["cross_run_fields"]["policy"]["overlap_floor"] = 1.01
+            _write_json(evidence_path, evidence)
+
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            check = report["checks"]["mode_count_convergence"]
+            self.assertEqual(check["numeric_status"], "fail")
+            self.assertEqual(check["cross_run_field_match"]["status"], "fail")
+            self.assertTrue(any("outside the matcher's explicit domain" in reason
+                                for reason in check["numeric_reasons"]))
+
+    def test_convergence_field_match_rejects_loader_metadata_hash_rebound(self):
+        from comsol_tracking_fields import load_tracking_fields as actual_load_tracking_fields
+
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            _install_cross_run_field_inputs(case_dir)
+            calls = 0
+
+            def loader_with_rebound_metadata(*args, **kwargs):
+                nonlocal calls
+                context = actual_load_tracking_fields(*args, **kwargs)
+                calls += 1
+                if calls == 2:
+                    metadata_path = Path(args[0]) / "metadata.json"
+                    modified_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    modified_metadata["test_unrelated_metadata_marker"] = "same physical context, new bound document"
+                    modified_bytes = json.dumps(
+                        modified_metadata, sort_keys=True, separators=(",", ":"),
+                    ).encode("utf-8")
+                    rebound_digest = "sha256:" + hashlib.sha256(modified_bytes).hexdigest()
+                    file_hashes = [dict(entry) for entry in context["file_hashes"]]
+                    metadata_entries = [entry for entry in file_hashes if entry.get("path") == "metadata.json"]
+                    self.assertEqual(len(metadata_entries), 1)
+                    metadata_entries[0]["sha256"] = rebound_digest
+                    context = dict(context)
+                    context["file_hashes"] = file_hashes
+                return context
+
+            with mock.patch("comsol_tracking_fields.load_tracking_fields", side_effect=loader_with_rebound_metadata):
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+
+            check = report["checks"]["mode_count_convergence"]
+            diagnostic = check["cross_run_field_match"]
+            self.assertEqual(calls, 2)
+            self.assertEqual(check["numeric_status"], "fail", report["reasons"][:12])
+            self.assertEqual(diagnostic["status"], "fail")
+            self.assertTrue(any("metadata hash differs from numeric bundle descriptor" in reason
+                                for reason in diagnostic["reasons"]))
+            self.assertEqual(diagnostic["physical_identity_status"], "not_verified")
+
+    def test_convergence_field_match_fails_closed_on_mesh_change_and_missing_field_bytes(self):
+        for change in ("mesh", "missing_vector"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c1")
+                _install_cross_run_field_inputs(case_dir, check_mesh_shift=change == "mesh")
+                section = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))["convergence"]["mode_count"]
+                check_root = case_dir / section["runs"]["check"]["root"]
+                if change == "missing_vector":
+                    (check_root / "eigen/mode_fields/sample_0000/mode_0000/vector.bin").unlink()
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+                check = report["checks"]["mode_count_convergence"]
+                diagnostic = check["cross_run_field_match"]
+                self.assertNotEqual(diagnostic["status"], "pass")
+                self.assertEqual(diagnostic["physical_identity_status"], "not_verified")
+                if change == "mesh":
+                    self.assertTrue(any("topology fingerprints differ" in reason for reason in diagnostic["reasons"]))
+                else:
+                    self.assertEqual(check["numeric_status"], "fail", report["reasons"][:12])
+                    self.assertTrue(any("phase certificate failed" in reason for reason in diagnostic["reasons"]))
+
+    def test_signed_k_missing_evidence_is_a1_not_verified_and_c0_not_applicable(self):
+        a1 = gate._validate_signed_k_replay(
+            Path("unused"), "a1", {"signed_k": {"status": "pass"}}, {}, {}, {}, [],
+        )
+        self.assertEqual(a1["status"], "not_verified")
+        self.assertEqual(a1["numeric_status"], "not_verified")
+        self.assertEqual(a1["scientific_status"], "not_verified")
+        self.assertIn("evidence.signed_k.negative_run is missing", a1["numeric_reasons"])
+        c0 = gate._validate_signed_k_replay(
+            Path("unused"), "c0", None, {}, {}, {}, [],
+        )
+        self.assertEqual(c0["status"], "not_applicable")
+        self.assertEqual(c0["numeric_status"], "not_applicable")
+
+    def test_numeric_bundle_parses_the_exact_bytes_that_passed_hash_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory) / "c1"
+            case_dir.mkdir()
+            frequencies = [9.0e9 + index * 1.0e8 for index in range(8)]
+            samples = [{
+                "sample_index": 0,
+                "k_vector": [0.0, 0.0, 0.0],
+                "modes": [
+                    {"raw_mode_index": index, "frequency_real_hz": frequency, "frequency_imag_hz": 0.0}
+                    for index, frequency in enumerate(frequencies)
+                ],
+            }]
+            branches = [
+                {"branch_id": index, "points": [{
+                    "sample_index": 0,
+                    "raw_mode_index": index,
+                    "frequency_real_hz": frequency,
+                    "frequency_imag_hz": 0.0,
+                }]}
+                for index, frequency in enumerate(frequencies)
+            ]
+            descriptor = _write_bundle(
+                case_dir,
+                "validation/toctou",
+                samples,
+                branches,
+                mesh_id="mesh-L1",
+                airbox_m=2.0e-6,
+                requested_modes=24,
+            )
+            spectrum_path = case_dir / "validation/toctou/eigen/spectrum.v2.json"
+            bound_bytes = spectrum_path.read_bytes()
+            bound_payload = json.loads(bound_bytes.decode("utf-8"))
+            replacement_payload = copy.deepcopy(bound_payload)
+            replacement_payload["samples"][0]["modes"][0]["frequency_real_hz"] += 5.0e6
+            replacement_bytes = json.dumps(replacement_payload).encode("utf-8")
+            original_loader = gate._load_json
+            replacement_count = 0
+
+            def replace_after_hash(path):
+                nonlocal replacement_count
+                if path == spectrum_path:
+                    replacement_count += 1
+                    path.write_bytes(replacement_bytes)
+                return original_loader(path)
+
+            reasons = []
+            with mock.patch.object(gate, "_load_json", side_effect=replace_after_hash):
+                bundle = gate._load_numeric_bundle(
+                    case_dir,
+                    descriptor,
+                    "TOCTOU comparison run",
+                    reasons,
+                    require_demag=True,
+                )
+            self.assertEqual(reasons, [])
+            self.assertIsNotNone(bundle)
+            self.assertEqual(replacement_count, 0)
+            self.assertEqual(bundle["spectrum"], bound_payload)
+
+    def test_signed_k_replay_uses_bound_bytes_and_never_qualifies_physics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "a1")
+            descriptor = _write_signed_k_bundle(case_dir, negative_k=True)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["signed_k"] = {"status": "pass", "negative_run": descriptor}
+            _write_json(evidence_path, evidence)
+
+            report = gate.validate_case(case_dir, "a1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            check = report["checks"]["signed_k_replay"]
+            self.assertEqual(check["status"], "not_verified")
+            self.assertEqual(check["numeric_status"], "pass", check.get("numeric_reasons"))
+            self.assertEqual(check["scientific_status"], "not_verified")
+            self.assertEqual(check["numeric_replay"]["target_band_count"], 8)
+            self.assertEqual(check["numeric_replay"]["coverage"]["negative_sample_count"], 61)
+            self.assertEqual(check["relative_tolerance"], gate.CONVERGENCE_RELATIVE_TOLERANCE)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertTrue(any("assembled FEM operator" in item for item in check["scientific_blockers"]))
+
+            parameters, parameter_reasons = gate._load_parameters(PARAMETERS)
+            expected_path, _, path_reasons = gate._canonical_path_rows(KPATH)
+            primary_spectrum = json.loads((case_dir / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))
+            primary_metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+            _, _, primary_quality = gate._validate_spectrum(
+                primary_spectrum, "a1", expected_path, [],
+            )
+            self.assertEqual(parameter_reasons, [])
+            self.assertEqual(path_reasons, [])
+            primary_bundle = {"metadata": primary_metadata, "spectrum": primary_spectrum}
+
+            def replay_check():
+                current_evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                return gate._validate_signed_k_replay(
+                    case_dir,
+                    "a1",
+                    current_evidence,
+                    parameters,
+                    primary_bundle,
+                    primary_quality,
+                    [],
+                )
+
+            evidence["signed_k"]["status"] = "fail"
+            _write_json(evidence_path, evidence)
+            claimed_fail = replay_check()
+            self.assertEqual(claimed_fail["numeric_status"], "pass")
+
+            spectrum_path = case_dir / "validation/signed_k/negative_run/eigen/spectrum.v2.json"
+            tampered = json.loads(spectrum_path.read_text(encoding="utf-8"))
+            tampered["samples"][10]["modes"][0]["frequency_real_hz"] += 1.0e6
+            _write_json(spectrum_path, tampered)
+            evidence["signed_k"]["status"] = "pass"
+            _write_json(evidence_path, evidence)
+            hash_mismatch = replay_check()
+            self.assertEqual(hash_mismatch["numeric_status"], "not_verified")
+            self.assertEqual(hash_mismatch["input_status"], "fail")
+            self.assertTrue(any("SHA256 does not match" in item for item in hash_mismatch["numeric_reasons"]))
+
+            swapped_descriptor = _write_signed_k_bundle(case_dir, negative_k=False)
+            evidence["signed_k"]["negative_run"] = swapped_descriptor
+            _write_json(evidence_path, evidence)
+            swapped = replay_check()
+            self.assertEqual(swapped["numeric_status"], "fail")
+            self.assertIn("is not the negative", swapped["numeric_replay"]["error"])
+
+            short_descriptor = _write_signed_k_bundle(case_dir, negative_k=True, band_count=7)
+            evidence["signed_k"]["negative_run"] = short_descriptor
+            _write_json(evidence_path, evidence)
+            insufficient = replay_check()
+            self.assertEqual(insufficient["numeric_status"], "fail")
+            self.assertTrue(any("at least 8 are required" in item for item in insufficient["numeric_reasons"]))
+
+    def test_primary_and_comparison_schema_versions_are_required(self):
+        for scope in ("primary", "comparison"):
+            for payload in ("spectrum", "branches", "manifest"):
+                with self.subTest(scope=scope, payload=payload), tempfile.TemporaryDirectory() as directory:
+                    case_dir = _make_case(Path(directory), "c1")
+                    root = "" if scope == "primary" else "validation/convergence/mesh_medium"
+                    relative = {"spectrum": "eigen/spectrum.v2.json", "branches": "eigen/branches.v2.json", "manifest": "frequency_domain/manifest.v1.json"}[payload]
+                    artifact_path = case_dir / root / relative
+                    data = json.loads(artifact_path.read_text(encoding="utf-8"))
+                    data["schema_version"] = "unknown.v999"
+                    _write_json(artifact_path, data)
+                    evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    if scope == "comparison":
+                        evidence["convergence"]["mesh"]["runs"]["medium"] = _bundle_descriptor(case_dir, root)
+                    else:
+                        binding = {"spectrum": "spectrum_v2_sha256", "branches": "branches_v2_sha256", "manifest": "manifest_sha256"}[payload]
+                        evidence["artifact_bindings"][binding] = _sha256(artifact_path)
+                    _write_json(evidence_path, evidence)
+                    report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+                    self.assertEqual(report["status"], "not_qualified")
+                    self.assertTrue(any(f".{payload} requires schema_version" in reason for reason in report["reasons"]))
+                    self.assertFalse(any("binding does not match" in reason or "SHA256 does not match" in reason for reason in report["reasons"]))
+
+    def test_mode_count_comparison_cannot_change_mesh_resolution(self):
+        original = _native_metadata("c1", "mesh-L1", 2e-6, 24)
+        changed = _native_metadata("c1", "mesh-L2", 2e-6, 48)
+        self.assertNotEqual(gate._backend_signature(original, vary="mode_count"), gate._backend_signature(changed, vary="mode_count"))
+
+    def test_airbox_comparison_preserves_magnetic_geometry_and_hmax(self):
+        original = _native_metadata("c1", "mesh-L1", 2e-6, 24)
+        for defect in ("hmax", "magnetic_bounds"):
+            with self.subTest(defect=defect):
+                changed = json.loads(json.dumps(original))
+                plan = changed["execution_plan"]["backend_plan"]
+                if defect == "hmax":
+                    plan["hmax"] *= 0.5
+                else:
+                    plan["domain_frame"]["object_bounds_max"][2] *= 2
+                self.assertNotEqual(gate._backend_signature(original, vary="airbox"), gate._backend_signature(changed, vary="airbox"))
+
+    def test_uniform_equilibrium_can_be_resampled_on_a_refined_mesh(self):
+        original = _native_metadata("c1", "mesh-L1", 2e-6, 24)
+        refined = _native_metadata("c1", "mesh-L2", 2e-6, 24)
+        plan = refined["execution_plan"]["backend_plan"]
+        plan["equilibrium_magnetization"] *= 2
+        self.assertEqual(gate._backend_signature(original, vary="mesh"), gate._backend_signature(refined, vary="mesh"))
+        plan["equilibrium_magnetization"][-1] = [0.0, 1.0, 0.0]
+        self.assertNotEqual(gate._backend_signature(original, vary="mesh"), gate._backend_signature(refined, vary="mesh"))
+
+    def test_airbox_identity_uses_resolved_bounds_not_authoring_factor(self):
+        plan = _native_metadata("c1", "mesh-L1", 2e-6, 24)["execution_plan"]["backend_plan"]
+        self.assertAlmostEqual(gate._backend_airbox_value(plan), 2e-6, delta=1e-18)
+        plan["air_box_config"]["factor"] *= 10
+        self.assertAlmostEqual(gate._backend_airbox_value(plan), 2e-6, delta=1e-18)
+        plan.pop("domain_frame")
+        self.assertIsNone(gate._backend_airbox_value(plan))
+
+    def test_two_levels_cannot_qualify_mesh_or_airbox_convergence(self):
+        for key in ("mesh", "airbox"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c1")
+                path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+                evidence = json.loads(path.read_text(encoding="utf-8"))
+                evidence["convergence"][key]["runs"].pop("medium", None)
+                _write_json(path, evidence)
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+                self.assertEqual(report["status"], "not_qualified")
+                self.assertEqual(report["checks"][f"{key}_convergence"]["status"], "fail")
+                self.assertTrue(any(f"convergence.{key}" in reason and "three" in reason for reason in report["reasons"]))
+
+    def test_three_level_convergence_rejects_reused_or_reversed_levels(self):
+        for key in ("mesh", "airbox"):
+            for defect in ("reused", "reversed"):
+                with self.subTest(key=key, defect=defect), tempfile.TemporaryDirectory() as directory:
+                    case_dir = _make_case(Path(directory), "c1")
+                    path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+                    evidence = json.loads(path.read_text(encoding="utf-8"))
+                    runs = evidence["convergence"][key]["runs"]
+                    if defect == "reused":
+                        runs["medium"] = runs["coarse"]
+                    else:
+                        runs["medium"], runs["fine"] = runs["fine"], runs["medium"]
+                    _write_json(path, evidence)
+                    report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+                    self.assertEqual(report["checks"][f"{key}_convergence"]["status"], "fail")
+                    self.assertEqual(report["status"], "not_qualified")
+
+    def test_small_but_growing_refinement_increments_are_not_convergence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(path.read_text(encoding="utf-8"))
+            samples = json.loads((case_dir / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))["samples"]
+            branches = json.loads((case_dir / "eigen/branches.v2.json").read_text(encoding="utf-8"))["branches"]
+            samples, branches = _scaled_payload(samples, branches, 1.00019)
+            evidence["convergence"]["mesh"]["runs"]["fine"] = _write_bundle(
+                case_dir, "validation/convergence/mesh_fine", samples, branches,
+                mesh_id="mesh-L3", airbox_m=2e-6, requested_modes=24,
+            )
+            _write_json(path, evidence)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertEqual(report["checks"]["mesh_convergence"]["status"], "fail")
+            self.assertTrue(any("increments grow" in reason for reason in report["reasons"]))
+            self.assertTrue(all(check["numeric_status"] == "pass" for check in report["checks"]["mesh_convergence"]["adjacent_comparisons"]))
+            self.assertTrue(all(check["physical_identity_status"] == "not_verified" for check in report["checks"]["mesh_convergence"]["adjacent_comparisons"]))
+
+    def test_campaign_contract_pass_cannot_qualify_inconsistent_tracking_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            results = {}
+            for case in ("c0", "c1", "a1"):
+                with self.subTest(case=case):
+                    results[case] = gate.validate_case(
+                        _make_case(Path(directory), case), case,
+                        parameters_path=PARAMETERS, kpath_path=KPATH,
+                    )
+                    self.assertEqual(results[case]["campaign_contract_status"], "pass", results[case]["reasons"][:8])
+                    self.assertEqual(results[case]["status"], "not_qualified")
+                    self.assertEqual(results[case]["checks"]["primary_search_parameters"]["status"], "pass")
+                    self.assertEqual(results[case]["checks"]["primary_window_completeness"]["status"], "pass")
+                    if case == "c0":
+                        self.assertEqual(results[case]["checks"]["modal_field_phase"]["status"], "pass")
+                        self.assertEqual(results[case]["checks"]["modal_potential_phase"]["status"], "not_applicable")
+                    if case in gate.PATH_CASES:
+                        self.assertEqual(results[case]["qualification"], "NOT VERIFIED")
+                        # Full magnetic phase coverage does not prove consistency of
+                        # the synthetic branch assignment or its metric replay.
+                        self.assertEqual(results[case]["checks"]["modal_field_phase"]["status"], "pass")
+                        replay = results[case]["checks"]["tracking_field_metric_replay"]
+                        self.assertEqual(replay["status"], "fail")
+                        self.assertTrue(replay["reasons"])
+            self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "a1"))["status"], "not_qualified")
+
+    def test_primary_equilibrium_is_mandatory_for_c0_c1_a1(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for case in ("c0", "c1", "a1"):
+                with self.subTest(case=case):
+                    report = gate.validate_case(
+                        _make_case(root, case),
+                        case,
+                        parameters_path=PARAMETERS,
+                        kpath_path=KPATH,
+                    )
+                    self.assertEqual(
+                        report["checks"]["primary_equilibrium"]["status"],
+                        "pass",
+                        report["checks"]["primary_equilibrium"],
+                    )
+                    if case in {"c0", "a1"}:
+                        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "not_applicable")
+
+    def test_primary_equilibrium_rejects_stale_and_mismatched_bindings(self):
+        defects = (
+            "missing_mode",
+            "stale_state_hash",
+            "wrong_source_run",
+            "wrong_source_mesh",
+            "wrong_material",
+            "wrong_physics",
+            "identity_hash",
+        )
+        for defect in defects:
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c0")
+                if defect == "missing_mode":
+                    (case_dir / "eigen/modes/sample_0000/mode_0000.json").unlink()
+                elif defect == "stale_state_hash":
+                    path = case_dir / "eigen/metadata/sample_0000/linearization_state.v6.json"
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                    state["m0"][0][0] = 0.5
+                    _write_json(path, state)
+                elif defect == "wrong_source_run":
+                    _rewrite_primary_identity(case_dir, 0, source_run_id="different-source-run")
+                elif defect == "wrong_source_mesh":
+                    _rewrite_primary_identity(
+                        case_dir,
+                        0,
+                        source_mesh_topology_sha256="sha256:" + "9" * 64,
+                    )
+                elif defect == "wrong_material":
+                    path = case_dir / "metadata.json"
+                    metadata = json.loads(path.read_text(encoding="utf-8"))
+                    metadata["execution_plan"]["backend_plan"]["material"][
+                        "saturation_magnetisation"
+                    ] = 700000.0
+                    _write_json(path, metadata)
+                elif defect == "wrong_physics":
+                    path = case_dir / "metadata.json"
+                    metadata = json.loads(path.read_text(encoding="utf-8"))
+                    metadata["execution_plan"]["backend_plan"]["external_field"][0] += 100.0
+                    _write_json(path, metadata)
+                else:
+                    path = case_dir / "eigen/metadata/sample_0000/linearization_identity.v2.json"
+                    identity = json.loads(path.read_text(encoding="utf-8"))
+                    identity["source_stage_id"] = "unbound-stage-edit"
+                    _write_json(path, identity)
+
+                report = gate.validate_case(
+                    case_dir,
+                    "c0",
+                    parameters_path=PARAMETERS,
+                    kpath_path=KPATH,
+                )
+                self.assertEqual(
+                    report["checks"]["primary_equilibrium"]["status"],
+                    "fail",
+                    report["checks"]["primary_equilibrium"],
+                )
+    def test_primary_canonical_v8_v7_reuse_binds_both_raw_material_plans(self):
+        producer_material = _canonical_test_material("relaxation-source")
+        consumer_material = _canonical_test_material("current-consumer")
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(
+                Path(directory),
+                "c0",
+                primary_material=consumer_material,
+                producer_material=producer_material,
+            )
+            report = gate.validate_case(
+                case_dir,
+                "c0",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+            self.assertEqual(
+                report["checks"]["primary_equilibrium"]["status"],
+                "pass",
+                report["checks"]["primary_equilibrium"],
+            )
+            identity = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/linearization_identity.v2.json")
+                .read_text(encoding="utf-8")
+            )
+            equilibrium = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/equilibrium_artifact.v8.json")
+                .read_text(encoding="utf-8")
+            )
+            state = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/linearization_state.v7.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertEqual(equilibrium["material_provenance_signature"],
+                             identity["material_provenance_signature"])
+            self.assertEqual(state["material_provenance_signature"],
+                             identity["material_provenance_signature"])
+            self.assertNotEqual(identity["producer_material_provenance_signature"],
+                                identity["material_provenance_signature"])
+            self.assertEqual(identity["material_signature"], equilibrium["material_signature"])
+
+    def test_primary_canonical_v8_v7_rejects_current_physical_material_changes(self):
+        changes = (
+            ("saturation_magnetisation", 700000.0),
+            ("exchange_stiffness", 1.4e-11),
+            ("uniaxial_anisotropy", 14000.0),
+            ("ms_field", "spatial"),
+            ("a_field", "spatial"),
+        )
+        for field, value in changes:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                consumer_material = _canonical_test_material()
+                producer_material = _canonical_test_material("relaxation-source")
+                case_dir = _make_case(
+                    Path(directory),
+                    "c0",
+                    primary_material=consumer_material,
+                    producer_material=producer_material,
+                )
+                changed_material = copy.deepcopy(consumer_material)
+                if value == "spatial":
+                    node_count = len(
+                        json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+                        ["execution_plan"]["backend_plan"]["mesh"]["nodes"]
+                    )
+                    field_value = (
+                        [800000.0] * node_count if field == "ms_field"
+                        else [1.3e-11] * node_count
+                    )
+                    changed_material[field] = field_value
+                else:
+                    changed_material[field] = value
+                metadata_path = case_dir / "metadata.json"
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["execution_plan"]["backend_plan"]["material"] = changed_material
+                _write_json(metadata_path, metadata)
+                _rewrite_primary_consumer_material(case_dir, 0, changed_material)
+
+                report = gate.validate_case(
+                    case_dir,
+                    "c0",
+                    parameters_path=PARAMETERS,
+                    kpath_path=KPATH,
+                )
+                self.assertEqual(
+                    report["checks"]["primary_equilibrium"]["status"],
+                    "fail",
+                    report["checks"]["primary_equilibrium"],
+                )
+
+    def test_primary_canonical_ku0_uses_physical_v1_preimage(self):
+        material = _canonical_test_material(ku=0.0, axis=[0.0, 0.0, 0.0])
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(
+                Path(directory),
+                "c0",
+                primary_material=material,
+                producer_material=copy.deepcopy(material),
+            )
+            report = gate.validate_case(
+                case_dir,
+                "c0",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+            self.assertEqual(
+                report["checks"]["primary_equilibrium"]["status"],
+                "pass",
+                report["checks"]["primary_equilibrium"],
+            )
+            identity = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/linearization_identity.v2.json")
+                .read_text(encoding="utf-8")
+            )
+            physical = json.loads(identity["equilibrium_material_preimage_json"])
+            self.assertEqual(identity["material_identity_kind"],
+                             "canonical_equilibrium_material.v2")
+            self.assertEqual(physical["schema_version"],
+                             "EquilibriumMaterialSignaturePreimage.v1")
+    def test_metric_replay_pass_cannot_qualify_unreplayed_assignment(self):
+        # Unit coverage of the aggregate verdict only, not a field/solver proof.
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            with patch.object(gate, "replay_tracking_fields", return_value={
+                "status": "pass", "qualification": "NOT VERIFIED", "reasons": [],
+                "assignment_replay": "NOT VERIFIED",
+            }) as replay:
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            replay.assert_called_once()
+            self.assertEqual(report["checks"]["tracking_field_metric_replay"]["status"], "pass")
+            self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"], "missing")
+            self.assertEqual(report["scientific_qualification"], "not_verified")
+            self.assertEqual(report["qualification"], "NOT VERIFIED")
+
+    def test_assignment_flag_without_full_step_certificate_cannot_qualify(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            for steps in ([], [dict(sample_index=1, status="pass")],
+                          [dict(sample_index=index, status="pass") for index in reversed(range(1,61))]):
+                with self.subTest(steps=len(steps)), patch.object(gate, "replay_tracking_fields", return_value={
+                    "status":"pass", "reasons":[], "assignment_replay":"pass",
+                    "global_assignment_verification":steps,
+                }):
+                    report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+                    self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],"missing")
+                    self.assertEqual(report["qualification"],"NOT VERIFIED")
+
+    def test_full_executed_assignment_certificate_closes_only_its_gate(self):
+        # Consumer logic with an injected component result, not runtime proof.
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            with patch.object(gate,"replay_tracking_fields",return_value={
+                "status":"pass", "reasons":[], "assignment_replay":"pass",
+                "replayed_branch_scope":"all_candidates", "branch_lifecycle_scope":"complete_continuous",
+                "candidate_field_coverage":{"status":"pass", "exported_candidate_count":61 * 8},
+                "global_assignment_verification":[dict(sample_index=index,status="pass") for index in range(1,61)],
+            }):
+                report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+            self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],"pass")
+            potential = report["checks"]["modal_potential_phase"]
+            self.assertEqual(potential["status"], "not_verified")
+            self.assertEqual(potential["gauge_status"], "not_verified")
+            self.assertIn("independently replayable gauge constraint", potential["gauge_reason"])
+            self.assertTrue(any("modal_potential_phase" in reason and "not_verified" in reason
+                                for reason in report["reasons"]))
+            self.assertEqual(report["status"],"not_qualified",report["reasons"])
+
+    def test_complete_steps_without_full_candidate_scope_cannot_qualify(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            result = dict(status="pass", reasons=[], assignment_replay="pass",
+                replayed_branch_scope="all_candidates", branch_lifecycle_scope="complete_continuous",
+                candidate_field_coverage=dict(status="pass", exported_candidate_count=61 * 8),
+                global_assignment_verification=[dict(sample_index=index,status="pass") for index in range(1,61)])
+            for defect in ("scope", "lifecycle", "coverage", "count"):
+                changed = copy.deepcopy(result)
+                if defect == "scope":
+                    changed.pop("replayed_branch_scope")
+                elif defect == "lifecycle":
+                    changed.pop("branch_lifecycle_scope")
+                elif defect == "coverage":
+                    changed["candidate_field_coverage"]["status"] = "missing"
+                else:
+                    changed["candidate_field_coverage"]["exported_candidate_count"] -= 1
+                with self.subTest(defect=defect), patch.object(gate,"replay_tracking_fields",return_value=changed):
+                    report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+                    self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],"missing")
+                    self.assertEqual(report["qualification"],"NOT VERIFIED")
+
+    def test_sparse_history_requires_executed_lifecycle_certificate(self):
+        # Injected component results test this consumer, not FEM execution.
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            result = dict(status="pass", reasons=[], assignment_replay="pass",
+                replayed_branch_scope="all_candidates", branch_lifecycle_scope="complete_history",
+                branch_lifecycle_replay=dict(status="pass", verified_sample_count=61),
+                candidate_field_coverage=dict(status="pass", exported_candidate_count=61 * 8),
+                global_assignment_verification=[dict(sample_index=index,status="pass") for index in range(1,61)])
+            for defect in (None, "missing", "failed", "count", "boolean"):
+                changed = copy.deepcopy(result)
+                if defect == "missing": changed.pop("branch_lifecycle_replay")
+                elif defect == "failed": changed["branch_lifecycle_replay"]["status"] = "NOT VERIFIED"
+                elif defect == "count": changed["branch_lifecycle_replay"]["verified_sample_count"] = 60
+                elif defect == "boolean": changed["branch_lifecycle_replay"]["verified_sample_count"] = True
+                with self.subTest(defect=defect), patch.object(gate,"replay_tracking_fields",return_value=changed):
+                    report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+                    self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],
+                                     "pass" if defect is None else "missing")
+
+    def test_resolved_spatial_material_override_cannot_claim_homogeneous_ks(self):
+        metadata = _native_metadata("c1", "mesh-L1", 2e-6, 24)
+        metadata["execution_plan"]["backend_plan"]["material"]["ms_field"] = [800000.0, 1600000.0]
+        reasons = []
+        self.assertFalse(gate._validate_benchmark_metadata(
+            metadata, "c1", json.loads(PARAMETERS.read_text(encoding="utf-8")),
+            "inhomogeneous fixture", reasons, require_uniform_slab=True,
+        ), "spatial Ms overrides the scalar and invalidates the homogeneous-film oracle")
+
+    def test_canonical_guide_metadata_matches_resolved_c1_without_validation_toggle(self):
+        metadata = _native_metadata("c1", "mesh-L1", 2e-6, 24)
+        self.assertNotIn("dispersion_validation", metadata["execution_plan"]["backend_plan"])
+        reasons = []
+        self.assertTrue(gate._validate_benchmark_metadata(
+            metadata, "c1", json.loads(PARAMETERS.read_text(encoding="utf-8")),
+            "canonical fixture", reasons, require_uniform_slab=True,
+        ), reasons)
+        self.assertEqual(reasons, [])
+
+    def test_canonical_metadata_cannot_hide_changed_resolved_gamma(self):
+        metadata = _native_metadata("c1", "mesh-L1", 2e-6, 24)
+        metadata["execution_plan"]["backend_plan"]["gyromagnetic_ratio"] *= 2.0
+        reasons = []
+        self.assertFalse(gate._validate_benchmark_metadata(
+            metadata, "c1", json.loads(PARAMETERS.read_text(encoding="utf-8")),
+            "canonical fixture", reasons, require_uniform_slab=True,
+        ))
+        self.assertTrue(any("gyromagnetic_ratio" in reason for reason in reasons))
+
+    def test_a1_requires_canonical_realized_cylindrical_through_hole(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        for include_shared_air in (False, True):
+            with self.subTest(shared_air=include_shared_air):
+                metadata = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+                if include_shared_air:
+                    magnetic_count = len(metadata["execution_plan"]["backend_plan"]["mesh"]["cells"]["types"])
+                    _append_a1_shared_air_tet(metadata)
+                    plan = metadata["execution_plan"]["backend_plan"]
+                    self.assertEqual(plan["mesh_parts"][0]["element_selector"]["count"], magnetic_count)
+                    self.assertEqual(plan["mesh"]["cells"]["mesh_parts"][-1], "transition_air")
+                    self.assertGreater(
+                        max(point[2] for point in plan["mesh"]["nodes"]),
+                        max(point[2] for point in plan["mesh"]["nodes"][:-1]),
+                    )
+                reasons = []
+                self.assertTrue(gate._validate_benchmark_metadata(
+                    metadata, "a1", parameters, "canonical A1 fixture", reasons,
+                    require_uniform_slab=False,
+                ), reasons)
+                self.assertEqual(reasons, [])
+
+    def test_a1_rejects_malformed_air_node_coordinates(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        metadata = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+        _append_a1_shared_air_tet(metadata)
+        plan = metadata["execution_plan"]["backend_plan"]
+        mesh = plan["mesh"]
+        air_node = len(mesh["nodes"]) - 1
+        magnetic_nodes = {
+            node
+            for cell_index in range(plan["mesh_parts"][0]["element_selector"]["count"])
+            for node in mesh["cells"]["nodes"][4 * cell_index:4 * cell_index + 4]
+        }
+        self.assertNotIn(air_node, magnetic_nodes)
+        mesh["nodes"][air_node][0] = None
+        reasons = []
+        self.assertFalse(gate._validate_benchmark_metadata(
+            metadata, "a1", parameters, "malformed air-node A1 fixture", reasons,
+            require_uniform_slab=False,
+        ))
+        self.assertTrue(any(
+            f"A1 resolved mesh node {air_node} has invalid coordinates" in reason
+            for reason in reasons
+        ), reasons)
+
+    def test_a1_rejects_slab_wrong_radius_shape_location_and_magnetic_support(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        canonical = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+        radius = parameters["geometry"]["hole_radius_m"]
+        defects = (
+            ("full slab", {"shape": "slab"}, "exposed film face caps the canonical through-hole"),
+            ("wrong radius", {"radius": 0.9 * radius}, "inside the canonical through-hole"),
+            ("wrong shape", {"shape": "ellipse"}, "inside the canonical through-hole"),
+            ("wrong location", {"center": (0.1 * radius, 0.0)}, "inside the canonical through-hole"),
+        )
+        for label, mesh_changes, expected_reason in defects:
+            with self.subTest(defect=label):
+                metadata = copy.deepcopy(canonical)
+                _replace_a1_fixture_mesh(metadata, **mesh_changes)
+                reasons = []
+                self.assertFalse(gate._validate_benchmark_metadata(
+                    metadata, "a1", parameters, f"{label} A1 fixture", reasons,
+                    require_uniform_slab=False,
+                ))
+                self.assertTrue(any(expected_reason in reason for reason in reasons), reasons)
+
+        with self.subTest(defect="contradictory magnetic support"):
+            metadata = copy.deepcopy(canonical)
+            plan = metadata["execution_plan"]["backend_plan"]
+            cell_count = len(plan["mesh"]["cells"]["types"])
+            plan["mesh_parts"] = [
+                {
+                    "id": "partial_magnetic_object",
+                    "role": "magnetic_object",
+                    "element_selector": {
+                        "kind": "element_range", "start": 0, "count": cell_count - 1,
+                    },
+                },
+                {
+                    "id": "misclassified_air",
+                    "role": "air",
+                    "element_selector": {
+                        "kind": "element_range", "start": cell_count - 1, "count": 1,
+                    },
+                },
+            ]
+            reasons = []
+            self.assertFalse(gate._validate_benchmark_metadata(
+                metadata, "a1", parameters, "wrong-support A1 fixture", reasons,
+                require_uniform_slab=False,
+            ))
+            self.assertTrue(any("contradict" in reason for reason in reasons), reasons)
+
+    def test_a1_rejects_inverted_duplicate_missing_and_disconnected_tetrahedra(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        canonical = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+
+        def cells_and_nodes(metadata):
+            mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+            table = mesh["cells"]
+            return [
+                table["nodes"][table["offsets"][index]:table["offsets"][index + 1]]
+                for index in range(len(table["types"]))
+            ], mesh["nodes"]
+
+        cases = (
+            ("inverted cell", "negative tetra orientation"),
+            ("duplicate cell", "duplicate Tet4 cells"),
+            ("missing cell", "exposed face inside the canonical support"),
+            ("disconnected interior cell", "disconnected"),
+        )
+        for defect, expected_reason in cases:
+            with self.subTest(defect=defect):
+                metadata = copy.deepcopy(canonical)
+                tetrahedra, nodes = cells_and_nodes(metadata)
+                if defect == "inverted cell":
+                    tetrahedra[0][0], tetrahedra[0][1] = tetrahedra[0][1], tetrahedra[0][0]
+                elif defect == "duplicate cell":
+                    tetrahedra.append(tetrahedra[0].copy())
+                elif defect == "missing cell":
+                    del tetrahedra[len(tetrahedra) // 2]
+                else:
+                    base = len(nodes)
+                    nodes = copy.deepcopy(nodes)
+                    nodes.extend((
+                        [70e-9, 5e-9, -1e-9],
+                        [75e-9, 5e-9, -1e-9],
+                        [70e-9, 10e-9, -1e-9],
+                        [70e-9, 5e-9, 1e-9],
+                    ))
+                    tetrahedra.append(_orient_fixture_tet4(
+                        nodes, [base, base + 1, base + 2, base + 3],
+                    ))
+                _rewrite_a1_fixture_cells(metadata, tetrahedra, nodes=nodes)
+                reasons = []
+                self.assertFalse(gate._validate_benchmark_metadata(
+                    metadata, "a1", parameters, f"{defect} A1 fixture", reasons,
+                    require_uniform_slab=False,
+                ))
+                self.assertTrue(any(expected_reason in reason for reason in reasons), reasons)
+
+    def test_validate_case_a1_rejects_invalid_tet4_geometry_after_metadata_hash_rebind(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "a1")
+            metadata_path = case_dir / "metadata.json"
+            canonical = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+            def cells_and_nodes(metadata):
+                mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+                table = mesh["cells"]
+                return [
+                    table["nodes"][table["offsets"][index]:table["offsets"][index + 1]]
+                    for index in range(len(table["types"]))
+                ], mesh["nodes"]
+
+            cases = (
+                ("inverted cell", "negative tetra orientation"),
+                ("duplicate cell", "duplicate Tet4 cells"),
+                ("missing cell", "exposed face inside the canonical support"),
+                ("disconnected interior cell", "disconnected"),
+            )
+            for defect, expected_reason in cases:
+                with self.subTest(defect=defect):
+                    metadata = copy.deepcopy(canonical)
+                    tetrahedra, nodes = cells_and_nodes(metadata)
+                    if defect == "inverted cell":
+                        tetrahedra[0][0], tetrahedra[0][1] = tetrahedra[0][1], tetrahedra[0][0]
+                    elif defect == "duplicate cell":
+                        tetrahedra.append(tetrahedra[0].copy())
+                    elif defect == "missing cell":
+                        del tetrahedra[len(tetrahedra) // 2]
+                    else:
+                        nodes = copy.deepcopy(nodes)
+                        base = len(nodes)
+                        nodes.extend((
+                            [70e-9, 5e-9, -1e-9],
+                            [75e-9, 5e-9, -1e-9],
+                            [70e-9, 10e-9, -1e-9],
+                            [70e-9, 5e-9, 1e-9],
+                        ))
+                        tetrahedra.append(_orient_fixture_tet4(
+                            nodes, [base, base + 1, base + 2, base + 3],
+                        ))
+                    _rewrite_a1_fixture_cells(metadata, tetrahedra, nodes=nodes)
+                    _write_json(metadata_path, metadata)
+                    _refresh_primary_artifact_binding(
+                        case_dir, "metadata.json", "metadata_sha256",
+                    )
+                    report = gate.validate_case(
+                        case_dir, "a1", parameters_path=PARAMETERS, kpath_path=KPATH,
+                    )
+                    self.assertEqual(
+                        report["artifact_bindings"]["metadata.json"]["sha256"],
+                        _sha256(metadata_path),
+                    )
+                    self.assertFalse(any(
+                        "scientific evidence binding does not match current metadata.json" in reason
+                        for reason in report["reasons"]
+                    ), report["reasons"])
+                    self.assertTrue(any(expected_reason in reason for reason in report["reasons"]), report["reasons"])
+
+    def test_validate_case_a1_rejects_unrepresentable_finite_air_mesh_scale_after_hash_rebind(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "a1")
+            metadata_path = case_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            _append_a1_shared_air_tet(metadata)
+            mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+            air_node = len(mesh["nodes"]) - 1
+            mesh["nodes"][air_node][0] = 1.0e200
+            self.assertTrue(math.isfinite(mesh["nodes"][air_node][0]))
+            _write_json(metadata_path, metadata)
+            _refresh_primary_artifact_binding(
+                case_dir, "metadata.json", "metadata_sha256",
+            )
+
+            report = gate.validate_case(
+                case_dir, "a1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+
+            self.assertEqual(
+                report["artifact_bindings"]["metadata.json"]["sha256"],
+                _sha256(metadata_path),
+            )
+            self.assertFalse(any(
+                "scientific evidence binding does not match current metadata.json" in reason
+                for reason in report["reasons"]
+            ), report["reasons"])
+            self.assertTrue(any(
+                "cannot represent native Tet4-volume epsilon" in reason
+                for reason in report["reasons"]
+            ), report["reasons"])
+
+    def test_validate_case_selects_lowest_eight_by_seed_frequency_and_preserves_degeneracy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            branches_path = case_dir / "eigen/branches.v2.json"
+
+            def rewrite_primary(*, cross_after_seed=False, omit_lower_sample=False):
+                spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+                branches = [{"branch_id": raw, "label": f"raw_{raw}", "points": []} for raw in range(24)]
+                for sample in spectrum["samples"]:
+                    sample_index = sample["sample_index"]
+                    old_fundamental = next(
+                        mode["frequency_real_hz"]
+                        for mode in sample["modes"]
+                        if mode["raw_mode_index"] == 0
+                    )
+                    modes = []
+                    for raw in range(24):
+                        if raw == 0:
+                            frequency = old_fundamental
+                        elif cross_after_seed and sample_index > 0 and raw in range(1, 8):
+                            frequency = old_fundamental + raw * 1.0e8
+                        elif cross_after_seed and sample_index > 0 and raw in range(8, 15):
+                            frequency = old_fundamental + (20 + raw) * 1.0e8
+                        elif not cross_after_seed and sample_index > 0 and raw == 15:
+                            frequency = old_fundamental + 7.0e8
+                        elif raw in range(8, 15):
+                            frequency = old_fundamental + (raw - 7) * 1.0e8
+                        elif raw in range(1, 8):
+                            frequency = old_fundamental + (10 + raw) * 1.0e8
+                        else:
+                            frequency = old_fundamental + (30 + raw) * 1.0e8
+                        mode = {
+                            "raw_mode_index": raw,
+                            "frequency_real_hz": frequency,
+                            "frequency_imag_hz": 0.0,
+                        }
+                        _native_mode_diagnostics(mode)
+                        modes.append(mode)
+                        if not (omit_lower_sample and raw == 8 and sample_index == 60):
+                            branches[raw]["points"].append({
+                                "sample_index": sample_index,
+                                "raw_mode_index": raw,
+                                "frequency_real_hz": frequency,
+                                "frequency_imag_hz": 0.0,
+                                "tracking_confidence": 1.0,
+                            })
+                    sample["modes"] = modes
+                spectrum["mode_count"] = sum(len(sample["modes"]) for sample in spectrum["samples"])
+                _write_json(spectrum_path, spectrum)
+                _write_json(branches_path, _tracking_fixture_payload(branches))
+
+            rewrite_primary()
+            seed_report = gate.validate_case(
+                case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            seed_check = seed_report["checks"]["tracked_branches"]
+            self.assertEqual(seed_check["status"], "pass", seed_report["reasons"])
+            self.assertEqual(seed_check["selected_branch_ids"], [0, 8, 9, 10, 11, 12, 13, 14])
+            self.assertEqual(seed_check["lowest_frequency_multiset_check"], "pass")
+
+            # The same branch identities remain selected, but their path
+            # frequencies now leave the lowest-eight multiset after the seed.
+            # A higher branch cannot be silently substituted mid-path.
+            rewrite_primary(cross_after_seed=True)
+            crossed_report = gate.validate_case(
+                case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            crossed_check = crossed_report["checks"]["tracked_branches"]
+            self.assertEqual(crossed_check["status"], "fail")
+            self.assertEqual(crossed_check["selected_branch_ids"], [0, 8, 9, 10, 11, 12, 13, 14])
+            self.assertTrue(any(
+                "lowest 8 quality-admitted frequency multiset" in reason
+                for reason in crossed_report["reasons"]
+            ), crossed_report["reasons"])
+
+            # A high complete branch cannot replace a lower seed candidate
+            # whose tracked history is incomplete.
+            rewrite_primary(omit_lower_sample=True)
+            incomplete_report = gate.validate_case(
+                case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            incomplete_check = incomplete_report["checks"]["tracked_branches"]
+            self.assertEqual(incomplete_check["status"], "fail")
+            self.assertEqual(incomplete_check["selected_branch_ids"], [0, 9, 10, 11, 12, 13, 14])
+            self.assertTrue(any(
+                "raw 8 has no complete tracked branch" in reason
+                for reason in incomplete_report["reasons"]
+            ), incomplete_report["reasons"])
+
+    def test_validate_case_a1_allows_two_of_eight_branches_to_cross(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "a1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            branches_path = case_dir / "eigen/branches.v2.json"
+            spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+            branches = json.loads(branches_path.read_text(encoding="utf-8"))
+            for sample in spectrum["samples"]:
+                if sample["sample_index"] >= 30:
+                    modes_by_raw = {mode["raw_mode_index"]: mode for mode in sample["modes"]}
+                    first = modes_by_raw[0]["frequency_real_hz"]
+                    second = modes_by_raw[1]["frequency_real_hz"]
+                    modes_by_raw[0]["frequency_real_hz"] = second
+                    modes_by_raw[1]["frequency_real_hz"] = first
+                    _native_mode_diagnostics(modes_by_raw[0])
+                    _native_mode_diagnostics(modes_by_raw[1])
+                modes_by_raw = {mode["raw_mode_index"]: mode for mode in sample["modes"]}
+                for branch in branches["branches"]:
+                    for point in branch["points"]:
+                        if point["sample_index"] == sample["sample_index"]:
+                            mode = modes_by_raw[point["raw_mode_index"]]
+                            point["frequency_real_hz"] = mode["frequency_real_hz"]
+                            point["frequency_imag_hz"] = mode["frequency_imag_hz"]
+            _write_json(spectrum_path, spectrum)
+            _write_json(branches_path, _tracking_fixture_payload(branches["branches"]))
+            _write_mode_fields(case_dir, spectrum["samples"])
+
+            report = gate.validate_case(
+                case_dir, "a1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            check = report["checks"]["tracked_branches"]
+            self.assertEqual(check["status"], "pass", report["reasons"])
+            self.assertEqual(check["selected_branch_ids"], list(range(8)))
+            self.assertEqual(check["lowest_frequency_multiset_check"], "pass")
+            self.assertEqual(check["fundamental_branch_check"], "not_applicable")
+
+    def test_full_c1_contract_pass_requires_controls_and_convergence_but_is_not_qualification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = gate.validate_case(
+                _make_case(Path(directory), "c1"),
+                "c1",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+        self.assertEqual(report["campaign_contract_status"], "pass", report["reasons"][:12])
+        self.assertEqual(report["checks"]["primary_search_parameters"]["status"], "pass")
+        self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "pass")
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("field-metric replay" in reason for reason in report["reasons"]))
+        self.assertEqual(report["checks"]["tracked_branches"]["target_band_count"], 8)
+        self.assertEqual(report["checks"]["spectrum_samples"]["sample_count"], 61)
+        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "pass")
+
+    def test_ks_mode_cannot_use_equilibrium_from_another_mesh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            mode_path = case_dir / "validation/ks/bv/eigen/modes/sample_0000/mode_0000.json"
+            mode = json.loads(mode_path.read_text())
+            mode["source_mesh_topology_sha256"] = "sha256:" + "0" * 64
+            _write_json(mode_path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
+        self.assertTrue(any("mesh signature mismatch" in item for item in report["reasons"]), report["reasons"])
+
+    def test_ks_field_frequency_must_match_spectrum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "validation/ks/bv/eigen/modes/sample_0000/mode_0000.json"
+            mode = json.loads(path.read_text())
+            mode["frequency_imag_hz"] = 1.0
+            _write_json(path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
+        self.assertTrue(any("frequency_imag_hz differs" in reason for reason in report["reasons"]), report["reasons"])
+
+    def test_primary_connectivity_change_invalidates_modal_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "metadata.json"
+            metadata = json.loads(path.read_text())
+            nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["cells"]["nodes"]
+            nodes[0], nodes[1] = nodes[1], nodes[0]
+            _write_json(path, metadata)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("topology differs" in reason for reason in report["reasons"]), report["reasons"])
+
+    def test_primary_field_frequency_must_match_spectrum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "eigen/modes/sample_0000/mode_0000.json"
+            mode = json.loads(path.read_text())
+            mode["frequency_real_hz"] *= 2
+            _write_json(path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("frequency_real_hz differs" in reason for reason in report["reasons"]), report["reasons"])
+
+    def test_missing_ks_equilibrium_is_not_qualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            (case_dir / "validation/ks/bv/eigen/metadata/sample_0000/equilibrium_artifact.v7.json").unlink()
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
+        self.assertTrue(any("n0 profile measurement failed" in item for item in report["reasons"]), report["reasons"])
+
+    def test_missing_ks_profile_vector_is_not_qualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            vector_path = case_dir / (
+                "validation/ks/bv/eigen/mode_fields/"
+                "sample_0000/mode_0000/vector.bin"
+            )
+            vector_path.unlink()
+            report = gate.validate_case(
+                case_dir,
+                "c1",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+        self.assertEqual(report["status"], "not_qualified")
+        check = report["checks"]["kalinikos_slab_n0"]
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(
+            any("n0 profile measurement failed" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+
+    def test_hashed_nonuniform_ks_profile_is_not_qualified_despite_frequency_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            _rewrite_mode_field_with_z_sign_profile(case_dir / "validation/ks/bv")
+            report = gate.validate_case(
+                case_dir,
+                "c1",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+        self.assertEqual(report["status"], "not_qualified")
+        check = report["checks"]["kalinikos_slab_n0"]
+        self.assertEqual(check["status"], "fail")
+        profile = check["n0_profiles"][0]
+        self.assertEqual(profile["status"], "measured")
+        self.assertGreater(
+            profile["metrics"]["projection_residual"],
+            0.01,
+        )
+        self.assertTrue(
+            any("n0 projection_residual exceeds" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+
+    def test_missing_ks_profile_policy_is_a_gate_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+            parameters.pop("ks_n0_profile")
+            parameters_path = Path(directory) / "parameters-without-ks-profile.json"
+            _write_json(parameters_path, parameters)
+            report = gate.validate_case(
+                case_dir,
+                "c1",
+                parameters_path=parameters_path,
+                kpath_path=KPATH,
+            )
+        self.assertEqual(report["status"], "not_qualified")
+        check = report["checks"]["kalinikos_slab_n0"]
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(
+            any(
+                "requires explicit finite n0 profile tolerances" in reason
+                for reason in report["reasons"]
+            ),
+            report["reasons"],
+        )
+    def test_ks_check_rejects_invalid_control_even_when_frequencies_agree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            baseline = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))
+            parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+            for field, value in (("sample_index", False), ("branch_id", False), ("k_rad_per_m", 2.0e7), ("k_rad_per_m", None), ("k_rad_per_m", float("nan")), ("k_rad_per_m", "1e7"), ("k_rad_per_m", -1.0)):
+                with self.subTest(field=field):
+                    evidence = copy.deepcopy(baseline)
+                    evidence["analytic_controls"]["kalinikos_slab_n0"]["samples"][0][field] = value
+                    reasons = []
+                    check = gate._validate_ks(case_dir, "c1", evidence, parameters, reasons)
+                    self.assertEqual(check["status"], "fail", reasons)
+                    self.assertTrue(reasons)
+
+    def test_duplicate_branch_ids_do_not_count_as_independent_bands(self):
+        branches = [{"branch_id": 0, "points": [{"sample_index": sample, "raw_mode_index": raw,
+                     "frequency_real_hz": 1e9 + raw} for sample in range(61)]} for raw in range(8)]
+        modes = {(sample, raw): 1e9 + raw for sample in range(61) for raw in range(8)}
+        reasons = []
+        selected, check = gate._validate_branches(
+            {"branches": branches}, "c1", modes, reasons,
+            quality_mode_map=modes,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertEqual(len(selected), 1)
+        self.assertTrue(any("unique" in reason for reason in reasons))
+
+    def test_primary_artifacts_reject_link_before_hashing(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "metadata.json"
+            path.write_text("{}")
+            original = Path.is_symlink
+            with patch.object(Path, "is_symlink", lambda value: value == path or original(value)):
+                with patch.object(gate, "_sha256", side_effect=AssertionError("linked artifact was read")):
+                    artifacts, reasons = gate._artifact_map(root)
+        self.assertNotIn(Path("metadata.json"), artifacts)
+        self.assertTrue(any("symlink or junction" in reason for reason in reasons))
+
+    def test_primary_csv_budget_rejects_sparse_legacy_member_before_hashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            csv_relative = Path("eigen/dispersion.csv")
+            for relative in gate._REQUIRED_ARTIFACTS:
+                if relative != csv_relative:
+                    _write_json(root / relative, {})
+            csv_path = root / csv_relative
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            budget = 32
+            with csv_path.open("wb") as stream:
+                stream.seek(budget)
+                stream.write(b"x")
+            self.assertEqual(csv_path.stat().st_size, budget + 1)
+
+            reader = gate.ArtifactBundleReader(root)
+            with mock.patch.object(gate, "MAX_PRIMARY_DISPERSION_CSV_BYTES", budget):
+                artifacts, reasons = gate._artifact_map(root, bundle_reader=reader)
+
+        self.assertNotIn(csv_relative, artifacts)
+        self.assertNotIn(csv_relative.as_posix(), reader._records)
+        self.assertTrue(any("reader byte budget" in reason for reason in reasons), reasons)
+
+    def test_equilibrium_generation_state_json_is_bounded_before_parsing(self):
+        import comsol_equilibrium_artifacts
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).absolute()
+
+            class OversizeReader:
+                def __init__(self):
+                    self.root = root
+                    self.reads = []
+
+                def read_bytes(self, relative, *, maximum_bytes=None):
+                    self.reads.append((relative, maximum_bytes))
+                    raise ValueError("artifact member exceeds reader byte budget")
+
+            reader = OversizeReader()
+            manifest = {
+                "artifacts": {
+                    "equilibrium_artifact_v7_paths": [
+                        "eigen/metadata/sample_0000/equilibrium_artifact.v7.json"
+                    ],
+                    "linearization_state_v6_paths": [
+                        "eigen/metadata/sample_0000/linearization_state.v6.json"
+                    ],
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "reader byte budget"):
+                comsol_equilibrium_artifacts.read_sample_equilibrium(
+                    root,
+                    manifest,
+                    {},
+                    {},
+                    0,
+                    bundle_reader=reader,
+                )
+
+        self.assertEqual(
+            reader.reads,
+            [
+                (
+                    "eigen/metadata/sample_0000/equilibrium_artifact.v7.json",
+                    generation.DEFAULT_MAX_JSON_BYTES,
+                )
+            ],
+        )
+
+    def test_primary_equilibrium_state_reread_keeps_json_budget(self):
+        class OversizeReader:
+            generation = None
+
+            def __init__(self):
+                self.reads = []
+
+            def read_bytes(self, relative, *, maximum_bytes=None):
+                self.reads.append((relative, maximum_bytes))
+                raise ValueError("artifact member exceeds reader byte budget")
+
+        reader = OversizeReader()
+        with self.assertRaisesRegex(ValueError, "reader byte budget"):
+            gate._read_captured_member_bytes(
+                reader,
+                "eigen/metadata/sample_0000/equilibrium_artifact.v7.json",
+                json_limit=True,
+            )
+        self.assertEqual(
+            reader.reads,
+            [
+                (
+                    "eigen/metadata/sample_0000/equilibrium_artifact.v7.json",
+                    generation.DEFAULT_MAX_JSON_BYTES,
+                )
+            ],
+        )
+
+    def test_validate_case_uses_one_v2_reader_and_cached_primary_json_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            payloads = _primary_generation_payloads(case_dir, include_c0_field=True)
+            generation_id, _marker = _install_test_generation(
+                case_dir, payloads, schema=generation.SCHEMA_V2,
+            )
+            for relative in payloads:
+                path = case_dir / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"stale root artifact")
+            original_reader = gate.ArtifactBundleReader
+            readers = []
+
+            def make_reader(root):
+                reader = original_reader(root)
+                readers.append(reader)
+                return reader
+
+            member_reads = {}
+            original_read_member = generation.GenerationCapture.read_member
+
+            def count_member_read(capture, relative, *args, **kwargs):
+                member_reads[relative] = member_reads.get(relative, 0) + 1
+                return original_read_member(capture, relative, *args, **kwargs)
+
+            with (
+                mock.patch.object(gate, "ArtifactBundleReader", side_effect=make_reader),
+                mock.patch.object(generation.GenerationCapture, "read_member", new=count_member_read),
+            ):
+                report = gate.validate_case(
+                    case_dir, "c0", parameters_path=PARAMETERS, kpath_path=KPATH,
+                )
+
+        self.assertEqual(len(readers), 1)
+        self.assertEqual(readers[0].generation.generation_id, generation_id)
+        self.assertEqual(report["artifact_bindings"]["eigen/spectrum.v2.json"]["sha256"],
+                         hashlib.sha256(payloads["eigen/spectrum.v2.json"]).hexdigest())
+        self.assertEqual(report["artifact_bindings"]["eigen/dispersion.csv"]["sha256"],
+                         hashlib.sha256(payloads["eigen/dispersion.csv"]).hexdigest())
+        self.assertEqual(report["checks"]["spectrum_samples"]["sample_count"], 1)
+        self.assertEqual(report["checks"]["dispersion_csv"]["status"], "pass")
+        self.assertEqual(report["checks"]["primary_equilibrium"]["status"], "pass")
+        for relative in payloads:
+            self.assertEqual(member_reads.get(relative), 1, relative)
+        self.assertEqual(report["artifact_generation"]["generation_binding_status"], "immutable_verified")
+        self.assertEqual(report["artifact_generation_coverage"]["coverage"], "partial")
+        self.assertFalse(report["artifact_generation_coverage"]["whole_gate_immutable_snapshot_verified"])
+        self.assertFalse(report["artifact_generation_coverage"]["referenced_external_evidence_files_in_generation"])
+        self.assertIn(
+            "external_scientific_evidence_referenced_by_case_descriptor",
+            report["artifact_generation_coverage"]["excluded_inputs"],
+        )
+        self.assertEqual(report["status"], "not_qualified")
+
+    def test_corrupt_v2_primary_csv_or_equilibrium_member_never_falls_back_to_root(self):
+        for corrupt_kind in ("csv", "equilibrium"):
+            with self.subTest(member=corrupt_kind), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c0")
+                payloads = _primary_generation_payloads(case_dir, include_c0_field=True)
+                generation_id, _marker = _install_test_generation(
+                    case_dir, payloads, schema=generation.SCHEMA_V2,
+                )
+                relative = "eigen/dispersion.csv" if corrupt_kind == "csv" else next(
+                    path for path in payloads
+                    if path.endswith(("equilibrium_artifact.v7.json", "equilibrium_artifact.v8.json"))
+                )
+                member = (
+                    case_dir
+                    / generation.GENERATION_DIRECTORY
+                    / generation_id[7:]
+                    / relative
+                )
+                member.write_bytes(payloads[relative] + b" ")
+                report = gate.validate_case(
+                    case_dir, "c0", parameters_path=PARAMETERS, kpath_path=KPATH,
+                )
+
+            self.assertIn(relative, payloads)
+            if corrupt_kind == "csv":
+                self.assertNotIn(relative, report["artifact_bindings"])
+                self.assertEqual(report["checks"]["dispersion_csv"]["status"], "missing")
+                self.assertTrue(
+                    any("could not be read from the captured generation" in reason for reason in report["reasons"]),
+                    report["reasons"],
+                )
+            else:
+                self.assertEqual(report["checks"]["primary_equilibrium"]["status"], "fail")
+                self.assertTrue(
+                    any("accepted state failed validation" in reason for reason in report["reasons"]),
+                    report["reasons"],
+                )
+                self.assertTrue(
+                    any("generation member" in reason for reason in report["reasons"]),
+                    report["reasons"],
+                )
+
+    def test_validate_case_reports_v1_as_mutable_and_keeps_coverage_partial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            _install_test_generation(
+                case_dir,
+                _primary_generation_payloads(case_dir),
+                schema=generation.SCHEMA_V1,
+            )
+            report = gate.validate_case(
+                case_dir, "c0", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+        self.assertEqual(report["artifact_generation"]["generation_binding_status"], "byte_verified_mutable")
+        self.assertFalse(report["artifact_generation"]["immutable"])
+        self.assertEqual(report["artifact_generation_coverage"]["status"], "not_verified")
+        self.assertEqual(report["artifact_generation_coverage"]["coverage"], "partial")
+        self.assertEqual(report["status"], "not_qualified")
+
+    def test_corrupt_v2_marker_never_falls_back_to_root_primary_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            _install_test_generation(
+                case_dir,
+                _primary_generation_payloads(case_dir, include_c0_field=True),
+                schema=generation.SCHEMA_V2,
+            )
+            marker_path = case_dir / generation.IMMUTABLE_COMMIT_PATH
+            marker_path.write_bytes(b"{corrupt v2 marker")
+            primary_paths = {
+                (case_dir / relative).resolve()
+                for relative in (
+                    "metadata.json",
+                    "eigen/spectrum.v2.json",
+                    "eigen/branches.v2.json",
+                    "frequency_domain/manifest.v1.json",
+                    "eigen/diagnostics/solver.v1.json",
+                    gate.EVIDENCE_RELATIVE_PATH.as_posix(),
+                )
+            }
+            loaded_paths = []
+            original_load_json = gate._load_json
+
+            def track_json_load(path):
+                loaded_paths.append(Path(path).resolve())
+                return original_load_json(path)
+
+            with mock.patch.object(gate, "_load_json", side_effect=track_json_load):
+                report = gate.validate_case(
+                    case_dir, "c0", parameters_path=PARAMETERS, kpath_path=KPATH,
+                )
+
+        self.assertTrue(primary_paths.isdisjoint(loaded_paths))
+        self.assertNotIn("eigen/spectrum.v2.json", report["artifact_bindings"])
+        self.assertEqual(report["artifact_generation"]["current_fence_status"], "capture_failed")
+        self.assertTrue(any("generation capture failed" in reason for reason in report["reasons"]))
+        self.assertEqual(report["status"], "not_qualified")
+
+    def test_gate_uses_nested_replay_without_fence_and_fences_once_at_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            payloads = _primary_generation_payloads(
+                case_dir,
+                include_primary_equilibrium=False,
+            )
+            _install_test_generation(case_dir, payloads, schema=generation.SCHEMA_V2)
+            original_reader = gate.ArtifactBundleReader
+            readers = []
+
+            class CountingReader(original_reader):
+                def __init__(self, root):
+                    self.final_fence_calls = 0
+                    super().__init__(root)
+                    readers.append(self)
+
+                def ensure_current(self):
+                    self.final_fence_calls += 1
+                    return super().ensure_current()
+
+            replay_calls = []
+
+            def replay_without_work(*args, **kwargs):
+                replay_calls.append((args, kwargs))
+                return {"status": "fail", "qualification": "NOT VERIFIED", "reasons": ["test replay boundary"]}
+
+            def change_current_generation(*_args, **_kwargs):
+                _install_test_generation(
+                    case_dir,
+                    {"eigen/spectrum.v2.json": b'{"replacement":true}'},
+                    schema=generation.SCHEMA_V2,
+                )
+                return {"status": "not_verified", "reasons": ["test replacement"]}
+
+            with (
+                mock.patch.object(gate, "ArtifactBundleReader", CountingReader),
+                mock.patch.object(gate, "_validate_spectrum", return_value=({}, {}, {})),
+                mock.patch.object(gate, "replay_tracking_fields", side_effect=replay_without_work),
+                mock.patch.object(gate, "_validate_primary_equilibrium", side_effect=change_current_generation),
+            ):
+                report = gate.validate_case(
+                    case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+                )
+
+        self.assertEqual(len(readers), 1)
+        self.assertEqual(len(replay_calls), 1)
+        self.assertIs(replay_calls[0][1]["bundle_reader"], readers[0])
+        self.assertFalse(replay_calls[0][1]["final_fence"])
+        self.assertEqual(readers[0].final_fence_calls, 1)
+        self.assertEqual(report["checks"]["artifact_generation_current_fence"]["status"], "fail")
+        self.assertEqual(report["artifact_generation"]["generation_binding_status"], "stale")
+        self.assertEqual(report["artifact_generation_coverage"]["coverage"], "partial")
+        self.assertEqual(report["campaign_contract_status"], "fail")
+        self.assertEqual(report["status"], "not_qualified")
+
+    def test_tracking_snapshot_covers_sparse_unselected_candidates_and_missing_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            header = root / "eigen/modes/sample_0001/mode_0064.json"
+            vector = root / "eigen/mode_fields/sample_0001/mode_0064/vector.bin"
+            header.parent.mkdir(parents=True)
+            vector.parent.mkdir(parents=True)
+            header.write_text("{}")
+            vector.write_bytes(b"candidate")
+            snapshot = gate._tracking_input_hashes(root, {}, {(1, 64): 1e9, (1, 91): 2e9})
+            self.assertEqual(snapshot[header.relative_to(root).as_posix()], "sha256:" + _sha256(header))
+            self.assertEqual(snapshot[vector.relative_to(root).as_posix()], "sha256:" + _sha256(vector))
+            self.assertIsNone(snapshot["eigen/modes/sample_0001/mode_0091.json"])
+            self.assertIsNone(snapshot["eigen/mode_fields/sample_0001/mode_0091/vector.bin"])
+
+    def test_tracking_snapshot_rejects_linked_field_before_hashing(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "eigen/modes/sample_0000/mode_0064.json"
+            path.parent.mkdir(parents=True)
+            path.write_text("{}")
+            original = Path.is_symlink
+            with patch.object(Path, "is_symlink", lambda value: value == path or original(value)):
+                with patch.object(gate, "_sha256", side_effect=AssertionError("linked field was read")):
+                    snapshot = gate._tracking_input_hashes(root, {}, {(0, 64): 1e9})
+            self.assertIsNone(snapshot[path.relative_to(root).as_posix()])
+
+    def test_internal_linked_parent_is_rejected(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "eigen"
+            parent.mkdir()
+            (parent / "spectrum.v2.json").write_text("{}")
+            original = Path.is_symlink
+            reasons = []
+            with patch.object(Path, "is_symlink", lambda value: value == parent or original(value)):
+                result = gate._safe_relative_path(root, "eigen/spectrum.v2.json", "spectrum", reasons)
+        self.assertIsNone(result)
+        self.assertTrue(any("symlink or junction" in reason for reason in reasons))
+
+    def test_comparison_spectrum_rejects_duplicate_samples_and_bool_indices(self):
+        from unittest.mock import patch
+        baseline = {"spectrum": {"sample_count": 1, "mode_count": 1, "samples": [{"sample_index": 0, "k_vector": [0., 0., 0.],
+                    "modes": [{"raw_mode_index": 0}]}]},
+                    "diagnostics": {"sample_count": 1, "mode_count": 1}}
+        for defect in ("duplicate", "bool_sample", "bool_mode", "negative_mode", "bad_k"):
+            with self.subTest(defect=defect):
+                bundle = copy.deepcopy(baseline)
+                sample = bundle["spectrum"]["samples"][0]
+                if defect == "duplicate":
+                    second = copy.deepcopy(sample)
+                    second["modes"][0]["raw_mode_index"] = 1
+                    bundle["spectrum"]["samples"].append(second)
+                    bundle["diagnostics"].update(sample_count=2, mode_count=2)
+                    bundle["spectrum"].update(sample_count=2, mode_count=2)
+                elif defect == "bool_sample": sample["sample_index"] = False
+                elif defect == "bool_mode": sample["modes"][0]["raw_mode_index"] = False
+                elif defect == "negative_mode": sample["modes"][0]["raw_mode_index"] = -1
+                else: sample["k_vector"] = [float("nan"), 0., 0.]
+                reasons = []
+                with patch.object(gate, "_validate_modal_quality", return_value=True):
+                    gate._validate_bundle_modal_payload(bundle, "control", reasons)
+                self.assertTrue(reasons)
+
+    def test_comparison_counts_must_match_contents_with_integer_types(self):
+        from unittest.mock import patch
+        baseline = {"spectrum": {"sample_count": 1, "mode_count": 1,
+                    "samples": [{"sample_index": 0, "k_vector": [0., 0., 0.], "modes": [{"raw_mode_index": 0}]}]},
+                    "diagnostics": {"sample_count": 1, "mode_count": 1}}
+        with patch.object(gate, "_validate_modal_quality", return_value=True):
+            reasons = []
+            gate._validate_bundle_modal_payload(baseline, "control", reasons)
+            self.assertFalse(reasons)
+            for source in ("spectrum", "diagnostics"):
+                for key in ("sample_count", "mode_count"):
+                    for value in (None, True, 2):
+                        with self.subTest(source=source, key=key, value=value):
+                            bundle = copy.deepcopy(baseline)
+                            bundle[source][key] = value
+                            reasons = []
+                            gate._validate_bundle_modal_payload(bundle, "control", reasons)
+                            self.assertTrue(any(key in reason for reason in reasons))
+
+    def test_bundle_checks_points_outside_selected_control(self):
+        modes = [{"raw_mode_index": raw, "frequency_real_hz": 1e9 + raw, "frequency_imag_hz": 0.0} for raw in (0, 1)]
+        bundle = {"spectrum": {"samples": [{"sample_index": 0, "modes": modes}]},
+                  "branches": {"branches": [{"branch_id": raw, "points": [{"sample_index": 0, **mode}]} for raw, mode in enumerate(modes)]}}
+        reasons = []
+        gate._validate_bundle_branches(bundle, "control", reasons)
+        self.assertFalse(reasons)
+        bundle["branches"]["branches"][1]["points"][0]["frequency_real_hz"] *= 2
+        gate._validate_bundle_branches(bundle, "control", reasons)
+        self.assertTrue(any("differs from spectrum" in reason for reason in reasons))
+
+    def test_rehashed_wrong_manifest_product_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "validation/ks/bv/frequency_domain/manifest.v1.json"
+            baseline = json.loads(path.read_text())
+            for field, value in (("study_product", "driven_response"), ("analysis_family", "other")):
+                with self.subTest(field=field):
+                    manifest = copy.deepcopy(baseline)
+                    manifest[field] = value
+                    _write_json(path, manifest)
+                    descriptor = _bundle_descriptor(case_dir, "validation/ks/bv")
+                    reasons = []
+                    gate._load_numeric_bundle(case_dir, descriptor, "KS", reasons, require_demag=True)
+                    self.assertTrue(any(f"manifest {field}" in reason for reason in reasons), reasons)
+                    self.assertFalse(any("SHA256 does not match" in reason for reason in reasons), reasons)
+
+    def test_convergence_cannot_use_only_control_samples(self):
+        samples = [{"sample_index": index, "modes": [{"raw_mode_index": raw, "frequency_real_hz": 1e9 + raw} for raw in range(8)]}
+                   for index in (0, 10, 20, 30, 40, 50, 60)]
+        branches = [{"branch_id": raw, "points": [{"sample_index": sample["sample_index"], "raw_mode_index": raw,
+                     "frequency_real_hz": 1e9 + raw} for sample in samples]} for raw in range(8)]
+        reasons = []
+        mode_map = {
+            (sample["sample_index"], mode["raw_mode_index"]): mode["frequency_real_hz"]
+            for sample in samples for mode in sample["modes"]
+        }
+        gate._validate_convergence_coverage({
+            "spectrum": {"samples": samples},
+            "branches": {"branches": branches},
+            "_quality_admitted_mode_map": mode_map,
+        }, "c1", "mesh fine", reasons)
+        self.assertTrue(any("complete benchmark sample set" in reason for reason in reasons))
+        self.assertTrue(any("complete tracked branches" in reason for reason in reasons))
+
+    def test_convergence_path_checks_noncontrol_sample(self):
+        primary = {"spectrum": {"samples": [{"sample_index": i, "k_vector": [float(i), 0., 0.]} for i in range(61)]}}
+        candidate = copy.deepcopy(primary)
+        reasons = []
+        gate._validate_convergence_path(candidate, primary, "fine", reasons)
+        self.assertFalse(reasons)
+        candidate["spectrum"]["samples"][17]["k_vector"][1] = 1.0
+        gate._validate_convergence_path(candidate, primary, "fine", reasons)
+        self.assertTrue(any("sample 17 wavevector differs" in reason for reason in reasons))
+
+    def test_missing_evidence_is_unqualified_with_explicit_reasons(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            (case_dir / gate.EVIDENCE_RELATIVE_PATH).unlink()
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("missing scientific evidence bundle" in reason for reason in report["reasons"]))
+        self.assertTrue(any("missing convergence.mesh" in reason for reason in report["reasons"]))
+
+    def test_analytic_frequency_source_cannot_qualify_numeric_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            manifest_path = case_dir / "frequency_domain/manifest.v1.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["validation"]["dispersion_frequency_source"] = "analytic_reference_model"
+            _write_json(manifest_path, manifest)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_bindings"]["manifest_sha256"] = _sha256(manifest_path)
+            _write_json(evidence_path, evidence)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("analytic reference is declared" in reason for reason in report["reasons"]))
+
+    def test_incomplete_path_or_branch_is_rejected_even_with_nonempty_csv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            branches_path = case_dir / "eigen/branches.v2.json"
+            branches = json.loads(branches_path.read_text(encoding="utf-8"))
+            branches["branches"][0]["points"].pop()
+            _write_json(branches_path, branches)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_bindings"]["branches_v2_sha256"] = _sha256(branches_path)
+            _write_json(evidence_path, evidence)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("complete tracked branches" in reason for reason in report["reasons"]))
+
+    def test_complete_case_selection_accepts_all_permutations(self):
+        results = {case: {"status": "qualified", "scientific_qualification": "qualified", "reasons": []}
+                   for case in gate.EXPECTED_CASES}
+        for cases in itertools.permutations(gate.EXPECTED_CASES):
+            with self.subTest(cases=cases):
+                self.assertEqual(gate.validate_requested_cases(results, cases)["status"], "qualified")
+        self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "c1"))["status"], "not_qualified")
+
+    def test_numeric_bundle_cannot_mix_files_from_other_declared_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            evidence = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))
+            runs = evidence["convergence"]["mesh"]["runs"]
+            descriptor = copy.deepcopy(runs["coarse"])
+            descriptor["artifacts"]["spectrum"] = copy.deepcopy(runs["fine"]["artifacts"]["spectrum"])
+            reasons = []
+            bundle = gate._load_numeric_bundle(case_dir, descriptor, "mixed", reasons, require_demag=True)
+        self.assertIsNone(bundle)
+        self.assertTrue(any("outside the declared numeric run root" in reason for reason in reasons), reasons)
+
+    def test_numeric_bundle_root_must_be_an_existing_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            (case_dir / "regular-file").write_text("{}", encoding="utf-8")
+            for root in ("regular-file", "missing-directory"):
+                with self.subTest(root=root):
+                    reasons = []
+                    result = gate._load_numeric_bundle(case_dir, {"root": root, "artifacts": {}},
+                                                       "bundle", reasons, require_demag=True)
+                    self.assertIsNone(result)
+                    self.assertTrue(any("root is not a directory" in reason for reason in reasons), reasons)
+
+    def test_failed_check_without_reason_cannot_qualify(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            with mock.patch.object(gate, "_validate_convergence", return_value={"status": "fail"}):
+                report = gate.validate_case(case_dir, "c0", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("required scientific check mesh_convergence did not pass" in reason
+                            for reason in report["reasons"]), report["reasons"])
+
+    def test_partial_case_selection_cannot_be_promoted(self):
+        result = gate.validate_requested_cases({"c1": {"status": "qualified", "reasons": []}}, ("c1",))
+        self.assertEqual(result["status"], "not_qualified")
+        self.assertIn("requires cases c0,c1,a1", result["reasons"][0])
+
+
+class A1ExternalFrequencyGateTests(unittest.TestCase):
+    """Synthetic comparison fixtures never attest execution or COMSOL equivalence."""
+
+    def _fixture(self, root):
+        reference_dir = root / "validation/comsol"
+        reference_dir.mkdir(parents=True)
+        path, path_check, reasons = gate._canonical_path_rows(KPATH)
+        self.assertEqual(reasons, [])
+        self.assertEqual(path_check["status"], "pass")
+        frequency_csv = reference_dir / "frequencies.csv"
+        with frequency_csv.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(("jpath", "kx_rad_per_um", "ky_rad_per_um", "frequency_order", "frequency_GHz"))
+            for sample, vector in sorted(path.items()):
+                for rank in range(1, 25):
+                    # The first two independent modes are exactly degenerate.
+                    frequency = 9.0 if rank <= 2 else float(7 + rank)
+                    writer.writerow((sample, vector[0] / 1e6, vector[1] / 1e6, rank, frequency))
+        artifacts = {}
+        for key in ("frequency_csv", "original_export", "model_mph", "resolved_model",
+                    "execution_provenance", "equilibrium", "boundary_phase", "lowest_mode_selection"):
+            artifact = frequency_csv if key == "frequency_csv" else reference_dir / (key + ".fixture")
+            if key != "frequency_csv":
+                artifact.write_text('{"status":"verified","equivalence_status":"pass"}\n', encoding="utf-8")
+            artifacts[key] = {"path": artifact.relative_to(root).as_posix(), "sha256": _sha256(artifact)}
+        manifest = {"schema_version": "fullmag.comsol-a1-reference.v1", "artifacts": artifacts,
+                    "status": "pass", "equivalence_status": "verified"}
+        manifest_path = reference_dir / "reference.v1.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        evidence = {"external_frequency_reference": {
+            "schema_version": "fullmag.comsol-a1-reference.v1",
+            "manifest_path": manifest_path.relative_to(root).as_posix(),
+            "manifest_sha256": _sha256(manifest_path), "status": "pass"}}
+        parameters = {"external_frequency_comparison": {
+            "policy": "lowest_positive_frequency_multiset_at_each_k",
+            "target_modes_per_sample": 8, "max_relative_error": 1e-3}}
+        samples = {sample: {"sample_index": sample, "k_vector": list(vector), "modes": [
+            {"raw_mode_index": 100 - rank, "branch_id": 999 - rank,
+             "frequency_real_hz": (9.0 if rank <= 2 else float(7 + rank)) * 1e9}
+            for rank in range(8, 0, -1)]} for sample, vector in path.items()}
+        return evidence, parameters, samples, manifest_path, manifest, frequency_csv
+
+    def _validate(self, root, evidence, parameters, samples):
+        reasons = []
+        result = gate._validate_a1_comsol_reference(root, evidence, parameters, samples, reasons)
+        self.assertEqual(result["qualification"], "NOT VERIFIED")
+        self.assertNotEqual(result["status"], "pass")
+        self.assertTrue(reasons)
+        return result
+
+    def test_zero_error_and_declared_verified_proof_still_cannot_qualify(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, parameters, samples, *_ = self._fixture(root)
+            result = self._validate(root, evidence, parameters, samples)
+        self.assertEqual(result["status"], "not_verified")
+        self.assertEqual(result["frequency_comparison_status"], "pass")
+        self.assertEqual(result["compared_pair_count"], 488)
+        self.assertEqual(result["measured_max_relative_error"], 0.0)
+        self.assertEqual(len(result["pairs"]), 488)
+        self.assertEqual(result["pairs"][0]["reference_frequency_hz"], result["pairs"][1]["reference_frequency_hz"])
+        self.assertEqual(result["external_equivalence_status"], "not_verified_verifier_unavailable")
+
+    def test_missing_reference_and_unset_threshold_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, parameters, samples, *_ = self._fixture(root)
+            missing = self._validate(root, {}, parameters, samples)
+            self.assertEqual(missing["compared_pair_count"], 0)
+            for config in ({}, {"external_frequency_comparison": {
+                    **parameters["external_frequency_comparison"], "max_relative_error": None}}):
+                result = self._validate(root, evidence, config, samples)
+                self.assertEqual(result["status"], "not_verified")
+                self.assertEqual(result["frequency_comparison_status"], "not_verified")
+                self.assertEqual(result["compared_pair_count"], 488)
+                self.assertTrue(all(pair["within_threshold"] is None for pair in result["pairs"]))
+
+    def test_malformed_threshold_and_descriptor_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, parameters, samples, *_ = self._fixture(root)
+            for value in (True, False, 0, -1, float("nan"), float("inf"), 10 ** 400, "0.001"):
+                with self.subTest(value=value):
+                    config = copy.deepcopy(parameters)
+                    config["external_frequency_comparison"]["max_relative_error"] = value
+                    self.assertEqual(self._validate(root, evidence, config, samples)["status"], "fail")
+            for descriptor in ({"schema_version": "frequency_only_unqualified"},
+                               {**evidence["external_frequency_reference"], "manifest_path": "../reference.json"},
+                               {**evidence["external_frequency_reference"], "manifest_sha256": "0" * 64}):
+                result = self._validate(root, {"external_frequency_reference": descriptor}, parameters, samples)
+                self.assertEqual(result["status"], "fail")
+
+    def test_changed_csv_and_rehashed_malformed_reference_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, parameters, samples, manifest_path, manifest, frequency_csv = self._fixture(root)
+            rows = frequency_csv.read_text(encoding="utf-8").splitlines()
+            frequency_csv.write_text("\n".join(rows[:-1]) + "\n", encoding="utf-8")
+            stale = self._validate(root, evidence, parameters, samples)
+            self.assertTrue(any("frequency_csv SHA256" in reason for reason in stale["reasons"]))
+            manifest["artifacts"]["frequency_csv"]["sha256"] = _sha256(frequency_csv)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            evidence["external_frequency_reference"]["manifest_sha256"] = _sha256(manifest_path)
+            malformed = self._validate(root, evidence, parameters, samples)
+            self.assertTrue(any("frequency CSV is invalid" in reason for reason in malformed["reasons"]))
+
+    def test_missing_artifact_and_unsafe_member_path_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, parameters, samples, manifest_path, manifest, _ = self._fixture(root)
+            for mutation in ("missing", "path", "hash"):
+                altered = copy.deepcopy(manifest)
+                if mutation == "missing":
+                    del altered["artifacts"]["model_mph"]
+                elif mutation == "path":
+                    altered["artifacts"]["boundary_phase"]["path"] = "../foreign.json"
+                else:
+                    altered["artifacts"]["execution_provenance"]["sha256"] = "0" * 64
+                manifest_path.write_text(json.dumps(altered), encoding="utf-8")
+                evidence["external_frequency_reference"]["manifest_sha256"] = _sha256(manifest_path)
+                self.assertEqual(self._validate(root, evidence, parameters, samples)["status"], "fail")
+
+    def test_native_coverage_identity_k_and_single_outlier_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, parameters, samples, *_ = self._fixture(root)
+            for mutation in ("sample", "sample_bool", "mode", "raw_bool", "duplicate", "k", "nonfinite", "outlier"):
+                with self.subTest(mutation=mutation):
+                    altered = copy.deepcopy(samples)
+                    if mutation == "sample":
+                        del altered[60]
+                    elif mutation == "sample_bool":
+                        altered[1]["sample_index"] = True
+                    elif mutation == "mode":
+                        altered[20]["modes"].pop()
+                    elif mutation == "raw_bool":
+                        altered[20]["modes"][0]["raw_mode_index"] = True
+                    elif mutation == "duplicate":
+                        altered[20]["modes"][0]["raw_mode_index"] = altered[20]["modes"][1]["raw_mode_index"]
+                    elif mutation == "k":
+                        altered[20]["k_vector"][0] += 1e5
+                    elif mutation == "nonfinite":
+                        altered[20]["modes"][0]["frequency_real_hz"] = float("nan")
+                    else:
+                        altered[20]["modes"][0]["frequency_real_hz"] *= 1.1
+                    result = self._validate(root, evidence, parameters, altered)
+                    self.assertEqual(result["status"], "fail")
+                    if mutation == "outlier":
+                        self.assertEqual(result["compared_pair_count"], 488)
+                        self.assertEqual(sum(pair["within_threshold"] is False for pair in result["pairs"]), 1)
+                        self.assertGreater(result["measured_max_relative_error"], 0.09)
+
+    def test_reference_replacement_during_read_invalidates_bound_comparison(self):
+        from compare_comsol_a1_frequency_reference import read_reference
+        for changed_input in ("frequency_csv", "manifest"):
+            with self.subTest(changed_input=changed_input), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                evidence, parameters, samples, manifest_path, _, frequency_csv = self._fixture(root)
+
+                def replacing_read(path):
+                    parsed = read_reference(path)
+                    changed = frequency_csv if changed_input == "frequency_csv" else manifest_path
+                    changed.write_bytes(changed.read_bytes() + b"\n")
+                    return parsed
+
+                with mock.patch("compare_comsol_a1_frequency_reference.read_reference", side_effect=replacing_read):
+                    result = self._validate(root, evidence, parameters, samples)
+                self.assertEqual(result["status"], "fail")
+                self.assertEqual(result["frequency_comparison_status"], "fail")
+                self.assertEqual(result["compared_pair_count"], 488)
+                self.assertTrue(any("after comparison SHA256" in reason for reason in result["reasons"]))
+                self.assertEqual(result["binding_observation"], "before_and_after_comparison_hash_checks_no_atomic_snapshot")
+                if changed_input == "frequency_csv":
+                    self.assertNotIn("frequency_csv", result["external_artifact_hashes"])
+                else:
+                    self.assertIsNone(result["external_reference_manifest_sha256"])
+
+    def test_gate_check_is_mandatory_only_for_a1(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for case in ("c0", "c1", "a1"):
+                case_dir = _make_case(Path(directory), case)
+                with mock.patch.object(gate, "_validate_a1_comsol_reference", return_value={"status": "not_verified"}) as external:
+                    result = gate.validate_case(case_dir, case, parameters_path=PARAMETERS, kpath_path=KPATH)
+                self.assertEqual(external.call_count, 1 if case == "a1" else 0)
+                self.assertEqual(result["checks"]["comsol_a1_reference"]["status"],
+                                 "not_verified" if case == "a1" else "not_applicable")
+                self.assertEqual(result["campaign_contract_status"], "pass", result["reasons"][:8])
+                if case == "a1":
+                    self.assertEqual(result["qualification"], "NOT VERIFIED")
+                    self.assertTrue(any("required scientific check comsol_a1_reference" in reason for reason in result["reasons"]))
+
+if __name__ == "__main__":
+    unittest.main()

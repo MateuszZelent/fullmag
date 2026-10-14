@@ -946,6 +946,9 @@ fn solve_charge(
         gauge: match descriptor.charge_gauge {
             ChargePotentialGaugeIR::DirichletReference => ffi::FULLMAG_FDM_CPU_CHARGE_GAUGE_NONE,
             ChargePotentialGaugeIR::ZeroMean => ffi::FULLMAG_FDM_CPU_CHARGE_GAUGE_ZERO_MEAN,
+            ChargePotentialGaugeIR::TerminalReference => {
+                return Err(run_error("terminal-reference gauge requires dedicated FEM antenna solve"));
+            }
         },
         reserved0: 0,
         relative_tolerance: descriptor.charge_solver.linear.relative_tolerance,

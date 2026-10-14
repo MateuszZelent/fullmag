@@ -411,6 +411,12 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("routes canonical hysteresis datasets to the typed result inspector", () => {
+    expect(resolveInspectorPanel({ kind: "results.hysteresis.dataset" })?.id).toBe(
+      "analysis-result",
+    );
+  });
+
   it("routes bounded legacy time-domain selections to their dedicated inspector", () => {
     for (const kind of [
       "results.time_domain.spectral_feature",

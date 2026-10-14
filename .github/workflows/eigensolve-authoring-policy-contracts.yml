@@ -1,0 +1,112 @@
+name: eigensolve-authoring-policy-contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'crates/fullmag-authoring/src/adapters.rs'
+      - 'crates/fullmag-authoring/src/validation.rs'
+      - 'crates/fullmag-ir/src/execution_profile*.rs'
+      - 'crates/fullmag-ir/src/parallel_execution.rs'
+      - 'crates/fullmag-application/src/execution_profile.rs'
+      - 'packages/fullmag-py/src/fullmag/model/study.py'
+      - 'packages/fullmag-py/src/fullmag/runtime/scene_document.py'
+      - 'packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py'
+      - 'packages/fullmag-py/tests/test_scene_document_problem_ir.py'
+      - 'packages/fullmag-py/tests/test_api.py'
+      - 'packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py'
+      - 'docs/physics/0600-fem-eigenmodes-linearized-llg*'
+      - '.github/workflows/eigensolve-authoring-policy-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  modal-authoring-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Install existing authoring dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglu1-mesa
+          python -m pip install 'pytest>=9,<10' -e 'packages/fullmag-py[meshing]'
+      - name: Validate scientific owner and source map
+        run: python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0600-fem-eigenmodes-linearized-llg.source-map.json --repo-root .
+      - name: Run modal controls construction and scene round-trip regressions
+        run: >-
+          python -B -m pytest -q
+          packages/fullmag-py/tests/test_api.py
+          packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
+          -k eigen_solver
+
+  scene-analysis-lowering:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Install existing scene lowering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglu1-mesa
+          python -m pip install 'pytest>=9,<10' -e 'packages/fullmag-py[meshing]'
+      - name: Run complete canonical scene lowering contracts including postprocessing metadata
+        run: python -B -m pytest -v packages/fullmag-py/tests/test_scene_document_problem_ir.py
+
+  adaptive-profile-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUST_MIN_STACK: 16777216
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Verify effective profile lane and immutable authoring intent
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-authoring --lib adaptive_parallel_execution -- --nocapture | tee "$RUNNER_TEMP/adaptive-profile.log"
+          grep -F "adaptive_parallel_execution_uses_materialized_profile_instead_of_stale_legacy_lane ... ok" "$RUNNER_TEMP/adaptive-profile.log"
+          grep -F "adaptive_parallel_execution_replays_layers_and_preserves_weakening_guard ... ok" "$RUNNER_TEMP/adaptive-profile.log"
+          grep -F "adaptive_parallel_execution_requires_explicit_fem_cpu_lane ... ok" "$RUNNER_TEMP/adaptive-profile.log"
+      - name: Reject malformed scheduling policy shapes at shared IR boundary
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-ir --lib parallel_policy_ -- --nocapture | tee "$RUNNER_TEMP/parallel-policy-shapes.log"
+          grep -F "parallel_policy_requires_map_and_preserves_defaults_and_roundtrip ... ok" "$RUNNER_TEMP/parallel-policy-shapes.log"
+          grep -F "parallel_policy_rejects_duplicate_fields_in_raw_json ... ok" "$RUNNER_TEMP/parallel-policy-shapes.log"
+      - name: Run complete authoring validation contracts
+        run: cargo test --locked -p fullmag-authoring --lib --no-fail-fast
+      - name: Preserve public application materialization replay contracts
+        run: cargo test --locked -p fullmag-application --test execution_profile_materialization --no-fail-fast
+
+  scene-solver-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Validate actual scene solver policy round-trip
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-authoring --lib eigen_solver_policy -- --nocapture | tee "$RUNNER_TEMP/eigen-scene-policy.log"
+          grep -F "scene_override_preserves_explicit_eigen_solver_policy ... ok" "$RUNNER_TEMP/eigen-scene-policy.log"
+          grep -F "scene_override_omits_unset_eigen_solver_policy_for_legacy_stage ... ok" "$RUNNER_TEMP/eigen-scene-policy.log"
+          grep -F "scene_override_preserves_explicit_eigen_solver_policy_clears_and_mixed_values ... ok" "$RUNNER_TEMP/eigen-scene-policy.log"

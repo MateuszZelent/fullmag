@@ -22,6 +22,15 @@ type ObjectSelectionKind =
   | "object.root"
   | "object.geometry"
   | "object.antenna"
+  | "object.antenna.geometry"
+  | "object.antenna.regional"
+  | "object.antenna.conductor"
+  | "object.antenna.port"
+  | "object.antenna.solution"
+  | "object.antenna.projection"
+  | "object.antenna.drive"
+  | "object.antenna.spectrum"
+  | "object.antenna.visualization"
   | "object.material"
   | "object.physics"
   | "object.regions"
@@ -287,6 +296,13 @@ export type SelectionRef =
       type: "observation-frame";
     }
   | {
+      kind: "results.pinned_visualizations.root";
+      moduleId: string;
+      nodeId: string;
+      runId: string;
+      type: "analysis-pinned-group";
+    }
+  | {
       constraintId: string;
       kind: "object.frozen-spins";
       nodeId: string;
@@ -369,6 +385,14 @@ export type SelectionRef =
       nodeId: string;
       objectId: string;
       objectRole?: "antenna" | "magnet" | "auxiliary";
+      antennaResourceId?: string;
+      antennaResourceKind?:
+        | "conductor"
+        | "port"
+        | "solution"
+        | "projection"
+        | "drive"
+        | "spectrum";
       extensionId?: string;
       regionId?: string;
       type: "scene-object";
@@ -593,6 +617,7 @@ export type SelectionRef =
       kind:
         | "study.stage.action"
         | "study.stage.add_field_drive"
+        | "study.stage.antenna_field_solve"
         | "study.stage.autosave"
         | "study.stage.eigenmodes"
         | "study.stage.eigenmodes.setup"
@@ -681,6 +706,8 @@ export type SelectionRef =
       analysisRunId?: string;
       analysisStageId?: string;
       artifactRevision?: number | string;
+      datasetId?: string;
+      datasetRevision?: string;
       availability?: ResourceAvailability;
       contractGap?: string | null;
       equilibriumId?: string;
@@ -885,6 +912,14 @@ export function selectionRefEquals(
         left.stageId === right.stageId &&
         left.stateDigest === right.stateDigest
       );
+    case "analysis-pinned-group":
+      return (
+        right.type === "analysis-pinned-group" &&
+        left.kind === right.kind &&
+        left.moduleId === right.moduleId &&
+        left.nodeId === right.nodeId &&
+        left.runId === right.runId
+      );
     case "analysis-result":
       return (
         right.type === "analysis-result" &&
@@ -1067,6 +1102,8 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.objectId === right.objectId &&
         left.objectRole === right.objectRole &&
+        nullableStringEquals(left.antennaResourceId, right.antennaResourceId) &&
+        left.antennaResourceKind === right.antennaResourceKind &&
         nullableStringEquals(left.extensionId, right.extensionId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
@@ -1337,6 +1374,8 @@ export function selectionRefEquals(
         nullableStringEquals(left.contractGap, right.contractGap) &&
         nullableStringEquals(left.analysisRunId, right.analysisRunId) &&
         nullableStringEquals(left.analysisStageId, right.analysisStageId) &&
+        nullableStringEquals(left.datasetId, right.datasetId) &&
+        nullableStringEquals(left.datasetRevision, right.datasetRevision) &&
         nullableStringEquals(left.artifactPath, right.artifactPath) &&
         nullableStringEquals(left.branchId, right.branchId) &&
         nullableStringEquals(left.calculationMode, right.calculationMode) &&

@@ -1,0 +1,126 @@
+name: eigensolve-api-source-contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - '.github/workflows/eigensolve-api-source-contracts.yml'
+      - 'crates/fullmag-api/src/session.rs'
+      - 'crates/fullmag-session/**'
+      - 'crates/fullmag-api/src/router_v2/tests.rs'
+      - 'crates/fullmag-api/src/router_v2/handlers/data/fields.rs'
+      - 'crates/fullmag-api/src/router_v2/handlers/data/quantities.rs'
+      - 'crates/fullmag-api/src/router_v2/handlers/analysis/results.rs'
+      - 'crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs'
+      - 'crates/fullmag-api/src/schemas/fields.rs'
+      - 'crates/fullmag-runner/src/artifact_generation.rs'
+      - 'crates/fullmag-api/src/router_v2/handlers/analysis/postprocessing.rs'
+      - 'crates/fullmag-api/src/router_v2/tests/postprocessing_definitions.rs'
+
+permissions:
+  contents: read
+
+jobs:
+  physical-field-source-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUST_MIN_STACK: 16777216
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Run complete FMS and typed session document contracts
+        run: cargo test --locked -p fullmag-session --lib --no-fail-fast
+      - name: Run session ownership and physical field contracts
+        run: cargo test --locked -p fullmag-api --bin fullmag-api session::tests --no-fail-fast
+      - name: Preserve dataset source paths and byte revisions
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::results::tests -- --nocapture | tee "$RUNNER_TEMP/result-datasets.log"
+          grep -F "multi_stage_hysteresis_manifests_preserve_resolved_source_paths_and_revisions ... ok" "$RUNNER_TEMP/result-datasets.log"
+          grep -F "resolved_hysteresis_source_ref_rejects_parent_components ... ok" "$RUNNER_TEMP/result-datasets.log"
+          grep -F "generation_binding_replaces_every_payload_generation_query_without_changing_legacy_keys ... ok" "$RUNNER_TEMP/result-datasets.log"
+      - name: Run captured artifact generation and field binary contracts
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-runner --lib artifact_generation::tests -- --nocapture
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::frequency_domain::spectrum_residual_tests::artifact_generation_status_uses_explicit_wire_values -- --exact | tee "$RUNNER_TEMP/artifact-generation-status.log"
+          grep -F "artifact_generation_status_uses_explicit_wire_values ... ok" "$RUNNER_TEMP/artifact-generation-status.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::results::generation_snapshot_tests -- --nocapture | tee "$RUNNER_TEMP/artifact-generations.log"
+          grep -F "committed_field_reader_returns_only_digest_verified_generation_bytes ... ok" "$RUNNER_TEMP/artifact-generations.log"
+          grep -F "legacy_capture_fence_rejects_a_new_publication ... ok" "$RUNNER_TEMP/artifact-generations.log"
+          grep -F "spectrum_v3_projection_field_link_is_bound_to_the_captured_binary_generation ... ok" "$RUNNER_TEMP/artifact-generations.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fields::tests::analysis_artifact_generation_precondition_requires_metadata_binding -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fields::tests::artifact_generation_header_is_emitted_only_for_a_verified_member -- --exact
+      - name: Run older callback magnetization publication contract
+        run: cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle -- --exact
+      - name: Run physical row and bundle consistency contract
+        run: cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_m_publication_bundle_requires_matching_physical_scalar_row -- --exact
+      - name: Run solver progress stale field contract
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_progress_keeps_live_magnetization_at_its_original_observation_step -- --exact | tee "$RUNNER_TEMP/field-freshness.log"
+          grep -F "test router_v2::tests::v2_progress_keeps_live_magnetization_at_its_original_observation_step ... ok" "$RUNNER_TEMP/field-freshness.log"
+
+  postprocessing-revision-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUST_MIN_STACK: 16777216
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Validate real HTTP postprocessing revision mutations
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::postprocessing_definitions:: -- --nocapture | tee "$RUNNER_TEMP/postprocessing-revisions.log"
+          grep -F "postprocessing_definition_revision_overflow_conflicts_without_mutating_the_scene ... ok" "$RUNNER_TEMP/postprocessing-revisions.log"
+          grep -F "postprocessing_definition_revision_near_max_increments_once ... ok" "$RUNNER_TEMP/postprocessing-revisions.log"
+
+  generated-frequency-domain-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Prepare managed frontend and pinned manifests
+        run: |
+          python -B scripts/fullmag_storage.py prepare-links --profile linux-host --frontend
+          python -B scripts/ci/prepare_eigensolve_ui_workspace.py
+      - name: Install pinned dependencies
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir "$FULLMAG_CI_FRONTEND_WORKSPACE_ROOT" install --frozen-lockfile
+      - name: Generate one canonical API contract from these sources
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir apps/control-room generate:api
+      - name: Preserve generated contract and source identity
+        run: git rev-parse HEAD > apps/control-room/src/kernel/api/generated/source-commit.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: eigensolve-generated-api-${{ github.run_id }}
+          path: |
+            apps/control-room/src/kernel/api/generated/openapi-v2.json
+            apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/source-commit.txt
+          if-no-files-found: error

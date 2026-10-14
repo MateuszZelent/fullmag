@@ -258,6 +258,49 @@ class SemanticSceneHandoffTests(unittest.TestCase):
         self.assertEqual(second_path.read_bytes(), b"nonempty imported magnetization fixture")
         self.assertEqual(second_path.suffix, ".ovf")
 
+    def test_restored_capsule_supports_next_restart_with_new_owner_binding(self):
+        first = self.stage()
+        first_payload = self.load(first)
+        capsule.record_handoff_outcome(
+            self.runtime, first["handoff_id"], self.binding, "restored"
+        )
+        self.source.unlink()
+        next_binding = {
+            **binding(),
+            "generation_id": self.binding["generation_id"],
+            "session_epoch": self.binding["session_epoch"] + 1,
+            "source_build_id": self.binding["target_build_id"],
+            "target_build_id": "backend-dev:third-build",
+            "source_sha256": "b" * 64,
+        }
+        second = semantic.create_scene_handoff(
+            str(self.repo), next_binding, first_payload["scene"],
+            first_payload["editor"], first_payload["workspace"],
+            first_payload["project_document"]
+        )
+        restored = semantic.load_scene_handoff(
+            str(self.repo), second["handoff_id"], next_binding
+        )
+        self.assertNotEqual(first["handoff_id"], second["handoff_id"])
+        self.assertEqual(restored["binding"], next_binding)
+        self.assertEqual(restored["source_scene"], first_payload["scene"])
+        for field in ("editor", "workspace", "project_document"):
+            self.assertEqual(restored[field], first_payload[field])
+        copy = Path(restored["scene"]["magnetization_assets"][0]["source_path"])
+        self.assertIn(second["handoff_id"], copy.parts)
+        self.assertEqual(copy.read_bytes(), b"nonempty imported magnetization fixture")
+        self.assertEqual(copy.suffix, ".ovf")
+        self.assertEqual(restored["scene"]["study"], self.scene["study"])
+        with self.assertRaises(capsule.HandoffError):
+            semantic.load_scene_handoff(str(self.repo), second["handoff_id"], self.binding)
+        capsule.record_handoff_outcome(
+            self.runtime, second["handoff_id"], next_binding, "restored"
+        )
+        for ref, owner in ((first, self.binding), (second, next_binding)):
+            self.assertEqual(capsule.load_handoff(
+                self.runtime, ref["handoff_id"], owner
+            )["receipt"]["state"], "restored")
+
     def test_preserves_mesh_source_extension_required_by_native_planner(self):
         mesh = self.store / "runs" / "mesh.JSON"
         mesh.write_bytes(b'{"mesh_fixture":true}')

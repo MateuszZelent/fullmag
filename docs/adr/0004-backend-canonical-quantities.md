@@ -106,3 +106,64 @@ New quantities may be added but existing IDs must not change.
 - Solver diagnostics have a clean separation from physical observables.
 - Transport unification enables generic quantity preview without magnetization special-casing.
 - Legacy `SaveField`/`SaveScalar` remain working during transition via compat wrappers.
+
+## Rozdzielenie rodzaju rekordu i progress — doprecyzowanie 2026-10-10
+
+Status rozszerzenia: kontrakt przyjęty w zakresie naprawy4204792253; implementacja
+w toku, wykonanie i zgodność end-to-end **NOT VERIFIED**.
+
+### Problem i decyzja
+
+Legalny identyfikator obiektu `fem_eigen_progress` nie może klasyfikować rekordu
+jako callback solvera. Jedynym właścicielem rodzaju rekordu jest współdzielony
+`StepDataKind` w `fullmag-quantities`: `physical_observation`, `solver_progress`
+i `legacy_unclassified`. Nowi producenci nadają jawny rodzaj. Tworzenie nowych
+struktur Rust może domyślnie oznaczać physical, lecz brak pola podczas
+odczytu historycznego JSON zawsze oznacza legacy_unclassified, nigdy domyślną
+obserwację fizyczną. Nieznana wartość enum jest błędem.
+
+Postęp solvera ma oddzielny typowany kanał `solver_progress`, z wariantem
+`fem_eigen` i istniejącymi metrykami. `per_object_scalars` zawiera dane
+rzeczywistych obiektów. Nie używamy nazw obiektów, wartości zerowych ani braku
+observation_frame jako heurystyki klasyfikacji. Katalog ilości, jednostki SI,
+Python DSL i ProblemIR pozostają bez zmian.
+
+### Spójność i migracja
+
+Physical record nie może mieć payload solver_progress. Solver-progress record
+musi mieć zgodny typowany payload i nie może publikować fizycznych quantity
+frames, per-object scalar samples ani placeholderów liczbowych jako obserwacji.
+`StepStats`, `StepDiagnostics`, `GlobalQuantityRow`, V2 transport, CLI live
+writers i API ingestion/projekcje przenoszą ten sam rodzaj oraz kanał.
+Walidacja sprzecznego kind/payload jest wykonywana na granicach transportu.
+
+Historyczne dane bez discriminatora pozostają nieklasyfikowane: zachowujemy
+oryginalne bajty i wartości w zapisanych runach/archiwach, nie dokonujemy
+heurystycznej migracji i nie traktujemy ich jako potwierdzonej fizyki.
+Nieklasyfikowany rekord nie jest źródłem kwalifikowanych quantity/status/table
+projekcji. Dane surowe pozostają dostępne przez istniejące artefakty; jawna
+rekoncyliacja wymaga oddzielnego dowodu producenta. To ograniczenie dotyczy
+interpretacji danych, nie ich usunięcia. Nowa obserwacja legalnego obiektu
+`fem_eigen_progress` jest physical i zachowuje wszystkie wartości.
+
+Publiczne V2 scalar-window/stage-progress zachowują dotychczasowy kształt;
+wewnętrzne raw DTO otrzymują additive discriminator i kanał. Jeżeli wdrożenie
+wymaga zmiany publicznego V2 wire, musi przejść normalny OpenAPI/codegen;
+nie wolno ręcznie nadpisywać chronionych wygenerowanych plików.
+
+### Obowiązki i dowody
+
+Właściciele: quantities step_data/transport; runner types/lib; CLI types,
+step_utils, orchestrator, live_workspace, interactive_runtime_host; API types,
+session, main, quantities i handlers data/scalars,tables, sessions/status,
+simulation/runtime. Odczyty metryk stage progress przechodzą na typowany kanał.
+
+Regresje GHA: rzeczywisty modal producer→CLI→API bez physical row; legalny
+object_id zachowuje quantity/table/status; serde i persistence round-trip
+zachowują kind/channel; brak kind pozostaje legacy; unknown enum i sprzeczny
+payload są odrzucane; metryki i scope stage progress pozostają widoczne.
+Sukces testów źródeł nie jest dowodem runtime ani fizycznej kwalifikacji.
+
+Rollback nie może przywrócić klasyfikacji po object_id. Archiwa pozostają
+nietknięte; przejściowe numeric placeholders są legalne tylko jako dane
+shim z jawnym nie-fizycznym rodzajem i bez admission do quantity projections.

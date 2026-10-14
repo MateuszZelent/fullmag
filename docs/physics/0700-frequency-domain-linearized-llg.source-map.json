@@ -1,0 +1,96 @@
+{
+  "document": {
+    "path": "docs/physics/0700-frequency-domain-linearized-llg.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The frequency-domain tangent contract is owned by the FEM response lanes; FDM time-domain dynamics are separate."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The frequency-domain tangent contract is owned by the FEM response lanes; FDM time-domain dynamics are separate."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-0700-modal-pencil",
+      "symbols": ["L", "q", "lambda", "B_alpha", "omega"],
+      "sources": ["source-native-pencil", "source-runner-response"]
+    },
+    {
+      "id": "eq-0700-forced-pencil",
+      "symbols": ["omega", "B_alpha", "L", "q", "b"],
+      "sources": ["source-native-pencil", "source-runner-response"]
+    },
+    {
+      "id": "eq-0700-floquet-phase",
+      "symbols": ["k", "delta_r"],
+      "sources": ["source-python-stage", "source-runner-response"]
+    }
+  ],
+  "symbols": [
+    {"id": "q", "latex": "$q$", "meaning": "tangent-plane unknown", "si_unit": "$1$"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "B_alpha", "latex": "$B_\\alpha$", "meaning": "gyrotropic/mass operator", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "L", "latex": "$L$", "meaning": "linearized restoring operator", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
+    {"id": "b", "latex": "$b$", "meaning": "projected RF drive", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
+    {"id": "k", "latex": "$k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "delta_r", "latex": "$\\Delta\\mathbf r$", "meaning": "pair translation", "si_unit": "$\\mathrm{m}$"},
+    {"id": "lambda", "latex": "$\\lambda$", "meaning": "modal eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"}
+  ],
+  "sources": [
+    {
+      "id": "source-python-stage",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "frequency_response_stage",
+      "responsibility": "Lower frequency-response authoring and Floquet metadata."
+    },
+    {
+      "id": "source-python-response",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FrequencyResponse",
+      "responsibility": "Validate the public driven-response product."
+    },
+    {
+      "id": "source-native-pencil",
+      "path": "backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp",
+      "symbol": "apply_Aomega",
+      "responsibility": "Apply the phase-aware dynamic pencil."
+    },
+    {
+      "id": "source-runner-response",
+      "path": "crates/fullmag-runner/src/frequency_response.rs",
+      "symbol": "try_execute_fem_frequency_response_native_production_cpu",
+      "responsibility": "Dispatch the native FEM CPU response lane."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.stages.add_frequency_response.frequencies_hz",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "finite non-empty positive sequence",
+        "meaning": "driven-frequency samples",
+        "backend_support": "FEM CPU/GPU authoring; runtime gated",
+        "problem_ir": "studies[].frequency_response.frequencies_hz"
+      }
+    ]
+  }
+}

@@ -9,6 +9,10 @@
 
 #include "fullmag_fem.h"
 
+#ifndef FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256
+#define FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 ""
+#endif
+
 #include "backend_handle.hpp"
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
@@ -588,6 +592,7 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
     case FULLMAG_FEM_OBSERVABLE_H_EX:
         return &context.gpu_state.device.fields.h_ex;
     case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
+#if FULLMAG_HAS_MFEM_STACK
         if (context.demag.enabled &&
             (context.poisson_demag.gpu_demag_mode ==
                  FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
@@ -595,6 +600,7 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
                  FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM)) {
             return &context.gpu_state.device.demag_poisson.poisson_gradient;
         }
+#endif
         return nullptr;
     case FULLMAG_FEM_OBSERVABLE_H_EXT:
         return &context.gpu_state.device.fields.h_ext;
@@ -613,13 +619,17 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
     case FULLMAG_FEM_OBSERVABLE_H_MEL:
         return &context.gpu_state.device.fields.h_mel;
     case FULLMAG_FEM_OBSERVABLE_H_EFF:
-        if (!context.demag.enabled ||
-            (context.poisson_demag.gpu_demag_mode ==
-                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
-             context.poisson_demag.gpu_demag_mode ==
-                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM)) {
+        if (!context.demag.enabled) {
             return &context.gpu_state.device.fields.h_eff;
         }
+#if FULLMAG_HAS_MFEM_STACK
+        if (context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+            context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+            return &context.gpu_state.device.fields.h_eff;
+        }
+#endif
         return nullptr;
     case FULLMAG_FEM_OBSERVABLE_DEMAG_PHI:
         return nullptr;
@@ -1819,6 +1829,7 @@ int fullmag_fem_get_frequency_domain_dependency_info(
         out_info->diagnostics_json,
         sizeof(out_info->diagnostics_json),
         "{\"schema_version\":\"fullmag_fem_frequency_domain_dependency_info.v1\","
+        "\"native_source_snapshot_sha256\":\"%s\","
         "\"petsc_available\":%s,"
         "\"slepc_available\":%s,"
         "\"modal_eigen_native_cpu_slepc_available\":%s,"
@@ -1831,6 +1842,7 @@ int fullmag_fem_get_frequency_domain_dependency_info(
         "\"petsc_library_path\":\"%s\","
         "\"slepc_library_path\":\"%s\","
         "\"reason\":\"%s\"}",
+        FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256,
         petsc_available ? "true" : "false",
         slepc_available ? "true" : "false",
         modal_eigen_native_cpu_slepc_available ? "true" : "false",
@@ -4430,8 +4442,99 @@ static FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve_impl(
             "k0_poisson_airbox_gpu_attestation_abi_required");
     }
 
+    constexpr std::size_t kModalTinyMassMatrixPointerEnd =
+        offsetof(FullmagFemModalEigenRequest, tiny_validation_mass_matrix_row_major) +
+        sizeof(request->tiny_validation_mass_matrix_row_major);
+    const bool tiny_mass_matrix_pointer_layout_valid =
+        known_modal_abi &&
+        request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION &&
+        request->struct_size >= kModalTinyMassMatrixPointerEnd;
+    const bool tiny_mass_matrix_boundary_layout_valid =
+        tiny_mass_matrix_pointer_layout_valid &&
+        native_request.tiny_validation_enabled != 0 &&
+        native_request.tiny_validation_tangent_dof_count == 2 &&
+        (native_request.tiny_validation_stiffness_matrix_row_major != nullptr ||
+         native_request.tiny_validation_stiffness_diagonal != nullptr) &&
+        request->tiny_validation_mass_matrix_row_major != nullptr &&
+        native_request.tiny_validation_mass_matrix_row_major != nullptr;
+    const bool tiny_mass_matrix_pointer_matches_native =
+        tiny_mass_matrix_boundary_layout_valid &&
+        request->tiny_validation_mass_matrix_row_major ==
+            native_request.tiny_validation_mass_matrix_row_major;
+
     fd::FrequencyDomainContractResult native_result =
         fd::solve_modal_eigen_contract(native_request);
+    if (tiny_mass_matrix_boundary_layout_valid &&
+        native_result.status == fd::FrequencyDomainStatus::solve_error &&
+        native_result.error_message ==
+            "modal tiny validation gyrotropic mass matrix is singular") {
+        double public_tiny_mass_matrix_snapshot[4]{};
+        double native_tiny_mass_matrix_snapshot[4]{};
+        if (tiny_mass_matrix_pointer_matches_native) {
+            for (std::size_t index = 0; index < 4; ++index) {
+                public_tiny_mass_matrix_snapshot[index] =
+                    request->tiny_validation_mass_matrix_row_major[index];
+                native_tiny_mass_matrix_snapshot[index] =
+                    native_request.tiny_validation_mass_matrix_row_major[index];
+            }
+        }
+        const auto json_number = [](double value) {
+            if (!std::isfinite(value)) {
+                return std::string("null");
+            }
+            char buffer[64]{};
+            const int written = std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+            if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
+                return std::string("null");
+            }
+            return std::string(buffer);
+        };
+        std::string boundary_field =
+            "\"tiny_validation_cabi_boundary\":{"
+            "\"public_abi_version\":" +
+            std::to_string(request->abi_version) +
+            ",\"public_struct_size\":" + std::to_string(request->struct_size) +
+            ",\"public_request_sizeof\":" +
+            std::to_string(sizeof(FullmagFemModalEigenRequest)) +
+            ",\"public_mass_pointer_offset\":" +
+            std::to_string(offsetof(
+                FullmagFemModalEigenRequest,
+                tiny_validation_mass_matrix_row_major)) +
+            ",\"public_mass_pointer_size\":" +
+            std::to_string(sizeof(request->tiny_validation_mass_matrix_row_major)) +
+            ",\"public_mass_pointer_matches_native\":" +
+            std::string(tiny_mass_matrix_pointer_matches_native ? "true" : "false") +
+            ",\"native_abi_version\":" +
+            std::to_string(native_request.abi_version) +
+            ",\"native_struct_size\":" + std::to_string(native_request.struct_size) +
+            ",\"native_request_sizeof\":" +
+            std::to_string(sizeof(fd::ModalEigenRequest));
+        boundary_field += ",\"public_mass_matrix_row_major\":";
+        if (tiny_mass_matrix_pointer_matches_native) {
+            boundary_field += "[" +
+                json_number(public_tiny_mass_matrix_snapshot[0]) + "," +
+                json_number(public_tiny_mass_matrix_snapshot[1]) + "," +
+                json_number(public_tiny_mass_matrix_snapshot[2]) + "," +
+                json_number(public_tiny_mass_matrix_snapshot[3]) +
+                "],\"native_mass_matrix_row_major\":[";
+            boundary_field +=
+                json_number(native_tiny_mass_matrix_snapshot[0]) + "," +
+                json_number(native_tiny_mass_matrix_snapshot[1]) + "," +
+                json_number(native_tiny_mass_matrix_snapshot[2]) + "," +
+                json_number(native_tiny_mass_matrix_snapshot[3]) + "]}";
+        } else {
+            boundary_field += "null,\"native_mass_matrix_row_major\":null}";
+        }
+        std::string &diagnostics = native_result.diagnostics_json;
+        if (!diagnostics.empty() && diagnostics.back() == '}') {
+            diagnostics.pop_back();
+            if (diagnostics.size() > 1) {
+                diagnostics.push_back(',');
+            }
+            diagnostics += boundary_field;
+            diagnostics.push_back('}');
+        }
+    }
     if (accepted_certificate_binding_status !=
         FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNSPECIFIED) {
         native_result.certificate_binding.status = accepted_certificate_binding_status;
@@ -4846,23 +4949,27 @@ int fullmag_fem_get_regional_field_drive_abi_layout(
     return FULLMAG_FEM_OK;
 }
 
-int fullmag_fem_backend_begin_stage(
+int fullmag_fem_backend_begin_stage_v2(
     fullmag_fem_backend *handle,
-    double stage_start_time_s)
+    double segment_start_time_s,
+    double waveform_origin_time_s)
 {
-    if (handle == nullptr || !std::isfinite(stage_start_time_s)) {
-        fullmag_fem_set_handle_error(handle, "begin_stage requires a non-null handle and finite stage start time");
+    if (handle == nullptr || !std::isfinite(segment_start_time_s) ||
+        segment_start_time_s < 0.0 || !std::isfinite(waveform_origin_time_s) ||
+        waveform_origin_time_s < 0.0 ||
+        waveform_origin_time_s > segment_start_time_s) {
+        fullmag_fem_set_handle_error(handle, "begin_stage_v2 requires finite non-negative times with waveform origin no later than segment start");
         return FULLMAG_FEM_ERR_INVALID;
     }
     auto &ctx = handle->context;
     const double tolerance = 64.0 * std::numeric_limits<double>::epsilon() *
-        std::max({1.0, std::abs(ctx.state.current_time), std::abs(stage_start_time_s)});
-    if (std::abs(ctx.state.current_time - stage_start_time_s) > tolerance) {
+        std::max({1.0, std::abs(ctx.state.current_time), std::abs(segment_start_time_s)});
+    if (std::abs(ctx.state.current_time - segment_start_time_s) > tolerance) {
         fullmag_fem_set_handle_error(handle,
             "begin_stage start time must equal the backend's current absolute time");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    ctx.zeeman.stage_start_time_s = stage_start_time_s;
+    ctx.zeeman.stage_start_time_s = waveform_origin_time_s;
     ctx.zeeman.regional_drive_revision += 1;
     ctx.stepper.workspace.fsal_valid = false;
     ctx.gpu_state.device.rk.fsal_valid = false;
@@ -4871,12 +4978,22 @@ int fullmag_fem_backend_begin_stage(
     ctx.gpu_state.device.rk.endpoint_operator_signature = 0;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
+#if FULLMAG_HAS_MFEM_STACK
     ctx.poisson_demag.fresh_initial_guess_required =
         ctx.demag.enabled && ctx.gpu_state.device.lifecycle.allocated;
+#endif
     std::fill(ctx.zeeman.h_drive_xyz.begin(), ctx.zeeman.h_drive_xyz.end(), 0.0);
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
     handle->last_error.clear();
     return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_begin_stage(
+    fullmag_fem_backend *handle,
+    double stage_start_time_s)
+{
+    return fullmag_fem_backend_begin_stage_v2(
+        handle, stage_start_time_s, stage_start_time_s);
 }
 
 int fullmag_fem_backend_set_gpu_execution_request_v1(
@@ -5427,6 +5544,7 @@ int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
 
+#if FULLMAG_HAS_MFEM_STACK
     if (handle->context.gpu_state.device.lifecycle.allocated &&
         handle->context.poisson_demag.gpu_demag_mode ==
             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
@@ -5444,6 +5562,8 @@ int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
         }
         return FULLMAG_FEM_OK;
     }
+
+#endif
 
     const int tangent_status = fullmag_fem_backend_apply_demag_tangent_f64(
         handle,

@@ -901,11 +901,11 @@
       "lanes": {
         "fdm_cpu_reference": "semantic_only",
         "fdm_gpu_production": "semantic_only",
-        "fem_cpu_public": "semantic_only",
+        "fem_cpu_public": "reference_executable",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "SpinWaveExcitationAnalysis(method=source_k_profile) authoring exists, but the resource-backed vector source-spectrum workflow is not executable. It must preserve field components and must not be labeled as the magnetization response."
+      "notes": "The reference runner executes source_k_profile against a verified immutable antenna_field_solution.v1 carrier and publishes antenna_source_spectrum_artifact.v2 with four hashed float64_le payloads plus thin metadata. The current producer is the FEM CPU field-solve lane; FDM/GPU production lanes and browser end-to-end qualification remain unvalidated. The product preserves vector components and is never labeled as a magnetization response; transverse equilibrium and mode_basis_ref are fail-closed until their verified resource contracts exist."
     },
     {
       "id": "antenna_local_k_spectrum",

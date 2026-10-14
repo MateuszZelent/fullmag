@@ -1135,6 +1135,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       usesInstanceColors,
     ],
   );
+  const surfaceMaterialRef = useRef<MeshBasicMaterial>(null);
   const wireframePolicy = RENDER_POLICIES.featureEdges;
   const wireframeColor = wireframeColorFromSettings(renderSettings, colors.wire);
   const wireframeOpacity = renderPlan.wireframe.opacity;
@@ -1312,7 +1313,11 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         renderOrder={surfacePolicy.renderOrder}
         visible={renderPlan.surface.visible}
       >
-        <primitive attach="material" object={surfaceMaterial} />
+        <primitive
+          ref={surfaceMaterialRef}
+          attach="material"
+          object={surfaceMaterial}
+        />
       </instancedMesh>
       <instancedMesh
         args={[geometry, undefined, renderCount]}

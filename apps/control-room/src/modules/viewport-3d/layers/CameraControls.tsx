@@ -7,7 +7,6 @@ import type { ComponentRef } from "react";
 import { MathUtils, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import { isViewport3DImmediatePointerDownRegion } from "../viewport3dEventManager";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -800,7 +799,6 @@ function useOrbitCameraControlsModel({
   const cameraGestureEndedRef = useRef(false);
   const activeGestureEpochRef = useRef<number | null>(null);
   const trajectoryFrameRef = useRef(0);
-  const previousHudControlsEnabledRef = useRef<boolean | null>(null);
   const suppressNextRestCommitRef = useRef(false);
   const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
     typeof setTimeout
@@ -908,44 +906,6 @@ function useOrbitCameraControlsModel({
     tracker,
   ]);
 
-
-  useEffect(() => {
-    const element = gl.domElement;
-    const listenerController = new AbortController();
-
-    const restoreControls = () => {
-      const previousEnabled = previousHudControlsEnabledRef.current;
-      previousHudControlsEnabledRef.current = null;
-      const controls = controlsRef.current;
-      if (!controls || previousEnabled === null) return;
-      controls.enabled = previousEnabled;
-    };
-
-    const handlePointerDownCapture = (event: PointerEvent) => {
-      if (!isViewport3DImmediatePointerDownRegion(event)) return;
-      const controls = controlsRef.current;
-      if (!controls || previousHudControlsEnabledRef.current !== null) return;
-      previousHudControlsEnabledRef.current = Boolean(controls.enabled);
-      controls.enabled = false;
-    };
-
-    window.addEventListener("pointerup", restoreControls, {
-      capture: true,
-      signal: listenerController.signal,
-    });
-    window.addEventListener("pointercancel", restoreControls, {
-      capture: true,
-      signal: listenerController.signal,
-    });
-    element.addEventListener("pointerdown", handlePointerDownCapture, {
-      capture: true,
-      signal: listenerController.signal,
-    });
-    return () => {
-      listenerController.abort();
-      restoreControls();
-    };
-  }, [gl]);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "production") {

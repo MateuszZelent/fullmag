@@ -15,6 +15,19 @@ pub(crate) fn build_quantities(
     scalar_rows: &[ScalarRow],
     _field_location: &str,
 ) -> Vec<QuantityDescriptor> {
+    // The standalone read model carries only the backend discriminant,
+    // not the heavy resolved conductor input required by ExecutionPlanIR.
+    if metadata
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("backend_plan"))
+        .and_then(|value| value.get("kind"))
+        .and_then(Value::as_str)
+        == Some("antenna_external_lead_inspection")
+    {
+        // V/J/H belong to the owner-bound inspection publisher, not to the
+        // magnetic quantity catalog or its interactive preview controls.
+        return Vec::new();
+    }
     let dynamic_supported = metadata
         .and_then(|value| value.get("capabilities"))
         .and_then(|value| serde_json::from_value::<BackendCapabilities>(value.clone()).ok())
@@ -39,7 +52,13 @@ pub(crate) fn build_quantities(
     let dynamic_available =
         |quantity_id: &str| dynamic_supported.iter().any(|id| id == quantity_id);
     let scalar_available = |run_value: Option<f64>| {
-        !scalar_rows.is_empty() || live_state.is_some() || run_value.is_some()
+        scalar_rows
+            .iter()
+            .any(ScalarRow::is_physical_observation)
+            || live_state.is_some_and(|state| {
+                state.latest_step.is_physical_observation()
+            })
+            || run_value.is_some()
     };
 
     quantity_specs()
@@ -110,6 +129,7 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
         return metric_key != "e_rotated_dmi";
     };
     match &plan.backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(_) => false,
         BackendPlanIR::Fdm(plan) => match metric_key {
             "e_ex" => plan.enable_exchange,
             "e_demag" => plan.enable_demag,
@@ -194,6 +214,14 @@ pub(crate) fn run_manifest_scalar_value(
     metric_key: &str,
     plan: Option<&ExecutionPlanIR>,
 ) -> Option<f64> {
+    if plan.is_some_and(|plan| {
+        matches!(
+            &plan.backend_plan,
+            BackendPlanIR::AntennaExternalLeadInspection(_)
+        )
+    }) {
+        return None;
+    }
     match metric_key {
         "e_ex" => run.and_then(|manifest| manifest.final_e_ex),
         "e_demag" => run.and_then(|manifest| manifest.final_e_demag),
@@ -236,7 +264,9 @@ fn plan_is_rotated_dmi_only(plan: &ExecutionPlanIR) -> bool {
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none()
         }
-        BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => false,
+        BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_)
+        | BackendPlanIR::AntennaExternalLeadInspection(_) => false,
     }
 }
 
@@ -247,14 +277,18 @@ pub(crate) fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMesh
         BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(&fem)),
         BackendPlanIR::FemEigen(fem) => Some(FemMeshPayload::from(&fem)),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(FemMeshPayload::from(&fem)),
-        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
+        BackendPlanIR::Fdm(_)
+        | BackendPlanIR::FdmMultilayer(_)
+        | BackendPlanIR::AntennaExternalLeadInspection(_) => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{build_quantities, run_manifest_scalar_value, scalar_metric_is_active};
-    use crate::types::{CachedPreviewFields, LatestFields, LiveState, RunManifest, StepUpdateView};
+    use crate::types::{
+        CachedPreviewFields, LatestFields, LiveState, RunManifest, ScalarRow, StepUpdateView,
+    };
     use fullmag_ir::{
         BackendPlanIR, BackendTarget, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode,
         ExecutionPlanIR, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
@@ -262,12 +296,141 @@ mod tests {
         OutputPlanIR, ProvenancePlanIR,
     };
 
+    fn modal_latest_live_state() -> LiveState {
+        serde_json::from_value(serde_json::json!({
+            "status": "running",
+            "updated_at_unix_ms": 1,
+            "latest_step": {
+                "kind": "solver_progress",
+                "solver_progress": {
+                    "kind": "fem_eigen",
+                    "metrics": { "progress_fraction": 0.5 }
+                },
+                "step": 2,
+                "time": 0.0,
+                "dt": 1.0e-12,
+                "e_ex": 1.0,
+                "e_demag": 2.0,
+                "e_ext": 3.0,
+                "e_total": 6.0,
+                "max_dm_dt": 0.0,
+                "max_h_eff": 0.0,
+                "wall_time_ns": 2,
+                "grid": [1, 1, 1],
+                "per_object_scalars": {},
+                "finished": false
+            }
+        }))
+        .expect("valid modal live-state fixture")
+    }
+
+    fn scalar_row(step: u64, modal_progress: bool) -> ScalarRow {
+        serde_json::from_value(serde_json::json!({
+            "kind": if modal_progress { "legacy_unclassified" } else { "physical_observation" },
+            "step": step,
+            "time": 0.0,
+            "solver_dt": 1.0e-12,
+            "mx": 1.0,
+            "my": 0.0,
+            "mz": 0.0,
+            "e_ex": 1.0,
+            "e_demag": 2.0,
+            "e_ext": 3.0,
+            "e_total": 6.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0,
+            "per_object_scalars": if modal_progress {
+                serde_json::json!({
+                    "fem_eigen_progress": { "progress_fraction": 0.5 }
+                })
+            } else {
+                serde_json::json!({})
+            }
+        }))
+        .expect("valid scalar-row fixture")
+    }
+
+    fn total_energy_available(
+        live_state: Option<&LiveState>,
+        run: Option<&RunManifest>,
+        scalar_rows: &[ScalarRow],
+    ) -> bool {
+        let plan = completed_run_plan(BackendPlanIR::Fdm(FdmPlanIR::default()));
+        let metadata = serde_json::json!({ "execution_plan": plan });
+        build_quantities(
+            &LatestFields::default(),
+            &CachedPreviewFields::default(),
+            live_state,
+            run,
+            Some(&metadata),
+            scalar_rows,
+            "cell",
+        )
+        .into_iter()
+        .find(|quantity| quantity.id == "E_total")
+        .expect("missing total-energy descriptor")
+        .available
+    }
+
+    #[test]
+    fn total_energy_remains_available_from_physical_history_when_modal_step_is_latest() {
+        let live_state = modal_latest_live_state();
+        let scalar_rows = [scalar_row(1, false), scalar_row(2, true)];
+
+        assert!(total_energy_available(
+            Some(&live_state),
+            None,
+            &scalar_rows
+        ));
+    }
+
+    #[test]
+    fn modal_only_progress_does_not_make_physical_scalar_available() {
+        let live_state = modal_latest_live_state();
+        let scalar_rows = [scalar_row(2, true)];
+
+        assert!(!total_energy_available(
+            Some(&live_state),
+            None,
+            &scalar_rows
+        ));
+    }
+
+    #[test]
+    fn physical_quantity_with_legal_progress_named_object_remains_available() {
+        let mut row = scalar_row(1, false);
+        row.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            std::collections::HashMap::from([("measured_value".into(), 1.0)]),
+        );
+
+        assert!(row.is_physical_observation());
+        assert!(total_energy_available(None, None, &[row]));
+    }
+
+    #[test]
+    fn run_manifest_scalar_remains_available_during_latest_modal_step() {
+        let live_state = modal_latest_live_state();
+        let mut run = completed_run_manifest();
+        run.final_e_total = Some(6.0);
+        let plan = completed_run_plan(BackendPlanIR::Fdm(FdmPlanIR::default()));
+
+        assert_eq!(
+            run_manifest_scalar_value(Some(&run), "e_total", Some(&plan)),
+            Some(6.0)
+        );
+        assert!(total_energy_available(Some(&live_state), Some(&run), &[]));
+    }
+
     #[test]
     fn magnetization_is_marked_available_from_live_step_magnetization() {
         let live_state = LiveState {
             status: "running".to_string(),
             updated_at_unix_ms: 1,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-12,
@@ -331,6 +494,29 @@ mod tests {
                 spec.id.as_str()
             );
         }
+    }
+
+    #[test]
+    fn thin_standalone_inspection_metadata_does_not_offer_magnetic_quantities() {
+        let metadata = serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "antenna_external_lead_inspection" } },
+            "capabilities": { "preview_quantities": ["m", "H_eff"] }
+        });
+        let latest_fields = serde_json::from_value(serde_json::json!({
+            "m": { "values": [[1.0, 0.0, 0.0]] },
+            "H_eff": { "values": [[0.0, 1.0, 0.0]] }
+        }))
+        .expect("stale magnetic fields");
+        let quantities = build_quantities(
+            &latest_fields,
+            &CachedPreviewFields::default(),
+            None,
+            Some(&completed_run_manifest()),
+            Some(&metadata),
+            &[],
+            "node",
+        );
+        assert!(quantities.is_empty());
     }
 
     #[test]

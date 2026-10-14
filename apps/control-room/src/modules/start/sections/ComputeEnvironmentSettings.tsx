@@ -5,8 +5,11 @@ import { Activity, Cpu, HardDrive, RefreshCw } from "lucide-react";
 import { Button } from "@/shared/ui/Button";
 
 import { formatTelemetrySampleTime } from "../model/computeTelemetry";
+import { ComputeNodeInventoryDetails } from "../ComputeNodeInventoryDetails";
+import { ComputeNodeInventoryStatus } from "../ComputeNodeInventoryStatus";
 import type {
   ComputeEnvironment,
+  ComputeNodeInventorySummary,
   ComputeProbeState,
   GpuInfo,
   SolverKind,
@@ -28,6 +31,8 @@ const LANE_ORDER: readonly { readonly backend: SolverKind; readonly device: "CPU
 
 export interface ComputeEnvironmentSettingsProps {
   readonly compute: ComputeProbeState;
+  readonly nodeInventory?: ComputeNodeInventorySummary;
+  readonly view?: "overview" | "resources";
   readonly refreshing?: boolean;
   readonly stale?: boolean;
   readonly error?: string | null;
@@ -36,11 +41,14 @@ export interface ComputeEnvironmentSettingsProps {
 
 export function ComputeEnvironmentSettings({
   compute,
+  nodeInventory,
+  view = "overview",
   refreshing = false,
   stale = false,
   error = null,
   onRefresh,
 }: ComputeEnvironmentSettingsProps) {
+  const overview = view === "overview";
   const sampleTime = formatTelemetrySampleTime(compute?.sampledAt);
   return (
     <section
@@ -51,15 +59,25 @@ export function ComputeEnvironmentSettings({
       <div className="fm-start-compute-settings__head">
         <div>
           <h2 className="fm-start-section__title" id="fm-start-compute-settings-title">
-            Compute environment
+            {overview ? "Compute environment" : "Compute resources"}
           </h2>
           <p className="fm-start-compute-settings__intro">
-            Devices, memory, and available solver runtimes on the compute host.
+            {overview
+              ? "Devices, memory, and available solver runtimes on the compute host."
+              : "Observed host inventory and operating-system resource constraints."}
           </p>
         </div>
         {onRefresh ? (
           <Button
-            aria-label={refreshing ? "Refreshing compute environment" : "Refresh compute environment"}
+            aria-label={
+              refreshing
+                ? view === "resources"
+                  ? "Refreshing host resources"
+                  : "Refreshing compute environment"
+                : view === "resources"
+                  ? "Refresh host resources"
+                  : "Refresh compute environment"
+            }
             disabled={refreshing}
             onClick={onRefresh}
             size="sm"
@@ -67,12 +85,12 @@ export function ComputeEnvironmentSettings({
             variant="secondary"
           >
             <RefreshCw aria-hidden="true" size={14} />
-            {refreshing ? "Refreshing…" : "Refresh"}
+            {refreshing ? "Refreshing…" : view === "resources" ? "Refresh inventory" : "Refresh"}
           </Button>
         ) : null}
       </div>
 
-      {compute === undefined ? (
+      {overview && compute === undefined ? (
         <div aria-live="polite" className="fm-start-compute-settings__notice">
           <p>
             {error
@@ -87,11 +105,11 @@ export function ComputeEnvironmentSettings({
             </p>
           ) : null}
         </div>
-      ) : compute === null ? (
+      ) : overview && compute === null ? (
         <p className="fm-start-compute-settings__notice" role={error ? "alert" : undefined}>
           {error ? "The compute probe could not return a reading. Try refreshing the environment." : "No compute probe is available on this host."}
         </p>
-      ) : (
+      ) : overview && compute !== undefined && compute !== null ? (
         <>
           {sampleTime ? (
             <p className="fm-start-compute-settings__policy">
@@ -105,17 +123,41 @@ export function ComputeEnvironmentSettings({
           ) : null}
           <ComputeDetails compute={compute} />
         </>
-      )}
+      ) : null}
 
-      {error ? (
+      {!overview ? (
+        nodeInventory ? (
+          <>
+            <ComputeNodeInventoryStatus
+              className="fm-start-compute-settings__policy"
+              summary={nodeInventory}
+            />
+            <ComputeNodeInventoryDetails summary={nodeInventory} />
+          </>
+        ) : (
+          <p className="fm-start-compute-settings__notice" role="status">
+            No host inventory snapshot is available.
+          </p>
+        )
+      ) : null}
+
+      {!overview ? (
+        <p className="fm-start-compute-settings__policy">
+          This view reports observed inventory; it does not change host resource policy.
+        </p>
+      ) : null}
+
+      {overview && error ? (
         <p className="fm-start-compute-settings__error" role="alert">
           {error}
         </p>
       ) : null}
 
-      <p className="fm-start-compute-settings__policy">
-        Choose backend, device, and precision in each study&apos;s execution settings. A concrete device is resolved when a run starts.
-      </p>
+      {overview ? (
+        <p className="fm-start-compute-settings__policy">
+          Choose backend, device, and precision in each study&apos;s execution settings. A concrete device is resolved when a run starts.
+        </p>
+      ) : null}
     </section>
   );
 }

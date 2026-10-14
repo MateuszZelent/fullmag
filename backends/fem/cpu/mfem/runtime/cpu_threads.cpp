@@ -67,9 +67,14 @@ bool env_requests_auto_threads(const char *name)
 CpuThreadRequest requested_cpu_threads()
 {
     if (env_requests_auto_threads("FULLMAG_CPU_THREADS")) {
+        const int resolved_native_threads = parse_positive_env_int(
+            "FULLMAG_NATIVE_THREADS_AUTO_RESOLVED"
+        ).value_or(
+            parse_positive_env_int("FULLMAG_CPU_THREADS_AUTO_RESOLVED").value_or(0)
+        );
         return CpuThreadRequest{
             detected_cpu_threads(),
-            parse_positive_env_int("FULLMAG_CPU_THREADS_AUTO_RESOLVED").value_or(0),
+            resolved_native_threads,
             true,
         };
     }

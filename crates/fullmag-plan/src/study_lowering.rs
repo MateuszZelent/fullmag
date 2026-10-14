@@ -370,7 +370,7 @@ mod tests {
             "steps": [{
                 "step_id": "step:future",
                 "label": "Future",
-                "kind": "future_solver",
+                "kind": {"kind": "future_solver"},
                 "model": {"model_id": "model:one", "version": "v1"},
                 "solver_config": {"preset_id": "solver:default", "version": "v1"},
                 "discretization": {"recipe_id": "mesh:default", "version": "v1"},

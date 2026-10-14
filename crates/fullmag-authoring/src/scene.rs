@@ -48,12 +48,109 @@ pub struct SceneDocument {
     pub spin_torques: Vec<SceneSpinTorque>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub oersted_fields: Vec<SceneOerstedField>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_port_modes: Vec<fullmag_ir::AntennaPortModeIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_field_solve_stages: Vec<fullmag_ir::AntennaFieldSolveStageIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_target_projections: Vec<fullmag_ir::AntennaTargetProjectionRefIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solved_antenna_drives: Vec<fullmag_ir::SolvedAntennaDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_spectrum_requests: Vec<fullmag_ir::AntennaSpectrumRequestIR>,
     #[serde(default)]
     pub study: SceneStudyState,
     #[serde(default)]
     pub outputs: SceneOutputsState,
     #[serde(default)]
     pub editor: SceneEditorState,
+    /// User-created Results nodes (ADR 0054). Not part of the physics model or
+    /// the script; saved with the project and omitted while empty.
+    #[serde(default, skip_serializing_if = "SceneAnalysisState::is_empty")]
+    pub analysis: SceneAnalysisState,
+}
+
+impl Default for SceneDocument {
+    fn default() -> Self {
+        Self {
+            version: default_scene_version(),
+            revision: 0,
+            scene: SceneMetadata::default(),
+            universe: None,
+            objects: Vec::new(),
+            couplings: Vec::new(),
+            materials: Vec::new(),
+            magnetization_assets: Vec::new(),
+            field_drives: SceneFieldDrivesState::default(),
+            monitors: SceneMonitorState::default(),
+            selections: Vec::new(),
+            magnetization_constraints: Vec::new(),
+            current_modules: SceneCurrentModulesState::default(),
+            current_transports: Vec::new(),
+            spin_transports: Vec::new(),
+            spin_torques: Vec::new(),
+            oersted_fields: Vec::new(),
+            antenna_port_modes: Vec::new(),
+            antenna_field_solve_stages: Vec::new(),
+            antenna_target_projections: Vec::new(),
+            solved_antenna_drives: Vec::new(),
+            antenna_spectrum_requests: Vec::new(),
+            study: SceneStudyState::default(),
+            outputs: SceneOutputsState::default(),
+            editor: SceneEditorState::default(),
+            analysis: SceneAnalysisState::default(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SceneAnalysisState {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub postprocessing_definitions: Vec<ScenePostprocessingDefinition>,
+}
+
+impl SceneAnalysisState {
+    pub fn is_empty(&self) -> bool {
+        self.postprocessing_definitions.is_empty()
+    }
+}
+
+/// A Results node owned by an analysis module, e.g. a mode visualization
+/// pinned to a dispersion point (spec frontend-v2/32 §8). Data references use
+/// published identities only, never array indices.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ScenePostprocessingDefinition {
+    pub definition_id: String,
+    #[serde(default)]
+    pub revision: u64,
+    pub module_id: String,
+    pub module_version: String,
+    pub definition_schema: String,
+    pub node_kind: String,
+    pub label: String,
+    pub data_ref: ScenePostprocessingDataRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_definition_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub settings: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ScenePostprocessingDataRef {
+    pub run_id: String,
+    pub dataset_id: String,
+    pub dataset_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -287,6 +384,15 @@ pub struct SceneCurrentModulesState {
     pub modules: Vec<ScriptBuilderCurrentModuleState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
+}
+
+fn deserialize_scene_pbc_presence<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<fullmag_ir::FdmPeriodicityIR>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<fullmag_ir::FdmPeriodicityIR>::deserialize(deserializer).map(Some)
 }
 
 /// A stage scalar that is numeric in the canonical scene representation.
@@ -742,6 +848,15 @@ pub struct SceneStudyState {
     pub requested_mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_cpu_threads: Option<u32>,
+    #[serde(default, deserialize_with = "fullmag_ir::deserialize_parallel_execution_policy")]
+    pub parallel_execution: fullmag_ir::ParallelExecutionPolicyIR,
+    // Missing preserves an existing script; null explicitly clears its PBC.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_scene_pbc_presence"
+    )]
+    pub pbc: Option<Option<fullmag_ir::FdmPeriodicityIR>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
     #[serde(default = "default_true")]
@@ -1657,6 +1772,20 @@ pub enum SceneCouplingCapabilityPolicy {
 
 #[cfg(test)]
 mod spin_authoring_tests {
+    #[test]
+    fn scene_parallel_execution_null_restores_serial_policy() {
+        let scene: super::SceneStudyState = serde_json::from_value(
+            serde_json::json!({"parallel_execution": null}),
+        ).expect("explicit null restores the canonical policy");
+        assert_eq!(scene.parallel_execution, fullmag_ir::ParallelExecutionPolicyIR::default());
+        for value in [serde_json::json!(false), serde_json::json!([]),
+                      serde_json::json!({"unknown": 1})] {
+            assert!(serde_json::from_value::<super::SceneStudyState>(
+                serde_json::json!({"parallel_execution": value}),
+            ).is_err());
+        }
+    }
+
     use super::*;
 
     #[test]

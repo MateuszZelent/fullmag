@@ -45,6 +45,7 @@ export type ModeCompositionFieldLayerSnapshotMap = ReadonlyMap<
 >;
 
 export interface ModeCompositionFieldBinaryLoadResult {
+  readonly artifactGenerationId: string | null;
   readonly byteLength: number;
   readonly data: DecodedFieldVector;
   readonly encoding: string | null;
@@ -56,6 +57,7 @@ export interface ModeCompositionFieldLayerLoaders {
   loadBinary(
     layer: ModeCompositionLayer,
     signal: AbortSignal,
+    expectedArtifactGenerationId: string,
     etag?: string | null,
   ): Promise<ModeCompositionFieldBinaryLoadResult>;
   loadMetadata(
@@ -65,7 +67,15 @@ export interface ModeCompositionFieldLayerLoaders {
 }
 
 interface ResolvedMetadata {
+  readonly artifactGenerationId: string;
   readonly metadataRevision: string;
+}
+
+type ModeCompositionFieldBinaryEncoding = "FMVP;version=3" | "FMVP;version=5";
+
+interface ResolvedFieldRevision {
+  readonly binaryEncoding: ModeCompositionFieldBinaryEncoding;
+  readonly fieldRevision: string;
 }
 
 interface CachedField {
@@ -75,6 +85,7 @@ interface CachedField {
 
 interface RetainedField extends CachedField {
   readonly layer: ModeCompositionLayer;
+  readonly metadataRevision: string;
   readonly topology: ModeCompositionFieldLayerTopologyIdentity;
 }
 
@@ -93,7 +104,7 @@ export class ModeCompositionFieldLayerController {
     maxBytes: MAX_CACHE_BYTES,
   });
   private readonly listeners = new Set<Listener>();
-  private readonly fieldRevisions = new Map<string, string>();
+  private readonly fieldRevisions = new Map<string, ResolvedFieldRevision>();
   private readonly metadataCache = new Map<string, ResolvedMetadata>();
   private readonly metadataInflight = new Map<string, Promise<ResolvedMetadata>>();
   private requestToken = 0;
@@ -118,6 +129,7 @@ export class ModeCompositionFieldLayerController {
     this.requestToken += 1;
     this.abortController?.abort();
     this.abortController = null;
+    this.metadataCache.clear();
     this.metadataInflight.clear();
     this.retained.clear();
     this.publish(new Map());
@@ -140,6 +152,10 @@ export class ModeCompositionFieldLayerController {
     }
     const requestToken = ++this.requestToken;
     this.abortController?.abort();
+    // Artifact generation is part of metadata identity and is only known after
+    // this activation's read. Keep request deduplication within this activation,
+    // but never carry a prior activation's metadata answer forward.
+    this.metadataCache.clear();
     this.metadataInflight.clear();
     const abortController = new AbortController();
     this.abortController = abortController;
@@ -182,24 +198,93 @@ export class ModeCompositionFieldLayerController {
         if (retained && !sameTopology(retained.topology, topology!)) {
           this.retained.delete(targetId);
         }
-        const retainedForTopology = this.retained.get(targetId) ?? null;
-        next.set(targetId, retainedForTopology
-          ? refreshingSnapshot(layer, retainedForTopology)
-          : preparingSnapshot(layer));
+        // The previous payload is hidden until fresh metadata proves that its
+        // exact committed generation still owns this layer.
+        next.set(targetId, preparingSnapshot(layer));
         active.push({ layer, topology: topology! });
       }
     }
 
     this.publish(next);
-    await runBounded(active, this.maxConcurrentLoads, async ({ layer, topology }) => {
-      await this.loadLayer(
-        requestToken,
-        layer,
-        topology,
-        loaders,
-        abortController.signal,
-      );
+    const resolvedMetadata = new Map<string, ResolvedMetadata>();
+    const metadataErrors = new Map<string, Error>();
+    await runBounded(active, this.maxConcurrentLoads, async ({ layer }) => {
+      try {
+        resolvedMetadata.set(
+          layer.target_id,
+          await this.resolveMetadata(layer, loaders, abortController.signal),
+        );
+      } catch (error) {
+        metadataErrors.set(layer.target_id, normalizeError(error));
+      }
     });
+
+    if (this.requestToken !== requestToken) return "cancelled";
+    const artifactGenerations = new Set(
+      [...resolvedMetadata.values()].map((metadata) => metadata.artifactGenerationId),
+    );
+    if (metadataErrors.size > 0 || artifactGenerations.size > 1) {
+      const rejected = new Map(this.snapshot);
+      for (const { layer } of active) {
+        this.retained.delete(layer.target_id);
+        const metadataError = metadataErrors.get(layer.target_id);
+        const reason = metadataError
+          ? failureReason(metadataError)
+          : "identity_mismatch";
+        rejected.set(
+          layer.target_id,
+          errorSnapshot(
+            layer,
+            metadataError?.message ?? (artifactGenerations.size > 1
+              ? "Mode composition includes fields from different committed artifact generations."
+              : [...metadataErrors.values()].some(isIdentityError)
+                ? "Mode composition cannot join fields when any member lacks an owner-bound committed artifact generation."
+                : "Mode composition cannot verify every member's committed artifact generation."),
+            reason,
+          ),
+        );
+      }
+      this.publish(rejected);
+    } else {
+      const refreshed = new Map(this.snapshot);
+      for (const { layer, topology } of active) {
+        const metadata = resolvedMetadata.get(layer.target_id);
+        const retained = this.retained.get(layer.target_id);
+        const expectedFieldIdentity = metadata
+          ? this.fieldRevisions.get(fieldRevisionKey(layer, topology, metadata)) ?? null
+          : null;
+        if (
+          !metadata ||
+          !retained ||
+          !sameRetainedIdentity(
+            retained,
+            layer,
+            topology,
+            metadata,
+            expectedFieldIdentity,
+          )
+        ) {
+          this.retained.delete(layer.target_id);
+          refreshed.set(layer.target_id, preparingSnapshot(layer));
+          continue;
+        }
+        refreshed.set(layer.target_id, refreshingSnapshot(layer, retained));
+      }
+      // Remove every stale-generation fallback before any target can publish a
+      // newly loaded field, so intermediate snapshots cannot mix publications.
+      this.publish(refreshed);
+      await runBounded(active, this.maxConcurrentLoads, async ({ layer, topology }) => {
+        await this.loadLayer(
+          requestToken,
+          layer,
+          topology,
+          loaders,
+          abortController.signal,
+          resolvedMetadata.get(layer.target_id) ?? null,
+          metadataErrors.get(layer.target_id) ?? null,
+        );
+      });
+    }
 
     if (this.requestToken !== requestToken) return "cancelled";
     if (this.abortController === abortController) this.abortController = null;
@@ -212,14 +297,23 @@ export class ModeCompositionFieldLayerController {
     topology: ModeCompositionFieldLayerTopologyIdentity,
     loaders: ModeCompositionFieldLayerLoaders,
     signal: AbortSignal,
+    preloadedMetadata: ResolvedMetadata | null,
+    metadataError: Error | null,
   ): Promise<void> {
     try {
-      const metadata = await this.resolveMetadata(layer, loaders, signal);
+      if (metadataError) throw metadataError;
+      const metadata = preloadedMetadata ?? await this.resolveMetadata(layer, loaders, signal);
       if (!this.isCurrent(requestToken)) return;
       const revisionKey = fieldRevisionKey(layer, topology, metadata);
-      const fieldRevision = this.fieldRevisions.get(revisionKey) ?? null;
-      const identity = fieldRevision
-        ? createFieldIdentity(layer, topology, fieldRevision)
+      const resolvedFieldRevision = this.fieldRevisions.get(revisionKey) ?? null;
+      const identity = resolvedFieldRevision
+        ? createFieldIdentity(
+            layer,
+            topology,
+            resolvedFieldRevision.fieldRevision,
+            metadata.artifactGenerationId,
+            resolvedFieldRevision.binaryEncoding,
+          )
         : null;
       const cached = identity
         ? this.fieldCache.get(modeFieldComplexBinaryResourceKey(identity))
@@ -227,6 +321,7 @@ export class ModeCompositionFieldLayerController {
       const entry = cached ?? await this.loadAndValidateBinary(
         layer,
         topology,
+        metadata,
         identity,
         revisionKey,
         loaders,
@@ -236,6 +331,7 @@ export class ModeCompositionFieldLayerController {
       const retained: RetainedField = {
         ...entry.data,
         layer,
+        metadataRevision: metadata.metadataRevision,
         topology,
       };
       this.retained.set(layer.target_id, retained);
@@ -301,15 +397,33 @@ export class ModeCompositionFieldLayerController {
   private async loadAndValidateBinary(
     layer: ModeCompositionLayer,
     topology: ModeCompositionFieldLayerTopologyIdentity,
+    metadata: ResolvedMetadata,
     expectedIdentity: ModeFieldComplexBinaryIdentity | null,
     revisionKey: string,
     loaders: ModeCompositionFieldLayerLoaders,
     signal: AbortSignal,
   ) {
-    const result = await loaders.loadBinary(layer, signal, null);
-    const fieldRevision = validateBinary(layer, expectedIdentity, topology, result);
-    const identity = expectedIdentity ?? createFieldIdentity(layer, topology, fieldRevision);
-    this.fieldRevisions.set(revisionKey, fieldRevision);
+    const result = await loaders.loadBinary(
+      layer,
+      signal,
+      metadata.artifactGenerationId,
+      null,
+    );
+    const resolvedFieldRevision = validateBinary(
+      layer,
+      expectedIdentity,
+      topology,
+      result,
+      metadata.artifactGenerationId,
+    );
+    const identity = expectedIdentity ?? createFieldIdentity(
+      layer,
+      topology,
+      resolvedFieldRevision.fieldRevision,
+      metadata.artifactGenerationId,
+      resolvedFieldRevision.binaryEncoding,
+    );
+    this.fieldRevisions.set(revisionKey, resolvedFieldRevision);
     const key = modeFieldComplexBinaryResourceKey(identity);
     const entry = {
       byteLength: result.byteLength,
@@ -417,6 +531,20 @@ function validateMetadata(
   metadata: FrequencyDomainFieldResource,
 ): ResolvedMetadata {
   const metadataRevision = requiredString(metadata.revision) ?? requiredString(metadata.content_digest);
+  const artifactGenerationId = requiredString(metadata.generation_id);
+  if (metadata.generation_status === "member_verified_unbound") {
+    throw new ModeCompositionFieldIdentityError(
+      "Mode composition rejects member_verified_unbound field artifacts; an owner-bound committed generation is required.",
+    );
+  }
+  if (
+    metadata.generation_status !== "member_verified_owner_bound" ||
+    !artifactGenerationId
+  ) {
+    throw new ModeCompositionFieldIdentityError(
+      "Mode composition requires a nonempty member_verified_owner_bound artifact generation; legacy fields cannot join a composition.",
+    );
+  }
   if (
     metadata.status !== "ready" ||
     metadata.schema_version !== "frequency_domain_mode_field.v1" ||
@@ -435,17 +563,20 @@ function validateMetadata(
       "Mode field metadata is incomplete or incompatible with a global complex XYZ field.",
     );
   }
-  return { metadataRevision };
+  return { artifactGenerationId, metadataRevision };
 }
 
 function createFieldIdentity(
   layer: ModeCompositionLayer,
   topology: ModeCompositionFieldLayerTopologyIdentity,
   fieldRevision: string,
+  artifactGenerationId: string,
+  binaryEncoding: ModeCompositionFieldBinaryEncoding,
 ): ModeFieldComplexBinaryIdentity {
   return {
+    artifactGenerationId,
     artifactRevision: layer.mode.artifact_revision,
-    binaryEncoding: "FMVP;version=3",
+    binaryEncoding,
     fieldId: layer.field_id,
     fieldRevision,
     generationId: topology.domainGenerationId!,
@@ -464,11 +595,17 @@ function validateBinary(
   expectedIdentity: ModeFieldComplexBinaryIdentity | null,
   topology: ModeCompositionFieldLayerTopologyIdentity,
   result: ModeCompositionFieldBinaryLoadResult,
-): string {
+  expectedArtifactGenerationId: string,
+): ResolvedFieldRevision {
   const field = result.data;
   const complex = asDecodedComplexFieldVector(field);
   const nodeIndices = field.nodeIndices;
   const fieldRevision = requiredString(result.fieldRevision);
+  if (result.artifactGenerationId !== expectedArtifactGenerationId) {
+    throw new ModeCompositionFieldIdentityError(
+      "Mode field artifact generation header is missing or does not match the owner-bound metadata member.",
+    );
+  }
   if (
     field.domainGenerationId !== topology.domainGenerationId ||
     field.meshTopologyHash !== topology.meshTopologyHash ||
@@ -478,12 +615,22 @@ function validateBinary(
       "Object-scoped complex mode field does not match the current topology identity.",
     );
   }
+  const binaryEncoding = supportedModeCompositionFieldEncoding(
+    result.encoding,
+    field.formatVersion,
+  );
+  if (!binaryEncoding) {
+    throw new ModeCompositionFieldIdentityError(
+      "Object-scoped complex mode field requires a matching FMVP v3 or v5 header and decoded format version.",
+    );
+  }
   if (
-    result.encoding !== "FMVP;version=3" ||
     !fieldRevision ||
-    (expectedIdentity !== null && result.fieldRevision !== expectedIdentity.fieldRevision) ||
+    (expectedIdentity !== null && (
+      result.fieldRevision !== expectedIdentity.fieldRevision ||
+      binaryEncoding !== expectedIdentity.binaryEncoding
+    )) ||
     !complex ||
-    field.formatVersion !== 3 ||
     field.nComp !== 6 ||
     complex.componentCount !== 3 ||
     field.quantityId !== layer.field_id ||
@@ -503,7 +650,16 @@ function validateBinary(
       "Object-scoped complex mode field failed identity, topology, scope, or coverage validation.",
     );
   }
-  return fieldRevision;
+  return { binaryEncoding, fieldRevision };
+}
+
+function supportedModeCompositionFieldEncoding(
+  encoding: string | null,
+  formatVersion: number | undefined,
+): ModeCompositionFieldBinaryEncoding | null {
+  if (encoding === "FMVP;version=3" && formatVersion === 3) return encoding;
+  if (encoding === "FMVP;version=5" && formatVersion === 5) return encoding;
+  return null;
 }
 
 function metadataKey(layer: ModeCompositionLayer): string {
@@ -525,6 +681,7 @@ function fieldRevisionKey(
   return [
     metadataKey(layer),
     metadata.metadataRevision,
+    metadata.artifactGenerationId,
     topology.domainGenerationId,
     topology.meshTopologyHash,
     topology.meshTopologyRevision,
@@ -548,6 +705,34 @@ function sameTopology(
   return left.domainGenerationId === right.domainGenerationId &&
     left.meshTopologyHash === right.meshTopologyHash &&
     left.meshTopologyRevision === right.meshTopologyRevision;
+}
+
+function sameRetainedIdentity(
+  retained: RetainedField,
+  layer: ModeCompositionLayer,
+  topology: ModeCompositionFieldLayerTopologyIdentity,
+  metadata: ResolvedMetadata,
+  expectedFieldIdentity: ResolvedFieldRevision | null,
+): boolean {
+  const identity = retained.identity;
+  return Boolean(
+    expectedFieldIdentity &&
+    identity.fieldRevision === expectedFieldIdentity.fieldRevision &&
+    identity.binaryEncoding === expectedFieldIdentity.binaryEncoding &&
+    identity.artifactGenerationId === metadata.artifactGenerationId &&
+    retained.metadataRevision === metadata.metadataRevision &&
+    identity.runId === layer.mode.run_id &&
+    identity.stageId === layer.mode.stage_id &&
+    identity.artifactRevision === layer.mode.artifact_revision &&
+    identity.sampleId === layer.mode.sample_id &&
+    identity.modeId === layer.mode.mode_id &&
+    identity.fieldId === layer.field_id &&
+    identity.scopeKind === "object" &&
+    identity.scopeId === layer.object_id &&
+    identity.generationId === topology.domainGenerationId &&
+    identity.topologyHash === topology.meshTopologyHash &&
+    sameTopology(retained.topology, topology)
+  );
 }
 
 function requiredString(value: unknown): string | null {
@@ -574,10 +759,13 @@ function normalizeError(error: unknown): Error {
 }
 
 function isIdentityError(error: Error): boolean {
-  return error instanceof ModeCompositionFieldIdentityError;
+  return error instanceof ModeCompositionFieldIdentityError || isHttpConflict(error);
 }
 
 function failureReason(error: Error): ModeCompositionFieldLayerFailureReason {
+  if (isHttpConflict(error)) {
+    return "identity_mismatch";
+  }
   if (error instanceof ModeCompositionFieldTopologyError) {
     return "topology_mismatch";
   }
@@ -585,6 +773,10 @@ function failureReason(error: Error): ModeCompositionFieldLayerFailureReason {
     return "identity_mismatch";
   }
   return "transport_error";
+}
+
+function isHttpConflict(error: Error): boolean {
+  return (error as Error & { readonly status?: unknown }).status === 409;
 }
 
 class ModeCompositionFieldIdentityError extends Error {

@@ -291,6 +291,76 @@ def test_disabled_flat_scene_stage_stays_in_document_but_is_not_captured(tmp_pat
     ] == [0.0, 0.0, 2e-12]
 
 
+@pytest.mark.parametrize("pipeline", [
+    {},
+    {"version": "study_pipeline.v1"},
+    {"version": "study_pipeline.v1", "nodes": []},
+    {"version": "study_pipeline.v1", "nodes": [{
+        "node_kind": "primitive", "id": "disabled-relax", "label": "Disabled relax",
+        "enabled": False, "stage_kind": "relax", "payload": {"max_steps": 7},
+    }]},
+    {"version": "study_pipeline.v1", "nodes": [{
+        "node_kind": "group", "id": "disabled-group", "label": "Disabled group",
+        "enabled": False, "children": [{
+            "node_kind": "primitive", "id": "nested-run", "label": "Nested run",
+            "stage_kind": "run", "payload": {"until_seconds": 2e-12},
+        }],
+    }]},
+])
+def test_explicit_pipeline_never_revives_dormant_flat_stages(tmp_path, monkeypatch, pipeline):
+    scene = _authored_scene(tmp_path)
+    scene["study"].pop("output_storage")
+    scene["study"]["study_pipeline"] = copy.deepcopy(pipeline)
+    original_scene = copy.deepcopy(scene)
+
+    def forbidden_solver(*args, **kwargs):
+        pytest.fail("pipeline export must not start a solver")
+
+    monkeypatch.setattr(world, "run", forbidden_solver)
+    config = scene_document_to_execution_config(
+        scene, requested_backend="fdm", requested_device="auto",
+        requested_precision="single", requested_mode="extended", source_root=tmp_path,
+    )
+
+    assert scene == original_scene
+    assert config["stages"] == []
+    assert config["default_until_seconds"] is None
+    assert config["study_pipeline"] == pipeline
+    metadata = config["ir"]["problem_meta"]["runtime_metadata"]
+    assert metadata["study_pipeline"] == pipeline
+    assert "active_stage_id" not in metadata
+
+
+def test_null_pipeline_retains_flat_stage_capture(tmp_path):
+    scene = _authored_scene(tmp_path)
+    scene["study"]["study_pipeline"] = None
+    config = scene_document_to_execution_config(
+        scene, requested_backend="fdm", requested_device="auto",
+        requested_precision="single", requested_mode="extended", source_root=tmp_path,
+    )
+    assert [stage["entrypoint_kind"] for stage in config["stages"]] == [
+        "flat_relax", "flat_save_state", "flat_run", "flat_run",
+    ]
+
+
+@pytest.mark.parametrize("pipeline, message", [
+    ([], "study_pipeline must be an object"),
+    ({"version": "study_pipeline.v99", "nodes": []}, "pipeline_version_not_supported"),
+    ({"version": "study_pipeline.v1", "nodes": None}, "nodes must be a list"),
+    ({"version": "study_pipeline.v1", "nodes": {}}, "nodes must be a list"),
+])
+def test_invalid_pipeline_is_rejected_without_flat_fallback(tmp_path, pipeline, message):
+    scene = _authored_scene(tmp_path)
+    scene["study"]["study_pipeline"] = pipeline
+    original_scene = copy.deepcopy(scene)
+    with pytest.raises(ValueError, match=message):
+        scene_document_to_execution_config(
+            scene, requested_backend="fdm", requested_device="auto",
+            requested_precision="single", requested_mode="extended", source_root=tmp_path,
+        )
+    assert scene == original_scene
+
+
 def test_scene_execution_config_keeps_geometry_recipes_without_building_assets(
     tmp_path, monkeypatch
 ):
@@ -336,6 +406,57 @@ def test_scene_execution_config_keeps_geometry_recipes_without_building_assets(
             assert stage["ir"]["geometry_assets"] is None
 
 
+@pytest.mark.parametrize("source", ["flat", "pipeline"])
+def test_execution_opt_in_reaches_existing_geometry_and_lead_producers_without_solving(
+    tmp_path, monkeypatch, source,
+):
+    import fullmag.runtime.antenna_lead_materialization as lead_materialization
+
+    scene = _authored_scene(tmp_path)
+    if source == "flat":
+        scene["study"].pop("study_pipeline")
+    original = copy.deepcopy(scene)
+    geometry_calls, lead_calls = [], []
+    assets = {"fdm_grid_assets": [], "fem_mesh_assets": []}
+
+    def fake_geometry_builder(**kwargs):
+        geometry_calls.append(kwargs)
+        return copy.deepcopy(assets)
+
+    def fake_lead_preparer(problem, ir, **kwargs):
+        lead_calls.append((ir["geometry_assets"], kwargs))
+
+    def forbidden_solver(*args, **kwargs):
+        pytest.fail("execution input preparation must not start a solver")
+
+    monkeypatch.setattr(problem_model, "build_geometry_assets_for_request", fake_geometry_builder)
+    monkeypatch.setattr(lead_materialization, "materialize_antenna_lead_preparations", fake_lead_preparer)
+    monkeypatch.setattr(world, "run", forbidden_solver)
+    config = scene_document_to_execution_config(
+        scene, requested_backend="fdm", requested_device="auto",
+        requested_precision="single", requested_mode="extended", source_root=tmp_path,
+        materialize_geometry_assets=True,
+    )
+
+    assert scene == original
+    assert len(geometry_calls) == 1 + len(config["stages"])
+    assert len(lead_calls) == len(geometry_calls)
+    assert all(value == assets for value, _ in lead_calls)
+    assert (config["shared_geometry_assets"] or config["ir"]["geometry_assets"]) == assets
+    assert config["ir"]["backend_policy"]["requested_backend"] == "fdm"
+    # These are routing mocks, not real mesh/current/field evidence.
+
+
+@pytest.mark.parametrize("value", [None, 1, "true", []])
+def test_execution_geometry_opt_in_requires_an_actual_bool(value):
+    with pytest.raises(TypeError, match="materialize_geometry_assets must be a bool"):
+        scene_document_to_execution_config(
+            {}, requested_backend="fem", requested_device="cpu",
+            requested_precision="double", requested_mode="strict",
+            materialize_geometry_assets=value,
+        )
+
+
 def test_scene_single_ir_keeps_geometry_assets_omitted_and_scene_unmodified(tmp_path):
     scene = _authored_scene(tmp_path)
     original_scene = copy.deepcopy(scene)
@@ -352,7 +473,9 @@ def test_scene_single_ir_keeps_geometry_assets_omitted_and_scene_unmodified(tmp_
     assert scene == original_scene
     assert ir["geometry_assets"] is None
     _assert_annotations(ir, scene)
-    assert ir["problem_meta"]["runtime_metadata"]["output_storage_source_stem"] == "scene_document"
+    # The temporary capture script is not an authored output basename.
+    assert "output_storage_source_stem" not in ir["problem_meta"]["runtime_metadata"]
+    assert ir["problem_meta"]["name"] == scene["scene"]["name"] == "scene-config-test"
 
 
 def test_scene_pipeline_macro_remains_owned_by_shared_materializer(tmp_path):
@@ -412,9 +535,15 @@ def test_scene_renderer_preserves_eigen_equilibrium_artifact(tmp_path):
     assert export_builder_draft(roundtrip)["stages"][0]["eigen_equilibrium_artifact"] == "equilibrium-1"
 
 
-def test_scene_renderer_preserves_table_autosave_expressions_and_id(tmp_path):
+@pytest.mark.parametrize("source", ["flat", "pipeline"])
+def test_scene_renderer_preserves_table_autosave_expressions_and_id(tmp_path, source):
     scene = _authored_scene(tmp_path)
-    scene["study"]["stages"][0]["autosave"] = fm.StageAutosave(
+    if source == "flat":
+        scene["study"].pop("study_pipeline")
+        stage = scene["study"]["stages"][0]
+    else:
+        stage = scene["study"]["study_pipeline"]["nodes"][0]["children"][0]["payload"]
+    stage["autosave"] = fm.StageAutosave(
         table=fm.TableAutosave(
             every_steps=7,
             quantities=("E_total",),
@@ -433,6 +562,32 @@ def test_scene_renderer_preserves_table_autosave_expressions_and_id(tmp_path):
     autosave = export_builder_draft(roundtrip)["stages"][0]["autosave"]
     assert autosave["table"]["table_id"] == "trace"
     assert autosave["table"]["expressions"] == ["mx+my"]
+
+
+@pytest.mark.parametrize("materialize", [False, True])
+def test_helper_forwards_execution_geometry_opt_in(tmp_path, monkeypatch, materialize):
+    scene_path = tmp_path / "scene.json"
+    scene_path.write_text("{}", encoding="utf-8")
+    calls = []
+
+    def capture(scene, **kwargs):
+        calls.append((scene, kwargs))
+        return {"routing_only": True}
+
+    monkeypatch.setattr(runtime_helper, "scene_document_to_execution_config", capture)
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+        exit_code = runtime_helper.main([
+            "export-scene-config", "--scene-json", str(scene_path),
+            "--backend", "fem", "--device", "cpu", "--precision", "double", "--mode", "strict",
+            *(["--materialize-geometry-assets"] if materialize else []),
+        ])
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == {"routing_only": True}
+    assert calls == [({}, {
+        "requested_backend": "fem", "requested_device": "cpu", "requested_precision": "double",
+        "requested_mode": "strict", "source_root": None, "materialize_geometry_assets": materialize,
+    })]
 
 
 def test_helper_exports_scene_execution_config_with_same_capture_arguments(tmp_path, monkeypatch):

@@ -271,3 +271,41 @@ powyższy rzeczywisty build. Dłuższa obserwacja stabilności pozostaje otwarta
 
 Ten dokument nie potwierdza gotowości kontrolowanego restartu z odtworzeniem
 modelu, kwalifikacji FEM ani ukończenia P0–P8.
+
+### Indeks konfliktów ścieżek — 13.10.2026
+
+Przy przygotowaniu kolejnego snapshotu wykryto iloczyn liczby nowych i starych
+plików w kontroli przejścia katalogu w plik: dla każdej nowej ścieżki sprawdzano
+prefiks wszystkich poprzednich plików. Zastąpiono tę pętlę jednorazowym indeksem
+właściwych katalogów nadrzędnych i przecięciem zbiorów. Ścieżki nadal przechodzą
+wcześniejszą walidację; ta sama odmowa następuje przed pierwszą mutacją mirrora.
+Nie pomija się hashów, własności, kontroli snapshotu ani atomowej publikacji.
+
+Pomiar w pamięci na 7784 ścieżkach kapsuły
+`b7717905b6f3ccd0f9a77a36a2f1f7c0a0b3bbd016d938e3e3a455e00d4eb6ac`:
+stara kontrola 19,625 s, indeks 0,020847 s; wynik identyczny.
+To pojedynczy pomiar wyłącznie kontroli przejść, wykonany przy równoległym
+buildzie. Nie jest benchmarkiem całego przygotowania, Cargo ani runtime.
+
+Dodano interpretowane regresje: odmowa zastąpienia własnego katalogu plikiem
+bez zmiany pozostałych plików oraz dopuszczenie nazw o wspólnym prefiksie
+(`docs` i `docs-extra`). Pierwsze żądanie managed regresji odmówiło przed
+uruchomieniem z powodu aktywnej blokady builda; wynik suite pozostaje
+NOT VERIFIED w tamtym checkpointcie. Ta optymalizacja nie znajduje się
+w już utrwalonej kapsule bieżącego buildu.
+
+Dotychczasowa managed suite (`7b4974dd1e434e88a2de154e08b3ba97`) przeszła
+165 kontroli, ale jej wzorzec discovery nie obejmował testów compiler inputs.
+Dodano jawny adapter `load_tests`, wpisy ich źródeł i zależności do fingerprintu
+oraz wspólny kontrolowany katalog fixtures dla `FULLMAG_TEST_TEMP_ROOT` i TEMP.
+Pierwsza rozszerzona próba (`b775517b6ea3408f96a1734e53479af4`) wykryła
+dziedziczenie adaptera `FULLMAG_WINDOWS_BUILD_ROOT` hosta w osobnym repo Git
+testu external working root. Izolacja `MANAGED_VARIABLES` tylko w tym fixture
+usunęła konflikt bez zmiany resolvera produkcyjnego.
+
+Finalny managed receipt `e2006700e71f4ecfbbd98ccb33edcac2`:
+**181 PASS, 0 skipów, exit 0**, z potwierdzonym wykonaniem obu nowych regresji.
+Fingerprint przed/po:
+`ececb84e24fbf9eeeecf350788fd77bfe0099fe1dc0007171b1e4a270ab7fcb5`.
+Odrębne review algorytmu i adaptera nie znalazły P0/P1; nie zastępują
+rzeczywistego kolejnego buildu ani benchmarku całego przygotowania.

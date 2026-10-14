@@ -4,13 +4,15 @@
 //! GPU identity, partition, and durable topology bindings. Telemetry and
 //! runtime capabilities have separate freshness and revision semantics.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Schema version for the first public compute-node snapshot model.
 pub const COMPUTE_NODE_SNAPSHOT_SCHEMA_V1: &str = "compute_node_snapshot.v1";
+/// Schema version that pins samples to the shared-host inventory owner lease.
+pub const COMPUTE_NODE_SNAPSHOT_SCHEMA_V2: &str = "compute_node_snapshot.v2";
 
 /// Maximum age for a sample to be considered current.
 pub const COMPUTE_NODE_SAMPLE_STALE_AFTER_SECONDS: i64 = 30;
@@ -524,10 +526,14 @@ pub struct ComputeNodeSnapshotData {
     pub node_id: String,
     /// Operating-system boot identity.
     pub boot_id: String,
-    /// Runtime service owner identity, never a PID or operational token.
+    /// V1 stable host-ledger identity, never a PID or operational token.
     pub runtime_owner_id: String,
-    /// Fencing epoch for the runtime owner.
+    /// V1 configured host-policy epoch; not a process or producer epoch.
     pub owner_epoch: u64,
+    /// Stable identity of the exclusive shared-host inventory owner (v2).
+    pub host_owner_id: Option<String>,
+    /// Monotonic shared-host inventory owner lease epoch (v2).
+    pub host_owner_epoch: Option<u64>,
     /// Monotonic revision of durable CPU/GPU inventory for this node/boot.
     pub inventory_revision: u64,
     /// Independent revision of runtime capabilities.
@@ -556,10 +562,16 @@ pub struct ComputeNodeSnapshot {
     pub node_id: String,
     /// Operating-system boot identity.
     pub boot_id: String,
-    /// Runtime service owner identity, never a PID or operational token.
+    /// V1 stable host-ledger identity, never a PID or operational token.
     pub runtime_owner_id: String,
-    /// Fencing epoch for the runtime owner.
+    /// V1 configured host-policy epoch; not a process or producer epoch.
     pub owner_epoch: u64,
+    /// Stable identity of the exclusive shared-host inventory owner (v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_owner_id: Option<String>,
+    /// Monotonic shared-host inventory owner lease epoch (v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_owner_epoch: Option<u64>,
     /// Monotonic revision of durable CPU/GPU inventory for this node/boot.
     pub inventory_revision: u64,
     /// SHA-256 of canonical CPU topology/constraints and GPU identity bindings.
@@ -583,13 +595,20 @@ pub struct ComputeNodeSnapshot {
 impl ComputeNodeSnapshot {
     /// Constructs a snapshot, computes its inventory digest, and derives freshness.
     pub fn new(mut data: ComputeNodeSnapshotData, now: DateTime<Utc>) -> Result<Self> {
+        let schema_version = match (&data.host_owner_id, data.host_owner_epoch) {
+            (None, None) => COMPUTE_NODE_SNAPSHOT_SCHEMA_V1,
+            (Some(_), Some(_)) => COMPUTE_NODE_SNAPSHOT_SCHEMA_V2,
+            _ => bail!("host_owner_id and host_owner_epoch must be provided together"),
+        };
         data.sample.refresh_freshness_at(now.clone());
         let mut snapshot = Self {
-            schema_version: COMPUTE_NODE_SNAPSHOT_SCHEMA_V1.into(),
+            schema_version: schema_version.into(),
             node_id: data.node_id,
             boot_id: data.boot_id,
             runtime_owner_id: data.runtime_owner_id,
             owner_epoch: data.owner_epoch,
+            host_owner_id: data.host_owner_id,
+            host_owner_epoch: data.host_owner_epoch,
             inventory_revision: data.inventory_revision,
             inventory_sha256: String::new(),
             capabilities_revision: data.capabilities_revision,
@@ -605,10 +624,65 @@ impl ComputeNodeSnapshot {
         Ok(snapshot)
     }
 
+    /// Builds the next durable observation while preserving independent
+    /// inventory and capability revisions for the same node and boot.
+    pub fn successor(
+        mut data: ComputeNodeSnapshotData,
+        previous: Option<&Self>,
+        now: DateTime<Utc>,
+    ) -> Result<Self> {
+        let same_node_boot = previous.is_some_and(|snapshot| {
+            snapshot.node_id == data.node_id && snapshot.boot_id == data.boot_id
+        });
+        if let Some(previous) = previous.filter(|_| same_node_boot) {
+            data.inventory_revision = previous.inventory_revision;
+            data.capabilities_revision = previous.capabilities_revision;
+            let candidate = Self::new(data.clone(), now.clone())?;
+            if candidate.inventory_sha256 != previous.inventory_sha256 {
+                data.inventory_revision = previous
+                    .inventory_revision
+                    .checked_add(1)
+                    .context("compute-node inventory revision overflow")?;
+            }
+            if candidate.computed_capabilities_sha256()?
+                != previous.computed_capabilities_sha256()?
+            {
+                data.capabilities_revision = previous
+                    .capabilities_revision
+                    .checked_add(1)
+                    .context("compute-node capabilities revision overflow")?;
+            }
+        } else {
+            data.inventory_revision = 1;
+            data.capabilities_revision = 1;
+        }
+
+        let snapshot = Self::new(data, now)?;
+        if let Some(previous) = previous {
+            snapshot.validate_successor_of(previous)?;
+        }
+        Ok(snapshot)
+    }
+
     /// Validates the schema, identity, data, and canonical inventory digest.
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != COMPUTE_NODE_SNAPSHOT_SCHEMA_V1 {
-            bail!("unsupported compute node snapshot schema `{}`", self.schema_version);
+        match self.schema_version.as_str() {
+            COMPUTE_NODE_SNAPSHOT_SCHEMA_V1 => {
+                if self.host_owner_id.is_some() || self.host_owner_epoch.is_some() {
+                    bail!("v1 compute-node snapshots cannot carry host-owner fencing fields");
+                }
+            }
+            COMPUTE_NODE_SNAPSHOT_SCHEMA_V2 => {
+                let host_owner_id = self
+                    .host_owner_id
+                    .as_deref()
+                    .context("v2 compute-node snapshot is missing host_owner_id")?;
+                validate_identifier(host_owner_id, "host_owner_id")?;
+                if self.host_owner_epoch.unwrap_or_default() == 0 {
+                    bail!("host_owner_epoch must be positive");
+                }
+            }
+            _ => bail!("unsupported compute node snapshot schema `{}`", self.schema_version),
         }
         validate_identifier(&self.node_id, "node_id")?;
         validate_identifier(&self.boot_id, "boot_id")?;
@@ -636,6 +710,14 @@ impl ComputeNodeSnapshot {
     pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
         self.validate()?;
         self.sample.validate_at(now)
+    }
+
+    /// Whether this observation is safe to use as a current admission input.
+    /// Freshness is recomputed from the sample timestamp instead of trusting
+    /// the serialized value, which may have aged since it was published.
+    pub fn is_current_at(&self, now: DateTime<Utc>) -> Result<bool> {
+        self.validate()?;
+        Ok(self.sample.freshness_at(now) == SampleFreshness::Current)
     }
 
     /// Computes the digest of the canonical durable CPU/GPU inventory.
@@ -699,7 +781,41 @@ impl ComputeNodeSnapshot {
     pub fn validate_successor_of(&self, previous: &Self) -> Result<()> {
         self.validate()?;
         previous.validate()?;
+        if previous.schema_version == COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
+            && self.schema_version == COMPUTE_NODE_SNAPSHOT_SCHEMA_V1
+        {
+            bail!("compute-node snapshot schema cannot downgrade from v2 to v1");
+        }
+        if self.node_id == previous.node_id && self.owner_epoch < previous.owner_epoch {
+            bail!("owner_epoch must not decrease for the same node");
+        }
+        if self.node_id == previous.node_id
+            && self.boot_id == previous.boot_id
+            && self.runtime_owner_id != previous.runtime_owner_id
+            && self.owner_epoch <= previous.owner_epoch
+        {
+            bail!("runtime owner changes require a higher owner_epoch");
+        }
+        if self.node_id == previous.node_id {
+            if let (Some(current_id), Some(previous_id)) =
+                (&self.host_owner_id, &previous.host_owner_id)
+            {
+                if current_id != previous_id {
+                    bail!("host_owner_id must remain stable for the same node");
+                }
+            }
+            if let (Some(current_epoch), Some(previous_epoch)) =
+                (self.host_owner_epoch, previous.host_owner_epoch)
+            {
+                if current_epoch < previous_epoch {
+                    bail!("host_owner_epoch must not decrease for the same node");
+                }
+            }
+        }
         if self.node_id != previous.node_id || self.boot_id != previous.boot_id {
+            if self.inventory_revision != 1 || self.capabilities_revision != 1 {
+                bail!("a new node or boot must start snapshot revisions at one");
+            }
             return Ok(());
         }
 
@@ -879,6 +995,8 @@ mod tests {
             boot_id: "boot-20261013".into(),
             runtime_owner_id: "owner-7d905b".into(),
             owner_epoch: 3,
+            host_owner_id: None,
+            host_owner_epoch: None,
             inventory_revision: 4,
             capabilities_revision: 8,
             cpu: CpuSnapshot {
@@ -971,6 +1089,75 @@ mod tests {
             future.freshness,
             SampleFreshness::Unavailable(UnavailableReason::FutureTimestamp)
         );
+    }
+
+    #[test]
+    fn admission_freshness_is_recomputed_at_the_observation_time() {
+        let collected_at = now();
+        let snapshot = ComputeNodeSnapshot::new(valid_data(collected_at), collected_at).unwrap();
+
+        assert!(snapshot
+            .is_current_at(collected_at + Duration::seconds(30))
+            .unwrap());
+        assert!(!snapshot
+            .is_current_at(collected_at + Duration::seconds(30) + Duration::milliseconds(1))
+            .unwrap());
+        assert!(!snapshot
+            .is_current_at(collected_at - Duration::milliseconds(1))
+            .unwrap());
+    }
+
+    #[test]
+    fn v2_snapshot_pins_host_owner_without_reinterpreting_v1_fields() {
+        let at = now();
+        let mut data = valid_data(at);
+        data.host_owner_id = Some("host-owner-stable".into());
+        data.host_owner_epoch = Some(7);
+        let snapshot = ComputeNodeSnapshot::new(data.clone(), at).unwrap();
+
+        assert_eq!(snapshot.schema_version, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2);
+        assert_eq!(snapshot.runtime_owner_id, "owner-7d905b");
+        assert_eq!(snapshot.owner_epoch, 3);
+        assert_eq!(snapshot.host_owner_id.as_deref(), Some("host-owner-stable"));
+        assert_eq!(snapshot.host_owner_epoch, Some(7));
+
+        let encoded = serde_json::to_vec(&snapshot).unwrap();
+        let decoded: ComputeNodeSnapshot = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, snapshot);
+
+        data.host_owner_epoch = None;
+        assert!(ComputeNodeSnapshot::new(data, at).is_err());
+    }
+
+    #[test]
+    fn host_owner_epoch_is_monotonic_and_v2_cannot_downgrade() {
+        let at = now();
+        let mut first_data = valid_data(at);
+        first_data.host_owner_id = Some("host-owner-stable".into());
+        first_data.host_owner_epoch = Some(4);
+        let first = ComputeNodeSnapshot::new(first_data.clone(), at).unwrap();
+
+        first_data.sample.collected_at = at + Duration::seconds(1);
+        first_data.host_owner_epoch = Some(5);
+        let next = ComputeNodeSnapshot::successor(
+            first_data.clone(),
+            Some(&first),
+            at + Duration::seconds(1),
+        )
+        .unwrap();
+        assert_eq!(next.host_owner_epoch, Some(5));
+
+        first_data.sample.collected_at = at + Duration::seconds(2);
+        first_data.host_owner_epoch = Some(3);
+        assert!(ComputeNodeSnapshot::successor(
+            first_data,
+            Some(&next),
+            at + Duration::seconds(2),
+        )
+        .is_err());
+
+        let legacy = ComputeNodeSnapshot::new(valid_data(at + Duration::seconds(2)), at).unwrap();
+        assert!(legacy.validate_successor_of(&next).is_err());
     }
 
     #[test]
@@ -1134,6 +1321,77 @@ mod tests {
         invalid.inventory_revision += 1;
         let invalid_next = ComputeNodeSnapshot::new(invalid, at + Duration::seconds(1)).unwrap();
         assert!(invalid_next.validate_successor_of(&previous).is_err());
+    }
+
+    #[test]
+    fn successor_assigns_revisions_from_durable_digests_and_fences_owner_changes() {
+        let at = now();
+        let previous = ComputeNodeSnapshot::new(valid_data(at), at).unwrap();
+
+        let same = ComputeNodeSnapshot::successor(
+            valid_data(at + Duration::seconds(1)),
+            Some(&previous),
+            at + Duration::seconds(1),
+        )
+        .unwrap();
+        assert_eq!(same.inventory_revision, previous.inventory_revision);
+        assert_eq!(same.capabilities_revision, previous.capabilities_revision);
+
+        let mut inventory_change = valid_data(at + Duration::seconds(2));
+        inventory_change.cpu.os_constraints.allowed_logical_cpu_ids =
+            available(BTreeSet::from([0]));
+        let inventory_next = ComputeNodeSnapshot::successor(
+            inventory_change,
+            Some(&same),
+            at + Duration::seconds(2),
+        )
+        .unwrap();
+        assert_eq!(inventory_next.inventory_revision, same.inventory_revision + 1);
+        assert_eq!(inventory_next.capabilities_revision, same.capabilities_revision);
+
+        let mut capability_change = valid_data(at + Duration::seconds(3));
+        capability_change.capabilities = available(vec!["fdm.cpu".into()]);
+        let capability_next = ComputeNodeSnapshot::successor(
+            capability_change,
+            Some(&inventory_next),
+            at + Duration::seconds(3),
+        )
+        .unwrap();
+        assert_eq!(capability_next.inventory_revision, inventory_next.inventory_revision);
+        assert_eq!(
+            capability_next.capabilities_revision,
+            inventory_next.capabilities_revision + 1
+        );
+
+        let mut owner_change = valid_data(at + Duration::seconds(4));
+        owner_change.runtime_owner_id = "owner-next".into();
+        assert!(ComputeNodeSnapshot::successor(
+            owner_change.clone(),
+            Some(&capability_next),
+            at + Duration::seconds(4),
+        )
+        .is_err());
+        owner_change.owner_epoch += 1;
+        let owner_next = ComputeNodeSnapshot::successor(
+            owner_change,
+            Some(&capability_next),
+            at + Duration::seconds(4),
+        )
+        .unwrap();
+        assert_eq!(owner_next.owner_epoch, capability_next.owner_epoch + 1);
+
+        let mut rebooted = valid_data(at + Duration::seconds(5));
+        rebooted.boot_id = "boot-next".into();
+        rebooted.inventory_revision = u64::MAX;
+        rebooted.capabilities_revision = u64::MAX;
+        let reboot_snapshot = ComputeNodeSnapshot::successor(
+            rebooted,
+            Some(&owner_next),
+            at + Duration::seconds(5),
+        )
+        .unwrap();
+        assert_eq!(reboot_snapshot.inventory_revision, 1);
+        assert_eq!(reboot_snapshot.capabilities_revision, 1);
     }
 
     #[test]

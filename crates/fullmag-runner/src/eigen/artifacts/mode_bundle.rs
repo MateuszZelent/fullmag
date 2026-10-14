@@ -46,8 +46,9 @@ struct ModeArtifact {
     mode_field_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
-    residual_absolute_l2: f64,
-    residual_relative_l2: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_absolute_l2: Option<f64>,
+    residual_relative_l2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_linf: Option<f64>,
     mass_norm: f64,
@@ -78,6 +79,8 @@ struct ModeArtifact {
     #[serde(skip_serializing_if = "Option::is_none")]
     source_mesh_topology_sha256: Option<String>,
     source_mesh_identity: ModeSourceMeshIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tracking_consistent_p1_metric: Option<serde_json::Value>,
     value_kind: &'static str,
     component_basis: &'static str,
     component_count: usize,
@@ -169,6 +172,7 @@ fn write_complex_vector_field_payload(
 }
 
 pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
+    let gamma0_rad_s_per_a_m = validated_modal_gamma0(result.gamma0_rad_s_per_a_m)?;
     for sample in &result.samples {
         let diagnostics = sample_native_solver_diagnostics(sample);
         for mode in &sample.modes {
@@ -195,6 +199,21 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 ));
             }
             mode_source_mesh_identity(diagnostics, real.len())?;
+            if let Some(metric) = mode.consistent_p1_metric.as_ref() {
+                if mode.node_mass_weights.is_some()
+                    || diagnostic_string(diagnostics, "source_mesh_topology_sha256").as_deref()
+                        != Some(metric.mesh_identity())
+                    || metric
+                        .node_indices()
+                        .iter()
+                        .any(|index| *index >= real.len())
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "mode consistent mass conflicts with its mesh or diagonal weights",
+                    ));
+                }
+            }
         }
     }
     let eigen_dir = base_dir.join("eigen").join("modes");
@@ -231,9 +250,15 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 "eigen/mode_fields/sample_{:04}/mode_{:04}/vector.bin",
                 sample.sample.sample_index, mode.raw_mode_index
             );
-            let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
-            let residual_relative_l2 = residual_absolute_l2;
-            let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
+            let residual_absolute_l2 = mode
+                .residual_norm
+                .filter(|value| value.is_finite() && *value >= 0.0);
+            let residual_relative_l2 = mode
+                .residual_relative_l2
+                .filter(|value| value.is_finite() && *value >= 0.0);
+            let residual_linf = mode
+                .residual_linf
+                .filter(|value| value.is_finite() && *value >= 0.0);
             let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
             let tangent_leakage_max_abs =
                 finite_or_default(mode.tangent_leakage_max_abs, 0.0).max(tangent_leakage_mean_abs);
@@ -253,16 +278,15 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 phasor_convention: modal_phasor_convention(result.solver_model),
                 eigenvalue_mapping: modal_eigenvalue_mapping(result.solver_model),
                 omega_rad_s: mode.angular_frequency_rad_per_s,
-                gamma_rad_s_t: reference_modal_gamma_rad_s_t(),
-                gamma0_rad_s_per_a_m: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+                gamma_rad_s_t: gamma0_rad_s_per_a_m / crate::MU0,
+                gamma0_rad_s_per_a_m,
                 mu0_t_m_per_a: crate::MU0,
                 normalization: "unit_l2",
                 damping_policy: "ignore",
                 mode_field_id,
-                residual_norm: Some(residual_absolute_l2),
-                residual_absolute_l2,
+                residual_norm: residual_absolute_l2,                residual_absolute_l2,
                 residual_relative_l2,
-                residual_linf: Some(residual_linf),
+                residual_linf,
                 mass_norm: resolved_mode_mass_norm(mode),
                 tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
                 tangent_leakage_max_abs: Some(tangent_leakage_max_abs),
@@ -297,6 +321,10 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                     "source_mesh_topology_sha256",
                 ),
                 source_mesh_identity: mode_source_mesh_identity(diagnostics, real.len())?,
+                tracking_consistent_p1_metric: mode
+                    .consistent_p1_metric
+                    .as_ref()
+                    .map(|metric| metric.artifact_json()),
                 value_kind: "complex_spatial_vector",
                 component_basis: "global_xyz",
                 component_count: 3,

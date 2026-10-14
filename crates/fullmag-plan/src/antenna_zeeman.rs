@@ -176,7 +176,9 @@ fn geometry_contains_point(entry: &GeometryEntryIR, point: [f64; 3]) -> Result<b
         | GeometryEntryIR::Sphere { .. }
         | GeometryEntryIR::Ellipse { .. }
         | GeometryEntryIR::Union { .. }
-        | GeometryEntryIR::Intersection { .. } => Err(format!(
+        | GeometryEntryIR::Intersection { .. }
+        | GeometryEntryIR::MicrostripAntenna { .. }
+        | GeometryEntryIR::CpwAntenna { .. } => Err(format!(
             "antenna mask geometry kind '{}' is not executable yet; use Box/Cylinder/Difference/Translate",
             entry_kind(entry)
         )),
@@ -243,5 +245,7 @@ fn entry_kind(entry: &GeometryEntryIR) -> &'static str {
         GeometryEntryIR::Union { .. } => "union",
         GeometryEntryIR::Intersection { .. } => "intersection",
         GeometryEntryIR::Translate { .. } => "translate",
+        GeometryEntryIR::MicrostripAntenna { .. } => "microstrip",
+        GeometryEntryIR::CpwAntenna { .. } => "cpw",
     }
 }

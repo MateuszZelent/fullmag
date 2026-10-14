@@ -117,8 +117,11 @@ bool initialize_demag_poisson_boundary_operator(
         bdr_mass->Assemble();
         bdr_mass->Finalize();
 
-        auto A_robin = std::make_unique<mfem::SparseMatrix>(poisson_bilinear.SpMat());
-        A_robin->Add(ctx.poisson_demag.robin_effective_beta, bdr_mass->SpMat());
+        auto A_robin = std::unique_ptr<mfem::SparseMatrix>(mfem::Add(
+            1.0,
+            poisson_bilinear.SpMat(),
+            ctx.poisson_demag.robin_effective_beta,
+            bdr_mass->SpMat()));
         ctx.poisson_demag.robin_boundary_mass = bdr_mass.release();
         ctx.poisson_demag.poisson_bc_op = A_robin.release();
         ctx.poisson_demag.ess_tdof_list.clear();

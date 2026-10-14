@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import copy
 import math
 import numpy as np
 
@@ -123,6 +124,8 @@ def resolve_effective_algorithm_3d(
     active_sources: list[str] = []
     if opts.size_fields:
         active_sources.append("authored size fields")
+    if opts.lower_bound_fields:
+        active_sources.append("scoped lower-bound fields")
     resolved_controls = resolve_mesh_size_controls(opts)
     if int(resolved_controls["resolved_size_from_curvature"]) > 0:
         active_sources.append("curvature refinement")
@@ -170,9 +173,13 @@ def _apply_mesh_options(
     emit_progress("Gmsh: applying mesh options")
     selector_resolution: list[dict[str, object]] = []
     resolved_size_controls = resolve_mesh_size_controls(opts)
+    preexisting_background_field_ids = [
+        *(preexisting_field_ids or []),
+        *(preexisting_lower_bound_field_ids or []),
+    ]
     algorithm_3d, algorithm_3d_fallback_reason = resolve_effective_algorithm_3d(
         opts,
-        preexisting_field_ids=preexisting_field_ids,
+        preexisting_field_ids=preexisting_background_field_ids,
     )
     if algorithm_3d_fallback_reason is not None:
         # MMG3D has proven unstable for imported/shared-domain workflows when a
@@ -209,7 +216,18 @@ def _apply_mesh_options(
 
     resolved_curvature = int(resolved_size_controls["resolved_size_from_curvature"])
     if resolved_curvature > 0:
-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", resolved_curvature)
+        # When lower-bound fields are active, keep curvature refinement in the
+        # background upper-field stack below. The native Gmsh curvature target
+        # is another direct minimum and would bypass Max(lower) outside that
+        # pointwise composition.
+        scoped_lower_bounds_active = (
+            bool(opts.lower_bound_fields)
+            or bool(preexisting_lower_bound_field_ids)
+        )
+        gmsh.option.setNumber(
+            "Mesh.MeshSizeFromCurvature",
+            0 if scoped_lower_bounds_active else resolved_curvature,
+        )
 
     resolved_growth_rate = resolved_size_controls["resolved_growth_rate"]
     if isinstance(resolved_growth_rate, (int, float)):
@@ -301,12 +319,24 @@ def _apply_mesh_options(
     # MeshSizeFromPoints and MeshSizeExtendFromBoundary across the whole
     # volume, completely overriding per-geometry Box fields and making local
     # refinement settings have no visible effect on the final mesh.
-    has_active_fields = bool(extra_field_ids) or bool(opts.size_fields)
+    has_active_fields = (
+        bool(extra_field_ids)
+        or bool(opts.size_fields)
+        or bool(opts.lower_bound_fields)
+        or bool(preexisting_lower_bound_field_ids)
+    )
     if has_active_fields:
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
 
-    if opts.size_fields:
+    if (
+        opts.size_fields
+        or opts.lower_bound_fields
+        or extra_field_ids
+        or preexisting_lower_bound_field_ids
+    ):
+        # A lower-only policy is still a complete background field and must
+        # reach the same final pointwise composition as upper fields.
         emit_progress("Gmsh: configuring mesh size fields")
         _configure_mesh_size_fields(
             gmsh,
@@ -316,18 +346,8 @@ def _apply_mesh_options(
             list(preexisting_lower_bound_field_ids or []),
             component_volume_tags=component_volume_tags,
             component_surface_tags=component_surface_tags,
-        )
-    elif extra_field_ids:
-        # No explicit size_fields but we have auto-generated fields (e.g. narrow regions)
-        emit_progress("Gmsh: configuring mesh size fields")
-        _configure_mesh_size_fields(
-            gmsh,
-            [],
-            hscale,
-            extra_field_ids,
-            list(preexisting_lower_bound_field_ids or []),
-            component_volume_tags=component_volume_tags,
-            component_surface_tags=component_surface_tags,
+            lower_bound_fields=opts.lower_bound_fields,
+            default_upper_size=effective_hmax,
         )
     return MeshOptionsApplicationReport(
         selector_resolution=selector_resolution,
@@ -1506,8 +1526,15 @@ def _configure_mesh_size_fields(
     lower_bound_field_ids: list[int] | None = None,
     component_volume_tags: dict[str, list[int]] | None = None,
     component_surface_tags: dict[str, list[int]] | None = None,
-) -> None:
+    lower_bound_fields: list[dict[str, Any]] | None = None,
+    default_upper_size: float | None = None,
+    set_background: bool = True,
+) -> int | None:
     """Configure Gmsh mesh size fields from JSON-serializable configs.
+
+    Returns the id of the composed size field, or None when nothing was
+    configured.  ``set_background=False`` builds the composition without
+    installing it as the background mesh (used for auxiliary cap fields).
 
     Each field config dict has:
         {"kind": "Box", "params": {"VIn": ..., "VOut": ..., ...}}
@@ -1528,6 +1555,7 @@ def _configure_mesh_size_fields(
     _METADATA_PARAMS = {"Source"}
 
     field_ids = []
+    resolved_lower_bound_field_ids = list(lower_bound_field_ids or [])
 
     def _mark_field(
         config: dict[str, Any],
@@ -1541,6 +1569,129 @@ def _configure_mesh_size_fields(
             config["_gmsh_reason"] = reason
         if field_id is not None:
             config["_gmsh_field_id"] = int(field_id)
+
+    def _required_owner_volumes(config: dict[str, Any], geometry_name: object) -> list[int]:
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            reason = "mesh_lower_bound_owner_binding_missing: GeometryName is required"
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+        volume_tags = _component_volume_tags_for_geometry(
+            geometry_name,
+            component_volume_tags,
+        )
+        if not volume_tags:
+            reason = (
+                "mesh_lower_bound_owner_binding_missing: "
+                f"no exact component volumes for geometry='{geometry_name}'"
+            )
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+        return volume_tags
+
+    def _add_component_volume_lower_bound(config: dict[str, Any]) -> int:
+        params = config.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        volume_tags = _required_owner_volumes(config, geometry_name)
+        size = float(params["MinimumElementSize"]) * hscale
+        field_id = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(field_id, "VolumesList", volume_tags)
+        gmsh.model.mesh.field.setNumber(field_id, "VIn", size)
+        # Constant fields use VOut outside VolumesList.  Zero is the neutral
+        # value for the later Max(lower) composition.
+        gmsh.model.mesh.field.setNumber(field_id, "VOut", 0.0)
+        return field_id
+
+    def _add_component_region_lower_bound(config: dict[str, Any]) -> int:
+        params = config.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        volume_tags = _required_owner_volumes(config, geometry_name)
+        shape_kind = params.get("ShapeKind")
+        size = float(params["MinimumElementSize"]) * hscale
+        center = [float(value) * hscale for value in params.get("Center", [])]
+        if len(center) != 3:
+            raise ValueError("mesh_lower_bound_shape_unsupported: region center must be 3D")
+
+        if shape_kind == "box":
+            box_size = [float(value) * hscale for value in params.get("Size", [])]
+            if len(box_size) != 3:
+                raise ValueError("mesh_lower_bound_shape_unsupported: box size must be 3D")
+            shape_field = gmsh.model.mesh.field.add("Box")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            for axis, name in enumerate(("X", "Y", "Z")):
+                half_size = 0.5 * box_size[axis]
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Min", center[axis] - half_size
+                )
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Max", center[axis] + half_size
+                )
+        elif shape_kind == "cylinder":
+            axis = [float(value) for value in params.get("Axis", [0.0, 0.0, 1.0])]
+            if len(axis) != 3:
+                raise ValueError("mesh_lower_bound_shape_unsupported: cylinder axis must be 3D")
+            axis_norm = math.sqrt(sum(value * value for value in axis))
+            if axis_norm <= 0.0:
+                raise ValueError("mesh_lower_bound_shape_unsupported: cylinder axis is zero")
+            axis_unit = [value / axis_norm for value in axis]
+            height = float(params["Height"]) * hscale
+            half_axis = [0.5 * height * value for value in axis_unit]
+            bottom_center = [center[index] - half_axis[index] for index in range(3)]
+            top_center = [center[index] + half_axis[index] for index in range(3)]
+            cylinder_fields: list[int] = []
+            for origin, direction in (
+                (bottom_center, axis_unit),
+                (top_center, [-value for value in axis_unit]),
+            ):
+                cylinder = gmsh.model.mesh.field.add("Cylinder")
+                gmsh.model.mesh.field.setNumber(cylinder, "VIn", size)
+                gmsh.model.mesh.field.setNumber(cylinder, "VOut", 0.0)
+                gmsh.model.mesh.field.setNumber(
+                    cylinder, "Radius", float(params["Radius"]) * hscale
+                )
+                gmsh.model.mesh.field.setNumber(cylinder, "XCenter", origin[0])
+                gmsh.model.mesh.field.setNumber(cylinder, "YCenter", origin[1])
+                gmsh.model.mesh.field.setNumber(cylinder, "ZCenter", origin[2])
+                for axis_name, value in zip(("XAxis", "YAxis", "ZAxis"), direction):
+                    gmsh.model.mesh.field.setNumber(cylinder, axis_name, value * height)
+                cylinder_fields.append(cylinder)
+            shape_field = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(shape_field, "FieldsList", cylinder_fields)
+        elif shape_kind == "sphere":
+            shape_field = gmsh.model.mesh.field.add("Ball")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            gmsh.model.mesh.field.setNumber(shape_field, "Radius", float(params["Radius"]) * hscale)
+            gmsh.model.mesh.field.setNumber(shape_field, "XCenter", center[0])
+            gmsh.model.mesh.field.setNumber(shape_field, "YCenter", center[1])
+            gmsh.model.mesh.field.setNumber(shape_field, "ZCenter", center[2])
+        else:
+            region_id = params.get("RegionId", "<unknown>")
+            reason = (
+                "mesh_lower_bound_shape_unsupported: "
+                f"region='{region_id}' shape_kind='{shape_kind}'"
+            )
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+
+        # A scoped lower field must be zero outside both its geometric core and
+        # its exact owner volumes. Restrict's large outside value is unsuitable
+        # for Max(lower), so combine zero-outside shape and volume-mask fields.
+        owner_mask = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(owner_mask, "VolumesList", volume_tags)
+        gmsh.model.mesh.field.setNumber(owner_mask, "VIn", 1.0)
+        gmsh.model.mesh.field.setNumber(owner_mask, "VOut", 0.0)
+        scoped_field = gmsh.model.mesh.field.add("MathEval")
+        expr = (
+            f"Min(F{shape_field}, "
+            f"{_math_number(size)}*F{owner_mask})"
+        )
+        gmsh.model.mesh.field.setString(scoped_field, "F", expr)
+        return scoped_field
 
     for config in fields:
         validate_size_field_config(config)
@@ -1980,8 +2131,38 @@ def _configure_mesh_size_fields(
     if extra_field_ids:
         field_ids.extend(extra_field_ids)
 
-    if not field_ids and not lower_bound_field_ids:
-        return
+    for config in lower_bound_fields or []:
+        kind = config.get("kind")
+        if kind == "ComponentVolumeLowerBound":
+            fid = _add_component_volume_lower_bound(config)
+        elif kind == "ComponentRegionLowerBound":
+            fid = _add_component_region_lower_bound(config)
+        else:
+            reason = f"mesh_lower_bound_field_unsupported: kind='{kind}'"
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+        resolved_lower_bound_field_ids.append(fid)
+        _mark_field(config, status="applied", field_id=fid)
+
+    if not field_ids and resolved_lower_bound_field_ids:
+        if (
+            default_upper_size is None
+            or not math.isfinite(float(default_upper_size))
+            or float(default_upper_size) <= 0.0
+        ):
+            raise ValueError(
+                "mesh_lower_bound_upper_target_missing: lower-only fields require a finite positive default upper size"
+            )
+        default_upper = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(
+            default_upper,
+            "F",
+            _math_number(float(default_upper_size) * hscale),
+        )
+        field_ids.append(default_upper)
+
+    if not field_ids and not resolved_lower_bound_field_ids:
+        return None
 
     size_upper_field = None
     if field_ids:
@@ -1992,22 +2173,291 @@ def _configure_mesh_size_fields(
             size_upper_field = field_ids[0]
 
     size_lower_field = None
-    if lower_bound_field_ids:
-        if len(lower_bound_field_ids) > 1:
+    if resolved_lower_bound_field_ids:
+        if len(resolved_lower_bound_field_ids) > 1:
             size_lower_field = gmsh.model.mesh.field.add("Max")
             gmsh.model.mesh.field.setNumbers(
-                size_lower_field, "FieldsList", lower_bound_field_ids
+                size_lower_field, "FieldsList", resolved_lower_bound_field_ids
             )
         else:
-            size_lower_field = lower_bound_field_ids[0]
+            size_lower_field = resolved_lower_bound_field_ids[0]
 
+    composed_field: int | None
     if size_upper_field is not None and size_lower_field is not None:
-        bounded = gmsh.model.mesh.field.add("Max")
+        composed_field = gmsh.model.mesh.field.add("Max")
         gmsh.model.mesh.field.setNumbers(
-            bounded, "FieldsList", [size_upper_field, size_lower_field]
+            composed_field, "FieldsList", [size_upper_field, size_lower_field]
         )
-        gmsh.model.mesh.field.setAsBackgroundMesh(bounded)
     elif size_upper_field is not None:
-        gmsh.model.mesh.field.setAsBackgroundMesh(size_upper_field)
-    elif size_lower_field is not None:
-        gmsh.model.mesh.field.setAsBackgroundMesh(size_lower_field)
+        composed_field = size_upper_field
+    else:
+        composed_field = size_lower_field
+    if set_background and composed_field is not None:
+        gmsh.model.mesh.field.setAsBackgroundMesh(composed_field)
+    return composed_field
+
+
+_PLANE_PROJECTED_UPPER_KINDS = frozenset(
+    {
+        "ComponentRestrictedGradedCylinder",
+        "ComponentRestrictedGradedBox",
+        "ComponentRestrictedGradedSphere",
+        "ComponentRestrictedCylinder",
+        "ComponentRestrictedBox",
+        "ComponentRestrictedSphere",
+    }
+)
+_PLANE_PROJECTED_LOWER_KINDS = frozenset(
+    {"ComponentVolumeLowerBound", "ComponentRegionLowerBound"}
+)
+
+
+def _translate_field_descriptor_z(config: dict[str, Any], dz: float) -> dict[str, Any]:
+    """Return a copy of a scoped field descriptor shifted by ``dz`` along z (SI)."""
+    shifted = copy.deepcopy(config)
+    params = shifted.get("params")
+    if not isinstance(params, dict):
+        return shifted
+    for key in ("_gmsh_status", "_gmsh_reason", "_gmsh_field_id"):
+        shifted.pop(key, None)
+    if isinstance(params.get("Center"), (list, tuple)) and len(params["Center"]) == 3:
+        center = [float(v) for v in params["Center"]]
+        center[2] += dz
+        params["Center"] = center
+    for key in ("ZCenter", "ZMin", "ZMax"):
+        if key in params:
+            params[key] = float(params[key]) + dz
+    return shifted
+
+
+def _add_exact_plane_projected_cap_field(
+    gmsh: Any,
+    *,
+    size_fields: Sequence[dict[str, Any]],
+    lower_bound_fields: Sequence[dict[str, Any]],
+    layer_planes: Sequence[float],
+    source_z: float,
+    neutral_size: float,
+    geometry_name: str,
+    cap_volume_tags: Sequence[int],
+    hscale: float = 1.0,
+) -> int | None:
+    """Build a size field for a shared extrusion cap from exact-plane targets.
+
+    A layered Box is meshed by extruding one triangulated source cap through
+    every exact layer plane, so the cap triangulation is the only in-plane
+    discretization of all planes.  Scoped region fields live between the
+    planes in z and are therefore invisible at the cap's own z.  For each exact
+    plane z_k this evaluates the scoped composition
+    ``Max(Min(upper), Max(lower))`` at z_k by translating the region shapes by
+    ``source_z - z_k``, and returns ``Min_k`` of those fields.  Upper-target
+    transitions end at ``neutral_size`` so the field does not coarsen or refine
+    the cap outside the region halos.  All inputs are SI; the returned field is
+    in Gmsh model units (``hscale``).  Fields that cannot be translated are
+    skipped, which leaves the status-quo cap sizing for them.
+    """
+    uppers = [
+        config
+        for config in size_fields
+        if isinstance(config, dict) and config.get("kind") in _PLANE_PROJECTED_UPPER_KINDS
+    ]
+    lowers = [
+        config
+        for config in lower_bound_fields
+        if isinstance(config, dict) and config.get("kind") in _PLANE_PROJECTED_LOWER_KINDS
+    ]
+    if not uppers or not cap_volume_tags:
+        return None
+    plane_fields: list[int] = []
+    for plane in layer_planes:
+        dz = float(source_z) - float(plane)
+        shifted_uppers = []
+        for config in uppers:
+            shifted = _translate_field_descriptor_z(config, dz)
+            params = shifted["params"]
+            if "VOut" in params:
+                params["VOut"] = max(float(params["VOut"]), float(neutral_size))
+            shifted_uppers.append(shifted)
+        shifted_lowers = [_translate_field_descriptor_z(config, dz) for config in lowers]
+        composed = _configure_mesh_size_fields(
+            gmsh,
+            shifted_uppers,
+            hscale=hscale,
+            component_volume_tags={geometry_name: list(cap_volume_tags)},
+            lower_bound_fields=shifted_lowers,
+            set_background=False,
+        )
+        if composed is not None:
+            plane_fields.append(int(composed))
+    if not plane_fields:
+        return None
+    if len(plane_fields) == 1:
+        return plane_fields[0]
+    cap_field = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(cap_field, "FieldsList", plane_fields)
+    return int(cap_field)
+
+
+def _plane_footprint(
+    params: dict[str, Any], kind: str, z: float
+) -> tuple[str, tuple[float, ...]] | None:
+    """Footprint of a region shape on the plane at ``z`` (SI).
+
+    Returns ``("disc", (cx, cy, r))`` or ``("rect", (x0, y0, x1, y1))``.
+    Shapes whose cross-section is not axis-aligned are not supported.
+    """
+    center = params.get("Center")
+    if not isinstance(center, (list, tuple)) or len(center) != 3:
+        return None
+    cx, cy, cz = (float(v) for v in center)
+    if kind == "cylinder":
+        axis = [float(v) for v in params.get("Axis", [0.0, 0.0, 1.0])]
+        norm = math.sqrt(sum(v * v for v in axis))
+        if norm <= 0.0 or abs(axis[2]) / norm < 1.0 - 1.0e-9:
+            return None
+        if abs(z - cz) > 0.5 * float(params["Height"]):
+            return None
+        return "disc", (cx, cy, float(params["Radius"]))
+    if kind == "sphere":
+        radius = float(params["Radius"])
+        dz = abs(z - cz)
+        if dz > radius:
+            return None
+        return "disc", (cx, cy, math.sqrt(max(radius * radius - dz * dz, 0.0)))
+    if kind == "box":
+        size = [float(v) for v in params.get("Size", [])]
+        if len(size) != 3 or abs(z - cz) > 0.5 * size[2]:
+            return None
+        return "rect", (
+            cx - 0.5 * size[0],
+            cy - 0.5 * size[1],
+            cx + 0.5 * size[0],
+            cy + 0.5 * size[1],
+        )
+    return None
+
+
+def _footprint_contains(
+    footprint: tuple[str, tuple[float, ...]], x: float, y: float
+) -> bool:
+    shape, values = footprint
+    if shape == "disc":
+        return math.hypot(x - values[0], y - values[1]) <= values[2]
+    return values[0] <= x <= values[2] and values[1] <= y <= values[3]
+
+
+_PLANE_SEED_UPPER_SHAPES = {
+    "ComponentRestrictedGradedCylinder": "cylinder",
+    "ComponentRestrictedGradedBox": "box",
+    "ComponentRestrictedGradedSphere": "sphere",
+}
+_PLANE_SEED_MAX_POINTS_PER_FOOTPRINT = 96
+
+
+def _exact_plane_cap_seed_points(
+    *,
+    size_fields: Sequence[dict[str, Any]],
+    lower_bound_fields: Sequence[dict[str, Any]],
+    layer_planes: Sequence[float],
+    bounds_xy: tuple[float, float, float, float],
+    excluded_disc: tuple[float, float, float] | None = None,
+) -> list[tuple[float, float, float]]:
+    """Seed points ``(x, y, h)`` (SI) for a shared extrusion cap.
+
+    Gmsh's 2D mesher samples the size field only at the vertices and
+    circumcenters of the current triangulation.  A region smaller than the
+    initial boundary triangles is therefore invisible to the field even when the
+    field is correct on the cap.  Embedding a few points inside every exact-plane
+    footprint of a scoped region gives the mesher vertices at the local target
+    size, from which the field drives refinement across the footprint.  ``h`` is
+    the local target at the footprint: the upper target raised by every lower
+    bound whose shape contains the footprint center on that plane.
+    """
+    x_min, y_min, x_max, y_max = bounds_xy
+    seeds: list[tuple[float, float, float]] = []
+
+    def accept(x: float, y: float, h: float) -> None:
+        margin = 0.5 * h
+        if not (
+            x_min + margin < x < x_max - margin
+            and y_min + margin < y < y_max - margin
+        ):
+            return
+        if (
+            excluded_disc is not None
+            and math.hypot(x - excluded_disc[0], y - excluded_disc[1])
+            <= excluded_disc[2] + margin
+        ):
+            return
+        for sx, sy, sh in seeds:
+            if math.hypot(x - sx, y - sy) < 0.5 * min(h, sh):
+                return
+        seeds.append((x, y, h))
+
+    for config in size_fields:
+        if not isinstance(config, dict):
+            continue
+        shape_kind = _PLANE_SEED_UPPER_SHAPES.get(str(config.get("kind")))
+        params = config.get("params")
+        if shape_kind is None or not isinstance(params, dict):
+            continue
+        for plane in layer_planes:
+            footprint = _plane_footprint(params, shape_kind, float(plane))
+            if footprint is None:
+                continue
+            if footprint[0] == "disc":
+                cx, cy = footprint[1][0], footprint[1][1]
+            else:
+                cx = 0.5 * (footprint[1][0] + footprint[1][2])
+                cy = 0.5 * (footprint[1][1] + footprint[1][3])
+            h = float(params["VIn"])
+            for lower in lower_bound_fields:
+                lower_params = lower.get("params") if isinstance(lower, dict) else None
+                if not isinstance(lower_params, dict):
+                    continue
+                if lower.get("kind") == "ComponentVolumeLowerBound":
+                    h = max(h, float(lower_params["MinimumElementSize"]))
+                    continue
+                lower_shape = lower_params.get("ShapeKind")
+                if lower.get("kind") != "ComponentRegionLowerBound" or not isinstance(
+                    lower_shape, str
+                ):
+                    continue
+                lower_footprint = _plane_footprint(
+                    lower_params, lower_shape, float(plane)
+                )
+                if lower_footprint is not None and _footprint_contains(
+                    lower_footprint, cx, cy
+                ):
+                    h = max(h, float(lower_params["MinimumElementSize"]))
+            if not math.isfinite(h) or h <= 0.0:
+                continue
+            accept(cx, cy, h)
+            if footprint[0] == "disc":
+                radius = footprint[1][2]
+                count = min(
+                    max(int(math.ceil(2.0 * math.pi * radius / h)), 6),
+                    _PLANE_SEED_MAX_POINTS_PER_FOOTPRINT,
+                )
+                for index in range(count):
+                    angle = 2.0 * math.pi * index / count
+                    accept(
+                        cx + radius * math.cos(angle),
+                        cy + radius * math.sin(angle),
+                        h,
+                    )
+            else:
+                x0, y0, x1, y1 = footprint[1]
+                perimeter = 2.0 * ((x1 - x0) + (y1 - y0))
+                step = max(h, perimeter / _PLANE_SEED_MAX_POINTS_PER_FOOTPRINT)
+                nx = max(int(math.ceil((x1 - x0) / step)), 1)
+                ny = max(int(math.ceil((y1 - y0) / step)), 1)
+                for index in range(nx + 1):
+                    x = x0 + (x1 - x0) * index / nx
+                    accept(x, y0, h)
+                    accept(x, y1, h)
+                for index in range(1, ny):
+                    y = y0 + (y1 - y0) * index / ny
+                    accept(x0, y, h)
+                    accept(x1, y, h)
+    return seeds

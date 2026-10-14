@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
-import { materializeCurrentLivePreparation } from "./livePreparationMaterialization";
+import {
+  materializeCurrentLivePreparation,
+  requiresSharedDomainMeshForLivePreparation,
+} from "./livePreparationMaterialization";
 
 function materializationApi({
   sourceSceneRevision = 17,
@@ -53,6 +56,32 @@ function materializationApi({
 }
 
 describe("Live preparation materialization", () => {
+  it("uses the declared lane ahead of stale topology flags when deciding mesh requirements", () => {
+    const contextFor = (status: Record<string, unknown>) =>
+      ({
+        resourceData: { [SESSION_STATUS_RESOURCE_KEY]: status },
+      }) as never;
+    const fdm = {
+      capabilities: {
+        explicit_topology: true,
+        active_lane: { resolved: { discretization: "fdm" } },
+      },
+      domain: { discretization: "fem" },
+    };
+    const unresolved = {
+      capabilities: { explicit_topology: true, active_lane: null },
+      domain: { discretization: "fem" },
+    };
+    const legacy = {
+      capabilities: { explicit_topology: true },
+      domain: { discretization: "fdm" },
+    };
+
+    expect(requiresSharedDomainMeshForLivePreparation(contextFor(fdm))).toBe(false);
+    expect(requiresSharedDomainMeshForLivePreparation(contextFor(unresolved))).toBe(false);
+    expect(requiresSharedDomainMeshForLivePreparation(contextFor(legacy))).toBe(true);
+  });
+
   it("accepts a receipt only after matching the current FEM mesh and scene revisions", async () => {
     const fixture = materializationApi();
 

@@ -12,11 +12,13 @@ import {
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
+  reconcileTransportDraft,
   resolveTransportRecord,
   TRANSPORT_AUTHORING_DRAFT_INVENTORY,
   spinTransportDraft,
   transportIdentity,
   transportSelectionKey,
+  transportDraftValuesEqual,
 } from "./TransportAuthoringInspectorModel";
 
 type ParityManifest = {
@@ -36,6 +38,46 @@ function parityManifest(): ParityManifest {
 }
 
 describe("transport authoring drafts", () => {
+  it("retains only edited fields across server revisions and detects overlap", () => {
+    for (const baseline of [currentTransportDraft(), spinTransportDraft()]) {
+      const local = { ...baseline, solverRelativeTolerance: "2e-10" };
+      const server = { ...baseline, solverMaxIterations: "1400" };
+      const resolved = reconcileTransportDraft(server, local, baseline);
+      expect(resolved.draft.solverRelativeTolerance).toBe("2e-10");
+      expect(resolved.draft.solverMaxIterations).toBe("1400");
+      expect(resolved.conflicts).toEqual([]);
+      const conflict = reconcileTransportDraft(
+        { ...server, solverRelativeTolerance: "1e-8" }, local, baseline,
+      );
+      expect(conflict.conflicts).toEqual(["solverRelativeTolerance"]);
+      expect(reconcileTransportDraft(server, server, baseline).conflicts).toEqual([]);
+    }
+  });
+
+  it("retains newer edits after ACK without treating the submitted value as a conflict", () => {
+    const submitted = { ...currentTransportDraft(), solverMaxIterations: "1100" };
+    const current = { ...submitted, solverMaxIterations: "1200" };
+    const acknowledged = { ...submitted };
+    const retained = reconcileTransportDraft(acknowledged, current, submitted);
+    expect(retained.draft.solverMaxIterations).toBe("1200");
+    expect(retained.conflicts).toEqual([]);
+  });
+
+  it("excludes UI row identity from draft comparison and canonical transport payload", () => {
+    const draft = currentTransportDraft(null, { objectId: "ring" });
+    Object.assign(draft, currentTransportClosurePatch(draft, true));
+    const same = structuredClone(draft);
+    same.structuredCurrentClosure!.sourceCuts[0].rowId = "different-ui-row";
+    expect(transportDraftValuesEqual(draft, same)).toBe(true);
+    const resource = buildCurrentTransport(draft);
+    expect(JSON.stringify(resource)).not.toContain("rowId");
+    if (!isKnownCurrentTransport(resource)) throw new Error("Expected a known current transport.");
+    const refreshed = currentTransportDraft(resource, null, draft);
+    expect(refreshed.structuredCurrentClosure!.sourceCuts[0].rowId).toBe(
+      draft.structuredCurrentClosure!.sourceCuts[0].rowId,
+    );
+  });
+
   it("covers every current/spin manifest field with a typed or opaque draft key", () => {
     const manifest = parityManifest();
     for (const parameter of manifest.parameters.filter(({ family }) => family === "current_transport" || family === "spin_transport")) {
@@ -141,6 +183,22 @@ describe("transport authoring drafts", () => {
     expect(() => buildCurrentTransport(draft)).toThrow(/JSON object/);
   });
 
+  it("round-trips value-free antenna current terminals", () => {
+    const resource = {
+      kind: "current_transport" as const,
+      model: "ohmic_poisson" as const,
+      name: "antenna_charge",
+      coupling: "one_way" as const,
+      domain: [{ object_id: "antenna" }],
+      materials: [{ region: { object_id: "antenna" }, material: { sigma_Spm: 5.8e7 } }],
+      boundaries: [{ id: "signal_in", kind: "equipotential_current_terminal" as const, surfaces: [{ object_id: "antenna", surface_id: "signal_in", orientation: [-1, 0, 0] }] }],
+      gauge: "terminal_reference" as const,
+      solver: { engine: "cg", linear: { relative_tolerance: 1e-10, absolute_tolerance: 0, max_iterations: 1000 }, operator_version: "fem_charge_conforming_h1_p1.transparent.v1", physical_residual_version: "charge_balance_integrated_l2.v1" },
+    };
+    expect(isKnownCurrentTransport(resource)).toBe(true);
+    expect(buildCurrentTransport(currentTransportDraft(resource))).toEqual(resource);
+  });
+
   it("round-trips the canonical current-source time envelope", () => {
     const resource = {
       kind: "current_transport" as const,
@@ -210,6 +268,7 @@ describe("transport authoring drafts", () => {
     expect(draft.structuredCurrentClosure).toEqual({
       closureId: "ring-closure",
       sourceCuts: [{
+        rowId: "source:0:ring-cut",
         axis: "y",
         circuitId: "ring-circuit",
         driveId: "ring-drive",

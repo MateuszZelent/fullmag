@@ -1072,7 +1072,7 @@ fn periodic_airbox_k0_rejections_use_stable_reason_tokens() {
         "count": 1, "target": {"kind": "frequency_window", "frequency_min_hz": 1.0e9, "frequency_max_hz": 2.0e9},
         "equilibrium": {"kind": "provided"}, "k_sampling": {"kind": "single", "k_vector": [0.0, 0.0, 0.0]},
         "normalization": "unit_l2", "damping_policy": "ignore", "spin_wave_bc": "periodic",
-        "magnetostatic_bc": "periodic_airbox_k0", "sampling": {"outputs": [{"kind": "eigen_spectrum", "quantity": "frequency_hz"}]}
+        "magnetostatic_bc": "periodic_airbox_k0", "sampling": {"outputs": [{"kind": "eigen_spectrum", "quantity": "eigenfrequency"}]}
     });
     let cases = [
         (
@@ -1872,6 +1872,72 @@ fn unsupported_ir_version_is_rejected() {
 fn bootstrap_example_validates() {
     let ir = ProblemIR::bootstrap_example();
     assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn antenna_study_has_no_dynamics_and_preserves_empty_sampling() {
+    let value = serde_json::json!({
+        "kind": "antenna_field_solve", "sampling": {"outputs": []}
+    });
+    let study: StudyIR = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(study.kind(), StudyKindIR::AntennaFieldSolve);
+    assert!(study.optional_dynamics().is_none());
+    assert!(study.relaxation().is_none());
+    assert_eq!(serde_json::to_value(study).unwrap(), value);
+}
+
+#[test]
+fn only_antenna_study_relaxes_magnetic_inventory_requirements() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets.clear();
+    ir.materials.clear();
+    ir.regions.clear();
+    ir.energy_terms.clear();
+    let errors = ir.validate().unwrap_err();
+    assert!(errors.iter().any(|e| e == "at least one magnet is required"));
+    ir.study = StudyIR::AntennaFieldSolve {
+        selection: None,
+        sampling: SamplingIR {
+            outputs: vec![], table_autosave: None, stage_autosave: None,
+        },
+    };
+    // Other authored-source constraints may still reject this bootstrap; the
+    // exemption is scoped to magnetic inventory, not a solver readiness proof.
+    let errors = ir.validate().err().unwrap_or_default();
+    assert!(!errors.iter().any(|e| e == "at least one magnet is required"));
+    assert!(!errors.iter().any(|e| e == "at least one material is required"));
+    assert!(!errors.iter().any(|e| e == "at least one region is required"));
+    assert!(!errors.iter().any(|e| e == "at least one interaction or material anisotropy is required"));
+}
+
+#[test]
+fn antenna_study_selection_is_optional_and_typed() {
+    let legacy = serde_json::json!({"kind": "antenna_field_solve", "sampling": {"outputs": []}});
+    let study: StudyIR = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(study).unwrap(), legacy);
+    let mut selected = legacy;
+    selected["selection"] = serde_json::json!({"stage_id": "solve", "port_mode_id": "port"});
+    let study: StudyIR = serde_json::from_value(selected.clone()).unwrap();
+    assert_eq!(serde_json::to_value(study).unwrap(), selected);
+    for selection in [serde_json::json!({"stage_id": "solve"}), serde_json::json!({"stage_id": "solve", "port_mode_id": "port", "fallback": true}), serde_json::json!("solve")] {
+        selected["selection"] = selection;
+        assert!(serde_json::from_value::<StudyIR>(selected.clone()).is_err());
+    }
+}
+
+#[test]
+fn both_ir_versions_reject_a_missing_antenna_selection_reference() {
+    let study: StudyIR = serde_json::from_value(serde_json::json!({
+        "kind": "antenna_field_solve", "sampling": {"outputs": []},
+        "selection": {"stage_id": "missing", "port_mode_id": "port"}
+    })).unwrap();
+    let mut legacy = ProblemIR::bootstrap_example();
+    legacy.study = study.clone();
+    let mut objects = fullmag_ir::ProblemIRV04::bootstrap_example();
+    objects.study = study;
+    for errors in [legacy.validate().unwrap_err(), objects.validate().unwrap_err()] {
+        assert!(errors.iter().any(|error| error.contains("antenna_field_solve.selection")));
+    }
 }
 
 #[test]
@@ -4999,10 +5065,14 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
             outputs: vec![
                 OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
+                    scope: None,
                 },
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![0, 1],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ],
         },
@@ -5111,7 +5181,8 @@ fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
             table_autosave: None,
             stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -5205,10 +5276,12 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
             stage_autosave: None,
             outputs: vec![
                 OutputIR::EigenSpectrum {
-                    quantity: "frequency_hz".to_string(),
+                    quantity: "eigenfrequency".to_string(),
+                    scope: None,
                 },
                 OutputIR::DispersionCurve {
                     name: "dispersion".to_string(),
+                    include_branch_table: true,
                 },
             ],
         },
@@ -5259,7 +5332,8 @@ fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
             table_autosave: None,
             stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -5310,8 +5384,8 @@ fn frequency_response_round_trips_as_first_class_study() {
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,
-            outputs: vec![OutputIR::EigenSpectrum {
-                quantity: "susceptibility".to_string(),
+            outputs: vec![OutputIR::FrequencyResponseOutput {
+                observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
         },
     };
@@ -5327,10 +5401,18 @@ fn frequency_response_round_trips_as_first_class_study() {
             excitation,
             frequencies_hz,
             solver_policy,
+            sampling,
             ..
         } => {
             assert_eq!(excitation.field_au_per_m, [0.0, 0.0, 1.0]);
             assert_eq!(frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
+            assert_eq!(
+                sampling.outputs,
+                vec![OutputIR::FrequencyResponseOutput {
+                    observable: FrequencyResponseOutputIR::SusceptibilityTensor,
+                }],
+                "round-trip must preserve the dedicated driven-response output"
+            );
             let solver_policy = solver_policy
                 .as_ref()
                 .expect("solver policy should round-trip");
@@ -6171,7 +6253,7 @@ fn problem_ir_validation_bubbles_mesh_semantics_errors_with_prefix() {
 }
 
 #[test]
-fn eigenmodes_require_spectrum_or_mode_output() {
+fn eigenmodes_accept_and_retain_diagnostics_only_and_mixed_outputs() {
     let mut ir = ProblemIR::bootstrap_example();
     let dynamics = ir.study.dynamics().clone();
     ir.study = StudyIR::Eigenmodes {
@@ -6194,17 +6276,296 @@ fn eigenmodes_require_spectrum_or_mode_output() {
             stage_autosave: None,
             outputs: vec![OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             }],
         },
         mode_tracking: None,
     };
 
+    ir.validate()
+        .expect("dispersion-only eigen study is a complete public output request");
+
+    let diagnostics = OutputIR::EigenDiagnostics {
+        include_tracking: true,
+        include_residuals: false,
+        include_overlaps: true,
+        include_tangent_leakage: false,
+        include_orthogonality: true,
+    };
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+        sampling.outputs = vec![diagnostics.clone()];
+    } else {
+        unreachable!();
+    }
+    ir.validate()
+        .expect("diagnostics-only eigen study is a complete public output request");
+    assert_eq!(ir.study.sampling().outputs, vec![diagnostics.clone()]);
+
+    let mixed_outputs = vec![
+        diagnostics.clone(),
+        OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope: None,
+        },
+    ];
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+        sampling.outputs = mixed_outputs.clone();
+    } else {
+        unreachable!();
+    }
+    ir.validate()
+        .expect("diagnostics and spectrum outputs are both retained");
+    assert_eq!(ir.study.sampling().outputs, mixed_outputs);
+
+    let illegal_mixed_outputs = vec![
+        diagnostics,
+        OutputIR::Field {
+            name: "M".to_string(),
+            every_seconds: 1.0e-9,
+        },
+    ];
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+        sampling.outputs = illegal_mixed_outputs.clone();
+    } else {
+        unreachable!();
+    }
     let errors = ir
         .validate()
-        .expect_err("dispersion-only eigen study must fail validation");
+        .expect_err("diagnostics must not make unrelated outputs legal");
     assert!(errors.iter().any(|error| {
-        error.contains("eigenmodes study requires at least one eigen_spectrum or eigen_mode output")
+        error.contains(
+            "eigenmodes outputs must be eigen_spectrum/eigen_mode/dispersion_curve/eigen_diagnostics requests"
+        )
     }));
+    assert_eq!(ir.study.sampling().outputs, illegal_mixed_outputs);
+}
+
+#[test]
+fn eigen_output_selectors_round_trip_through_canonical_ir() {
+    let mode = OutputIR::EigenMode {
+        field: "mode".to_string(),
+        all_modes: false,
+        indices: vec![],
+        branches: vec![2, 0],
+        sample_selector: Some(SampleSelectorIR {
+            sample_indices: vec![3, 1],
+            sample_labels: vec!["X".to_string(), "M".to_string()],
+        }),
+    };
+    let dispersion = OutputIR::DispersionCurve {
+        name: "band".to_string(),
+        include_branch_table: false,
+    };
+
+    let encoded = serde_json::to_value((&mode, &dispersion)).expect("outputs serialize");
+    let decoded: (OutputIR, OutputIR) =
+        serde_json::from_value(encoded.clone()).expect("outputs deserialize");
+
+    assert_eq!(decoded, (mode, dispersion));
+    assert_eq!(
+        encoded,
+        serde_json::json!([
+            {
+                "kind": "eigen_mode",
+                "field": "mode",
+                "indices": [],
+                "branches": [2, 0],
+                "sample_selector": {
+                    "sample_indices": [3, 1],
+                    "sample_labels": ["X", "M"]
+                }
+            },
+            {
+                "kind": "dispersion_curve",
+                "name": "band",
+                "include_branch_table": false
+            }
+        ])
+    );
+
+    let legacy_mode: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_mode",
+        "field": "mode",
+        "indices": [0]
+    }))
+    .expect("legacy mode output should deserialize");
+    assert_eq!(
+        legacy_mode,
+        OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![0],
+            branches: vec![],
+            sample_selector: None,
+        }
+    );
+    let legacy_dispersion: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "dispersion_curve",
+        "name": "dispersion"
+    }))
+    .expect("legacy dispersion output should deserialize");
+    assert_eq!(
+        legacy_dispersion,
+        OutputIR::DispersionCurve {
+            name: "dispersion".to_string(),
+            include_branch_table: true,
+        }
+    );
+}
+
+#[test]
+fn eigen_diagnostics_v03_defaults_true_preserves_false_and_rejects_null() {
+    let default_output: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_diagnostics"
+    }))
+    .expect("legacy diagnostic output should use Python defaults");
+    let expected = serde_json::json!({
+        "kind": "eigen_diagnostics",
+        "include_tracking": true,
+        "include_residuals": true,
+        "include_overlaps": true,
+        "include_tangent_leakage": true,
+        "include_orthogonality": true,
+    });
+    assert_eq!(serde_json::to_value(default_output).unwrap(), expected);
+
+    let explicit_false: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_diagnostics",
+        "include_tracking": false,
+        "include_residuals": true,
+        "include_overlaps": false,
+        "include_tangent_leakage": true,
+        "include_orthogonality": false,
+    }))
+    .expect("explicit false is preserved");
+    let encoded = serde_json::to_value(&explicit_false).unwrap();
+    assert_eq!(encoded["include_tracking"], false);
+    assert_eq!(encoded["include_residuals"], true);
+    assert_eq!(encoded["include_overlaps"], false);
+    assert_eq!(encoded["include_tangent_leakage"], true);
+    assert_eq!(encoded["include_orthogonality"], false);
+
+    for flag in [
+        "include_tracking",
+        "include_residuals",
+        "include_overlaps",
+        "include_tangent_leakage",
+        "include_orthogonality",
+    ] {
+        let mut explicit_null = serde_json::json!({ "kind": "eigen_diagnostics" });
+        explicit_null[flag] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<OutputIR>(explicit_null).is_err(), "{flag}");
+    }
+}
+
+#[test]
+fn eigen_mode_branch_only_output_is_valid_and_empty_selector_is_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::Eigenmodes {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        bias_field_sweep: None,
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
+        sampling: SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::EigenMode {
+                field: "mode".to_string(),
+                all_modes: false,
+                indices: vec![],
+                branches: vec![1],
+                sample_selector: None,
+            }],
+        },
+        mode_tracking: None,
+    };
+    assert!(ir.validate().is_ok());
+
+    let all: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_mode", "field": "mode", "all_modes": true, "indices": []
+    })).unwrap();
+    assert_eq!(serde_json::to_value(&all).unwrap()["all_modes"], true);
+    let legacy: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_mode", "field": "mode", "indices": [64, 91]
+    })).unwrap();
+    assert!(serde_json::to_value(&legacy).unwrap().get("all_modes").is_none());
+    let mut all_ir = ir.clone();
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut all_ir.study {
+        sampling.outputs = vec![all];
+    }
+    assert!(all_ir.validate().is_ok());
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut all_ir.study {
+        if let OutputIR::EigenMode { indices, .. } = &mut sampling.outputs[0] { indices.push(64); }
+    }
+    assert!(all_ir.validate().unwrap_err().iter().any(|error| error.contains("all_modes cannot be combined")));
+
+    let mut invalid = ir;
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut invalid.study {
+        sampling.outputs[0] = OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![],
+            branches: vec![],
+            sample_selector: Some(SampleSelectorIR::default()),
+        };
+    }
+    let errors = invalid.validate().expect_err("empty selector must fail");
+    assert!(errors.iter().any(|error| {
+        error.contains("eigen_mode must contain at least one mode index")
+            && error.contains("or branch index")
+    }));
+    assert!(errors.iter().any(
+        |error| error.contains("sample_selector must contain sample_indices or sample_labels")
+    ));
+}
+
+#[test]
+fn k_sampling_validation_is_shared_for_single_and_path_forms() {
+    let single = KSamplingIR::Single {
+        k_vector: [f64::NAN, 0.0, 0.0],
+    };
+    assert!(single
+        .validation_errors("study.k_sampling")
+        .iter()
+        .any(|error| error.contains("study.k_sampling.k_vector must contain finite values")));
+
+    let path = KSamplingIR::Path {
+        points: vec![
+            KPointIR {
+                label: Some("".to_string()),
+                k_vector: [f64::INFINITY, 0.0, 0.0],
+            },
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![0],
+        closed: false,
+    };
+    let errors = path.validation_errors("study.k_sampling");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("path point label must not be empty")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("path point k_vector must contain finite values")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("path samples_per_segment entries must be > 0")));
 }
 
 #[test]
@@ -8507,5 +8868,154 @@ fn fem_mesh_policy_canonical_bytes_and_digest_are_frozen() {
     assert_eq!(
         fingerprint,
         "sha256:05f950d4ecd8c74e363b1c0174e150107107f78b73dfb9be0fa9c082b104acdd"
+    );
+}
+
+#[test]
+fn sample_selector_rejects_labels_that_are_equal_after_trimming() {
+    let selector = SampleSelectorIR {
+        sample_indices: vec![4, 2],
+        sample_labels: vec!["Gamma".into(), " Gamma ".into()],
+    };
+    assert_eq!(
+        selector.validation_errors("selection"),
+        vec!["selection.sample_labels must be unique"]
+    );
+    let selector = SampleSelectorIR {
+        sample_indices: vec![4, 2, 4],
+        sample_labels: vec!["Gamma".into(), "X".into()],
+    };
+    assert_eq!(
+        selector.validation_errors("selection"),
+        vec!["selection.sample_indices must be unique"]
+    );
+}
+
+fn eigenmodes_problem_with_spectrum_quantity(quantity: &str) -> ProblemIR {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    let dynamics = value["study"]["dynamics"].clone();
+    value["study"] = serde_json::json!({
+        "kind": "eigenmodes",
+        "dynamics": dynamics,
+        "operator": {"kind": "linearized_llg", "include_demag": false},
+        "count": 1,
+        "target": {"kind": "lowest"},
+        "equilibrium": {"kind": "provided"},
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "sampling": {
+            "outputs": [{"kind": "eigen_spectrum", "quantity": quantity}]
+        }
+    });
+    serde_json::from_value(value).expect("eigenmodes fixture should deserialize")
+}
+
+#[test]
+fn eigen_spectrum_quantity_is_semantically_canonical_and_raw_wire_round_trips() {
+    for quantity in ["eigenfrequency", " eigenfrequency "] {
+        let errors = eigenmodes_problem_with_spectrum_quantity(quantity)
+            .validate()
+            .err()
+            .unwrap_or_default();
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("eigen_spectrum quantity")),
+            "canonical quantity should pass spectrum validation: {errors:?}"
+        );
+    }
+
+    for quantity in ["", "   ", "eigenvalue", "amplitude", "frequency_hz"] {
+        let encoded =
+            serde_json::to_value(eigenmodes_problem_with_spectrum_quantity(quantity)).unwrap();
+        let decoded: ProblemIR =
+            serde_json::from_value(encoded.clone()).expect("raw quantity remains readable");
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            encoded,
+            "serde must preserve raw quantity {quantity:?}"
+        );
+        let errors = decoded
+            .validate()
+            .expect_err("unsupported spectrum quantities must fail semantic validation");
+        let expected = if quantity.trim().is_empty() {
+            "eigen_spectrum quantity must not be empty".to_string()
+        } else {
+            format!(
+                "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is 'eigenfrequency'"
+            )
+        };
+        assert!(
+            errors.iter().any(|error| error == &expected),
+            "expected {expected:?}, got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn eigen_spectrum_scope_is_typed_and_legacy_wire_defaults_to_per_sample() {
+    let legacy = serde_json::to_value(
+        eigenmodes_problem_with_spectrum_quantity("eigenfrequency"),
+    )
+    .unwrap();
+    assert!(legacy["study"]["sampling"]["outputs"][0]
+        .get("scope")
+        .is_none());
+
+    let decoded_legacy: ProblemIR = serde_json::from_value(legacy.clone())
+        .expect("legacy spectrum output without scope remains readable");
+    decoded_legacy.validate().expect("legacy spectrum scope remains semantically valid");
+    let legacy_output = decoded_legacy
+        .study
+        .sampling()
+        .outputs
+        .first()
+        .expect("spectrum output should exist");
+    assert_eq!(
+        legacy_output.effective_eigen_spectrum_scope(),
+        Some(EigenSpectrumScopeIR::PerSample)
+    );
+    assert_eq!(
+        serde_json::to_value(&decoded_legacy).unwrap(),
+        legacy,
+        "legacy wire form without scope must round-trip unchanged"
+    );
+
+    for (wire_scope, expected_scope) in [
+        ("per_sample", EigenSpectrumScopeIR::PerSample),
+        ("global", EigenSpectrumScopeIR::Global),
+    ] {
+        let mut encoded = legacy.clone();
+        encoded["study"]["sampling"]["outputs"][0]["scope"] =
+            serde_json::Value::String(wire_scope.to_string());
+        let decoded: ProblemIR = serde_json::from_value(encoded.clone())
+            .expect("supported scope should deserialize through ProblemIR");
+        decoded.validate().expect("supported authored scope remains semantically valid");
+        let output = decoded
+            .study
+            .sampling()
+            .outputs
+            .first()
+            .expect("spectrum output should exist");
+        assert_eq!(
+            output.effective_eigen_spectrum_scope(),
+            Some(expected_scope),
+            "scope {wire_scope:?} should remain effective"
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            encoded,
+            "explicit scope {wire_scope:?} should round-trip unchanged"
+        );
+    }
+
+    let mut unknown_scope = legacy;
+    unknown_scope["study"]["sampling"]["outputs"][0]["scope"] =
+        serde_json::Value::String("per_run".to_string());
+    let error = serde_json::from_value::<ProblemIR>(unknown_scope)
+        .expect_err("unknown explicit spectrum scope must not be silently discarded");
+    assert!(
+        error.to_string().contains("unknown variant"),
+        "expected an enum deserialization error, got {error}"
     );
 }

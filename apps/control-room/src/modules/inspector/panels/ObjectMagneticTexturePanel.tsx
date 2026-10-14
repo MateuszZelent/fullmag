@@ -6,12 +6,16 @@ import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
-import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
+import {
+  captureAuthoringMutationFence,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
+  publishCommittedSceneResource,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -778,7 +782,7 @@ export function ObjectMagneticTexturePanel({
   selection,
 }: InspectorPanelProps) {
   const kernel = useKernel();
-  const { api, authoringHistory, resources } = kernel;
+  const { api, resources } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const activeLane = useActiveLaneCapabilities();
   const scene = useSceneResource();
@@ -887,22 +891,16 @@ export function ObjectMagneticTexturePanel({
     }
 
     const submittedDraft = draft;
-    const historyGeneration = authoringHistory?.getGeneration?.();
-    const isCurrentSession = () =>
-      kernel.commands.getSessionScopeKey() === sessionScopeKey &&
-      (historyGeneration === undefined ||
-        authoringHistory?.getGeneration?.() === historyGeneration);
+    const mutationContext = captureAuthoringMutationFence(
+      createCommandContext("inspector", kernel, { sessionScopeKey }),
+    );
+    const isCurrentSession = () => mutationContext.isCurrentSessionScope?.() === true;
     mutationInFlight.current = true;
     setPending(true);
     try {
       const asset = buildObjectMagneticTextureAssetDraft(model, submittedDraft);
       const response = await runAuthoringMutationWithHistory(
-        {
-          api,
-          authoringHistory,
-          sessionScopeKey,
-          isCurrentSessionScope: isCurrentSession,
-        },
+        mutationContext,
         `Save magnetic texture ${model.objectId}`,
         async ({ baseRevision }) => {
           const request = buildMagnetizationTransactionRequest(
@@ -921,6 +919,8 @@ export function ObjectMagneticTexturePanel({
       );
       if (!isCurrentSession()) return false;
       const revision = acknowledgedAuthoringSceneRevision(response);
+      publishCommittedSceneResource(resources, response.committed_scene, revision,
+        undefined, false, sessionScopeKey, api.resourceCacheScope);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       if (!isCurrentSession()) return false;
@@ -976,21 +976,15 @@ export function ObjectMagneticTexturePanel({
       return;
     }
     const submittedDraft = draft;
-    const historyGeneration = authoringHistory?.getGeneration?.();
-    const isCurrentSession = () =>
-      kernel.commands.getSessionScopeKey() === sessionScopeKey &&
-      (historyGeneration === undefined ||
-        authoringHistory?.getGeneration?.() === historyGeneration);
+    const mutationContext = captureAuthoringMutationFence(
+      createCommandContext("inspector", kernel, { sessionScopeKey }),
+    );
+    const isCurrentSession = () => mutationContext.isCurrentSessionScope?.() === true;
     mutationInFlight.current = true;
     setPending(true);
     try {
       const response = await runAuthoringMutationWithHistory(
-        {
-          api,
-          authoringHistory,
-          sessionScopeKey,
-          isCurrentSessionScope: isCurrentSession,
-        },
+        mutationContext,
         `Clear magnetic texture ${model.objectId}`,
         async ({ baseRevision }) => {
           const request = buildMagnetizationTransactionRequest(
@@ -1009,6 +1003,8 @@ export function ObjectMagneticTexturePanel({
       );
       if (!isCurrentSession()) return;
       const revision = acknowledgedAuthoringSceneRevision(response);
+      publishCommittedSceneResource(resources, response.committed_scene, revision,
+        undefined, false, sessionScopeKey, api.resourceCacheScope);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       if (!isCurrentSession()) return;

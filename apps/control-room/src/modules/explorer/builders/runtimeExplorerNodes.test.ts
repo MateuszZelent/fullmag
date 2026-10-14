@@ -72,8 +72,12 @@ const stageExecution: StageExecutionResource = {
   active_stage_index: 0,
   active_stage_kind: "relax",
   completed_stage_indexes: [],
+  request_scope_epoch: "runtime-explorer-api:0",
   revision: 7,
+  run_id: currentRun.run_id,
   runtime_state: "running",
+  session_epoch: `${currentRun.session_id}@0`,
+  session_id: currentRun.session_id,
   stage_statuses: ["running"],
   stages: [{
     converged: false,

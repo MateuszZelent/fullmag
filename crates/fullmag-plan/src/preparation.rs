@@ -875,10 +875,122 @@ impl PreparationMaterialization {
                 "FEM preparation requires a time-domain FEM execution plan".into(),
             ));
         };
-        native.validate_for_mesh(&fem.mesh, fem.fe_order)?;
-        let mesh_source_evidence = PreparationFemMeshSourceEvidence::from_mesh(
+        Self::from_native_fem_mesh_with_identity(
+            problem_fingerprint,
+            identity,
+            requested_backend,
+            geometry_fingerprint,
+            display_fingerprint,
             &fem.mesh,
+            fem.fe_order,
             fem.mesh_build_report.as_ref(),
+            native,
+        )
+    }
+
+    /// Prepare the combined conductor/lead mesh for standalone antenna
+    /// inspection. This certifies H1 P1 mesh/space construction, not a charge
+    /// solve, RT0 reconstruction, Oersted field, or LLG-compatible source.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_antenna_external_lead_inspection_execution_plan(
+        problem_fingerprint: impl Into<String>,
+        scene_revision: u64,
+        requested_backend: BackendTarget,
+        execution_plan: &ExecutionPlanIR,
+        geometry_fingerprint: impl Into<String>,
+        display_fingerprint: impl Into<String>,
+        native: &NativeFemMeshSpaceEvidence,
+    ) -> Result<Self, PreparationPlanError> {
+        Self::from_antenna_external_lead_inspection_with_identity(
+            problem_fingerprint,
+            PreparationPlanIdentity::LiveScene { scene_revision },
+            requested_backend,
+            execution_plan,
+            geometry_fingerprint,
+            display_fingerprint,
+            native,
+        )
+    }
+
+    /// Bind source-mesh preparation to an immutable accepted-run step,
+    /// without substituting a Live scene identity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_antenna_external_lead_inspection_execution_plan_for_accepted_run(
+        problem_fingerprint: impl Into<String>,
+        source: PreparationPlanSource,
+        requested_backend: BackendTarget,
+        execution_plan: &ExecutionPlanIR,
+        geometry_fingerprint: impl Into<String>,
+        display_fingerprint: impl Into<String>,
+        native: &NativeFemMeshSpaceEvidence,
+    ) -> Result<Self, PreparationPlanError> {
+        source.validate()?;
+        Self::from_antenna_external_lead_inspection_with_identity(
+            problem_fingerprint,
+            PreparationPlanIdentity::AcceptedRun(source),
+            requested_backend,
+            execution_plan,
+            geometry_fingerprint,
+            display_fingerprint,
+            native,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_antenna_external_lead_inspection_with_identity(
+        problem_fingerprint: impl Into<String>,
+        identity: PreparationPlanIdentity,
+        requested_backend: BackendTarget,
+        execution_plan: &ExecutionPlanIR,
+        geometry_fingerprint: impl Into<String>,
+        display_fingerprint: impl Into<String>,
+        native: &NativeFemMeshSpaceEvidence,
+    ) -> Result<Self, PreparationPlanError> {
+        if execution_plan.common.requested_backend != requested_backend {
+            return Err(PreparationPlanError::Contract(
+                "preparation requested backend does not match the execution plan".into(),
+            ));
+        }
+        if execution_plan.common.resolved_backend != BackendTarget::Fem {
+            return Err(PreparationPlanError::Contract(
+                "antenna source preparation requires resolved backend 'fem'".into(),
+            ));
+        }
+        let BackendPlanIR::AntennaExternalLeadInspection(antenna) = &execution_plan.backend_plan else {
+            return Err(PreparationPlanError::Contract(
+                "antenna source preparation requires an external-lead inspection execution plan"
+                    .into(),
+            ));
+        };
+        Self::from_native_fem_mesh_with_identity(
+            problem_fingerprint,
+            identity,
+            requested_backend,
+            geometry_fingerprint,
+            display_fingerprint,
+            &antenna.input.combined_mesh,
+            1,
+            None,
+            native,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_native_fem_mesh_with_identity(
+        problem_fingerprint: impl Into<String>,
+        identity: PreparationPlanIdentity,
+        requested_backend: BackendTarget,
+        geometry_fingerprint: impl Into<String>,
+        display_fingerprint: impl Into<String>,
+        source_mesh: &MeshIR,
+        fe_order: u32,
+        mesh_build_report: Option<&FemSharedDomainBuildReportIR>,
+        native: &NativeFemMeshSpaceEvidence,
+    ) -> Result<Self, PreparationPlanError> {
+        native.validate_for_mesh(source_mesh, fe_order)?;
+        let mesh_source_evidence = PreparationFemMeshSourceEvidence::from_mesh(
+            source_mesh,
+            mesh_build_report,
             &native.canonical_mesh_fingerprint,
             &native.topology_fingerprint,
             native.cell_count,
@@ -959,14 +1071,13 @@ impl PreparationMaterialization {
             )?,
         };
 
-        let mut marker_ids = fem
-            .mesh
+        let mut marker_ids = source_mesh
             .element_markers
             .iter()
-            .chain(fem.mesh.boundary_markers.iter())
+            .chain(source_mesh.boundary_markers.iter())
             .copied()
             .collect::<std::collections::BTreeSet<_>>();
-        for pair in &fem.mesh.periodic_boundary_pairs {
+        for pair in &source_mesh.periodic_boundary_pairs {
             marker_ids.insert(pair.marker_a);
             marker_ids.insert(pair.marker_b);
         }

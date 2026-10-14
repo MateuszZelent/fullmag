@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AuthoringTransactionResponse,
+  MaterialPropertiesResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
@@ -81,7 +82,15 @@ describe("scratch material Inspector stability", () => {
   it("hydrates with production resource hooks and keeps root, focus, scroll, drafts and requests bounded across both ACKs", async () => {
     let resolveAssignment!: (value: SceneResource) => void;
     const fixture = createFixture();
-    fixture.createMaterial.mockResolvedValue(createdMaterialAck());
+    fixture.createMaterial.mockResolvedValue(
+      createdMaterialAck("mat:cofeb", {
+        Aex: 1.3e-11,
+        Dbulk: null,
+        Dind: null,
+        Ms: 1.1e6,
+        alpha: 0.01,
+      }),
+    );
     fixture.patchObject.mockImplementation(
       () => new Promise<SceneResource>((resolve) => {
         resolveAssignment = resolve;
@@ -130,7 +139,13 @@ describe("scratch material Inspector stability", () => {
       expect(button(mounted.container, "Create and assign").disabled).toBe(true);
 
       await act(async () => {
-        resolveAssignment(assignedScene(23, "mat:cofeb"));
+        resolveAssignment(assignedScene(23, "mat:cofeb", {
+          Aex: 1.3e-11,
+          Dbulk: null,
+          Dind: null,
+          Ms: 1.1e6,
+          alpha: 0.01,
+        }));
         await Promise.resolve();
       });
       expect(mounted.container.querySelector(".fm-inspector-panel") === panelRoot).toBe(true);
@@ -138,6 +153,9 @@ describe("scratch material Inspector stability", () => {
       expect(panelRoot.scrollTop).toBe(73);
       expect(input(mounted.container, "New anisotropy axis X").value).toBe("1");
       expect(mounted.container.textContent).toContain("Ku1 draft is ready");
+      expect(findElements(mounted.container, (element) =>
+        element.tagName === "INPUT" && ["Ms", "Aex"].includes(element.getAttribute("aria-label") ?? ""),
+      )).toHaveLength(0);
 
       const invalidationCounts = new Map<string, number>();
       for (const [resourceKey] of fixture.invalidate.mock.calls as [string, unknown][]) {
@@ -156,6 +174,24 @@ describe("scratch material Inspector stability", () => {
           className.includes("transition-opacity") ||
           (element.getAttribute("style") ?? "").includes("opacity");
       }).length).toBe(0);
+
+      // Scalar parameters belong to the Material child, not the assignment
+      // child. Navigate only after checking stability through both ACKs.
+      await act(async () => {
+        mounted.root.render(
+          <KernelContext.Provider value={fixture.kernel}>
+            <ObjectMaterialPanel selection={{
+              ...selectionA,
+              kind: "object.material",
+              nodeId: "object:object-a:material",
+            }} />
+          </KernelContext.Provider>,
+        );
+        await Promise.resolve();
+      });
+      expect(mounted.container.querySelector(".fm-inspector-panel") === panelRoot).toBe(true);
+      expect(input(mounted.container, "Ms").value).toBe("1100000");
+      expect(input(mounted.container, "Aex").value).toBe("1.3e-11");
     } finally {
       await mounted.cleanup();
     }
@@ -299,6 +335,7 @@ function createFixture(): Fixture {
       },
     },
     bus,
+    commands: { getSessionScopeKey: () => SESSION_SCOPE_KEY },
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
     resources,
   } as unknown as KernelApi;
@@ -374,11 +411,20 @@ function sceneObject(id: string, name: string, materialRef: string | null = null
   };
 }
 
-function createdMaterialAck(materialId = "mat:cofeb"): AuthoringTransactionResponse {
+function createdMaterialAck(
+  materialId = "mat:cofeb",
+  properties: MaterialPropertiesResource = {
+    Aex: 1.3e-11,
+    Dbulk: null,
+    Dind: null,
+    Ms: 8e5,
+    alpha: 0.01,
+  },
+): AuthoringTransactionResponse {
   return {
     committed_scene: {
       ...scene(22),
-      materials: [{ id: materialId, name: "CoFeB" }],
+      materials: [{ id: materialId, name: "CoFeB", properties }],
       revision: 22,
     },
     scene_revision: 22,
@@ -386,9 +432,14 @@ function createdMaterialAck(materialId = "mat:cofeb"): AuthoringTransactionRespo
   } as unknown as AuthoringTransactionResponse;
 }
 
-function assignedScene(revision: number, materialRef: string): SceneResource {
+function assignedScene(
+  revision: number,
+  materialRef: string,
+  properties?: MaterialPropertiesResource,
+): SceneResource {
   return {
-    ...scene(revision),
+    ...createdMaterialAck(materialRef, properties).committed_scene,
+    revision,
     objects: [
       sceneObject("object-a", "Object A", materialRef),
       sceneObject("object-b", "Object B"),

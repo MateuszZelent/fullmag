@@ -24,6 +24,21 @@ export function newProfileDraft(source?: ExecutionProfile): ExecutionProfileDraf
   };
 }
 
+export function duplicateProfileDraft(
+  source: ExecutionProfile,
+  profileId: string,
+): ExecutionProfileDraft {
+  const draft = newProfileDraft(source);
+  return {
+    ...draft,
+    profile: {
+      ...draft.profile,
+      profile_id: profileId,
+      version: "1",
+    },
+  };
+}
+
 /** Preserve advanced sparse fields when editing the basic profile controls. */
 export function profileFromDraft(draft: ExecutionProfileDraft): ExecutionProfile {
   const profile = structuredClone(draft.profile);

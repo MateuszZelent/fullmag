@@ -94,22 +94,7 @@ pub async fn get_mode(
     Query(query): Query<EigenModeQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
-    let relative_path = if let Some(sample_idx) = query.sample_index {
-        format!(
-            "eigen/modes/sample_{:04}/mode_{:04}.json",
-            sample_idx, query.index
-        )
-    } else {
-        format!("eigen/modes/mode_{:04}.json", query.index)
-    };
-    let value = match read_json_artifact_value(&artifact_dir, &relative_path) {
-        Ok(value) => value,
-        Err(_) if query.sample_index.is_some() => {
-            let legacy_path = format!("eigen/modes/mode_{:04}.json", query.index);
-            read_json_artifact_value(&artifact_dir, &legacy_path)?
-        }
-        Err(err) => return Err(err),
-    };
+    let value = read_selected_eigen_mode(&artifact_dir, query.sample_index, query.index)?;
     crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(value))
 }
@@ -132,13 +117,23 @@ pub async fn get_mode_v2(
     Path((sample_index, mode_index)): Path<(u32, u32)>,
 ) -> Result<Json<Value>, ApiError> {
     let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
-    let relative_path = format!(
-        "eigen/modes/sample_{:04}/mode_{:04}.json",
-        sample_index, mode_index
-    );
-    let value = read_json_artifact_value(&artifact_dir, &relative_path)?;
+    let value = read_selected_eigen_mode(&artifact_dir, Some(sample_index), mode_index)?;
     crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(value))
+}
+
+// An explicit sample is authoritative. Missing, unreadable or malformed
+// sample artifacts must preserve their error instead of selecting a legacy mode.
+fn read_selected_eigen_mode(
+    artifact_dir: &std::path::Path,
+    sample_index: Option<u32>,
+    mode_index: u32,
+) -> Result<Value, ApiError> {
+    let relative_path = match sample_index {
+        Some(sample) => format!("eigen/modes/sample_{sample:04}/mode_{mode_index:04}.json"),
+        None => format!("eigen/modes/mode_{mode_index:04}.json"),
+    };
+    read_json_artifact_value(artifact_dir, &relative_path)
 }
 
 #[utoipa::path(
@@ -231,4 +226,110 @@ pub async fn get_branches_v2(State(state): State<Arc<AppState>>) -> Result<Json<
     let value = read_json_artifact_value(&artifact_dir, "eigen/branches.v2.json")?;
     crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(value))
+}
+
+#[cfg(test)]
+mod sample_selection_tests {
+    use super::read_selected_eigen_mode;
+    use axum::http::StatusCode;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct ModeFixture(PathBuf);
+
+    impl ModeFixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "fullmag-eigen-sample-{}-{nonce}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, relative: &str, content: &str) {
+            let path = self.0.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+    }
+
+    impl Drop for ModeFixture {
+        fn drop(&mut self) {
+            // This directory is created exclusively by this fixture.
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn missing_explicit_sample_does_not_read_existing_legacy_mode() {
+        let fixture = ModeFixture::new();
+        fixture.write("eigen/modes/mode_0000.json", r#"{"source":"legacy"}"#);
+        for sample in [0, 1] {
+            let error = read_selected_eigen_mode(&fixture.0, Some(sample), 0).unwrap_err();
+            assert_eq!(error.status, StatusCode::NOT_FOUND);
+            assert!(error.message.contains(&format!("sample_{sample:04}")));
+        }
+        assert_eq!(
+            read_selected_eigen_mode(&fixture.0, None, 0).unwrap()["source"],
+            "legacy"
+        );
+    }
+
+    #[test]
+    fn corrupt_explicit_sample_preserves_parse_error_with_legacy_present() {
+        let fixture = ModeFixture::new();
+        fixture.write("eigen/modes/mode_0000.json", r#"{"source":"legacy"}"#);
+        fixture.write("eigen/modes/sample_0001/mode_0000.json", "{broken");
+        let error = read_selected_eigen_mode(&fixture.0, Some(1), 0).unwrap_err();
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(error.message.contains("failed to parse artifact"));
+        assert!(error.message.contains("sample_0001/mode_0000.json"));
+    }
+
+    #[test]
+    fn identical_raw_indices_keep_distinct_sample_coordinates() {
+        let fixture = ModeFixture::new();
+        for (sample, k) in [(0, -2.0e6), (1, 2.0e6)] {
+            let mode = json!({"sample_index":sample, "raw_mode_index":0, "ky_rad_per_m":k});
+            fixture.write(
+                &format!("eigen/modes/sample_{sample:04}/mode_0000.json"),
+                &mode.to_string(),
+            );
+            assert_eq!(
+                read_selected_eigen_mode(&fixture.0, Some(sample), 0).unwrap(),
+                mode
+            );
+        }
+        assert_eq!(
+            read_selected_eigen_mode(&fixture.0, None, 0)
+                .unwrap_err()
+                .status,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn selected_mode_is_read_only_from_supplied_artifact_root() {
+        let run_a = ModeFixture::new();
+        let run_b = ModeFixture::new();
+        let relative = "eigen/modes/sample_0001/mode_0000.json";
+        run_a.write(relative, r#"{"run_id":"A"}"#);
+        run_b.write(relative, r#"{"run_id":"B"}"#);
+        assert_eq!(
+            read_selected_eigen_mode(&run_a.0, Some(1), 0).unwrap()["run_id"],
+            "A"
+        );
+        assert_eq!(
+            read_selected_eigen_mode(&run_b.0, Some(1), 0).unwrap()["run_id"],
+            "B"
+        );
+    }
 }

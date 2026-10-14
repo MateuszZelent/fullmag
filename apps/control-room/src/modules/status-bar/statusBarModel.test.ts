@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildStatusBarEngineModel,
+  buildStatusBarMethodModel,
   buildStatusBarMeshModel,
   formatRuntimeBundleVersionLabel,
 } from "./statusBarModel";
@@ -137,8 +138,8 @@ describe("statusBarModel", () => {
     const model = buildStatusBarEngineModel(null);
 
     expect(model).toMatchObject({
-      detail: "awaiting run",
-      label: "Engine pending",
+      detail: "no active run",
+      label: "Engine not started",
       state: "pending",
     });
   });
@@ -199,4 +200,40 @@ describe("statusBarModel", () => {
       state: "building",
     });
   });
+});
+
+
+describe("simulation method before the first engine run", () => {
+  it.each(["fem", "fdm"])("shows the resolved %s method without a mesh or run", (method) => {
+    expect(buildStatusBarMethodModel({
+      capabilities: { active_lane: { requested: { discretization: method }, resolved: { discretization: method } } },
+      domain: { discretization: method === "fem" ? "fdm" : "fem" },
+    })).toMatchObject({ label: method.toUpperCase(), method, state: "resolved" });
+    expect(buildStatusBarEngineModel(null).label).toBe("Engine not started");
+  });
+
+  it("retains the request without promoting it to a resolved method", () => {
+    expect(buildStatusBarMethodModel({
+      capabilities: { active_lane: { requested: { discretization: "fem" }, resolved: null } },
+      domain: { discretization: "fdm" },
+    })).toMatchObject({ label: "FEM requested", method: null, state: "pending" });
+  });
+
+  it("keeps auto explicit and makes a missing simulation distinct", () => {
+    expect(buildStatusBarMethodModel({ capabilities: { active_lane: { requested: { backend: "auto" }, resolved: null } } })).toMatchObject({ label: "Method auto", method: null });
+    expect(buildStatusBarMethodModel(null).label).toBe("No simulation");
+    expect(buildStatusBarMethodModel({ capabilities: { active_lane: null }, domain: { discretization: "fdm" } }).label).toBe("Method unavailable");
+  });
+});
+
+
+it("does not claim a running engine has not started while run metadata is unavailable", () => {
+  expect(buildStatusBarEngineModel(null, "running")).toMatchObject({ label: "Engine metadata pending", detail: "run in progress", state: "pending" });
+});
+
+
+it("shows accepted FEM before engine resolution and independently of the last FDM run", () => {
+  expect(buildStatusBarMethodModel({ capabilities: { active_lane: { authored: { backend: "fem", discretization: "fem" }, resolved: null } }, domain: { discretization: "fdm" } })).toMatchObject({ label: "FEM", method: "fem" });
+  expect(buildStatusBarMethodModel({ capabilities: { active_lane: { authored: { backend: "fem", discretization: "fem" }, resolved: { discretization: "fdm" } } } })).toMatchObject({ label: "FEM", method: "fem" });
+  expect(buildStatusBarEngineModel(null).label).toBe("Engine not started");
 });

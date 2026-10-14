@@ -1,7 +1,10 @@
 import configparser
+import json
+import os
 from pathlib import Path
 import subprocess
 import unittest
+from unittest.mock import mock_open, patch
 
 import yaml
 
@@ -172,7 +175,24 @@ jobs:
     def test_ci_installs_native_tools_before_contract_checks(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
 
-        self.assertEqual(workflow.count("sudo apt-get install -y ripgrep"), 1)
+        jobs = yaml.safe_load(workflow)["jobs"]
+        for job_name, first_consumer in (
+            ("api-hygiene-rg13", "check-api-hygiene.mjs"),
+            ("control-room-contracts", "ci-resource-first-gates.sh"),
+        ):
+            with self.subTest(job=job_name):
+                steps = jobs[job_name]["steps"]
+                installations = [
+                    index for index, step in enumerate(steps)
+                    if "sudo apt-get install -y ripgrep" in step.get("run", "")
+                ]
+                consumers = [
+                    index for index, step in enumerate(steps)
+                    if first_consumer in step.get("run", "")
+                ]
+                self.assertEqual(len(installations), 1)
+                self.assertEqual(len(consumers), 1)
+                self.assertLess(installations[0], consumers[0])
         self.assertIn("sudo apt-get install -y libglu1-mesa", workflow)
         self.assertIn('test "$(/usr/bin/rg --version | head -n 1)" = "ripgrep 13.0.0"', workflow)
 
@@ -218,6 +238,46 @@ jobs:
         self.assertIn(install, rust_job)
         self.assertLess(rust_job.index(install), rust_job.index(run))
 
+    def test_rust_contracts_resolve_artifact_storage_before_running_tests(self) -> None:
+        workflow = yaml.safe_load((ROOT / ".github/workflows/bootstrap.yml").read_text())
+        steps = workflow["jobs"]["rust-contracts"]["steps"]
+        index = next(i for i, step in enumerate(steps)
+                     if step.get("name") == "Resolve storage for API artifact fixtures")
+        contract_indices = [
+            i for i, step in enumerate(steps)
+            if "cargo test" in step.get("run", "")
+            or "rust-quantity-api-cli-contracts" in step.get("run", "")
+        ]
+        self.assertTrue(contract_indices, "Rust contract steps must be present")
+        self.assertIn("Run Rust quantity, API and CLI contracts",
+                      [steps[i].get("name") for i in contract_indices])
+        for contract_index in contract_indices:
+            self.assertLess(index, contract_index,
+                            f"Storage must precede {steps[contract_index].get('name')}")
+        lines = steps[index]["run"].rstrip().splitlines()
+        self.assertEqual(lines[-1], "PY")
+        source = "\n".join(lines[1:-1])
+        reply = subprocess.CompletedProcess(
+            [], 0, json.dumps({"storage_root": str(ROOT.parent / "storage")}), ""
+        )
+        output = mock_open()
+        with patch.dict(os.environ, {"GITHUB_ENV": "fixture-env"}), \
+                patch("subprocess.run", return_value=reply) as resolver, \
+                patch("builtins.open", output):
+            exec(source, {})
+        self.assertIn("scripts/fullmag_storage.py", resolver.call_args.args[0])
+        self.assertIn("--create", resolver.call_args.args[0])
+        self.assertTrue(resolver.call_args.kwargs["check"])
+        output.assert_called_once_with("fixture-env", "a", encoding="utf-8")
+        output().write.assert_called_once_with(
+            f"FULLMAG_PROJECT_STORAGE_ROOT={ROOT.parent / 'storage'}\n"
+        )
+        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(2, [])), \
+                patch("builtins.open", mock_open()) as output:
+            with self.assertRaises(subprocess.CalledProcessError):
+                exec(source, {})
+            output.assert_not_called()
+
     def test_texture_compatibility_regressions_run_in_required_contract_jobs(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
         gate = (ROOT / "scripts/ci/run_frontend3d_required_gate.sh").read_text()
@@ -242,14 +302,12 @@ jobs:
             python_job,
         )
         self.assertNotIn("actions/checkout@v4", workflow)
-        self.assertEqual(
-            workflow.count("actions/checkout@v7"),
-            workflow.count("- name: Checkout"),
-        )
-        self.assertEqual(
-            workflow.count("actions/setup-node@v7"),
-            workflow.count("- name: Setup Node.js"),
-        )
+        references = _workflow_uses(workflow)
+        for action in ("actions/checkout", "actions/setup-node"):
+            action_references = [reference for reference in references
+                                 if reference.startswith(action + "@")]
+            self.assertTrue(action_references, f"Required action is missing: {action}")
+            self.assertEqual(set(action_references), {action + "@v7"})
         self.assertIn("actions/setup-python@v7", workflow)
         self.assertIn("actions/upload-artifact@v7", workflow)
         self.assertIn("pnpm/action-setup@v6", workflow)

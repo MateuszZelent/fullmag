@@ -37,15 +37,15 @@ use fullmag_engine::{
     TimeIntegrator, Vector3, MU0,
 };
 use fullmag_ir::{
-    EigenDampingPolicyIR, EigenNormalizationIR, EquilibriumSourceIR, FemEigenPlanIR, KSamplingIR,
-    OutputIR, SpinWaveBoundaryConditionIR, SpinWaveBoundaryKindIR,
+    EigenDampingPolicyIR, EigenNormalizationIR, EquilibriumSourceIR, FemEigenPlanIR, KPointIR,
+    KSamplingIR, OutputIR, SampleSelectorIR, SpinWaveBoundaryConditionIR, SpinWaveBoundaryKindIR,
 };
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use num_complex::Complex64;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 fn frozen_v2_record_fixture() -> AcceptedFemRelaxStageHandoffV2Record {
@@ -182,6 +182,45 @@ fn equilibrium_and_modal_identity_signatures_are_separated_by_semantics() {
 }
 
 #[test]
+fn equilibrium_and_modal_preimages_replay_all_identity_families() {
+    use crate::fem::equilibrium_identity::{
+        EquilibriumIdentitySignaturesV1, ModalIdentitySignaturesV1,
+    };
+    use sha2::{Digest, Sha256};
+
+    let plan = minimal_native_modal_plan();
+    let source = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    let modal = ModalIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    let families = [
+        ("EquilibriumMaterialSignaturePreimage.v1", &source.equilibrium_material_preimage_json,
+         &source.equilibrium_material_signature),
+        ("EquilibriumStaticPhysicsSignaturePreimage.v1", &source.equilibrium_static_physics_preimage_json,
+         &source.equilibrium_static_physics_signature),
+        ("EquilibriumBoundarySignaturePreimage.v1", &source.equilibrium_boundary_preimage_json,
+         &source.equilibrium_boundary_signature),
+        ("ModalOperatorSignaturePreimage.v1", &modal.modal_operator_preimage_json,
+         &modal.modal_operator_signature),
+        ("ModalDynamicBoundarySignaturePreimage.v1", &modal.modal_dynamic_boundary_preimage_json,
+         &modal.modal_dynamic_boundary_signature),
+    ];
+    for (namespace, preimage, recorded_digest) in families {
+        let decoded: serde_json::Value = serde_json::from_str(preimage).unwrap();
+        assert_eq!(decoded["schema_version"], namespace);
+        let replay = |bytes: &[u8]| {
+            let mut hash = Sha256::new();
+            hash.update(namespace.as_bytes());
+            hash.update([0]);
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+            format!("sha256:{:x}", hash.finalize())
+        };
+        assert_eq!(*recorded_digest, replay(preimage.as_bytes()));
+        assert_ne!(*recorded_digest, replay(format!("{preimage} ").as_bytes()),
+                   "all identity families must bind the exact serialized bytes");
+    }
+}
+
+#[test]
 fn equilibrium_identity_signatures_mutate_only_in_the_owning_source_family() {
     use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
 
@@ -247,6 +286,70 @@ fn equilibrium_identity_signatures_mutate_only_in_the_owning_source_family() {
     );
 }
 
+#[test]
+fn equilibrium_identity_separates_static_material_from_raw_modal_material_provenance() {
+    use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
+
+    let modal_plan = minimal_native_modal_plan();
+    let source_plan = relax_source_plan_from_eigen(&modal_plan);
+    let mut damping_variant = source_plan.clone();
+    damping_variant.material.damping = 0.5;
+
+    let baseline = EquilibriumIdentitySignaturesV1::from_relax_plan(&source_plan).unwrap();
+    let variant = EquilibriumIdentitySignaturesV1::from_relax_plan(&damping_variant).unwrap();
+    assert_eq!(
+        baseline.equilibrium_material_signature,
+        variant.equilibrium_material_signature,
+        "damping is dynamic and must not change the equilibrium material identity"
+    );
+    let baseline_raw = shared_domain_content_digest("material_signature", &source_plan.material)
+        .unwrap();
+    let variant_raw =
+        shared_domain_content_digest("material_signature", &damping_variant.material).unwrap();
+    assert_ne!(
+        baseline_raw, variant_raw,
+        "raw material provenance must retain the producer/consumer damping distinction"
+    );
+}
+
+#[test]
+fn equilibrium_uniaxial_identity_binds_signed_ku_and_canonical_rank_one_axis() {
+    use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
+    let mut plan = minimal_native_modal_plan();
+    let baseline = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    assert_eq!(baseline, EquilibriumIdentitySignaturesV1::from_relax_plan(
+        &relax_source_plan_from_eigen(&plan)).unwrap());
+    plan.material.uniaxial_anisotropy = Some(1000.0);
+    let ku = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    assert_eq!(ku, EquilibriumIdentitySignaturesV1::from_relax_plan(
+        &relax_source_plan_from_eigen(&plan)).unwrap());
+    assert_ne!(baseline.equilibrium_material_signature, ku.equilibrium_material_signature);
+    assert_eq!(baseline.equilibrium_static_physics_signature, ku.equilibrium_static_physics_signature);
+    for axis in [[0.0, 0.0, 2.0], [-0.0, 0.0, -4.0], [0.0, 0.0, f64::MAX]] {
+        plan.material.anisotropy_axis = Some(axis);
+        assert_eq!(ku, EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap());
+        assert_eq!(ku, EquilibriumIdentitySignaturesV1::from_relax_plan(
+            &relax_source_plan_from_eigen(&plan)).unwrap());
+    }
+    plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    assert_ne!(ku.equilibrium_material_signature,
+        EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap().equilibrium_material_signature);
+    plan.material.anisotropy_axis = None;
+    plan.material.uniaxial_anisotropy = Some(-1000.0);
+    assert_ne!(ku.equilibrium_material_signature,
+        EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap().equilibrium_material_signature);
+    for axis in [[0.0; 3], [f64::NAN, 0.0, 1.0], [f64::INFINITY, 0.0, 1.0]] {
+        plan.material.anisotropy_axis = Some(axis);
+        assert!(EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).is_err());
+    }
+    plan.material.anisotropy_axis = None;
+    plan.material.ms_field = Some(vec![800_000.0]);
+    assert!(EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).is_err());
+    plan.material.ms_field = None;
+    plan.material.uniaxial_anisotropy_k2 = Some(1.0);
+    assert!(EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).is_err());
+}
+
 fn certified_fields(node_count: usize) -> crate::types::CertifiedFemEquilibriumFields {
     let zeros = vec![[0.0, 0.0, 0.0]; node_count];
     crate::types::CertifiedFemEquilibriumFields::from_fields(
@@ -257,6 +360,406 @@ fn certified_fields(node_count: usize) -> crate::types::CertifiedFemEquilibriumF
         vec![0.0; node_count],
     )
     .expect("certified field fixture")
+}
+
+fn certified_fields_for_exact_producer_fixture(
+    plan: &FemEigenPlanIR,
+) -> crate::types::CertifiedFemEquilibriumFields {
+    let node_count = plan.mesh.nodes.len();
+    let zeros = vec![[0.0, 0.0, 0.0]; node_count];
+    if plan.material.uniaxial_anisotropy.is_some() {
+        crate::types::CertifiedFemEquilibriumFields::from_fields_with_anisotropy(
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros,
+            vec![0.0; node_count],
+        )
+    } else {
+        crate::types::CertifiedFemEquilibriumFields::from_fields(
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros,
+            vec![0.0; node_count],
+        )
+    }
+    .expect("exact producer field fixture")
+}
+
+struct ExactProducerFixture {
+    source_plan: fullmag_ir::FemPlanIR,
+    source_mesh: crate::types::FemMeshPayload,
+    completion: fullmag_ir::StageCompletionIR,
+    equilibrium_magnetization: Vec<[f64; 3]>,
+    accepted_fields: crate::types::CertifiedFemEquilibriumFields,
+    certified_fields: crate::types::CertifiedFemEquilibriumFields,
+    recomputed_certificate: crate::types::RecomputedFemLinearizationCertificateV1,
+    exact_artifacts: AcceptedFemRelaxExactArtifacts,
+    producer_provenance: FemRelaxationProducerProvenance,
+}
+
+fn exact_fixture_raw_sha256(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn exact_fixture_framed_sha256(namespace: &str, bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(namespace.as_bytes());
+    hash.update([0_u8]);
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    format!("sha256:{:x}", hash.finalize())
+}
+
+fn exact_producer_fixture(with_declared_ku: bool) -> ExactProducerFixture {
+    let mut modal_plan = minimal_native_modal_plan();
+    if with_declared_ku {
+        // Explicit Ku=0 remains the V2 family and must retain the anisotropy
+        // view throughout the producer/consumer replay.
+        modal_plan.material.uniaxial_anisotropy = Some(0.0);
+        modal_plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    }
+    exact_producer_fixture_for_plan(modal_plan)
+}
+
+fn exact_producer_fixture_for_plan(modal_plan: FemEigenPlanIR) -> ExactProducerFixture {
+    let with_declared_ku = modal_plan.material.uniaxial_anisotropy.is_some();
+    let source_plan = relax_source_plan_from_eigen(&modal_plan);
+    let source_mesh = crate::types::FemMeshPayload::from(&source_plan);
+    let equilibrium_magnetization = modal_plan.equilibrium_magnetization.clone();
+    let accepted_fields = certified_fields_for_exact_producer_fixture(&modal_plan);
+    let certified_fields = accepted_fields.clone();
+    let source_identity =
+        crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
+            &source_plan,
+        )
+        .expect("source identity fixture");
+    let certificate_schema = if with_declared_ku {
+        "RecomputedFemLinearizationCertificate.v2"
+    } else {
+        "RecomputedFemLinearizationCertificate.v1"
+    };
+    let provider = if with_declared_ku {
+        "native_fem_final_state_refresh.v2"
+    } else {
+        "native_fem_final_state_refresh.v1"
+    };
+    let mut recomputed_certificate =
+        crate::types::RecomputedFemLinearizationCertificateV1 {
+            schema_version: certificate_schema.to_string(),
+            status: "matched".to_string(),
+            recompute_provider: provider.to_string(),
+            node_count: source_mesh.nodes.len(),
+            equilibrium_content_sha256:
+                crate::types::recomputed_fem_equilibrium_content_sha256(
+                    &equilibrium_magnetization,
+                ),
+            mesh_topology_sha256: crate::types::fem_mesh_topology_fingerprint(&source_mesh),
+            equilibrium_material_signature: source_identity
+                .equilibrium_material_signature
+                .clone(),
+            equilibrium_static_physics_signature: source_identity
+                .equilibrium_static_physics_signature
+                .clone(),
+            equilibrium_boundary_signature: source_identity
+                .equilibrium_boundary_signature
+                .clone(),
+            accepted_fields_content_sha256: accepted_fields.content_sha256.clone(),
+            recomputed_fields_content_sha256: certified_fields.content_sha256.clone(),
+            max_h_ex_difference_a_per_m: 0.0,
+            max_h_demag_difference_a_per_m: 0.0,
+            max_h_ext_difference_a_per_m: 0.0,
+            max_h_anisotropy_difference_a_per_m: with_declared_ku.then_some(0.0),
+            max_h_eff_difference_a_per_m: 0.0,
+            max_phi_difference_a: 0.0,
+            field_absolute_tolerance_a_per_m:
+                crate::types::FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M,
+            field_relative_tolerance: crate::types::FEM_LINEARIZATION_FIELD_RELATIVE_TOLERANCE,
+            phi_absolute_tolerance_a: crate::types::FEM_LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A,
+            content_sha256: String::new(),
+        };
+    recomputed_certificate.content_sha256 = crate::types::
+        recomputed_fem_linearization_certificate_sha256(&recomputed_certificate)
+        .expect("certificate fixture digest");
+
+    let accepted_fields_json = serde_json::to_vec(&accepted_fields).expect("accepted JSON");
+    // Pretty bytes intentionally differ from the accepted endpoint bytes;
+    // both decode to the independently validated typed value.
+    let certified_fields_json =
+        serde_json::to_vec_pretty(&certified_fields).expect("certified JSON");
+    let recomputed_certificate_json =
+        serde_json::to_vec_pretty(&recomputed_certificate).expect("certificate JSON");
+    let (certified_path, certificate_path) =
+        crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+            &source_plan.material,
+        );
+    let accepted_path =
+        crate::types::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+            &source_plan.material,
+        );
+    let producer_provenance = fem_relaxation_producer_provenance_from_exact_artifacts(
+        "run-relax-exact",
+        "stage-relax-exact",
+        "flat_relax",
+        &source_plan,
+        &equilibrium_magnetization,
+        serde_json::json!({
+            "built_at_utc": "2026-10-01T00:00:00Z",
+            "git_commit": "fixture-producer",
+            "worktree_state": "clean",
+            "source_snapshot_sha256": "a".repeat(64),
+        }),
+        accepted_path,
+        &accepted_fields_json,
+        certified_path,
+        &certified_fields_json,
+        certificate_path,
+        &recomputed_certificate_json,
+    )
+    .expect("producer provenance fixture");
+
+    ExactProducerFixture {
+        source_plan,
+        source_mesh,
+        completion: accepted_relax_completion(),
+        equilibrium_magnetization,
+        accepted_fields,
+        certified_fields,
+        recomputed_certificate,
+        exact_artifacts: AcceptedFemRelaxExactArtifacts {
+            accepted_fields_json,
+            certified_fields_json,
+            recomputed_certificate_json,
+        },
+        producer_provenance,
+    }
+}
+
+fn verified_exact_handoff_from_fixture(
+    fixture: &ExactProducerFixture,
+    provenance: FemRelaxationProducerProvenance,
+    exact_artifacts: AcceptedFemRelaxExactArtifacts,
+) -> Result<AcceptedFemRelaxStageHandoff, RunError> {
+    let producer_provenance_json = serde_json::to_vec_pretty(&provenance).expect("producer JSON");
+    AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+        "run-relax-exact",
+        "stage-relax-exact",
+        "flat_relax",
+        true,
+        &fixture.source_plan,
+        &fixture.source_mesh,
+        &fixture.completion,
+        fixture.equilibrium_magnetization.clone(),
+        fixture.accepted_fields.clone(),
+        fixture.certified_fields.clone(),
+        fixture.recomputed_certificate.clone(),
+        exact_artifacts,
+        provenance,
+        producer_provenance_json,
+    )
+}
+
+#[test]
+fn exact_producer_handoff_replays_imported_v1_and_declared_ku_zero_v2() {
+    for with_declared_ku in [false, true] {
+        let fixture = exact_producer_fixture(with_declared_ku);
+        let expected_field_schema = if with_declared_ku {
+            "CertifiedFemEquilibriumFields.v2"
+        } else {
+            "CertifiedFemEquilibriumFields.v1"
+        };
+        assert_eq!(fixture.accepted_fields.schema_version, expected_field_schema);
+        assert_eq!(fixture.certified_fields.schema_version, expected_field_schema);
+
+        // Model the cross-run import boundary: the producer sidecar is
+        // serialized and decoded before the consumer constructs its handoff.
+        let imported_sidecar = serde_json::from_slice::<FemRelaxationProducerProvenance>(
+            &serde_json::to_vec_pretty(&fixture.producer_provenance)
+                .expect("producer sidecar JSON"),
+        )
+        .expect("producer sidecar import");
+        let handoff = verified_exact_handoff_from_fixture(
+            &fixture,
+            imported_sidecar.clone(),
+            fixture.exact_artifacts.clone(),
+        )
+        .expect("exact producer handoff should replay");
+        let published_sidecar = handoff
+            .producer_provenance_sidecar_bytes()
+            .expect("verified handoff must retain producer sidecar");
+        let published = serde_json::from_slice::<FemRelaxationProducerProvenance>(
+            &published_sidecar,
+        )
+        .expect("published producer sidecar");
+        assert_eq!(published, imported_sidecar);
+        assert_eq!(
+            published.payloads.accepted_fields.path,
+            crate::types::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+                &fixture.source_plan.material,
+            )
+        );
+        assert_eq!(
+            published.payloads.certified_fields.path,
+            crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+                &fixture.source_plan.material,
+            )
+            .0
+        );
+        assert_eq!(
+            published.payloads.recomputed_certificate.path,
+            crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+                &fixture.source_plan.material,
+            )
+            .1
+        );
+    }
+}
+
+#[test]
+fn exact_producer_handoff_preserves_imported_sidecar_bytes() {
+    let fixture = exact_producer_fixture(false);
+    let canonical = serde_json::to_vec_pretty(&fixture.producer_provenance)
+        .expect("producer sidecar JSON");
+    let mut imported_bytes = b"\n  ".to_vec();
+    imported_bytes.extend_from_slice(&canonical);
+    imported_bytes.extend_from_slice(b"\n");
+    let imported_sidecar = serde_json::from_slice::<FemRelaxationProducerProvenance>(
+        &imported_bytes,
+    )
+    .expect("producer sidecar import");
+
+    let handoff =
+        AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+            "run-relax-exact",
+            "stage-relax-exact",
+            "flat_relax",
+            true,
+            &fixture.source_plan,
+            &fixture.source_mesh,
+            &fixture.completion,
+            fixture.equilibrium_magnetization.clone(),
+            fixture.accepted_fields.clone(),
+            fixture.certified_fields.clone(),
+            fixture.recomputed_certificate.clone(),
+            fixture.exact_artifacts.clone(),
+            imported_sidecar,
+            imported_bytes.clone(),
+        )
+        .expect("exact producer handoff should retain imported bytes");
+
+    assert_eq!(
+        handoff
+            .producer_provenance_sidecar_bytes()
+            .expect("verified handoff must retain producer sidecar"),
+        imported_bytes
+    );
+}
+
+#[test]
+fn exact_producer_handoff_rejects_missing_foreign_and_corrupt_replay_evidence() {
+    let fixture = exact_producer_fixture(false);
+
+    let missing_sidecar = AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts(
+        "run-relax-exact",
+        "stage-relax-exact",
+        "flat_relax",
+        true,
+        &fixture.source_plan,
+        &fixture.source_mesh,
+        &fixture.completion,
+        fixture.equilibrium_magnetization.clone(),
+        fixture.accepted_fields.clone(),
+        fixture.certified_fields.clone(),
+        fixture.recomputed_certificate.clone(),
+        fixture.exact_artifacts.clone(),
+    )
+    .expect_err("exact bytes without producer sidecar must fail closed");
+    assert_eq!(
+        missing_sidecar.message,
+        "relax_stage_handoff_exact_producer_provenance_required"
+    );
+
+    let mut foreign_source = fixture.producer_provenance.clone();
+    foreign_source.source_stage_id = "foreign-relax-stage".to_string();
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            foreign_source,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "a sidecar from another producer stage must not be relabeled"
+    );
+
+    let mut corrupt_plan = fixture.producer_provenance.clone();
+    corrupt_plan.producer_plan_snapshot.preimage_json.push(' ');
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            corrupt_plan,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "a producer plan mutation without matching digests must fail"
+    );
+
+    let mut foreign_source_plan = fixture.source_plan.clone();
+    foreign_source_plan.mesh_name.push_str("-foreign");
+    let foreign_plan_bytes = serde_json::to_vec(&foreign_source_plan).expect("foreign plan JSON");
+    let foreign_plan_json = String::from_utf8(foreign_plan_bytes.clone()).expect("UTF-8 plan");
+    let mut foreign_plan = fixture.producer_provenance.clone();
+    foreign_plan.producer_plan_snapshot.preimage_json = foreign_plan_json;
+    foreign_plan.producer_plan_snapshot.raw_sha256 =
+        exact_fixture_raw_sha256(&foreign_plan_bytes);
+    foreign_plan.producer_plan_snapshot.framed_sha256 = exact_fixture_framed_sha256(
+        FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1,
+        &foreign_plan_bytes,
+    );
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            foreign_plan,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "a validly hashed producer plan from another source must not be relabeled"
+    );
+
+    let mut corrupt_build = fixture.producer_provenance.clone();
+    let uppercase_snapshot = corrupt_build
+        .producer_build_identity
+        .source_snapshot_sha256
+        .to_uppercase();
+    corrupt_build.producer_build_identity.source_snapshot_sha256 = uppercase_snapshot;
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            corrupt_build,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "noncanonical producer source snapshot must fail closed"
+    );
+
+    let mut corrupt_payloads = fixture.exact_artifacts.clone();
+    let mutation_index = corrupt_payloads.accepted_fields_json.len() - 2;
+    corrupt_payloads.accepted_fields_json[mutation_index] =
+        if corrupt_payloads.accepted_fields_json[mutation_index] == b'0' {
+            b'1'
+        } else {
+            b'0'
+        };
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            fixture.producer_provenance.clone(),
+            corrupt_payloads,
+        )
+        .is_err(),
+        "exact accepted payload byte mutation must fail before publication"
+    );
 }
 
 fn accepted_relax_completion() -> fullmag_ir::StageCompletionIR {
@@ -306,10 +809,12 @@ fn relax_source_plan_from_eigen(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR 
         enable_demag: plan.enable_demag,
         external_field: plan.external_field,
         antenna_zeeman_masks: Vec::new(),
+        solved_antenna_drive_bases: Vec::new(),
         field_drives: Vec::new(),
         field_drive_geometry_masks: Vec::new(),
         time_stage: Default::default(),
         current_modules: Vec::new(),
+        charge_transport_plans: Vec::new(),
         spin_transport_plans: Vec::new(),
         gyromagnetic_ratio: plan.gyromagnetic_ratio,
         precision: plan.precision,
@@ -796,6 +1301,7 @@ fn relaxed_initial_state_without_handoff_fails_before_materialization() {
         None,
         None,
         None,
+        None,
     )
     .expect_err("uncertified relaxed_initial_state must fail closed");
 
@@ -825,6 +1331,7 @@ fn provided_equilibrium_without_certificate_fails_before_materialization() {
         false,
         Some(&mut progress),
         0,
+        None,
         None,
         None,
         None,
@@ -910,6 +1417,8 @@ fn accepted_relax_stage_handoff_prepares_single_k_without_second_relaxation() {
 
     let prepared = prepare_single_k_stage_continuation(&plan, &handoff)
         .expect("same-mesh single-k target should accept the handoff");
+    validate_eigen_equilibrium_certificate(&prepared, None, Some(&handoff))
+        .expect("post-conversion provided source handoff must be revalidated");
     let (_problem, consumed_m0, relaxation_steps, _observables, _source) =
         materialize_equilibrium(&prepared, &prepared.equilibrium_magnetization, None)
             .expect("provided equilibrium should materialize without relaxation");
@@ -917,6 +1426,94 @@ fn accepted_relax_stage_handoff_prepares_single_k_without_second_relaxation() {
     assert_eq!(prepared.equilibrium, EquilibriumSourceIR::Provided);
     assert_eq!(consumed_m0, accepted_m0);
     assert_eq!(relaxation_steps, 0);
+}
+
+#[test]
+fn accepted_relax_stage_handoff_revalidates_provided_multik_path_and_rejects_sweeps() {
+    let mut plan = minimal_native_modal_plan();
+    plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("a path may reuse the same accepted static relaxation");
+
+    let mut provided = plan.clone();
+    provided.equilibrium = EquilibriumSourceIR::Provided;
+    provided.equilibrium_magnetization = handoff.equilibrium_magnetization.clone();
+    handoff
+        .validate_provided_continuation_plan(&provided)
+        .expect("provided multi-k continuation must retain the source binding");
+    validate_eigen_equilibrium_certificate(&provided, None, Some(&handoff))
+        .expect("the shared certificate validator must accept the bound path");
+    assert!(
+        handoff.validate_target_plan(&provided).is_err(),
+        "the pre-conversion validator must not accept a Provided path"
+    );
+
+    let mut m0_drift = provided.clone();
+    m0_drift.equilibrium_magnetization[0] = [0.0, 1.0, 0.0];
+    let error = validate_eigen_equilibrium_certificate(&m0_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with forged m0 must fail closed");
+    assert!(error.message.contains("equilibrium_content_mismatch"));
+
+    let mut material_drift = provided.clone();
+    material_drift.material.saturation_magnetisation *= 1.01;
+    let error = validate_eigen_equilibrium_certificate(&material_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with material drift must fail closed");
+    assert!(error.message.contains("equilibrium_material_signature_mismatch"));
+
+    let mut static_drift = provided.clone();
+    static_drift.external_field = Some([1.0, 0.0, 0.0]);
+    let error = validate_eigen_equilibrium_certificate(&static_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with static-field drift must fail closed");
+    assert!(error
+        .message
+        .contains("equilibrium_static_physics_signature_mismatch"));
+
+    let mut boundary_drift = provided.clone();
+    boundary_drift.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+        factor: 2.0,
+        grading: 1.0,
+        boundary_marker: 99,
+        bc_kind: None,
+        robin_beta_mode: None,
+        robin_beta_factor: None,
+        shape: None,
+        factor_source: None,
+        boundary_marker_source: None,
+    });
+    let error = validate_eigen_equilibrium_certificate(&boundary_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with boundary drift must fail closed");
+    assert!(error.message.contains("equilibrium_boundary_signature_mismatch"));
+
+    let mut mesh_drift = provided.clone();
+    mesh_drift.mesh.nodes[0][0] += 1.0e-12;
+    let error = validate_eigen_equilibrium_certificate(&mesh_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with mesh drift must fail closed");
+    assert!(error.message.contains("mesh_identity_mismatch"));
+
+    let mut sweep = provided;
+    sweep.bias_field_samples.push(fullmag_ir::FemEigenBiasFieldSamplePlanIR {
+        sample_index: 0,
+        field_a_per_m: [1.0, 0.0, 0.0],
+        equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+        execution: exact_k0_resolution(fullmag_ir::ExecutionDevice::Cpu),
+    });
+    let error = validate_eigen_equilibrium_certificate(&sweep, None, Some(&handoff))
+        .expect_err("a provided continuation must not reuse one m0 for a field sweep");
+    assert!(error
+        .message
+        .contains("provided_continuation_rejects_bias_field_sweep"));
 }
 
 #[test]
@@ -1184,6 +1781,8 @@ fn gpu_stage_handoff_rejects_plan_outside_native_shared_domain_lane_before_progr
         &[],
         Some(&mut progress),
         &handoff,
+        0,
+        None,
     )
     .expect_err("an unsupported prepared GPU plan must fail before solver execution");
 
@@ -1387,7 +1986,7 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
         provenance: ExecutionProvenance::default(),
     };
 
-    bind_stage_continuation_artifacts(&mut run, &handoff)
+    bind_stage_continuation_artifacts(&mut run, &plan, &handoff)
         .expect("accepted handoff should bind artifacts");
     let summary: serde_json::Value =
         serde_json::from_slice(&run.auxiliary_artifacts[0].bytes).unwrap();
@@ -1412,10 +2011,18 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         mode["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        mode["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
         summary["solver_diagnostics"]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        summary["solver_diagnostics"]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1424,6 +2031,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         summary["modes"][0]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        summary["modes"][0]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1432,6 +2043,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         solver["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        solver["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1440,6 +2055,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         spectrum_v3["samples"][0]["modes"][0]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        spectrum_v3["samples"][0]["modes"][0]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1468,7 +2087,8 @@ fn accepted_relax_handoff_round_trips_through_summary_provenance() {
     )
     .expect("accepted linearization should produce a handoff");
     let diagnostics = serde_json::json!({
-        "source_mesh_topology_sha256": expected.source_mesh_topology_sha256(),
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
+        "relax_to_eigen_source_mesh_topology_sha256": expected.source_mesh_topology_sha256(),
         "relax_to_eigen_handoff_sha256": expected.content_sha256(),
         "equilibrium_artifact_sha256": expected.equilibrium_artifact_sha256,
         "linearization_state_sha256": expected.linearization_state_sha256,
@@ -1503,6 +2123,91 @@ fn accepted_relax_handoff_round_trips_through_summary_provenance() {
 }
 
 #[test]
+fn accepted_relax_handoff_promotes_stage_provenance_for_path_reuse() {
+    let plan = minimal_native_modal_plan();
+    let equilibrium = plan.equilibrium_magnetization.clone();
+    let equilibrium_artifact = format!("sha256:{}", "a".repeat(64));
+    let linearization_state = format!("sha256:{}", "b".repeat(64));
+    let stage_handoff_content = format!("sha256:{}", "c".repeat(64));
+    let source_topology = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .expect("fixture topology should be fingerprintable");
+    assert_ne!(source_topology, plan.mesh.topology_fingerprint_v6());
+    let diagnostics = serde_json::json!({
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
+        "relax_to_eigen_source_mesh_topology_sha256": source_topology,
+        "relax_to_eigen_handoff_sha256": stage_handoff_content,
+        "equilibrium_artifact_sha256": equilibrium_artifact,
+        "linearization_state_sha256": linearization_state,
+        "relax_to_eigen_handoff": {
+            "schema_version": "AcceptedFemRelaxStageHandoff.v3",
+            "source_mesh_topology_sha256": source_topology,
+            "content_sha256": stage_handoff_content,
+        },
+    });
+    let run = ExecutedRun {
+        result: RunResult {
+            status: RunStatus::Completed,
+            steps: Vec::new(),
+            final_magnetization: equilibrium,
+            completion: None,
+        },
+        initial_magnetization: Vec::new(),
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        auxiliary_artifacts: vec![json_artifact(
+            "eigen/metadata/eigen_summary.json",
+            &serde_json::json!({"solver_diagnostics": diagnostics}),
+        )
+        .expect("summary fixture should serialize")],
+        provenance: ExecutionProvenance::default(),
+    };
+
+    let restored = accepted_relax_to_eigen_handoff_from_run(&plan, &run)
+        .expect("accepted stage handoff should be promoted for path reuse");
+
+    assert_eq!(
+        restored.source_mesh_topology_sha256(),
+        plan.mesh.topology_fingerprint_v6()
+    );
+    assert_ne!(restored.content_sha256(), stage_handoff_content);
+}
+
+#[test]
+fn k_path_reuses_original_relax_certificate_for_every_wavevector() {
+    let plan = minimal_native_modal_plan();
+    let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("accepted relaxation should create a reusable path certificate");
+
+    assert!(
+        super::eigen_path::relax_stage_handoff_for_path_sample(&plan, Some(&handoff)).is_some(),
+        "a k path must retain the accepted Relax evidence after its first sample"
+    );
+    assert!(
+        !super::eigen_path::reuse_promoted_eigen_handoff(true, true),
+        "the promoted Eigen identity must not change a stage-certified point to Provided"
+    );
+    assert!(
+        super::eigen_path::reuse_promoted_eigen_handoff(false, true),
+        "artifact-backed paths without a Relax-stage certificate may reuse the promoted identity"
+    );
+
+    let mut field_sweep = plan;
+    field_sweep.bias_field_samples = vec![bias_field_sample(
+        0,
+        [10_000.0, 0.0, 0.0],
+        fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+    )];
+    assert!(
+        super::eigen_path::relax_stage_handoff_for_path_sample(&field_sweep, Some(&handoff))
+            .is_none(),
+        "a field sweep must compute and certify its own equilibrium per sample"
+    );
+}
+
+#[test]
 fn native_modal_progress_json_maps_to_runtime_progress() {
     let event = native_modal_progress_event(
             r#"{"schema_version":"fem_frequency_domain_progress.v1","solver_phase":"solving_shift_invert","candidate_mode_count":4,"accepted_mode_count":2,"outer_iteration":7,"max_outer_iterations":300,"linear_iteration":11,"current_residual_relative_l2":1.25e-9}"#,
@@ -1533,8 +2238,10 @@ fn native_modal_window_progress_exposes_phase_and_global_subwindow_position() {
     .expect("valid native window progress should map");
 
     assert_eq!(event.phase, "solving_native_frequency_window_refinement");
-    assert_eq!(event.iteration, Some(23));
-    assert_eq!(event.max_iterations, Some(50));
+    assert_eq!(event.iteration, Some(17));
+    assert_eq!(event.max_iterations, Some(300));
+    assert_eq!(event.current_subwindow, Some(23));
+    assert_eq!(event.total_subwindows, Some(50));
     assert!((event.percent - 55.7).abs() < 1.0e-12);
     assert_eq!(event.candidate_modes, 8);
     assert_eq!(event.computed_modes, 4);
@@ -1805,6 +2512,27 @@ fn bias_field_sweep_run_fixture(sample_index: usize, status: RunStatus) -> Execu
         auxiliary_artifacts,
         provenance: ExecutionProvenance::default(),
     }
+}
+
+#[test]
+fn bias_field_relaxation_decoder_rejects_duplicate_exact_artifact_paths() {
+    let mut run = bias_field_sweep_run_fixture(2, RunStatus::Completed);
+    let duplicate = AuxiliaryArtifact {
+        relative_path: "equilibrium/duplicate-relaxation-payload.json".to_string(),
+        bytes: br#"{}"#.to_vec(),
+    };
+    run.auxiliary_artifacts.push(duplicate.clone());
+    run.auxiliary_artifacts.push(duplicate);
+
+    let error = super::eigen_execution::decode_bias_field_relaxation_artifact_with_bytes::<
+        serde_json::Value,
+    >(
+        &run,
+        "equilibrium/duplicate-relaxation-payload.json",
+        2,
+    )
+    .expect_err("duplicate exact artifact paths must fail closed");
+    assert!(error.message.contains("duplicate artifacts"));
 }
 
 #[test]
@@ -3282,7 +4010,7 @@ fn modal_v6_cross_language_golden_matches_native_preimage_and_class_digests() {
     assert!(corner_error.message.contains("corner_closure_incomplete"));
 }
 
-fn minimal_native_modal_plan() -> FemEigenPlanIR {
+pub(super) fn minimal_native_modal_plan() -> FemEigenPlanIR {
     FemEigenPlanIR {
         mesh_build_report: None,
         mesh_name: "native_modal_mesh".to_string(),
@@ -3372,6 +4100,7 @@ fn minimal_native_modal_plan() -> FemEigenPlanIR {
         mode_tracking: None,
         dispersion_validation: None,
         k0_kittel_validation: None,
+        solver_policy: None,
     }
 }
 
@@ -3385,6 +4114,27 @@ fn bounded_k0_execution_plan() -> FemEigenPlanIR {
     plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
         k_vector: [0.0, 0.0, 0.0],
     });
+    plan
+}
+
+fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
+    let mut plan = bounded_k0_execution_plan();
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 1.0e8,
+        frequency_max_hz: 5.0e9,
+    };
+    configure_x_floquet_request(&mut plan);
+    // The shared-domain fixture carries both x/y geometric pair sets. The
+    // authored Floquet request must match all of them, including zero phase
+    // along y when k points along x.
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
+        unreachable!("configured Floquet fixture has explicit boundary intent");
+    };
+    config.boundary_pair_id = None;
+    config.pair_ids = vec!["x_faces".to_string(), "y_faces".to_string()];
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
     plan
 }
 
@@ -3408,6 +4158,22 @@ fn exact_k0_resolution(
         fallback_used: false,
         fallback_reason: None,
         selection_reason: "test.exact_k0_resolution".to_string(),
+    }
+}
+
+fn exact_floquet_dynamic_demag_resolution(
+    requested_device: fullmag_ir::ExecutionDevice,
+) -> fullmag_ir::FemEigenExecutionResolutionIR {
+    fullmag_ir::FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        requested_precision: fullmag_ir::ExecutionPrecision::Double,
+        resolved_precision: fullmag_ir::ExecutionPrecision::Double,
+        requested_engine: fullmag_ir::FemEigenEngineIR::Auto,
+        resolved_engine: fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+        fallback_used: false,
+        fallback_reason: None,
+        selection_reason: "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu".to_string(),
     }
 }
 
@@ -3676,6 +4442,81 @@ fn planned_k0_gpu_resolution_resists_cpu_environment_and_dispatches_device_krylo
 }
 
 #[test]
+fn planned_floquet_dynamic_demag_cpu_resolution_dispatches_distinct_engine() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("the materialized Floquet dynamic-demag resolution must validate")
+        .expect("bounded Floquet dynamic-demag plans must have an exact execution");
+
+    assert_eq!(execution.lane(), FemEigenExecutionLane::Cpu);
+    assert_eq!(
+        execution.native_target(),
+        Some(native_fem::NativeModalExecutionTarget::ProductionCpu)
+    );
+    assert_eq!(execution.engine_id(), "floquet_airbox_cpu_schur_slepc");
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_nearest_target_dispatches_same_cpu_engine() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    plan.target = fullmag_ir::EigenTargetIR::Nearest {
+        frequency_hz: 2.0e9,
+    };
+    plan.k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("nearest Floquet dynamic-demag resolution must validate")
+        .expect("nearest Floquet path must retain the exact CPU execution");
+
+    assert_eq!(execution.lane(), FemEigenExecutionLane::Cpu);
+    assert_eq!(
+        execution.native_target(),
+        Some(native_fem::NativeModalExecutionTarget::ProductionCpu)
+    );
+    assert_eq!(execution.engine_id(), "floquet_airbox_cpu_schur_slepc");
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_rejects_gpu_resolution_without_fallback() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let mut resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
+    resolution.resolved_device = fullmag_ir::ExecutionDevice::Gpu;
+    resolution.resolved_engine = fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov;
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("dynamic Floquet demag is CPU-only and must reject GPU resolution");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
+}
+
+#[test]
+fn planned_k0_rejects_floquet_dynamic_demag_resolution_scope() {
+    let plan = bounded_k0_execution_plan();
+    let mut resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    resolution.selection_reason = "test.floquet_dynamic_demag_resolution".to_string();
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("a plain K0 plan must not accept the Floquet dynamic-demag engine");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
+}
+
+#[test]
 fn planned_k0_runtime_capabilities_and_session_report_one_exact_engine() {
     for (device, expected_runtime_engine, expected_exact_engine, expected_accelerator) in [
         (
@@ -3820,11 +4661,22 @@ fn all_active_planned_entrypoints_preserve_exact_k0_dispatch_and_persisted_prove
             "{route} must not re-enter the generic FEM resolver"
         );
 
-        let metadata: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(output_dir.join("metadata.json"))
-                .expect("entrypoint must persist metadata.json"),
-        )
-        .expect("metadata.json must contain valid JSON");
+        let generation = crate::artifact_generation::capture(&output_dir)
+            .expect("entrypoint generation marker must be readable")
+            .expect("FEM eigen entrypoint must publish an artifact generation");
+        assert!(
+            generation.is_immutable(),
+            "FEM eigen metadata must be read from the immutable v2 generation"
+        );
+        assert!(
+            !output_dir.join("metadata.json").exists(),
+            "immutable FEM eigen publication must not depend on a mutable root metadata alias"
+        );
+        let metadata_bytes = generation
+            .read_member(&output_dir, "metadata.json")
+            .expect("entrypoint generation must contain captured metadata.json");
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&metadata_bytes).expect("captured metadata.json must be valid JSON");
         let provenance = &metadata["execution_provenance"];
         assert_eq!(provenance["execution_engine"], "fem_eigen_cpu_baseline");
         assert_eq!(
@@ -4184,6 +5036,42 @@ fn add_minimal_shared_domain_periodic_airbox(plan: &mut FemEigenPlanIR) {
     });
 }
 
+fn eight_magnetic_node_periodic_airbox_modal_plan() -> FemEigenPlanIR {
+    let mut plan = minimal_native_modal_plan();
+    plan.mesh = modal_v6_xy_shared_domain_mesh();
+    plan.mesh_parts = modal_v6_xy_mesh_parts();
+    plan.mesh_name = plan.mesh.mesh_name.clone();
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Config(
+        fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: SpinWaveBoundaryKindIR::Periodic,
+            boundary_pair_id: None,
+            pair_ids: vec!["x_faces".to_string(), "y_faces".to_string()],
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        },
+    );
+    plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+        factor: 2.0,
+        grading: 1.2,
+        boundary_marker: 99,
+        bc_kind: Some("robin".to_string()),
+        robin_beta_mode: Some("dipole".to_string()),
+        robin_beta_factor: Some(2.0),
+        shape: Some("bbox".to_string()),
+        factor_source: Some("test".to_string()),
+        boundary_marker_source: Some("test".to_string()),
+    });
+    plan
+}
+
 #[test]
 fn modal_participation_context_aggregates_same_object_parts_by_markers() {
     let mut plan = minimal_native_modal_plan();
@@ -4220,6 +5108,20 @@ fn add_x_floquet_pair_to_plan(plan: &mut FemEigenPlanIR) {
         node_a: 0,
         node_b: 1,
     }];
+    configure_x_floquet_request(plan);
+}
+
+fn add_x_floquet_shared_domain_airbox_to_plan(plan: &mut FemEigenPlanIR) {
+    add_minimal_shared_domain_periodic_airbox(plan);
+    configure_x_floquet_request(plan);
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
+        unreachable!("the x-Floquet fixture installs an explicit boundary configuration");
+    };
+    config.boundary_pair_id = None;
+    config.pair_ids = vec!["x_faces".to_string(), "y_faces".to_string()];
+}
+
+fn configure_x_floquet_request(plan: &mut FemEigenPlanIR) {
     plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
         kind: SpinWaveBoundaryKindIR::Floquet,
         boundary_pair_id: Some("x_faces".to_string()),
@@ -4244,7 +5146,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         "equilibrium_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "linearization_state_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "relax_to_eigen_handoff_sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        "source_mesh_topology_sha256": plan.mesh.topology_fingerprint_v6(),
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
         "periodic_mesh_certificate_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     });
     let mut legacy_mode = serde_json::json!({
@@ -4316,6 +5218,8 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     assert!(spectrum_v2["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
+    assert_eq!(spectrum_v2["samples"][0]["sample_id"], "k-sample-0000");
+    assert!(spectrum_v2["samples"][0].get("method_evidence").is_none());
     assert_eq!(spectrum_v2["solve_succeeded"], true);
     assert_eq!(spectrum_v2["fields_available"], true);
     assert_eq!(spectrum_v2["spectrum_completeness"], "selected_only");
@@ -4326,7 +5230,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     );
     assert_eq!(
         spectrum_v2["candidate_identity"]["topology_fingerprint"],
-        plan.mesh.topology_fingerprint_v6()
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
     );
     let spectrum_v3 = artifacts
         .iter()
@@ -4338,11 +5242,16 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         spectrum_v3["samples"][0]["modes"][0]["component_participation"]["status"],
         "unavailable"
     );
+    assert_eq!(spectrum_v3["samples"][0]["sample_id"], "k-sample-0000");
     let manifest = artifacts
         .iter()
         .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
         .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
         .expect("frequency-domain manifest must be emitted");
+    assert_eq!(manifest["spectrum_output_scopes"], serde_json::json!([]));
+    assert!(artifacts
+        .iter()
+        .any(|artifact| artifact.relative_path == "eigen/spectrum.v2.json"));
     assert_eq!(
         manifest["equilibrium_identity"],
         provenance["equilibrium_artifact_sha256"]
@@ -4389,7 +5298,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         nested["source_mesh_identity"],
         serde_json::json!({
             "mesh_id": plan.mesh_name,
-            "topology_fingerprint": plan.mesh.topology_fingerprint_v6(),
+            "topology_fingerprint": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
             "indexing": "full_domain_node_order",
             "node_count": plan.mesh.nodes.len(),
         })
@@ -4405,6 +5314,416 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         nested["payload_sha256"],
         format!("sha256:{:x}", Sha256::digest(&chunk.bytes))
     );
+    assert_eq!(nested["requested_fields"], serde_json::json!(["mode"]));
+    assert_eq!(
+        manifest["artifacts"]["mode_output_selection_path"],
+        "eigen/mode_output_selection.v1.json"
+    );
+    let default_selection = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/mode_output_selection.v1.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("default mode request should publish its field selection");
+    assert_eq!(
+        default_selection["field_selections"],
+        serde_json::json!([{
+            "field": "mode",
+            "sample_index": 0,
+            "raw_mode_indices": [0],
+        }])
+    );
+
+    let mode_for_sample_zero = OutputIR::EigenMode {
+        field: "mode".to_string(),
+        all_modes: false,
+        indices: vec![0],
+        branches: vec![],
+        sample_selector: Some(SampleSelectorIR {
+            sample_indices: vec![0],
+            sample_labels: vec![],
+        }),
+    };
+    let mode_for_sample_one = OutputIR::EigenMode {
+        field: "mode_complex".to_string(),
+        all_modes: false,
+        indices: vec![1],
+        branches: vec![],
+        sample_selector: Some(SampleSelectorIR {
+            sample_indices: vec![1],
+            sample_labels: vec![],
+        }),
+    };
+    let global_mode_outputs = [mode_for_sample_zero, mode_for_sample_one];
+    let mut mode_one = legacy_mode.clone();
+    mode_one["index"] = serde_json::json!(1);
+    let mut shared_summary = summary.clone();
+    shared_summary["modes"] = serde_json::json!([legacy_mode.clone(), mode_one.clone()]);
+    let shared_requested_modes = BTreeSet::from([0_u32, 1_u32]);
+
+    let mut sample_zero_artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &legacy_mode)
+            .expect("sample zero legacy mode should serialize"),
+        json_artifact("eigen/modes/mode_0001.json", &mode_one)
+            .expect("second legacy candidate should serialize"),
+    ];
+    write_eigen_v2_bundle_with_outputs(
+        &plan,
+        &shared_summary,
+        &shared_requested_modes,
+        &mut sample_zero_artifacts,
+        0,
+        &global_mode_outputs,
+        false,
+    )
+    .expect("sample zero mode request should write from the shared candidate pool");
+    let sample_zero_selection = sample_zero_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/mode_output_selection.v1.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("sample zero field selection should be published");
+    assert_eq!(
+        sample_zero_selection["field_selections"],
+        serde_json::json!([{
+            "field": "mode",
+            "sample_index": 0,
+            "raw_mode_indices": [0],
+        }])
+    );
+    assert_eq!(sample_zero_selection["payloads"].as_array().unwrap().len(), 1);
+    assert_eq!(sample_zero_selection["payloads"][0]["field"], "mode");
+    assert_eq!(sample_zero_selection["payloads"][0]["sample_index"], 0);
+    assert_eq!(sample_zero_selection["payloads"][0]["raw_mode_index"], 0);
+    let sample_zero_metadata = sample_zero_artifacts
+        .iter()
+        .find(|artifact| {
+            artifact.relative_path == "eigen/modes/sample_0000/mode_0000.json"
+        })
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("sample zero selected metadata should be backed");
+    assert_eq!(
+        sample_zero_metadata["requested_fields"],
+        serde_json::json!(["mode"])
+    );
+    assert!(
+        sample_zero_artifacts.iter().all(|artifact| {
+            artifact.relative_path != "eigen/modes/sample_0000/mode_0001.json"
+                && artifact.relative_path
+                    != "eigen/mode_fields/sample_0000/mode_0001/vector.bin"
+        }),
+        "sample zero must not publish its mode_complex/raw-mode-1 candidate"
+    );
+    let sample_zero_payload = sample_zero_artifacts
+        .iter()
+        .find(|artifact| {
+            artifact.relative_path
+                == "eigen/mode_fields/sample_0000/mode_0000/vector.bin"
+        })
+        .expect("sample zero selection should link a real vector payload");
+    assert_eq!(
+        sample_zero_selection["payloads"][0]["payload_sha256"],
+        format!("sha256:{:x}", Sha256::digest(&sample_zero_payload.bytes))
+    );
+
+    let mut sample_one_artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &legacy_mode)
+            .expect("first legacy candidate should serialize"),
+        json_artifact("eigen/modes/mode_0001.json", &mode_one)
+            .expect("sample one legacy mode should serialize"),
+    ];
+    write_eigen_v2_bundle_with_outputs(
+        &plan,
+        &shared_summary,
+        &shared_requested_modes,
+        &mut sample_one_artifacts,
+        1,
+        &global_mode_outputs,
+        false,
+    )
+    .expect("sample one complex mode request should write from the shared candidate pool");
+    let sample_one_selection = sample_one_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/mode_output_selection.v1.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("sample one field selection should be published");
+    assert_eq!(
+        sample_one_selection["field_selections"],
+        serde_json::json!([{
+            "field": "mode_complex",
+            "sample_index": 1,
+            "raw_mode_indices": [1],
+        }])
+    );
+    assert_eq!(sample_one_selection["payloads"].as_array().unwrap().len(), 1);
+    assert_eq!(sample_one_selection["payloads"][0]["field"], "mode_complex");
+    assert_eq!(sample_one_selection["payloads"][0]["sample_index"], 1);
+    assert_eq!(sample_one_selection["payloads"][0]["raw_mode_index"], 1);
+    let sample_one_metadata = sample_one_artifacts
+        .iter()
+        .find(|artifact| {
+            artifact.relative_path == "eigen/modes/sample_0001/mode_0001.json"
+        })
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("sample one selected metadata should be backed");
+    assert_eq!(
+        sample_one_metadata["requested_fields"],
+        serde_json::json!(["mode_complex"])
+    );
+    assert_eq!(
+        sample_one_metadata["field_output_selection_path"],
+        "eigen/mode_output_selection.v1.json"
+    );
+    assert!(
+        sample_one_artifacts.iter().all(|artifact| {
+            artifact.relative_path != "eigen/modes/sample_0001/mode_0000.json"
+                && artifact.relative_path
+                    != "eigen/mode_fields/sample_0001/mode_0000/vector.bin"
+        }),
+        "sample one must not publish its mode/raw-mode-0 candidate"
+    );
+    let unsupported_output = OutputIR::EigenMode {
+        field: "mode_real".to_string(),
+        all_modes: false,
+        indices: vec![0],
+        branches: vec![],
+        sample_selector: None,
+    };
+    let mut unsupported_artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &legacy_mode)
+            .expect("sentinel legacy mode should serialize"),
+    ];
+    let unsupported_before = unsupported_artifacts[0].bytes.clone();
+    let unsupported_error = write_eigen_v2_bundle_with_outputs(
+        &plan,
+        &summary,
+        &BTreeSet::from([0_u32]),
+        &mut unsupported_artifacts,
+        0,
+        &[unsupported_output],
+        false,
+    )
+    .expect_err("unsupported field must be rejected before artifacts are written");
+    assert!(unsupported_error.message.contains("unsupported"));
+    assert_eq!(unsupported_artifacts.len(), 1);
+    assert_eq!(unsupported_artifacts[0].relative_path, "eigen/modes/mode_0000.json");
+    assert_eq!(unsupported_artifacts[0].bytes, unsupported_before);
+
+    let unresolved_branch_output = OutputIR::EigenMode {
+        field: "mode".to_string(),
+        all_modes: false,
+        indices: vec![],
+        branches: vec![17],
+        sample_selector: None,
+    };
+    let mut unresolved_branch_artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &legacy_mode)
+            .expect("sentinel legacy mode should serialize"),
+    ];
+    let unresolved_branch_before = unresolved_branch_artifacts[0].bytes.clone();
+    let unresolved_branch_error = write_eigen_v2_bundle_with_outputs(
+        &plan,
+        &summary,
+        &BTreeSet::from([0_u32]),
+        &mut unresolved_branch_artifacts,
+        0,
+        &[unresolved_branch_output],
+        false,
+    )
+    .expect_err("direct writer must not alias branch IDs to raw mode IDs");
+    assert!(unresolved_branch_error.message.contains("branch selectors"));
+    assert_eq!(unresolved_branch_artifacts.len(), 1);
+    assert_eq!(
+        unresolved_branch_artifacts[0].bytes,
+        unresolved_branch_before
+    );
+
+    let scoped_outputs = [
+        OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope: Some(fullmag_ir::EigenSpectrumScopeIR::PerSample),
+        },
+        OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope: Some(fullmag_ir::EigenSpectrumScopeIR::Global),
+        },
+        OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![0],
+            branches: Vec::new(),
+            sample_selector: None,
+        },
+    ];
+    let mut scoped_artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &legacy_mode)
+            .expect("legacy mode artifact should serialize for scoped output"),
+    ];
+    write_eigen_v2_bundle_with_outputs(
+        &plan,
+        &summary,
+        &BTreeSet::from([0_u32]),
+        &mut scoped_artifacts,
+        0,
+        &scoped_outputs,
+        false,
+    )
+    .expect("native single-k writer should preserve both spectrum output scopes");
+    let scoped_manifest = scoped_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("scoped native manifest should be valid JSON");
+    assert_eq!(
+        scoped_manifest["spectrum_output_scopes"],
+        serde_json::json!(["per_sample", "global"])
+    );
+    for path in [
+        "eigen/spectrum.v2.json",
+        "eigen/spectrum.v3.json",
+        "eigen/branches.v2.json",
+        "eigen/mode_output_selection.v1.json",
+    ] {
+        let baseline_bytes = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == path)
+            .unwrap_or_else(|| panic!("baseline writer should emit {path}"))
+            .bytes
+            .clone();
+        let scoped_bytes = scoped_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == path)
+            .unwrap_or_else(|| panic!("scoped writer should emit {path}"))
+            .bytes
+            .clone();
+        assert_eq!(
+            scoped_bytes, baseline_bytes,
+            "adding spectrum scopes must not change artifact bytes at {path}"
+        );
+    }
+}
+
+#[test]
+fn native_eigen_v2_persists_certified_floquet_potential_binary_reference() {
+    let plan = minimal_native_modal_plan();
+    let values = [
+        Complex64::new(1.0, -2.0),
+        Complex64::new(3.0, -4.0),
+        Complex64::new(5.0, -6.0),
+        Complex64::new(7.0, -8.0),
+    ];
+    let potential_bytes = floquet_potential_payload_bytes(&values)
+        .expect("finite even Floquet coefficients should serialize");
+    let mode = serde_json::json!({
+        "index": 0,
+        "frequency_hz": 1.0e9,
+        "frequency_real_hz": 1.0e9,
+        "frequency_imag_hz": 0.0,
+        "angular_frequency_rad_per_s": std::f64::consts::TAU * 1.0e9,
+        "omega_rad_s": std::f64::consts::TAU * 1.0e9,
+        "eigenvalue_real": 0.0,
+        "eigenvalue_imag": std::f64::consts::TAU * 1.0e9,
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "residual_norm": 1.0e-10,
+        "residual_absolute_l2": 1.0e-10,
+        "residual_relative_l2": 1.0e-10,
+        "residual_linf": 1.0e-10,
+        "mass_norm": 1.0,
+        "tangent_leakage_mean_abs": 0.0,
+        "tangent_leakage_max_abs": 0.0,
+        "tangent_leakage_weighted_relative_l2": 0.0,
+        "phasor_convention": "exp_plus_i_omega_t",
+        "eigenvalue_mapping": "lambda_imag_positive_frequency",
+        "gamma_rad_s_T": 1.0,
+        "gamma0_rad_s_per_A_m": 2.211e5,
+        "mu0_T_m_per_A": MU0,
+        "dominant_polarization": "uniform",
+        "k_vector": [0.0, 0.0, 0.0],
+        "real": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]],
+        "imag": [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]],
+        "amplitude": [1.0, 1.0, 1.0, 1.0],
+        "floquet_descriptor_certified": true,
+        "floquet_geometric_bc_certified": false,
+        "potential_representation": "doubled_real_split_complex_coefficients",
+        "magnetic_relative_residual": 1.0e-10,
+        "potential_relative_residual": 2.0e-10,
+        "potential_dof_count": values.len(),
+    });
+    let summary = serde_json::json!({
+        "solver_kind": "reference_modal_fixture",
+        "modes": [mode.clone()],
+    });
+    let potential_path = floquet_potential_payload_path(0, 0);
+    let mut artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &mode)
+            .expect("legacy mode artifact should serialize"),
+        AuxiliaryArtifact {
+            relative_path: potential_path.clone(),
+            bytes: potential_bytes.clone(),
+        },
+    ];
+
+    write_eigen_v2_bundle(&plan, &summary, &BTreeSet::from([0_u32]), &mut artifacts, 0)
+        .expect("certified Floquet potential should be published");
+
+    let spectrum = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.v2.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("spectrum.v2 should be emitted");
+    let spectrum_mode = &spectrum["samples"][0]["modes"][0];
+    assert_eq!(spectrum_mode["floquet_descriptor_certified"], true);
+    assert_eq!(spectrum_mode["potential_dof_count"], values.len());
+    assert_eq!(spectrum_mode["potential_payload_path"], potential_path);
+    assert_eq!(
+        spectrum_mode["potential_payload_sha256"],
+        format!("sha256:{:x}", Sha256::digest(&potential_bytes))
+    );
+    let nested = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/modes/sample_0000/mode_0000.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("nested mode metadata should be emitted");
+    assert_eq!(nested["potential_payload_path"], potential_path);
+    assert_eq!(nested["potential_value_count"], values.len() * 2);
+    assert!(nested.get("potential_vector_real").is_none());
+    assert!(nested.get("potential_vector_imag").is_none());
+    assert_eq!(
+        artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == potential_path)
+            .expect("potential binary artifact should remain persisted")
+            .bytes,
+        potential_bytes
+    );
+}
+
+#[test]
+fn native_eigen_v2_bundle_preserves_nonzero_sample_index() {
+    let plan = minimal_native_modal_plan();
+    let summary = serde_json::json!({
+        "solver_kind": "prepared-sample-index-regression",
+        "modes": [],
+    });
+    let mut artifacts = Vec::new();
+
+    write_eigen_v2_bundle(
+        &plan,
+        &summary,
+        &std::collections::BTreeSet::new(),
+        &mut artifacts,
+        7,
+    )
+    .expect("prepared nonzero sample bundle should write");
+
+    for relative_path in ["eigen/spectrum.v2.json", "eigen/spectrum.v3.json"] {
+        let payload = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == relative_path)
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("prepared spectrum artifact should be emitted");
+        assert_eq!(payload["samples"][0]["sample_index"], 7);
+        assert_eq!(payload["samples"][0]["sample_id"], "k-sample-0007");
+    }
 }
 
 #[test]
@@ -4697,7 +6016,7 @@ fn native_modal_magnetic_pencil_request_carries_payload_digest_and_canonical_gam
 
     let pencil = native_modal_magnetic_pencil_payload(&plan, &stiffness, &gyrotropic, &mass, &[]);
     let request =
-        native_modal_mfem_operator_problem(2, &stiffness, &gyrotropic, &mass, &pencil, &[]);
+        native_modal_mfem_operator_problem(2, &stiffness, &gyrotropic, &mass, None, &pencil, &[]);
 
     assert!(!pencil.dependency_digest.is_empty());
     assert_eq!(
@@ -4817,20 +6136,181 @@ fn native_modal_lambda_i_omega_mapping_rejects_negative_branch() {
 }
 
 #[test]
-fn damping_linewidth_uses_exp_i_omega_t_decay_sign() {
-    let alpha = 0.05;
-    let factor = damping_imaginary_factor(alpha, EigenDampingPolicyIR::Include);
-
-    assert!(factor > 0.0);
-    assert!((factor - alpha / (1.0 + alpha * alpha)).abs() < 1.0e-15);
+fn damping_linewidth_factor_accepts_nonnegative_finite_alpha_and_is_stable() {
+    let small_alpha = 0.05;
+    let small_factor = damping_imaginary_factor(small_alpha, EigenDampingPolicyIR::Include)
+        .expect("small non-negative alpha should be accepted");
+    assert!(small_factor > 0.0);
+    assert!((small_factor - small_alpha / (1.0 + small_alpha * small_alpha)).abs() < 1.0e-15);
     assert_eq!(
-        damping_imaginary_factor(alpha, EigenDampingPolicyIR::Ignore),
+        damping_imaginary_factor(0.0, EigenDampingPolicyIR::Include)
+            .expect("zero alpha should be accepted"),
         0.0
     );
     assert_eq!(
-        damping_imaginary_factor(-alpha, EigenDampingPolicyIR::Include),
-        factor
+        damping_imaginary_factor(1.0, EigenDampingPolicyIR::Include)
+            .expect("unit alpha should be accepted"),
+        0.5
     );
+    let reciprocal = 1.0 / f64::MAX;
+    let large_factor = damping_imaginary_factor(f64::MAX, EigenDampingPolicyIR::Include)
+        .expect("finite maximum alpha should use the stable reciprocal form");
+    assert!(large_factor.is_finite() && large_factor > 0.0);
+    assert_eq!(large_factor, reciprocal / (1.0 + reciprocal * reciprocal));
+
+    for alpha in [0.0, small_alpha, 1.0, f64::MAX] {
+        assert_eq!(
+            damping_imaginary_factor(alpha, EigenDampingPolicyIR::Ignore)
+                .expect("ignore still accepts valid alpha"),
+            0.0
+        );
+    }
+}
+
+#[test]
+fn damping_linewidth_factor_rejects_invalid_alpha_for_both_policies() {
+    for policy in [EigenDampingPolicyIR::Ignore, EigenDampingPolicyIR::Include] {
+        for alpha in [-0.05, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = damping_imaginary_factor(alpha, policy)
+                .expect_err("negative and non-finite alpha must fail closed");
+            assert!(error.message.contains("finite and non-negative"));
+        }
+    }
+}
+
+#[test]
+fn reference_modal_method_evidence_keeps_damping_and_spectrum_claims_separate() {
+    let mut plan = minimal_native_modal_plan();
+    plan.damping_policy = EigenDampingPolicyIR::Include;
+    plan.material.alpha_field = Some(vec![0.05; plan.mesh.nodes.len()]);
+
+    let capped = reference_modal_method_evidence(&plan, plan.count as usize);
+    assert_eq!(capped["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(capped["damping"]["requested_policy"], "include");
+    assert_eq!(
+        capped["damping"]["resolved_method"],
+        "reference_proportional_linewidth_correction"
+    );
+    assert_eq!(capped["damping"]["alpha_in_pencil"], false);
+    assert_eq!(capped["damping"]["base_alpha"], plan.material.damping);
+    assert_eq!(capped["damping"]["alpha_field_present"], true);
+    assert_eq!(capped["damping"]["alpha_field_used"], false);
+    assert_eq!(capped["damping"]["exact_damped_eigenproblem"], false);
+    assert_eq!(capped["spectrum"]["spectrum_completeness"], "count_limited");
+    assert_eq!(capped["spectrum"]["independent_count_performed"], false);
+    assert_eq!(capped["spectrum"]["returned_mode_count"], plan.count);
+    assert_eq!(capped["spectrum"]["requested_mode_cap"], plan.count);
+    assert!(capped["spectrum"].get("complete").is_none());
+    assert_eq!(
+        capped["physical_qualification"],
+        "not_established_by_method_evidence"
+    );
+
+    let below_cap = reference_modal_method_evidence(&plan, plan.count as usize - 1);
+    assert_eq!(below_cap["spectrum"]["spectrum_completeness"], "unknown");
+    assert_eq!(
+        below_cap["spectrum"]["returned_mode_count"],
+        plan.count - 1
+    );
+    assert_ne!(below_cap["spectrum"]["spectrum_completeness"], "complete");
+}
+
+#[test]
+fn reference_modal_method_evidence_lists_operator_approximations_without_qualifying_oracle() {
+    let mut plan = minimal_native_modal_plan();
+    plan.interfacial_dmi = Some(1.0e-3);
+    plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Config(
+        fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: SpinWaveBoundaryKindIR::SurfaceAnisotropy,
+            boundary_pair_id: None,
+            pair_ids: Vec::new(),
+            phase_convention: Default::default(),
+            surface_anisotropy_ks: Some(1.0e-3),
+            surface_anisotropy_axis: Some([0.0, 0.0, 1.0]),
+        },
+    );
+
+    let evidence = reference_modal_method_evidence(&plan, 0);
+    assert_eq!(
+        evidence["operator_approximations"],
+        serde_json::json!([
+            "dmi_signed_coefficient_and_k_not_qualified",
+            "surface_anisotropy_scalar_curvature"
+        ])
+    );
+    assert_eq!(
+        evidence["physical_qualification"],
+        "not_established_by_method_evidence"
+    );
+
+    let without_approximations =
+        reference_modal_method_evidence(&minimal_native_modal_plan(), 0);
+    assert_eq!(
+        without_approximations["operator_approximations"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        without_approximations["physical_qualification"],
+        "not_established_by_method_evidence"
+    );
+}
+
+#[test]
+fn include_solver_notes_precede_full2x2_sparse_and_floquet_descriptions() {
+    let mut full_2x2 = minimal_native_modal_plan();
+    full_2x2.damping_policy = EigenDampingPolicyIR::Include;
+    full_2x2.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    let mut sparse = minimal_native_modal_plan();
+    sparse.damping_policy = EigenDampingPolicyIR::Include;
+    let mut floquet = minimal_native_modal_plan();
+    floquet.damping_policy = EigenDampingPolicyIR::Include;
+    configure_x_floquet_request(&mut floquet);
+
+    for (plan, complex_reduction, use_sparse) in [
+        (&full_2x2, false, false),
+        (&sparse, false, true),
+        (&floquet, true, false),
+    ] {
+        let notes = solver_notes(plan, complex_reduction, use_sparse);
+        assert!(notes.contains("approximate"), "missing approximation: {notes}");
+        assert!(
+            notes.contains("does not solve the exact damped eigenproblem"),
+            "missing non-exact damping statement: {notes}"
+        );
+    }
+}
+
+#[test]
+fn executor_rejects_invalid_alpha_before_progress_callbacks() {
+    for policy in [EigenDampingPolicyIR::Ignore, EigenDampingPolicyIR::Include] {
+        for alpha in [-0.05, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut plan = minimal_native_modal_plan();
+            plan.damping_policy = policy;
+            plan.material.damping = alpha;
+            let callback_count = std::sync::atomic::AtomicUsize::new(0);
+            let mut progress = |_event: FemEigenProgress| {
+                callback_count.fetch_add(1, Ordering::Relaxed);
+                StepAction::Continue
+            };
+
+            let error = execute_fem_eigen_inner(
+                &plan,
+                &[],
+                false,
+                false,
+                Some(&mut progress),
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect_err("invalid alpha must fail before solver callbacks or equilibrium work");
+            assert!(error.message.contains("finite and non-negative"));
+            assert_eq!(callback_count.load(Ordering::Relaxed), 0);
+        }
+    }
 }
 
 #[test]
@@ -4845,7 +6325,7 @@ fn dispersion_csv_maps_positive_imaginary_frequency_to_fwhm_linewidth() {
         }
     ]);
 
-    let csv = dispersion_v2_csv(None, &modes, &BTreeSet::from([3_u64]));
+    let csv = dispersion_v2_csv(0, "k-sample-0000", None, &modes, &BTreeSet::from([3_u64]));
     let header = csv
         .lines()
         .next()
@@ -4859,13 +6339,15 @@ fn dispersion_csv_maps_positive_imaginary_frequency_to_fwhm_linewidth() {
         .expect("dispersion CSV should include one data row");
     let columns: Vec<&str> = row.split(',').collect();
 
-    assert_eq!(columns[6], "3");
+    assert_eq!(columns[1], "k-sample-0000");
     assert_eq!(columns[7], "3");
-    assert_eq!(columns[10], "5.0000000000000000e6");
-    assert_eq!(columns[13], "seed");
-    assert_eq!(columns[14], "analysis:eigen:sample-0000:mode-0003");
+    assert_eq!(columns[8], "sample-0000/mode-0003");
+    assert_eq!(columns[12], "5.0000000000000000e6");
+    assert_eq!(columns[15], "seed");
+    assert_eq!(columns[16], "true");
+    assert_eq!(columns[17], "analysis:eigen:sample-0000:mode-0003");
     assert_eq!(
-            columns[15],
+            columns[18],
             "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=phase_rotated_real&phase_rad=0"
         );
 }
@@ -4922,6 +6404,10 @@ fn frequency_window_solver_diagnostics_publish_completeness() {
             .and_then(|value| value.as_u64()),
         Some(u64::from(plan.count))
     );
+    assert_eq!(diagnostics["complete"], true);
+    assert_eq!(diagnostics["method_evidence"]["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(diagnostics["method_evidence"]["damping"]["exact_damped_eigenproblem"], false);
+    assert_eq!(diagnostics["method_evidence"]["spectrum"]["spectrum_completeness"], "count_limited");
     assert_eq!(
         diagnostics
             .get("window_completeness")
@@ -5028,8 +6514,202 @@ fn native_frequency_window_solver_diagnostics_publish_mode_count() {
 }
 
 #[test]
+fn native_floquet_window_diagnostics_do_not_invent_missing_block_residuals() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let raw = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+        "requested_window_hz": [8.5e9, 12.0e9],
+        "resolved_search_window_hz": [8.0625e9, 12.4375e9],
+    });
+
+    let missing = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect("missing block residuals must remain representable as unavailable");
+    assert_eq!(missing["block_residuals"]["eps_q"], serde_json::Value::Null);
+    assert_eq!(
+        missing["block_residuals"]["eps_phi"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        missing["block_residuals"]["eps_gauge"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        missing["block_residuals"]["eps_full"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        missing["block_residuals"]["backend_reported_residual"],
+        serde_json::Value::Null
+    );
+    assert_eq!(missing["block_residuals"]["certified"], false);
+
+    let mut partial_raw = raw;
+    partial_raw["metrics"] = serde_json::json!({
+        "magnetic_block_backward_error": 2.0e-9,
+    });
+    let partial = native_solver_diagnostics_json(&plan, &partial_raw.to_string(), None, None)
+        .expect("partial block residual diagnostics must remain unqualified");
+    assert_eq!(partial["block_residuals"]["eps_q"], 2.0e-9);
+    assert_eq!(
+        partial["block_residuals"]["eps_phi"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        partial["block_residuals"]["eps_gauge"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        partial["block_residuals"]["eps_full"],
+        serde_json::Value::Null
+    );
+    assert_eq!(partial["block_residuals"]["certified"], false);
+}
+
+#[test]
+fn native_nonzero_floquet_diagnostics_bind_floquet_boundary_without_k0_claim() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 8.5e9,
+        frequency_max_hz: 12.0e9,
+    };
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+
+    let raw = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+    });
+    let diagnostics = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect("valid nonzero-k Floquet diagnostics must normalize");
+
+    assert_eq!(
+        diagnostics["requested_execution"]["magnetostatic_bc"],
+        "floquet_airbox"
+    );
+    assert_eq!(
+        diagnostics["boundary_gauge"]["magnetostatic_bc"],
+        "floquet_airbox"
+    );
+    assert_eq!(diagnostics["production_periodic_airbox_claim"], false);
+    assert_eq!(diagnostics["validated_scope"], serde_json::Value::Null);
+    assert_eq!(diagnostics["requested_execution"]["include_demag"], true);
+}
+
+#[test]
+fn floquet_dynamic_demag_provider_requires_exact_requested_pair_set() {
+    let base = bounded_floquet_dynamic_demag_execution_plan();
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&base));
+    for requested in [vec![], vec!["x_faces", "x_faces"], vec!["x_faces", "unknown_faces"]] {
+        let mut plan = base.clone();
+        let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
+            panic!("fixture must have explicit Floquet configuration");
+        };
+        config.boundary_pair_id = None;
+        config.pair_ids = requested.into_iter().map(str::to_owned).collect();
+        assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+    }
+    let mut two_axes = eight_magnetic_node_periodic_airbox_modal_plan();
+    two_axes.target = base.target.clone();
+    two_axes.k_sampling = base.k_sampling.clone();
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut two_axes.spin_wave_bc else {
+        panic!("two-axis fixture must have explicit configuration");
+    };
+    config.kind = SpinWaveBoundaryKindIR::Floquet;
+    config.boundary_pair_id = None;
+    config.pair_ids = vec!["x_faces".to_owned(), "y_faces".to_owned()];
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&two_axes));
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut two_axes.spin_wave_bc else {
+        unreachable!();
+    };
+    config.pair_ids.reverse();
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&two_axes));
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut two_axes.spin_wave_bc else {
+        unreachable!();
+    };
+    config.pair_ids = vec!["x_faces".to_owned()];
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&two_axes));
+    let mut incomplete_nodes = base.clone();
+    incomplete_nodes.mesh.periodic_node_pairs.retain(|pair| pair.pair_id != "x_faces");
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&incomplete_nodes));
+}
+
+#[test]
+fn planned_floquet_boundary_label_survives_invalid_execution_capability() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    plan.mesh.periodic_boundary_pairs.clear();
+    plan.mesh.periodic_node_pairs.clear();
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+    assert_eq!(planned_magnetostatic_bc(&plan), "floquet_airbox");
+}
+
+#[test]
+fn native_floquet_adapter_rejects_incomplete_plan_before_mode_publication() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    plan.mesh.periodic_boundary_pairs.clear();
+    plan.mesh.periodic_node_pairs.clear();
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    let raw = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+    });
+
+    let error = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect_err("incomplete Floquet plan must fail before mode publication");
+    assert!(error
+        .message
+        .contains("native_poisson_airbox_floquet_adapter_plan_mismatch"));
+}
+
+#[test]
+fn native_nonzero_floquet_plan_rejects_k0_adapter_claim_and_boundary_label() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 8.5e9,
+        frequency_max_hz: 12.0e9,
+    };
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+
+    let raw = serde_json::json!({
+        "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+        "requested_execution": {
+            "magnetostatic_bc": "periodic_airbox_k0"
+        }
+    });
+    let error = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect_err("recognized K0 adapter/Floquet plan mismatch must fail before mode publication");
+    assert!(error
+        .message
+        .contains("native_poisson_airbox_k0_adapter_plan_mismatch"));
+}
+
+#[test]
 fn native_poisson_airbox_result_metrics_are_preserved_in_solver_diagnostics() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "resolved_solver_family": "shift_invert",
         "solver_model": "reference_full_2x2_tangent",
@@ -5111,6 +6791,7 @@ fn native_poisson_airbox_result_metrics_are_preserved_in_solver_diagnostics() {
     assert_eq!(diagnostics["validation_state"], "unvalidated");
     assert_eq!(diagnostics["execution_lane"], "production_cpu");
     assert_eq!(diagnostics["production_periodic_airbox_claim"], true);
+    assert_eq!(diagnostics["validated_scope"], serde_json::Value::Null);
     assert_eq!(diagnostics["resolved_execution"]["device"], "cpu");
     assert_eq!(
         diagnostics["resolved_execution"]["native_backend"],
@@ -5155,7 +6836,7 @@ fn native_poisson_airbox_result_metrics_are_preserved_in_solver_diagnostics() {
 
 #[test]
 fn native_poisson_airbox_gpu_contract_publishes_real_split_schur_metadata() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "status": "ok",
         "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
@@ -5264,7 +6945,7 @@ fn native_poisson_airbox_gpu_contract_publishes_real_split_schur_metadata() {
 
 #[test]
 fn native_poisson_airbox_gpu_adapter_without_attestation_fails_closed() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "status": "ok",
         "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
@@ -5279,7 +6960,7 @@ fn native_poisson_airbox_gpu_adapter_without_attestation_fails_closed() {
 
 #[test]
 fn native_production_poisson_airbox_diagnostics_reject_missing_boundary_contract() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "status": "ok",
         "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
@@ -5302,7 +6983,7 @@ fn native_production_poisson_airbox_diagnostics_reject_missing_boundary_contract
 
 #[test]
 fn native_poisson_airbox_top_level_accepted_mode_count_is_preserved() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "resolved_solver_family": "shift_invert",
         "solver_model": "reference_full_2x2_tangent",
@@ -5320,6 +7001,443 @@ fn native_poisson_airbox_top_level_accepted_mode_count_is_preserved() {
             .expect("native Schur diagnostics should be normalized");
 
     assert_eq!(diagnostics["accepted_mode_count"], 3);
+    assert_eq!(
+        diagnostics["validated_scope"],
+        "fem_k0_periodic_airbox_p1_double_cpu_slepc"
+    );
+}
+
+#[test]
+fn native_floquet_sparse_diagnostics_keep_schur_and_nonzero_k_identity() {
+    let mut diagnostics = serde_json::Map::new();
+    let result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "demag_kind": "floquet_airbox", "accepted_mode_count": 8,
+    });
+    super::eigen_native_result::merge_poisson_airbox_modal_result_diagnostics(
+        &mut diagnostics,
+        &result.to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        diagnostics["resolved_solver_family"],
+        "floquet_poisson_airbox_schur"
+    );
+    assert_eq!(diagnostics["algebraic_form"], "schur_reduced_descriptor");
+    assert_eq!(diagnostics["demag_kind"], "floquet_airbox");
+    assert_eq!(diagnostics["accepted_mode_count"], 8);
+}
+
+fn eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(
+    plan: &FemEigenPlanIR,
+) -> Vec<AuxiliaryArtifact> {
+    // These fields match the native CPU Floquet multi-shift producer. The
+    // runner normalizer merges the result adapter and binds production and
+    // periodic-pair attestations before summary publication.
+    let native_diagnostics = serde_json::json!({
+        "schema_version": "frequency_domain_modal_diagnostics.v1",
+        "study_product": "modal_eigen",
+        "status": "ok",
+        "complete": true,
+        "execution_lane": "production_cpu",
+        "production_solver_available": true,
+        "tiny_validation_solver": false,
+        "mfem_operator_request": true,
+        "mfem_operator_payload": "floquet_shared_domain_sparse_matshell",
+        "algebraic_form": "real_frequency_rotated_gyrotropic_sparse_csr",
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "solver_model": "floquet_multi_shift_invert_slepc_sparse",
+        "solver_family": "floquet_multi_shift_invert_slepc_sparse",
+        "spectral_transform": "shift_invert",
+        "floquet_periodic_pair_count": 4,
+        "window_completeness": {
+            "policy": "best_effort",
+            "status": "not_certified",
+            "certified_modes_in_window": 0,
+            "additional_modes_may_exist": true,
+        },
+    });
+    let native_result = serde_json::json!({
+        "schema_version": "frequency_domain_modal_result.v1",
+        "study_product": "modal_eigen",
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "demag_kind": "floquet_airbox",
+        "q_dof_count": 8,
+        "phi_dof_count": 12,
+        "magnetic_pair_count": 2,
+        "airbox_pair_count": 2,
+        "augmented_dof_count": 21,
+    });
+    let normalized_diagnostics = native_solver_diagnostics_json(
+        plan,
+        &native_diagnostics.to_string(),
+        Some(&native_result.to_string()),
+        None,
+    )
+    .expect("native Floquet production diagnostics should normalize");
+    let empty_reduction = ReductionMap {
+        active_nodes: Vec::new(),
+        node_map: Vec::new(),
+        node_phases: Vec::new(),
+        complex_reduction: false,
+    };
+    super::eigen_native_artifacts::native_modal_artifacts(
+        plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope: None,
+        }],
+        &plan.equilibrium_magnetization,
+        &empty_reduction,
+        &[],
+        &[],
+        None,
+        normalized_diagnostics,
+        0,
+        None,
+        None,
+        None,
+        None,
+        0,
+        None,
+    )
+    .expect("native modal summary publication should preserve Floquet diagnostics")
+}
+
+#[cfg(test)]
+pub(super) fn canonical_production_shift_invert_summary_for_path_test(
+    plan: &FemEigenPlanIR,
+) -> serde_json::Value {
+    let native_diagnostics = serde_json::json!({
+        "schema_version": "frequency_domain_modal_diagnostics.v1",
+        "study_product": "modal_eigen",
+        "status": "ok",
+        "complete": true,
+        "solver_adapter": "slepc_modal_eigen",
+        "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+        "solver_family": "shift_invert",
+        "resolved_solver_family": "shift_invert",
+        "spectral_transform": "shift_invert",
+        "execution_lane": "production_cpu",
+        "production_solver_available": true,
+        "validation_only": false,
+        "phasor_convention": "exp_i_omega_t",
+        "eigenvalue_mapping": "lambda_eq_i_omega",
+        "resolved_execution": {
+            "device": "cpu",
+            "precision": "double",
+            "engine": "petsc_slepc",
+            "native_backend": "native_cpu",
+            "reference_or_production": "production",
+            "solver_library": "slepc",
+            "solver_algorithm": "shift_invert",
+            "status": "ok",
+            "fallback_used": false
+        },
+        "slepc": {
+            "converged_eigenpair_count": 7,
+            "accepted_mode_count": 2,
+            "outer_iterations": 19
+        }
+    });
+    let native_result = serde_json::json!({
+        "schema_version": "frequency_domain_modal_result.v1",
+        "study_product": "modal_eigen",
+        "solver_adapter": "slepc_modal_eigen",
+        "solver_model": "slepc_multi_shift_invert_production_cpu_dense"
+    });
+    let normalized_diagnostics = native_solver_diagnostics_json(
+        plan,
+        &native_diagnostics.to_string(),
+        Some(&native_result.to_string()),
+        None,
+    )
+    .expect("native shift-invert diagnostics should normalize");
+
+    let empty_reduction = ReductionMap {
+        active_nodes: Vec::new(),
+        node_map: Vec::new(),
+        node_phases: Vec::new(),
+        complex_reduction: false,
+    };
+    let artifacts = super::eigen_native_artifacts::native_modal_artifacts(
+        plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope: None,
+        }],
+        &plan.equilibrium_magnetization,
+        &empty_reduction,
+        &[],
+        &[],
+        None,
+        normalized_diagnostics,
+        0,
+        None,
+        None,
+        None,
+        None,
+        0,
+        None,
+    )
+    .expect("native modal publisher should write the shift-invert summary");
+    let summary_artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.json")
+        .expect("native publisher should write the canonical spectrum summary");
+    serde_json::from_slice(&summary_artifact.bytes)
+        .expect("canonical native spectrum summary should parse")
+}
+
+fn eigen_path_single_k_summary_artifact_for_diagnostics(
+    diagnostics: &serde_json::Value,
+) -> AuxiliaryArtifact {
+    let summary = serde_json::json!({
+        "solver_kind": diagnostics.get("solver_model").cloned(),
+        "solver_diagnostics": diagnostics,
+    });
+    AuxiliaryArtifact {
+        relative_path: "eigen/metadata/eigen_summary.json".to_string(),
+        bytes: serde_json::to_vec(&summary).unwrap(),
+    }
+}
+
+fn eigen_path_single_k_publish_solver_model(
+    plan: &FemEigenPlanIR,
+    solver_model: crate::eigen::EigenSolverModel,
+) -> serde_json::Value {
+    let result = crate::eigen::PathSolveResult {
+        gamma0_rad_s_per_a_m: plan.gyromagnetic_ratio,
+        samples: Vec::new(),
+        branches: Vec::new(),
+        solver_model,
+        notes: Vec::new(),
+        include_demag: plan.operator.include_demag,
+        dispersion_validation: plan.dispersion_validation.clone(),
+        k0_kittel_validation: plan.k0_kittel_validation.clone(),
+        solver_policy: plan.solver_policy.clone(),
+        dispersion_analytic_reference: None,
+        k0_kittel_periodic_airbox_demag: None,
+    };
+    super::eigen_path::test_support::eigen_path_solver_diagnostics(
+        crate::dispatch::FemEngine::CpuNative,
+        plan,
+        &result,
+        &std::collections::BTreeSet::<u32>::new(),
+    )
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_classifies_and_publishes_floquet_cpu_sparse_for_paired_k_signs() {
+    for kx in [1.0e6, -1.0e6] {
+        let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+        match plan.k_sampling.as_mut() {
+            Some(KSamplingIR::Single { k_vector }) => k_vector[0] = kx,
+            _ => unreachable!("Floquet execution fixture has one k sample"),
+        }
+        let artifacts =
+            eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(&plan);
+        let summary = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+            .expect("native modal artifact builder publishes an eigen summary");
+        let summary: serde_json::Value =
+            serde_json::from_slice(&summary.bytes).expect("eigen summary should be JSON");
+        let diagnostics = &summary["solver_diagnostics"];
+        assert_eq!(
+            diagnostics["solver_model"],
+            "floquet_airbox_cpu_schur_slepc"
+        );
+        assert_eq!(
+            diagnostics["solver_family"],
+            "floquet_multi_shift_invert_slepc_sparse"
+        );
+        assert_eq!(
+            diagnostics["mfem_operator_payload"],
+            "floquet_shared_domain_sparse_matshell"
+        );
+        assert_eq!(diagnostics["demag_kind"], "floquet_airbox");
+        assert_eq!(diagnostics["production_solver_available"], true);
+        assert_eq!(diagnostics["production_native_solver_available"], true);
+        assert_eq!(
+            diagnostics["modal_periodic_pair_contract_available"],
+            true
+        );
+        assert_eq!(diagnostics["floquet_periodic_pair_count"], 4);
+        assert_eq!(diagnostics["window_completeness"]["status"], "not_certified");
+
+        let solver_model =
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &artifacts);
+        assert_eq!(
+            solver_model,
+            crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+        );
+        let mut include_demag_mismatch = plan.clone();
+        include_demag_mismatch.operator.include_demag = false;
+        assert_eq!(
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(
+                &include_demag_mismatch,
+                &artifacts,
+            ),
+            crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+        );
+
+        let mut enabled_demag_mismatch = plan.clone();
+        enabled_demag_mismatch.enable_demag = false;
+        assert_eq!(
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(
+                &enabled_demag_mismatch,
+                &artifacts,
+            ),
+            crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+        );
+
+        let publication = eigen_path_single_k_publish_solver_model(&plan, solver_model.clone());
+        assert_eq!(
+            publication["solver_model"],
+            solver_model.as_str(),
+            "path publication should preserve the classified solver model"
+        );
+        assert_eq!(publication["production_solver_available"], true);
+        assert_eq!(publication["execution_lane"], "production_cpu");
+    }
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_requires_floquet_producer_flags_and_payload_contract() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let artifacts =
+        eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(&plan);
+    let summary = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+        .expect("native modal artifact builder publishes an eigen summary");
+    let summary: serde_json::Value =
+        serde_json::from_slice(&summary.bytes).expect("eigen summary should be JSON");
+    let base_diagnostics = summary["solver_diagnostics"].clone();
+    let invalid_fields: &[(&str, Option<serde_json::Value>)] = &[
+        ("production_solver_available", None),
+        ("production_solver_available", Some(serde_json::json!(false))),
+        ("production_native_solver_available", None),
+        ("production_native_solver_available", Some(serde_json::json!(false))),
+        ("execution_lane", None),
+        ("execution_lane", Some(serde_json::json!("production_gpu"))),
+        ("spectral_transform", None),
+        ("spectral_transform", Some(serde_json::json!("none"))),
+        ("validation_only", Some(serde_json::json!(true))),
+        ("tiny_validation_solver", None),
+        ("tiny_validation_solver", Some(serde_json::json!(true))),
+        ("solver_model", None),
+        ("solver_model", Some(serde_json::json!("unknown_solver"))),
+        ("solver_family", None),
+        ("solver_family", Some(serde_json::json!("unknown_solver"))),
+        ("solver_adapter", None),
+        ("solver_adapter", Some(serde_json::json!("future_floquet_adapter"))),
+        ("mfem_operator_payload", None),
+        ("mfem_operator_payload", Some(serde_json::json!("sparse_csr"))),
+        ("demag_kind", None),
+        ("demag_kind", Some(serde_json::json!("periodic_airbox_k0"))),
+        ("algebraic_form", None),
+        ("modal_periodic_pair_contract_available", None),
+        (
+            "modal_periodic_pair_contract_available",
+            Some(serde_json::json!(false)),
+        ),
+        ("floquet_periodic_pair_count", None),
+        ("floquet_periodic_pair_count", Some(serde_json::json!(0))),
+    ];
+    for (field, replacement) in invalid_fields {
+        let mut diagnostics = base_diagnostics.clone();
+        match replacement {
+            Some(value) => diagnostics[*field] = value.clone(),
+            None => {
+                diagnostics
+                    .as_object_mut()
+                    .expect("normalized diagnostics should be an object")
+                    .remove(*field);
+            }
+        }
+        let invalid_artifact =
+            eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+        assert_eq!(
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[invalid_artifact]),
+            crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent,
+            "invalid {field} must fail closed"
+        );
+    }
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_keeps_legacy_bloch_no_demag_guard() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = false;
+    plan.enable_demag = false;
+    plan.demag_realization = None;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    configure_x_floquet_request(&mut plan);
+    let mut diagnostics = serde_json::json!({
+        "production_solver_available": true,
+        "execution_lane": "production_cpu",
+        "solver_model": "slepc_multi_shift_invert_production_cpu_sparse_csr",
+        "solver_adapter": "slepc_modal_eigen",
+        "spectral_transform": "shift_invert",
+        "modal_periodic_pair_contract_available": true,
+        "floquet_periodic_pair_count": 2,
+        "operator_diagnostics": {
+            "payload_kind": "bloch_floquet_tangent_operator",
+        },
+    });
+    let legacy_artifact =
+        eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+    assert_eq!(
+        super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[legacy_artifact]),
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+    );
+
+    diagnostics["operator_diagnostics"]["demag_payload_kind"] =
+        serde_json::json!("dynamic_demag_k_operator");
+    let demag_artifact =
+        eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+    assert_eq!(
+        super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[demag_artifact]),
+        crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+    );
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_keeps_generic_cpu_and_k0_classifiers() {
+    let plan = minimal_native_modal_plan();
+    for solver_model in [
+        "slepc_multi_shift_invert_production_cpu_dense",
+        "slepc_multi_shift_invert_production_cpu_sparse_csr",
+    ] {
+        let diagnostics = serde_json::json!({
+            "production_solver_available": true,
+            "execution_lane": "production_cpu",
+            "solver_model": solver_model,
+            "spectral_transform": "shift_invert",
+        });
+        let artifact = eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+        assert_eq!(
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[artifact]),
+            crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+        );
+    }
+
+    let k0_plan = bounded_k0_execution_plan();
+    let k0_diagnostics = serde_json::json!({
+        "production_solver_available": true,
+        "execution_lane": "production_cpu",
+        "solver_model": "k0_poisson_airbox_cpu_schur_slepc",
+        "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+        "spectral_transform": "shift_invert",
+    });
+    let k0_artifact = eigen_path_single_k_summary_artifact_for_diagnostics(&k0_diagnostics);
+    assert_eq!(
+        super::eigen_path::test_support::eigen_path_single_k_solver_model(&k0_plan, &[k0_artifact]),
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+    );
 }
 
 #[test]
@@ -5388,6 +7506,33 @@ fn native_poisson_airbox_metrics_reject_wrong_solver_adapter() {
 }
 
 #[test]
+fn native_poisson_airbox_k0_metrics_reject_floquet_adapter_even_with_k0_demag_kind() {
+    let raw = serde_json::json!({
+        "schema_version": "frequency_domain_modal_result.v1",
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "demag_kind": "periodic_airbox_k0",
+        "phi_dof_count": 4,
+        "augmented_phi_dof_count": 5,
+        "poisson_constraint_relative_residual": 0.0,
+        "relative_reference_frequency_error": 0.0,
+    })
+    .to_string();
+    let err = native_poisson_airbox_k0_metrics_from_result_json(
+        &raw,
+        NativePoissonAirboxK0MetricsInput {
+            mesh_resolution_m: 10.0e-9,
+            airbox_size_m: 400.0e-9,
+            magnetic_pair_count: 12,
+            airbox_pair_count: 20,
+            effective_magnetisation_a_per_m: 800_000.0,
+        },
+    )
+    .expect_err("Floquet adapter must never populate K0-only metrics");
+
+    assert!(err.message.contains("solver_adapter"));
+}
+
+#[test]
 fn native_poisson_airbox_result_without_modes_is_rejected() {
     let plan = minimal_native_modal_plan();
     let omega = std::f64::consts::TAU * 4.0e9;
@@ -5439,6 +7584,8 @@ fn native_poisson_airbox_modes_use_q_payload_and_certified_residuals() {
             "omega_rad_s": omega,
             "frequency_hz": 4.0e9,
             "relative_residual": 2.0e-12,
+            "magnetic_block_backward_error": 3.0e-12,
+            "poisson_block_backward_error": 0.0,
             "full_residual_reconstruction_relative_error": 3.0e-12,
         }]
     })
@@ -5495,6 +7642,7 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
         active_nodes: &active_nodes,
         magnetic_classes: &magnetic_classes,
         magnetic_class_count: 2,
+        node_phases: None,
     };
     let error = native_poisson_airbox_mode_from_json(&plan, &mode, &mass, Some(&context))
         .expect_err("shared-domain mode must include certified block residuals");
@@ -5507,7 +7655,122 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
         .expect("complete shared-domain mode should be accepted");
     assert_eq!(accepted.block_residual_q, 3.0e-12);
     assert_eq!(accepted.block_residual_phi, 4.0e-12);
-    assert_eq!(accepted.block_residual_gauge, 0.0);
+    assert_eq!(accepted.block_residual_gauge, Some(0.0));
+    let phases = [Complex64::new(1.0, 0.0), Complex64::new(0.0, -1.0)];
+    let phase_context = SharedDomainModeContext {
+        node_phases: Some(&phases),
+        ..context
+    };
+    let phased =
+        native_poisson_airbox_mode_from_json(&plan, &mode, &mass, Some(&phase_context)).unwrap();
+    assert_eq!(phased.q_vector, accepted.q_vector);
+    assert_eq!(phased.vector[0], accepted.vector[0]);
+    assert_eq!(phased.vector[1], phases[1] * accepted.vector[1]);
+    assert_eq!(phased.phi_vector, accepted.phi_vector);
+    mode["potential_representation"] = serde_json::json!("complex_coefficients");
+    mode["potential_dof_count"] = serde_json::json!(2);
+    mode["floquet_descriptor_certified"] = serde_json::json!(false);
+    mode["floquet_full_descriptor_certified"] = serde_json::json!(false);
+    mode["floquet_seam_frame_certified"] = serde_json::json!(false);
+    mode["floquet_gauge_policy_satisfied"] = serde_json::json!(true);
+    mode["floquet_geometric_bc_certified"] = serde_json::json!(false);
+    mode["gauge_constraint_backward_error"] = serde_json::Value::Null;
+    mode["gauge_constraint_policy"] =
+        serde_json::json!("nonzero_k_poisson_without_mean_constraint");
+    mode["poisson_boundary_kind"] = serde_json::json!("pure_neumann");
+    mode["poisson_gauge_policy"] = serde_json::json!("require_invertible");
+    let full_result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc", "modes": [mode],
+    });
+    let modes = native_modal_modes_from_result_json(
+        &plan,
+        &full_result.to_string(),
+        None,
+        Some(&phase_context),
+    )
+    .expect("native sparse Floquet adapter must parse the physical shared-domain q/phi payload");
+    assert_eq!(modes[0].vector, phased.vector);
+    assert_eq!(modes[0].phi_vector, phased.phi_vector);
+    let residuals = super::eigen_native_artifacts::native_modal_block_residuals(
+        &modes[0],
+        Some("floquet_airbox_cpu_schur_slepc"),
+    );
+    assert_eq!(residuals["scope"], "reduced_original_blocks_only");
+    assert!(residuals["eps_full"].is_null());
+    assert_eq!(residuals["certified"], false);
+    assert_eq!(residuals["full_descriptor_certified"], false);
+    assert_eq!(residuals["reduced_pencil_certified"], true);
+
+    let mut certified_mode = mode.clone();
+    certified_mode["floquet_descriptor_certified"] = serde_json::json!(true);
+    certified_mode["floquet_full_descriptor_certified"] = serde_json::json!(true);
+    certified_mode["floquet_seam_frame_certified"] = serde_json::json!(true);
+    certified_mode["magnetic_relative_residual"] = serde_json::json!(3.0e-12);
+    certified_mode["potential_relative_residual"] = serde_json::json!(4.0e-12);
+    certified_mode["relative_residual"] = serde_json::json!(4.0e-12);
+    for key in [
+        "floquet_full_magnetic_relative_residual",
+        "floquet_full_potential_relative_residual",
+        "floquet_scalar_phase_seam_relative_residual",
+        "floquet_tangent_frame_seam_relative_residual",
+        "floquet_cartesian_magnetic_seam_relative_residual",
+        "floquet_equilibrium_pair_relative_residual",
+    ] {
+        certified_mode[key] = serde_json::json!(2.0e-12);
+    }
+    let certified_result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "modes": [certified_mode],
+    });
+    let certified_modes = native_modal_modes_from_result_json(
+        &plan,
+        &certified_result.to_string(),
+        None,
+        Some(&phase_context),
+    )
+    .expect("a mode with full projected equations, seams, and gauge policy should parse");
+    let certified_residuals = super::eigen_native_artifacts::native_modal_block_residuals(
+        &certified_modes[0],
+        Some("floquet_airbox_cpu_schur_slepc"),
+    );
+    assert_eq!(
+        certified_residuals["scope"],
+        "full_projected_weak_form_and_periodic_seams"
+    );
+    assert_eq!(certified_residuals["full_descriptor_certified"], true);
+    assert_eq!(certified_residuals["certified"], true);
+    assert!((certified_residuals["eps_full"].as_f64().unwrap() - 2.0e-12).abs() < 1.0e-24);
+    assert!((certified_residuals["eps_reduced"].as_f64().unwrap() - 4.0e-12).abs() < 1.0e-24);
+    assert!(certified_residuals["eps_gauge"].is_null());
+
+    let mut invalid_mode = mode;
+    invalid_mode["floquet_descriptor_certified"] = serde_json::json!(true);
+    invalid_mode["floquet_full_descriptor_certified"] = serde_json::json!(true);
+    invalid_mode["floquet_seam_frame_certified"] = serde_json::json!(true);
+    invalid_mode["floquet_gauge_policy_satisfied"] = serde_json::json!(true);
+    invalid_mode["magnetic_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["potential_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_full_magnetic_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_full_potential_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_scalar_phase_seam_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_tangent_frame_seam_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_cartesian_magnetic_seam_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_equilibrium_pair_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_full_potential_relative_residual"] = serde_json::json!(1.0e-5);
+    let invalid_result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "modes": [invalid_mode],
+    });
+    let invalid = native_modal_modes_from_result_json(
+        &plan,
+        &invalid_result.to_string(),
+        None,
+        Some(&phase_context),
+    )
+    .expect_err("an out-of-tolerance full weak residual must reject certification");
+    assert!(invalid
+        .message
+        .contains("floquet_full_potential_relative_residual"));
 }
 
 #[test]
@@ -5526,6 +7789,55 @@ fn native_cpu_modal_window_accepts_explicit_gamma_single_k() {
 }
 
 #[test]
+fn shared_domain_material_identity_preserves_raw_legacy_and_canonical_ku() {
+    let mut material = minimal_native_modal_plan().material;
+    let (legacy, raw, canonical) =
+        shared_domain_artifact_material_identity(&material, None).unwrap();
+    assert!(!canonical);
+    assert_eq!(legacy, raw);
+    assert_eq!(
+        raw,
+        shared_domain_content_digest("material_signature", &material).unwrap()
+    );
+    let legacy_source = serde_json::json!({"schema_version": "equilibrium_artifact.v7", "material_signature": legacy});
+    shared_domain_artifact_material_identity(&material, Some(&legacy_source)).unwrap();
+
+    material.uniaxial_anisotropy = Some(-1.0e3);
+    material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    let (physical, source_raw, canonical) =
+        shared_domain_artifact_material_identity(&material, None).unwrap();
+    assert!(canonical);
+    assert_ne!(physical, source_raw);
+    assert!(shared_domain_artifact_material_identity(&material, Some(&legacy_source)).is_err());
+    let source = serde_json::json!({
+        "schema_version": "equilibrium_artifact.v8", "material_signature": physical,
+        "material_provenance_signature": source_raw,
+        "material_identity_kind": "canonical_equilibrium_material.v2",
+        "material_provenance_scope": "materialization_plan",
+    });
+    let frozen = source.clone();
+    for axis in [[-2.0, 0.0, 0.0], [7.0, -0.0, 0.0]] {
+        material.anisotropy_axis = Some(axis);
+        let (actual_physical, current_raw, _) =
+            shared_domain_artifact_material_identity(&material, Some(&source)).unwrap();
+        assert_eq!(actual_physical, physical);
+        assert_ne!(current_raw, source_raw);
+        assert_eq!(
+            source, frozen,
+            "provided artifact provenance must not be rewritten"
+        );
+    }
+    material.uniaxial_anisotropy = Some(-2.0e3);
+    assert!(shared_domain_artifact_material_identity(&material, Some(&source)).is_err());
+    material.uniaxial_anisotropy = Some(-1.0e3);
+    material.anisotropy_axis = Some([0.0, 1.0, 0.0]);
+    assert!(shared_domain_artifact_material_identity(&material, Some(&source)).is_err());
+    material.uniaxial_anisotropy = None;
+    material.anisotropy_axis = None;
+    assert!(shared_domain_artifact_material_identity(&material, Some(&source)).is_err());
+}
+
+#[test]
 fn shared_domain_modal_scope_allows_normalized_texture_inside_the_unit_cell() {
     let plan = minimal_native_modal_plan();
     let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
@@ -5534,6 +7846,99 @@ fn shared_domain_modal_scope_allows_normalized_texture_inside_the_unit_cell() {
     equilibrium[1] = [0.0, 1.0, 0.0];
     validate_shared_domain_modal_scope(&plan, &topology, &equilibrium, &observables)
         .expect("normalized texture inside one unit cell must remain in production scope");
+}
+
+#[test]
+fn shared_domain_modal_scope_accepts_zero_static_field() {
+    let plan = minimal_native_modal_plan();
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
+    let mut observables = scope_observables(plan.mesh.nodes.len(), 0.0);
+    observables.external_field.fill([0.0; 3]);
+    observables.effective_field.fill([0.0; 3]);
+    observables.max_effective_field_amplitude = 0.0;
+    validate_shared_domain_modal_scope(
+        &plan, &topology, &plan.equilibrium_magnetization, &observables,
+    ).expect("zero static field must not imply zero modal curvature");
+
+    let mut unsupported_ku = plan.clone();
+    unsupported_ku.material.uniaxial_anisotropy = Some(-1.0e3);
+    let error = validate_shared_domain_modal_scope(
+        &unsupported_ku, &topology, &plan.equilibrium_magnetization, &observables,
+    ).expect_err("zero field must not bypass the uncertified Ku scope guard");
+    assert!(error.message.contains("tangent terms are not yet certified"));
+}
+
+#[test]
+fn shared_domain_modal_scope_rejects_invalid_diagnostic_amplitudes() {
+    let plan = minimal_native_modal_plan();
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
+    for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut observables = scope_observables(plan.mesh.nodes.len(), 0.0);
+        observables.max_effective_field_amplitude = invalid;
+        assert!(validate_shared_domain_modal_scope(
+            &plan, &topology, &plan.equilibrium_magnetization, &observables,
+        ).is_err(), "invalid field amplitude must be rejected");
+        observables.max_effective_field_amplitude = 0.0;
+        observables.max_torque_Apm = invalid;
+        assert!(validate_shared_domain_modal_scope(
+            &plan, &topology, &plan.equilibrium_magnetization, &observables,
+        ).is_err(), "invalid torque amplitude must be rejected");
+    }
+}
+
+#[test]
+fn shared_domain_full2x2_guard_accepts_tangent_frame_reference_axis_jump() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (_, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    assert!(topology.magnetic_node_volumes[node_a as usize] > 0.0);
+    assert!(topology.magnetic_node_volumes[node_b as usize] > 0.0);
+
+    // Keep the equilibrium seam below the 1e-8 m0 tolerance while placing the
+    // two otherwise nearly equal vectors on opposite sides of the
+    // tangent_bases() |m_z|=0.9 reference-axis branch. Native shared-domain
+    // constraints transport the resulting local coordinates with
+    // T_dst^T T_src, so the Rust preflight must allow this valid chart change.
+    let z_a: f64 = 0.9 - 1.0e-10;
+    let z_b: f64 = 0.9 + 1.0e-10;
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [(1.0 - z_a * z_a).sqrt(), 0.0, z_a];
+    equilibrium[node_b as usize] = [(1.0 - z_b * z_b).sqrt(), 0.0, z_b];
+    let seam = (equilibrium[node_a as usize][0] - equilibrium[node_b as usize][0])
+        .hypot(equilibrium[node_a as usize][2] - equilibrium[node_b as usize][2]);
+    assert!(
+        seam < 1.0e-8,
+        "fixture seam must pass the m0 periodic tolerance"
+    );
+
+    validate_shared_domain_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect("a local tangent-frame rotation is valid when physical m0 is periodic");
+}
+
+#[test]
+fn shared_domain_full2x2_guard_rejects_physical_equilibrium_mismatch() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (_, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [1.0, 0.0, 0.0];
+    equilibrium[node_b as usize] = [0.0, 1.0, 0.0];
+
+    let error = validate_shared_domain_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect_err("pure-translation Floquet pairs must preserve physical m0");
+    assert!(error
+        .message
+        .contains("matching physical equilibrium vectors"));
 }
 
 #[test]
@@ -5563,9 +7968,57 @@ fn shared_domain_modal_scope_rejects_nonperiodic_equilibrium_across_a_magnetic_p
 #[test]
 fn shared_domain_modal_scope_rejects_uncertified_local_tangent_terms() {
     let mut plan = minimal_native_modal_plan();
-    plan.material.uniaxial_anisotropy = Some(1.0e3);
     let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
     let observables = scope_observables(plan.mesh.nodes.len(), 0.0);
+
+    let mut axes_with_zero_anisotropy = plan.clone();
+    axes_with_zero_anisotropy.material.uniaxial_anisotropy = Some(0.0);
+    axes_with_zero_anisotropy.material.uniaxial_anisotropy_k2 = Some(0.0);
+    axes_with_zero_anisotropy.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_kc1 = Some(0.0);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_kc2 = Some(0.0);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_kc3 = Some(0.0);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+    let zero_field = vec![0.0; plan.mesh.nodes.len()];
+    axes_with_zero_anisotropy.material.ku_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.ku2_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.kc1_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.kc2_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.kc3_field = Some(zero_field);
+    validate_shared_domain_modal_scope(
+        &axes_with_zero_anisotropy,
+        &topology,
+        &plan.equilibrium_magnetization,
+        &observables,
+    )
+    .expect("anisotropy axes with exactly zero coefficients must remain in scope");
+
+    let mut tiny_scalar_anisotropy = plan.clone();
+    tiny_scalar_anisotropy.material.uniaxial_anisotropy = Some(1.0e-40);
+    let error = validate_shared_domain_modal_scope(
+        &tiny_scalar_anisotropy,
+        &topology,
+        &plan.equilibrium_magnetization,
+        &observables,
+    )
+    .expect_err("every nonzero scalar anisotropy coefficient must be rejected");
+    assert!(error.message.contains("anisotropy and DMI tangent terms"));
+
+    let mut tiny_nodal_anisotropy = plan.clone();
+    let mut ku_field = vec![0.0; plan.mesh.nodes.len()];
+    ku_field[0] = 1.0e-40;
+    tiny_nodal_anisotropy.material.ku_field = Some(ku_field);
+    let error = validate_shared_domain_modal_scope(
+        &tiny_nodal_anisotropy,
+        &topology,
+        &plan.equilibrium_magnetization,
+        &observables,
+    )
+    .expect_err("every nonzero nodal anisotropy coefficient must be rejected");
+    assert!(error.message.contains("anisotropy and DMI tangent terms"));
+
+    plan.material.uniaxial_anisotropy = Some(1.0e3);
     let error = validate_shared_domain_modal_scope(
         &plan,
         &topology,
@@ -5660,6 +8113,145 @@ fn native_gpu_k0_modal_selection_rejects_nonzero_k_without_kittel_oracle() {
 }
 
 #[test]
+fn shared_domain_payload_omits_zero_anisotropy_after_certified_linearization() {
+    let mut axes_only = eight_magnetic_node_periodic_airbox_modal_plan();
+    axes_only.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+    let mut zero_ku_with_nodal_ms = eight_magnetic_node_periodic_airbox_modal_plan();
+    zero_ku_with_nodal_ms.material.uniaxial_anisotropy = Some(0.0);
+    zero_ku_with_nodal_ms.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    zero_ku_with_nodal_ms.material.uniaxial_anisotropy_k2 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_kc1 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_kc2 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_kc3 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+    let zero_field = vec![0.0; zero_ku_with_nodal_ms.mesh.nodes.len()];
+    zero_ku_with_nodal_ms.material.ku_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.ku2_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.kc1_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.kc2_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.kc3_field = Some(zero_field);
+    zero_ku_with_nodal_ms.material.ms_field =
+        Some(vec![800_000.0; zero_ku_with_nodal_ms.mesh.nodes.len()]);
+
+    let mut uniform_zero_ku = eight_magnetic_node_periodic_airbox_modal_plan();
+    uniform_zero_ku.material.uniaxial_anisotropy = Some(0.0);
+    uniform_zero_ku.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+    let mut uniform_zero_ku_with_zero_axis = eight_magnetic_node_periodic_airbox_modal_plan();
+    uniform_zero_ku_with_zero_axis.material.uniaxial_anisotropy = Some(0.0);
+    uniform_zero_ku_with_zero_axis.material.anisotropy_axis = Some([0.0; 3]);
+
+    for (case, plan) in [
+        ("axis without Ku", axes_only),
+        ("zero Ku with nodal Ms", zero_ku_with_nodal_ms),
+        ("uniform-Ms zero Ku with axis", uniform_zero_ku),
+        (
+            "uniform-Ms zero Ku with zero axis",
+            uniform_zero_ku_with_zero_axis,
+        ),
+    ] {
+        let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic airbox mesh is valid");
+        assert_eq!(
+            topology
+                .magnetic_node_volumes
+                .iter()
+                .filter(|volume| **volume > 0.0)
+                .count(),
+            8,
+            "the shared fixture contains eight magnetic nodes"
+        );
+        assert_eq!(
+            topology.n_nodes, 16,
+            "the fixture includes eight airbox nodes"
+        );
+
+        let descriptor =
+            crate::fem::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)
+                .expect("zero or absent Ku must remain valid in identity materialization");
+        assert_eq!(
+            descriptor.is_some(),
+            case == "uniform-Ms zero Ku with axis",
+            "only explicit zero Ku with uniform Ms and a valid axis keeps the historical descriptor"
+        );
+
+        let fixture = exact_producer_fixture_for_plan(plan.clone());
+        let handoff = verified_exact_handoff_from_fixture(
+            &fixture,
+            fixture.producer_provenance.clone(),
+            fixture.exact_artifacts.clone(),
+        )
+        .expect("the standard exact producer helper must create a verified handoff");
+        let material = MaterialParameters::new(
+            plan.material.saturation_magnetisation,
+            plan.material.exchange_stiffness,
+            plan.material.damping,
+        )
+        .expect("fixture material is valid");
+        let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::RK23)
+            .expect("fixture dynamics are valid");
+        let problem = FemLlgProblem::with_terms(
+            topology.clone(),
+            material,
+            dynamics,
+            EffectiveFieldTerms {
+                exchange: plan.enable_exchange,
+                ..EffectiveFieldTerms::default()
+            },
+        );
+        let state = problem
+            .new_state(handoff.equilibrium_magnetization.clone())
+            .expect("certified equilibrium has the expected shape");
+        let observables = problem
+            .observe(&state)
+            .expect("fixture equilibrium observables must be available");
+        let linearization = build_shared_domain_linearization_state(
+            &plan,
+            &topology,
+            &problem,
+            None,
+            Some(&handoff),
+            &handoff.equilibrium_magnetization,
+            &observables,
+        )
+        .expect("the accepted handoff must produce a shared-domain linearization state");
+        let payload = build_native_shared_domain_modal_problem(
+            &plan,
+            &topology,
+            &handoff.equilibrium_magnetization,
+            &observables,
+            Some(&linearization),
+            0,
+        )
+        .expect("zero anisotropy must be admitted by the native payload builder");
+
+        assert!(payload.uniaxial_axis_xyz.is_empty(), "{case}");
+        assert!(
+            payload.uniaxial_anisotropy_field_a_per_m.is_empty(),
+            "{case}"
+        );
+        assert!(payload.anisotropy_term_digest.is_none(), "{case}");
+        assert_eq!(
+            payload.term_presence_mask & MODAL_LINEARIZATION_TERM_ANISOTROPY,
+            0,
+            "zero anisotropy must not advertise an active native tangent term ({case})"
+        );
+
+        if case == "uniform-Ms zero Ku with axis" {
+            let expected_signature =
+                crate::fem::equilibrium_identity::equilibrium_material_signature(&plan.material)
+                    .expect("historical Ku=0 V2 signature");
+            assert_eq!(
+                linearization.equilibrium_artifact["material_signature"].as_str(),
+                Some(expected_signature.as_str()),
+                "the uniform-Ms zero-Ku consumer must keep the historical V2 identity"
+            );
+        }
+    }
+}
+
+#[test]
 fn shared_domain_builder_rejects_missing_accepted_linearization_state() {
     let mut plan = minimal_native_modal_plan();
     plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
@@ -5702,6 +8294,10 @@ fn shared_domain_builder_rejects_missing_accepted_linearization_state() {
         .set_tri3_facets(vec![[0, 1, 2], [3, 5, 4], [6, 7, 8], [9, 11, 10]]);
     plan.mesh.boundary_markers = vec![10, 11, 20, 21];
     plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 12];
+    plan.material.ms_field = Some(vec![
+        760_000.0, 770_000.0, 780_000.0, 760_000.0, 770_000.0, 780_000.0, 800_000.0, 810_000.0,
+        820_000.0, 800_000.0, 810_000.0, 820_000.0,
+    ]);
     plan.mesh.periodic_node_pairs = vec![
         fullmag_ir::MeshPeriodicNodePairIR {
             pair_id: "magnetic".to_string(),
@@ -5865,6 +8461,22 @@ fn native_gpu_shared_domain_requires_operator_demag_flag() {
 
     assert!(native_gpu_shared_domain_modal_supported(&plan));
     plan.operator.include_demag = false;
+    assert!(!native_gpu_shared_domain_modal_supported(&plan));
+}
+
+#[test]
+fn native_gpu_shared_domain_rejects_nonfinite_target_frequency() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 1.0e9,
+        frequency_max_hz: f64::INFINITY,
+    };
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+
     assert!(!native_gpu_shared_domain_modal_supported(&plan));
 }
 
@@ -6800,6 +9412,208 @@ fn native_cpu_modal_window_accepts_nonzero_floquet_single_k_with_bloch_payload_p
 }
 
 #[test]
+fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+
+    assert!(
+        native_cpu_modal_window_enabled(&plan),
+        "nonzero-k Floquet Full2x2 airbox demag should enter the bounded native CPU provider path"
+    );
+    assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+
+    plan.k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    assert!(
+        native_cpu_modal_window_enabled(&plan),
+        "a path containing Gamma and nonzero-k samples should keep the CPU provider lane"
+    );
+
+    let gamma_point = crate::eigen::KSampleDescriptor {
+        sample_index: 0,
+        label: Some("Γ".to_string()),
+        segment_index: Some(0),
+        path_s: 0.0,
+        t_in_segment: 0.0,
+        k_vector: [0.0, 0.0, 0.0],
+    };
+    let point_plan = super::eigen_path::test_support::eigen_path_single_k_point_plan(
+        &plan,
+        &gamma_point,
+        false,
+        None,
+    )
+    .expect("Gamma point should materialize as a periodic K0 execution plan");
+    assert_eq!(
+        point_plan.spin_wave_bc.kind(),
+        SpinWaveBoundaryKindIR::Periodic
+    );
+}
+
+#[test]
+fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_nearest_target() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::Nearest {
+        frequency_hz: 2.0e9,
+    };
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+
+    assert!(
+        native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan),
+        "nearest nonzero-k Floquet airbox demag should use the bounded native CPU provider path"
+    );
+    assert!(native_cpu_modal_window_enabled(&plan));
+    assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+
+    // A path carries one explicit global target frequency.  It is not silently
+    // expanded into per-sample target frequencies by the capability gate.
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    assert!(
+        native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan),
+        "a valid multi-k nearest request must keep its single global target"
+    );
+}
+
+#[test]
+fn native_cpu_modal_window_rejects_floquet_airbox_demag_without_both_domain_pair_classes() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+
+    let complete_stats = periodic_domain_pair_stats(&plan.mesh)
+        .expect("shared-domain fixture must have valid tet4 pair metadata");
+    assert!(complete_stats.magnetic_pair_count > 0);
+    assert!(complete_stats.airbox_pair_count > 0);
+
+    let magnetic_pair = plan
+        .mesh
+        .periodic_node_pairs
+        .iter()
+        .find(|pair| {
+            let mut mesh = plan.mesh.clone();
+            mesh.periodic_node_pairs = vec![(*pair).clone()];
+            periodic_domain_pair_stats(&mesh)
+                .map(|stats| stats.magnetic_pair_count == 1 && stats.airbox_pair_count == 0)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .expect("fixture must expose a magnetic periodic pair");
+    let airbox_pair = plan
+        .mesh
+        .periodic_node_pairs
+        .iter()
+        .find(|pair| {
+            let mut mesh = plan.mesh.clone();
+            mesh.periodic_node_pairs = vec![(*pair).clone()];
+            periodic_domain_pair_stats(&mesh)
+                .map(|stats| stats.magnetic_pair_count == 0 && stats.airbox_pair_count == 1)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .expect("fixture must expose an airbox periodic pair");
+
+    let mut magnetic_only = plan.clone();
+    magnetic_only.mesh.periodic_node_pairs = vec![magnetic_pair.clone()];
+    assert!(
+        !native_cpu_modal_window_has_floquet_dynamic_demag_path(&magnetic_only),
+        "a nonempty magnetic-only pair map must not satisfy the shared-domain demag contract"
+    );
+
+    let mut mixed_domain = plan;
+    mixed_domain.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+        pair_id: magnetic_pair.pair_id,
+        node_a: magnetic_pair.node_a,
+        node_b: airbox_pair.node_a,
+    }];
+    assert!(
+        !native_cpu_modal_window_has_floquet_dynamic_demag_path(&mixed_domain),
+        "a magnetic-to-airbox mixed pair must not be counted as a valid domain pair"
+    );
+}
+
+#[test]
+fn native_cpu_modal_window_rejects_nonfinite_or_nonpositive_floquet_nearest_target() {
+    for frequency_hz in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.target = fullmag_ir::EigenTargetIR::Nearest { frequency_hz };
+        add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+
+        assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+            &plan
+        ));
+        assert_eq!(
+            native_cpu_modal_window_rejection_reason(&plan),
+            Some("production_cpu_modal_unsupported_floquet_target")
+        );
+    }
+}
+
+#[test]
+fn native_cpu_modal_window_rejects_nonzero_floquet_demag_without_airbox_contract() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_pair_to_plan(&mut plan);
+
+    assert!(!native_cpu_modal_window_enabled(&plan));
+    assert_eq!(
+        native_cpu_modal_window_rejection_reason(&plan),
+        Some("production_cpu_modal_dynamic_demag_k_operator_missing")
+    );
+}
+
+#[test]
 fn reference_modal_diagnostics_name_nonzero_k_production_cpu_rejection() {
     let mut plan = minimal_native_modal_plan();
     plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
@@ -6936,7 +9750,7 @@ fn runner_rejects_floquet_dynamic_demag_gate() {
         .expect_err("Floquet dynamic demag must be blocked before execution");
     assert!(err
         .message
-        .contains("dynamic demag for Floquet periodic FEM is not implemented yet"));
+        .contains("requires the validated native CPU Poisson-airbox provider"));
 }
 
 #[test]
@@ -7191,11 +10005,15 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
         &plan,
         &[
             OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string(),
+                scope: None,
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -7254,6 +10072,517 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
     );
 }
 
+#[test]
+fn native_modal_artifact_limitations_follow_executed_operator_payload() {
+    let plan = minimal_native_modal_plan();
+    let equilibrium = plan.equilibrium_magnetization.clone();
+    let reduction = ReductionMap {
+        active_nodes: Vec::new(),
+        node_map: Vec::new(),
+        node_phases: Vec::new(),
+        complex_reduction: false,
+    };
+    let build_summary = |solver_diagnostics: serde_json::Value| {
+        let artifacts = super::eigen_native_artifacts::native_modal_artifacts(
+            &plan,
+            &[OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+                scope: None,
+            }],
+            &equilibrium,
+            &reduction,
+            &[],
+            &[],
+            None,
+            solver_diagnostics,
+            0,
+            None,
+            None,
+            None,
+            None,
+            0,
+            None,
+        )
+        .expect("minimal modal inputs should publish a summary");
+        let summary = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+            .expect("native modal artifacts should include an eigen summary");
+        serde_json::from_slice::<serde_json::Value>(&summary.bytes)
+            .expect("eigen summary should be JSON")
+    };
+    let has_limitation = |summary: &serde_json::Value, limitation: &str| {
+        summary["solver_limitations"]
+            .as_array()
+            .is_some_and(|limitations| {
+                limitations
+                    .iter()
+                    .any(|value| value.as_str() == Some(limitation))
+            })
+    };
+
+    let sparse = build_summary(serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "mfem_operator_payload": "floquet_shared_domain_sparse_matshell",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(!has_limitation(&sparse, "dense_operator_payload"));
+    assert!(has_limitation(
+        &sparse,
+        "window_count_certification_pending"
+    ));
+    assert_eq!(
+        sparse["solver_diagnostics"]["solver_adapter"],
+        "floquet_airbox_cpu_schur_slepc"
+    );
+
+    let sparse_csr = build_summary(serde_json::json!({
+        "solver_adapter": "generic_cpu_slepc",
+        "mfem_operator_payload": "sparse_csr",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(!has_limitation(&sparse_csr, "dense_operator_payload"));
+
+    let dense = build_summary(serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "mfem_operator_payload": "dense_gyrotropic_matrix",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(has_limitation(&dense, "dense_operator_payload"));
+
+    let unknown = build_summary(serde_json::json!({
+        "solver_adapter": "future_modal_adapter",
+        "mfem_operator_payload": "future_operator_payload",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(!has_limitation(&unknown, "dense_operator_payload"));
+    assert!(has_limitation(
+        &unknown,
+        "window_count_certification_pending"
+    ));
+    assert_eq!(
+        unknown["solver_diagnostics"]["solver_adapter"],
+        "future_modal_adapter"
+    );
+    assert_eq!(
+        unknown["solver_diagnostics"]["mfem_operator_payload"],
+        "future_operator_payload"
+    );
+}
+
+#[test]
+fn native_modal_run_result_completion_matches_status() {
+    let cancelled = native_modal_run_result(RunStatus::Cancelled, StepStats::default(), Vec::new());
+    assert_eq!(cancelled.status, RunStatus::Cancelled);
+    let completion = cancelled
+        .completion
+        .expect("cancelled results carry completion");
+    assert_eq!(completion.status, "cancelled");
+    assert!(!completion.converged);
+    assert_eq!(
+        completion.reason,
+        Some(fullmag_ir::StageStopReason::UserCancelled),
+    );
+
+    let completed = native_modal_run_result(RunStatus::Completed, StepStats::default(), Vec::new());
+    assert_eq!(completed.status, RunStatus::Completed);
+    let completion = completed
+        .completion
+        .expect("completed results carry completion");
+    assert_eq!(completion.status, "completed");
+
+    let paused = native_modal_run_result(RunStatus::Paused, StepStats::default(), Vec::new());
+    assert_eq!(paused.status, RunStatus::Paused);
+    let completion = paused
+        .completion
+        .expect("paused results carry completion");
+    assert_eq!(completion.status, "paused");
+    assert!(!completion.converged);
+    assert_eq!(completion.reason, None);
+}
+
+#[test]
+fn writing_artifacts_control_preserves_certified_native_mode_bytes() {
+    const MODE_BYTES: &[u8] = b"validated native mode vector bytes\0preserve";
+
+    for (action, expected_state, expected_status, expected_reason) in [
+        (
+            StepAction::Stop,
+            NativeModalTerminalState::Cancelled,
+            RunStatus::Cancelled,
+            "cancelled",
+        ),
+        (
+            StepAction::Pause,
+            NativeModalTerminalState::Paused,
+            RunStatus::Paused,
+            "pause_requested",
+        ),
+    ] {
+        let mut callback = move |event: FemEigenProgress| {
+            if event.phase == "writing_artifacts" {
+                action
+            } else {
+                StepAction::Continue
+            }
+        };
+        let mut progress: Option<&mut FemEigenProgressCallback<'_>> = Some(&mut callback);
+        let write_action = emit_fem_eigen_progress(
+            &mut progress,
+            FemEigenProgress {
+                phase: "writing_artifacts",
+                ..Default::default()
+            },
+        );
+        assert_eq!(write_action, action);
+
+        let mut terminal_state = NativeModalTerminalState::Completed;
+        let mut solver_diagnostics = serde_json::json!({
+            "status": "ready",
+            "complete": true,
+        });
+        let mut artifacts = build_native_modal_artifacts_after_progress(
+            write_action,
+            &mut terminal_state,
+            &mut solver_diagnostics,
+            |diagnostics| {
+                assert_eq!(diagnostics["status"], "interrupted");
+                assert_eq!(diagnostics["complete"], false);
+                Ok(vec![AuxiliaryArtifact {
+                    relative_path: "eigen/mode_fields/sample_0000/mode_0000/vector.bin".into(),
+                    bytes: MODE_BYTES.to_vec(),
+                }])
+            },
+        )
+        .expect("artifact builder runs after terminal control is recorded");
+        append_native_modal_partial_artifact(&mut artifacts, terminal_state, 1)
+            .expect("partial status is recorded with preserved mode count");
+
+        assert_eq!(terminal_state, expected_state);
+        assert_eq!(terminal_state.run_status(), expected_status);
+        assert_ne!(terminal_state, NativeModalTerminalState::Completed);
+        assert_eq!(solver_diagnostics["complete"], false);
+        assert_eq!(
+            solver_diagnostics["stop_reason"],
+            match action {
+                StepAction::Stop => "cancel_requested",
+                StepAction::Pause => "pause_requested",
+                StepAction::Continue => unreachable!(),
+            }
+        );
+        assert_eq!(
+            artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path
+                    == "eigen/mode_fields/sample_0000/mode_0000/vector.bin")
+                .expect("certified mode artifact remains present")
+                .bytes
+                .as_slice(),
+            MODE_BYTES
+        );
+        let partial = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/partial.v1.json")
+            .expect("terminal partial artifact");
+        let partial: serde_json::Value =
+            serde_json::from_slice(&partial.bytes).expect("partial artifact JSON");
+        assert_eq!(partial["complete"], false);
+        assert_eq!(partial["stop_reason"], expected_reason);
+        assert_eq!(partial["preserved_mode_count"], 1);
+    }
+}
+
+#[test]
+fn direct_floquet_runtime_control_preserves_pause_and_stop_reasons() {
+    let pause_request = AtomicU8::new(NativeModalControlRequest::None as u8);
+    record_native_modal_control_request(&pause_request, StepAction::Pause);
+    assert_eq!(
+        NativeModalControlRequest::from_atomic_value(pause_request.load(Ordering::Relaxed)),
+        NativeModalControlRequest::Pause
+    );
+    record_native_modal_control_request(&pause_request, StepAction::Continue);
+    assert_eq!(
+        NativeModalControlRequest::from_atomic_value(pause_request.load(Ordering::Relaxed)),
+        NativeModalControlRequest::Pause
+    );
+    let stop_request = AtomicU8::new(NativeModalControlRequest::None as u8);
+    record_native_modal_control_request(&stop_request, StepAction::Stop);
+    assert_eq!(
+        NativeModalControlRequest::from_atomic_value(stop_request.load(Ordering::Relaxed)),
+        NativeModalControlRequest::Stop
+    );
+    let pause_then_stop = AtomicU8::new(NativeModalControlRequest::None as u8);
+    record_native_modal_control_request(&pause_then_stop, StepAction::Pause);
+    record_native_modal_control_request(&pause_then_stop, StepAction::Stop);
+    assert_eq!(
+        NativeModalControlRequest::from_atomic_value(pause_then_stop.load(Ordering::Relaxed)),
+        NativeModalControlRequest::Stop
+    );
+    let stop_then_pause = AtomicU8::new(NativeModalControlRequest::None as u8);
+    record_native_modal_control_request(&stop_then_pause, StepAction::Stop);
+    record_native_modal_control_request(&stop_then_pause, StepAction::Pause);
+    assert_eq!(
+        NativeModalControlRequest::from_atomic_value(stop_then_pause.load(Ordering::Relaxed)),
+        NativeModalControlRequest::Stop
+    );
+
+    let paused =
+        NativeModalTerminalState::resolve(true, NativeModalControlRequest::Pause);
+    assert_eq!(paused.run_status(), RunStatus::Paused);
+    assert_eq!(
+        paused.diagnostics_stop_reason(),
+        Some("pause_requested")
+    );
+    assert_eq!(paused.partial_stop_reason(), Some("pause_requested"));
+
+    let stopped =
+        NativeModalTerminalState::resolve(true, NativeModalControlRequest::Stop);
+    assert_eq!(stopped.run_status(), RunStatus::Cancelled);
+    assert_eq!(
+        stopped.diagnostics_stop_reason(),
+        Some("cancel_requested")
+    );
+    assert_eq!(stopped.partial_stop_reason(), Some("cancelled"));
+
+    let interrupted_without_step_action =
+        NativeModalTerminalState::resolve(true, NativeModalControlRequest::None);
+    assert_eq!(
+        interrupted_without_step_action.run_status(),
+        RunStatus::Cancelled
+    );
+    assert_eq!(
+        interrupted_without_step_action.diagnostics_stop_reason(),
+        Some("cancel_requested")
+    );
+
+    let completed = NativeModalTerminalState::resolve(false, NativeModalControlRequest::Pause);
+    assert_eq!(completed.run_status(), RunStatus::Completed);
+    assert_eq!(completed.diagnostics_stop_reason(), None);
+    assert_eq!(completed.partial_stop_reason(), None);
+}
+
+#[test]
+fn direct_floquet_pause_and_stop_metadata_match_checkpoint_receipts() {
+    let plan = minimal_native_modal_plan();
+    let mut provenance = ExecutionProvenance::default();
+    provenance.execution_engine = "fem_eigen_cpu_native".to_string();
+    provenance.precision = "double".to_string();
+
+    for (terminal_state, expected_status, expected_diagnostics_reason, expected_partial_reason) in [
+        (
+            NativeModalTerminalState::Paused,
+            "paused",
+            "pause_requested",
+            "pause_requested",
+        ),
+        (
+            NativeModalTerminalState::Cancelled,
+            "cancelled",
+            "cancel_requested",
+            "cancelled",
+        ),
+    ] {
+        let mode_payload = b"complex mode vector bytes".to_vec();
+        let mode_payload_sha256 =
+            format!("sha256:{:x}", Sha256::digest(&mode_payload));
+        let mode_field_id = "analysis:eigen:sample-0000:mode-0000";
+        let mode_metadata_path = "eigen/modes/sample_0000/mode_0000.json";
+        let mode_payload_path = "eigen/mode_fields/sample_0000/mode_0000/vector.bin";
+        let selection_index = serde_json::json!({
+            "schema_version": "eigen_mode_output_selection.v1",
+            "payload_semantics": "full_complex_delta_m",
+            "field_selections": [{
+                "field": "mode",
+                "sample_index": 0,
+                "raw_mode_indices": [0],
+            }],
+            "payloads": [{
+                "field": "mode",
+                "sample_index": 0,
+                "raw_mode_index": 0,
+                "mode_field_id": mode_field_id,
+                "metadata_path": mode_metadata_path,
+                "payload_path": mode_payload_path,
+                "payload_sha256": mode_payload_sha256.clone(),
+            }],
+        });
+        let mode_selection_bytes = serde_json::to_vec_pretty(&selection_index).unwrap();
+        let mut solver_diagnostics = serde_json::json!({
+            "status": "ready",
+            "complete": true,
+        });
+        apply_native_modal_terminal_diagnostics(&mut solver_diagnostics, terminal_state)
+            .expect("terminal state should produce solver diagnostics");
+
+        let spectrum = serde_json::json!({
+            "schema_version": "eigen_spectrum.v2",
+            "samples": [],
+        });
+        let spectrum_bytes = serde_json::to_vec_pretty(&spectrum).unwrap();
+        let spectrum_revision = format!("sha256:{:x}", Sha256::digest(&spectrum_bytes));
+        let manifest = serde_json::json!({
+            "schema_version": "frequency_domain_manifest.v1",
+            "status": "ready",
+            "complete": true,
+            "artifacts": {
+                "spectrum_v2_path": "eigen/spectrum.v2.json",
+                "mode_output_selection_path": "eigen/mode_output_selection.v1.json",
+            },
+            "cross_artifact_refs": [{
+                "relation": "source_spectrum",
+                "artifact": "eigen/spectrum.v2.json",
+                "revision": spectrum_revision.clone(),
+            }],
+        });
+        let mut artifacts = vec![
+            json_artifact(
+                "frequency_domain/manifest.v1.json",
+                &manifest,
+            )
+            .unwrap(),
+            AuxiliaryArtifact {
+                relative_path: "eigen/spectrum.v2.json".to_string(),
+                bytes: spectrum_bytes.clone(),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/mode_output_selection.v1.json".to_string(),
+                bytes: mode_selection_bytes.clone(),
+            },
+            json_artifact(
+                mode_metadata_path,
+                &serde_json::json!({
+                    "sample_index": 0,
+                    "raw_mode_index": 0,
+                    "mode_field_id": mode_field_id,
+                    "payload_sha256": mode_payload_sha256,
+                    "requested_fields": ["mode"],
+                    "field_output_selection_path": "eigen/mode_output_selection.v1.json",
+                }),
+            )
+            .unwrap(),
+            AuxiliaryArtifact {
+                relative_path: mode_payload_path.to_string(),
+                bytes: mode_payload.clone(),
+            },
+            json_artifact("eigen/diagnostics/solver.v1.json", &solver_diagnostics).unwrap(),
+        ];
+        append_native_modal_terminal_artifacts(&mut artifacts, terminal_state, 0, 1)
+            .expect("terminal state should update and preserve its artifact manifest");
+
+        let artifact = |path: &str| {
+            artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == path)
+                .unwrap_or_else(|| panic!("missing artifact {path}"))
+        };
+        let terminal_diagnostics: serde_json::Value =
+            serde_json::from_slice(&artifact("eigen/diagnostics/solver.v1.json").bytes).unwrap();
+        assert_eq!(terminal_diagnostics["status"], "interrupted");
+        assert_eq!(terminal_diagnostics["complete"], false);
+        assert_eq!(
+            terminal_diagnostics["stop_reason"],
+            expected_diagnostics_reason
+        );
+        let partial: serde_json::Value =
+            serde_json::from_slice(&artifact("eigen/partial.v1.json").bytes).unwrap();
+        assert_eq!(partial["complete"], false);
+        assert_eq!(partial["stop_reason"], expected_partial_reason);
+        let final_manifest: serde_json::Value =
+            serde_json::from_slice(&artifact("frequency_domain/manifest.v1.json").bytes)
+                .unwrap();
+        assert_eq!(final_manifest["status"], "interrupted");
+        assert_eq!(final_manifest["complete"], false);
+        assert_eq!(
+            final_manifest["artifacts"]["mode_output_selection_path"],
+            "eigen/mode_output_selection.v1.json"
+        );
+        assert_eq!(
+            artifact("eigen/mode_output_selection.v1.json").bytes.as_slice(),
+            mode_selection_bytes.as_slice()
+        );
+        let final_selection: serde_json::Value = serde_json::from_slice(
+            &artifact("eigen/mode_output_selection.v1.json").bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            final_selection["field_selections"],
+            serde_json::json!([{
+                "field": "mode",
+                "sample_index": 0,
+                "raw_mode_indices": [0],
+            }])
+        );
+        assert_eq!(
+            final_selection["payloads"][0]["payload_sha256"],
+            format!("sha256:{:x}", Sha256::digest(&artifact(mode_payload_path).bytes))
+        );
+        assert_eq!(
+            artifact(mode_payload_path).bytes.as_slice(),
+            mode_payload.as_slice()
+        );
+        assert_eq!(
+            final_manifest["cross_artifact_refs"][0]["revision"],
+            spectrum_revision
+        );
+        assert_eq!(
+            final_manifest["cross_artifact_refs"][0]["revision"],
+            format!("sha256:{:x}", Sha256::digest(&artifact("eigen/spectrum.v2.json").bytes))
+        );
+
+        let status = terminal_state.run_status();
+        let result = native_modal_run_result(status, StepStats::default(), Vec::new());
+        assert_eq!(result.status, status);
+        assert_eq!(
+            result.completion.as_ref().map(|completion| completion.status.as_str()),
+            Some(expected_status)
+        );
+        let checkpoint_artifacts = super::single_k_checkpoint::
+            interrupted_single_k_diagnostic_artifacts(
+                0,
+                [0.0, 0.0, 0.0],
+                &plan,
+                &artifacts,
+                status,
+                &provenance,
+            )
+            .expect("interrupted checkpoint receipt should preserve status and provenance");
+        let checkpoint_manifest: serde_json::Value = serde_json::from_slice(
+            &checkpoint_artifacts
+                .iter()
+                .find(|artifact| {
+                    artifact.relative_path
+                        == "eigen/diagnostics/raw_single_k/sample_0000/manifest.json"
+                })
+                .expect("checkpoint manifest is published")
+                .bytes,
+        )
+        .unwrap();
+        assert_eq!(checkpoint_manifest["run_status"], expected_status);
+        assert_eq!(
+            checkpoint_manifest["execution_provenance"],
+            serde_json::to_value(&provenance).unwrap()
+        );
+        let partial_record = checkpoint_manifest["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["source_relative_path"] == "eigen/partial.v1.json")
+            .expect("checkpoint receipt covers the terminal partial artifact bytes");
+        let copied_partial_path = format!(
+            "eigen/diagnostics/raw_single_k/sample_0000/{}",
+            partial_record["relative_path"].as_str().expect("receipt records the copied path")
+        );
+        let copied_partial = checkpoint_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == copied_partial_path)
+            .expect("checkpoint retains the terminal partial artifact");
+        assert_eq!(
+            partial_record["sha256"],
+            format!("{:x}", Sha256::digest(&copied_partial.bytes))
+        );
+    }
+}
+
 #[cfg(feature = "fem-gpu")]
 #[test]
 fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path() {
@@ -7272,11 +10601,15 @@ fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path()
         &plan,
         &[
             OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string(),
+                scope: None,
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -7375,7 +10708,8 @@ fn cpu_full_2x2_frequency_window_progress_and_provenance_report_shift_invert() {
     let run = execute_cpu_fem_eigen_with_progress(
         &plan,
         &[OutputIR::EigenSpectrum {
-            quantity: "frequency_hz".to_string(),
+            quantity: "eigenfrequency".to_string(),
+            scope: None,
         }],
         &mut progress,
     )
@@ -7442,11 +10776,66 @@ fn equilibrium_artifact_loader_requires_certified_v7_contract() {
     ));
     std::fs::write(&path, artifact.to_string()).unwrap();
     assert_eq!(
-        load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+        load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
             .unwrap()
             .m0,
         vec![[0.0, 0.0, 1.0]]
     );
+
+    let mut canonical_artifact = artifact.clone();
+    canonical_artifact["schema_version"] = serde_json::json!("equilibrium_artifact.v8");
+    canonical_artifact["material_identity_kind"] =
+        serde_json::json!("canonical_equilibrium_material.v2");
+    canonical_artifact["material_provenance_signature"] =
+        serde_json::json!(format!("sha256:{}", "a".repeat(64)));
+    canonical_artifact["material_provenance_scope"] = serde_json::json!("materialization_plan");
+    let seal_v8 = |mut value: serde_json::Value| {
+        let object = value.as_object_mut().unwrap();
+        object.remove("content_sha256");
+        object.remove("equilibrium_id");
+        let digest = shared_domain_content_digest("equilibrium_artifact_v8", &value).unwrap();
+        value["content_sha256"] = serde_json::json!(digest);
+        value["equilibrium_id"] = serde_json::json!(format!(
+            "equilibrium_artifact.v8:{}",
+            digest.strip_prefix("sha256:").unwrap()
+        ));
+        value
+    };
+    canonical_artifact = seal_v8(canonical_artifact);
+    std::fs::write(&path, canonical_artifact.to_string()).unwrap();
+    assert_eq!(
+        load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
+            .unwrap()
+            .value,
+        canonical_artifact
+    );
+    for field in [
+        "material_signature",
+        "material_identity_kind",
+        "material_provenance_signature",
+        "material_provenance_scope",
+    ] {
+        let mut invalid = canonical_artifact.clone();
+        invalid.as_object_mut().unwrap().remove(field);
+        std::fs::write(&path, seal_v8(invalid).to_string()).unwrap();
+        assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+    }
+    for (field, invalid_value) in [
+        ("material_identity_kind", "raw"),
+        ("material_provenance_scope", "original_authored_relaxation"),
+        ("material_provenance_signature", "sha256:not-a-digest"),
+        ("material_signature", "sha256:ABC"),
+    ] {
+        let mut invalid = canonical_artifact.clone();
+        invalid[field] = serde_json::json!(invalid_value);
+        std::fs::write(&path, seal_v8(invalid).to_string()).unwrap();
+        assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+    }
+    let mut masqueraded_legacy = artifact.clone();
+    masqueraded_legacy["material_identity_kind"] =
+        serde_json::json!("canonical_equilibrium_material.v2");
+    std::fs::write(&path, masqueraded_legacy.to_string()).unwrap();
+    assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
 
     let mut invalid_cases = Vec::new();
     invalid_cases.push(serde_json::json!([[0.0, 0.0, 1.0]]));
@@ -7472,11 +10861,11 @@ fn equilibrium_artifact_loader_requires_certified_v7_contract() {
 
     for invalid in invalid_cases {
         std::fs::write(&path, invalid.to_string()).unwrap();
-        assert!(load_equilibrium_artifact_v7(path.to_str().unwrap(), 1).is_err());
+        assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
     }
 
     std::fs::write(&path, v6.to_string()).unwrap();
-    let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1).unwrap_err();
+    let error = load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).unwrap_err();
     assert!(error.message.contains(
             "equilibrium_artifact_v6_uncertified: rerun relaxation or migrate with source completion evidence"
         ));
@@ -7520,7 +10909,7 @@ fn equilibrium_artifact_v7_loader_rejects_payload_tamper() {
 
     artifact["m0"] = serde_json::json!([[0.0, 1.0, 0.0]]);
     std::fs::write(&path, artifact.to_string()).unwrap();
-    let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+    let error = load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
         .expect_err("tampering after digest creation must fail closed");
     assert!(error.message.contains("content_sha256"));
     std::fs::remove_file(path).unwrap();
@@ -7558,8 +10947,1042 @@ fn equilibrium_artifact_v7_loader_rejects_arbitrary_declared_hash_and_id() {
     });
 
     std::fs::write(&path, artifact.to_string()).unwrap();
-    let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+    let error = load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
         .expect_err("a self-consistent but arbitrary declared hash/id must fail closed");
     assert!(error.message.contains("content_sha256"));
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn sparse_shared_domain_mass_preserves_dense_reference_and_full_node_weights() {
+    use super::eigen_mass_metric::{ModalMassMetric, SharedDomainSparseMass};
+    let mut plan = minimal_native_modal_plan();
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+    let full_reduction = full_physical_magnetic_reduction_map(&topology);
+    let full = assemble_tangent_mass_matrix(&topology, &full_reduction);
+    let (dense, active, classes, count) =
+        reduced_shared_domain_tangent_mass(&topology, &full).unwrap();
+    let phases = vec![Complex64::new(1.0, 0.0); topology.n_nodes];
+    let sparse =
+        SharedDomainSparseMass::from_topology(&topology, &classes, count, &phases).unwrap();
+    let q: Vec<_> = (0..dense.nrows())
+        .map(|i| Complex64::new((i + 1) as f64, (i % 3) as f64))
+        .collect();
+    let expected = complex_block_mass_norm(&dense, &q);
+    let actual = sparse.quadratic_form(&q);
+    assert!((actual - expected).norm() <= expected.norm() * 1e-13);
+    assert_eq!(active, sparse.active_nodes);
+    let weights =
+        node_mass_weights_from_tangent_mass(&full, full_reduction.active_nodes.len()).unwrap();
+    for (a, b) in weights.iter().zip(&sparse.node_diagonal_weights) {
+        assert!((a - b).abs() <= a.abs() * 1e-13);
+    }
+}
+
+#[test]
+fn eigen_path_mass_weights_sum_physical_nodes_into_floquet_classes() {
+    let mut plan = minimal_native_modal_plan();
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+    plan.k_sampling = Some(KSamplingIR::Single {
+        k_vector: [1.0e6, 0.0, 0.0],
+    });
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("test mesh is valid");
+    let reduction = build_reduction_map(&topology, &plan.spin_wave_bc, plan.k_sampling.as_ref())
+        .expect("Floquet reduction should be valid");
+    let physical_nodes = topology
+        .magnetic_node_volumes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
+        .collect::<Vec<_>>();
+    assert!(reduction.active_nodes.len() < physical_nodes.len());
+    let physical_weights = (1..=physical_nodes.len())
+        .map(|value| value as f64)
+        .collect::<Vec<_>>();
+
+    let reduced = super::eigen_path::eigen_path_reduced_node_mass_weights(
+        &topology,
+        &reduction,
+        &physical_weights,
+    )
+    .expect("physical FE weights should reduce onto Floquet classes");
+    let mut expected = vec![0.0; reduction.active_nodes.len()];
+    for (node, weight) in physical_nodes.into_iter().zip(physical_weights) {
+        expected[reduction.node_map[node].expect("magnetic node should map to a class")] += weight;
+    }
+    assert_eq!(reduced, expected);
+    assert!((reduced.iter().sum::<f64>() - expected.iter().sum::<f64>()).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eigen_path_returns_typed_partial_for_stop_and_pause_before_single_k_execution() {
+    for (action, expected_status, expected_reason) in [
+        (StepAction::Stop, RunStatus::Cancelled, "cancelled"),
+        (StepAction::Pause, RunStatus::Paused, "pause_requested"),
+    ] {
+        let mut plan = minimal_native_modal_plan();
+        plan.k_sampling = Some(KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("Gamma".into()),
+                    k_vector: [0.0; 3],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".into()),
+                    k_vector: [1.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        });
+        let mut phases = Vec::new();
+        let mut callback = |event: FemEigenProgress| {
+            phases.push(event.phase);
+            action
+        };
+        let run = crate::dispatch::execute_fem_eigen_with_progress(
+            PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+            &plan,
+            &[],
+            &mut callback,
+        )
+        .expect("active runtime control should return a typed partial result");
+
+        assert_eq!(run.result.status, expected_status);
+        assert_eq!(phases, vec!["preparing_k_path_sample"]);
+        let partial_artifact = run
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/partial.v1.json")
+            .expect("interrupted path should publish a partial diagnostic");
+        let raw_partial = run
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| {
+                artifact
+                    .relative_path
+                    .starts_with("eigen/diagnostics/raw_single_k/sample_0000/")
+                    && artifact
+                        .relative_path
+                        .ends_with("/artifacts/eigen/partial.v1.json")
+            })
+            .expect("interrupted single-k partial diagnostic remains sample-namespaced");
+        assert_eq!(partial_artifact.bytes, raw_partial.bytes);
+        let partial: serde_json::Value =
+            serde_json::from_slice(&partial_artifact.bytes).unwrap();
+        assert_eq!(partial["complete"], false);
+        assert_eq!(partial["stop_reason"], expected_reason);
+        assert_eq!(partial["preserved_mode_count"], 0);
+        assert!(run
+            .auxiliary_artifacts
+            .iter()
+            .all(|artifact| artifact.relative_path != "eigen/spectrum.json"));
+    }
+}
+
+#[test]
+fn bias_field_path_requires_producer_identity_before_relaxation() {
+    let mut plan = minimal_native_modal_plan();
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".into()),
+                k_vector: [0.0; 3],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".into()),
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![1],
+        closed: false,
+    });
+    plan.bias_field_samples = vec![
+        bias_field_sample(
+            0,
+            [20_000.0, 0.0, 0.0],
+            fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+            fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+        ),
+        bias_field_sample(
+            1,
+            [25_000.0, 0.0, 0.0],
+            fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+            fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+        ),
+    ];
+    let mut callback = |_event: FemEigenProgress| StepAction::Continue;
+    let error = crate::dispatch::execute_fem_eigen_with_progress(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &plan,
+        &[],
+        &mut callback,
+    )
+    .expect_err("a physical bias-field path without producer identity must fail closed");
+    assert!(
+        error
+            .message
+            .contains("fem_bias_field_relaxation_missing_producer_stage_identity"),
+        "unexpected pre-identity failure: {}",
+        error.message
+    );
+}
+
+#[test]
+fn certified_artifact_publication_rejects_unknown_or_mixed_schema_pairs() {
+    assert_eq!(
+        certified_equilibrium_artifact_filenames(
+            Some("equilibrium_artifact.v7"),
+            Some("LinearizationState.v6")
+        )
+        .unwrap(),
+        (
+            "equilibrium_artifact.v7.json",
+            "linearization_state.v6.json"
+        )
+    );
+    assert_eq!(
+        certified_equilibrium_artifact_filenames(
+            Some("equilibrium_artifact.v8"),
+            Some("LinearizationState.v7")
+        )
+        .unwrap(),
+        (
+            "equilibrium_artifact.v8.json",
+            "linearization_state.v7.json"
+        )
+    );
+    for pair in [
+        (None, None),
+        (Some("equilibrium_artifact.v8"), None),
+        (
+            Some("equilibrium_artifact.v8"),
+            Some("LinearizationState.v6"),
+        ),
+        (
+            Some("equilibrium_artifact.v7"),
+            Some("LinearizationState.v7"),
+        ),
+        (Some("unknown"), Some("LinearizationState.v6")),
+    ] {
+        assert!(certified_equilibrium_artifact_filenames(pair.0, pair.1).is_err());
+    }
+}
+
+#[test]
+fn consumer_plan_snapshot_uses_the_identity_digest_preimage_bytes() {
+    let plan = minimal_native_modal_plan();
+    let (bytes, digest) = consumer_plan_snapshot_bytes_and_sha256(&plan).unwrap();
+    assert_eq!(bytes, serde_json::to_vec(&plan).unwrap());
+    assert_eq!(
+        digest,
+        shared_domain_content_digest("linearization_identity.consumer_plan", &plan).unwrap()
+    );
+    let mut modified = bytes.clone();
+    modified.push(b' ');
+    assert_ne!(digest, format!("sha256:{:x}", Sha256::digest(&modified)));
+}
+
+#[test]
+fn complex_modal_normalization_uses_one_scale_below_the_historical_floor() {
+    let vector = [Complex64::new(1.0, 0.0)];
+    let mass = vec![vec![Complex64::new(1.0e-40, 0.0)]];
+    let (normalized, scale) =
+        normalize_complex_mode_and_scale(&vector, &mass, &EigenNormalizationIR::UnitL2).unwrap();
+    assert!((scale / 1.0e-20 - 1.0).abs() < 1.0e-14);
+    assert!((complex_mass_norm(&mass, &normalized).re - 1.0).abs() < 1.0e-14);
+    // A coupled potential proportional to q must retain the same ratio.
+    let potential = Complex64::new(3.0, -2.0) / scale;
+    assert!((potential / normalized[0] - Complex64::new(3.0, -2.0)).norm() < 1.0e-14);
+    let block_mass = DMatrix::from_element(1, 1, 1.0e-40);
+    let mut block = vector.to_vec();
+    let block_scale =
+        normalize_complex_block_mode(&mut block, &block_mass, EigenNormalizationIR::UnitL2)
+            .unwrap();
+    assert_eq!(block_scale, scale);
+    assert_eq!(block, normalized);
+}
+
+#[test]
+fn complex_modal_normalization_rejects_invalid_norms_and_preserves_input() {
+    let unit = [Complex64::new(1.0, 0.0)];
+    for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mass = vec![vec![Complex64::new(value, 0.0)]];
+        assert!(normalize_complex_mode(&unit, &mass, &EigenNormalizationIR::UnitL2).is_err());
+        let mut block = unit.to_vec();
+        let block_mass = DMatrix::from_element(1, 1, value);
+        assert!(normalize_complex_block_mode(
+            &mut block,
+            &block_mass,
+            EigenNormalizationIR::UnitL2
+        )
+        .is_err());
+        assert_eq!(block, unit);
+    }
+    let mass = vec![vec![Complex64::new(1.0, 0.0)]];
+    for normalization in [
+        EigenNormalizationIR::UnitL2,
+        EigenNormalizationIR::UnitMaxAmplitude,
+    ] {
+        assert!(
+            normalize_complex_mode(&[Complex64::new(0.0, 0.0)], &mass, &normalization).is_err()
+        );
+        assert!(
+            normalize_complex_mode(&[Complex64::new(f64::NAN, 0.0)], &mass, &normalization)
+                .is_err()
+        );
+        assert!(normalize_complex_mode(&unit, &[], &normalization).is_err());
+    }
+}
+
+#[test]
+fn coupled_potential_normalization_rejects_overflow_after_scaling() {
+    let finite_potential = [Complex64::new(1.0e308, 0.0)];
+    assert!(normalize_complex_vector_with_scale(&finite_potential, 1.0e-20).is_err());
+    let valid = [Complex64::new(3.0, -2.0)];
+    let normalized = normalize_complex_vector_with_scale(&valid, 1.0e-20).unwrap();
+    assert!(normalized[0].re.is_finite() && normalized[0].im.is_finite());
+}
+
+
+#[test]
+fn complex_modal_norm_interval_rejects_meaningful_imaginary_mass() {
+    let q = [Complex64::new(1.0, 0.0)];
+    let mass = vec![vec![Complex64::new(1.0, 1.0e-3)]];
+    assert!(super::eigen_solve::normalize_complex_mode_and_scale(
+        &q, &mass, &EigenNormalizationIR::UnitL2).is_err());
+}
+
+#[test]
+fn complex_modal_norm_interval_accepts_small_positive_subnormal_without_a_floor() {
+    let q = [Complex64::new(1.0, 0.0)];
+    let norm = f64::MIN_POSITIVE * 0.5;
+    let mass = vec![vec![Complex64::new(norm, 0.0)]];
+    let (_, scale) = super::eigen_solve::normalize_complex_mode_and_scale(
+        &q, &mass, &EigenNormalizationIR::UnitL2).unwrap();
+    assert_eq!(scale, norm.sqrt());
+}
+
+#[test]
+fn complex_modal_norm_interval_rejects_uncertain_positive_cancellation() {
+    let q = [Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)];
+    let mass = vec![
+        vec![Complex64::new(1.0e16, 0.0), Complex64::new(-1.0e16, 0.0)],
+        vec![Complex64::new(-1.0e16, 0.0), Complex64::new(1.0e16 + 2.0, 0.0)],
+    ];
+    // The exact stored-input quadratic is positive, but cancellation leaves
+    // its sign uncertified by the outward enclosure. No floor or guessed epsilon.
+    assert!(super::eigen_solve::normalize_complex_mode_and_scale(
+        &q, &mass, &EigenNormalizationIR::UnitL2).is_err());
+}
+
+#[test]
+fn complex_modal_norm_interval_rejects_rectangular_metric_atomically() {
+    let mut q = vec![Complex64::new(1.0, 1.0)];
+    let before = q.clone();
+    let metric = DMatrix::<f64>::from_row_slice(1, 2, &[1.0, 0.0]);
+    assert!(super::eigen_native_result::normalize_complex_block_mode(
+        &mut q, &metric, EigenNormalizationIR::UnitL2).is_err());
+    assert_eq!(q, before);
+}
+
+
+#[test]
+fn spectrum_quantity_manual_single_k_planned_entry_rejects_before_callbacks() {
+    let plan = bounded_k0_execution_plan();
+    let resolution = exact_k0_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("bounded single-k CPU resolution should be accepted")
+        .expect("bounded single-k CPU resolution should produce a planned execution");
+    let outputs = [OutputIR::EigenSpectrum {
+        quantity: "frequency_hz".to_string(),
+        scope: None,
+    }];
+    let before = outputs.clone();
+    let callback_count = std::sync::atomic::AtomicUsize::new(0);
+    let mut callback = |_event: FemEigenProgress| {
+        callback_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        StepAction::Continue
+    };
+
+    let error = execute_planned_fem_eigen_with_progress(
+        execution,
+        &plan,
+        &outputs,
+        &mut callback,
+    )
+    .expect_err("manual single-k runner entry must reject noncanonical spectrum quantity");
+
+    assert!(
+        error.message.contains("eigen_spectrum quantity")
+            && error.message.contains("unsupported"),
+        "expected the spectrum contract error before equilibrium/provider work, got {}",
+        error.message
+    );
+    assert_eq!(
+        callback_count.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "invalid output must not emit progress"
+    );
+    assert_eq!(outputs, before, "selection validation must not mutate inputs");
+}
+
+
+fn eigen_diagnostics_native_mode_fixture() -> NativeModalEigenpair {
+    let mut vector = vec![Complex64::new(0.0, 0.0); 8];
+    vector[0] = Complex64::new(1.0, 0.0);
+    NativeModalEigenpair {
+        cluster_id: 0,
+        frequency_hz: 1.25e9,
+        omega_rad_s: std::f64::consts::TAU * 1.25e9,
+        eigenvalue_real: 0.0,
+        eigenvalue_imag: std::f64::consts::TAU * 1.25e9,
+        residual_absolute_l2: Some(1.25e-5),
+        residual_relative_l2: 2.5e-8,
+        residual_linf: Some(3.75e-4),
+        mass_norm: 1.0,
+        block_residual_q: 2.5e-8,
+        block_residual_phi: 0.0,
+        block_residual_gauge: None,
+        backend_reported_residual: Some(2.5e-8),
+        vector,
+        q_vector: Vec::new(),
+        phi_vector: Vec::new(),
+        floquet_descriptor_certified: false,
+        floquet_full_descriptor_certified: false,
+        floquet_seam_frame_certified: false,
+        floquet_gauge_policy_satisfied: false,
+        floquet_geometric_bc_certified: false,
+        floquet_poisson_boundary_kind: None,
+        floquet_poisson_gauge_policy: None,
+        floquet_potential_representation: None,
+        floquet_magnetic_relative_residual: None,
+        floquet_potential_relative_residual: None,
+        floquet_full_magnetic_relative_residual: None,
+        floquet_full_potential_relative_residual: None,
+        floquet_scalar_phase_seam_relative_residual: None,
+        floquet_tangent_frame_seam_relative_residual: None,
+        floquet_cartesian_magnetic_seam_relative_residual: None,
+        floquet_equilibrium_pair_relative_residual: None,
+        floquet_potential_real_split: Vec::new(),
+    }
+}
+
+fn eigen_diagnostics_only_native_modal_artifacts(outputs: &[OutputIR]) -> Vec<AuxiliaryArtifact> {
+    let plan = minimal_native_modal_plan();
+    let equilibrium = plan.equilibrium_magnetization.clone();
+    let active_nodes = (0..equilibrium.len()).collect::<Vec<_>>();
+    let reduction = ReductionMap {
+        active_nodes: active_nodes.clone(),
+        node_map: active_nodes.iter().copied().map(Some).collect(),
+        node_phases: vec![Complex64::new(1.0, 0.0); equilibrium.len()],
+        complex_reduction: false,
+    };
+    let bases = tangent_bases(&equilibrium);
+    let modes = vec![eigen_diagnostics_native_mode_fixture()];
+    let mass_weights = vec![1.0; equilibrium.len()];
+
+    super::eigen_native_artifacts::native_modal_artifacts(
+        &plan,
+        outputs,
+        &equilibrium,
+        &reduction,
+        &bases,
+        &modes,
+        Some(&mass_weights),
+        serde_json::json!({
+            "solver_model": "native_modal_diagnostics_fixture",
+            "solver_adapter": "native_modal_diagnostics_fixture",
+            "production_solver_available": true,
+        }),
+        0,
+        None,
+        None,
+        None,
+        None,
+        0,
+        None,
+    )
+    .expect("native modal publisher should emit diagnostics artifacts")
+}
+
+fn eigen_diagnostics_published_json(
+    artifacts: &[AuxiliaryArtifact],
+    relative_path: &str,
+) -> serde_json::Value {
+    let artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == relative_path)
+        .unwrap_or_else(|| panic!("expected published artifact {relative_path}"));
+    serde_json::from_slice(&artifact.bytes)
+        .unwrap_or_else(|error| panic!("{relative_path} should be JSON: {error}"))
+}
+
+fn assert_eigen_diagnostics_only_artifacts(artifacts: &[AuxiliaryArtifact]) {
+    assert!(
+        artifacts.iter().any(|artifact| {
+            artifact.relative_path == "eigen/diagnostics/solver.v1.json"
+        }),
+        "mandatory raw solver diagnostics must remain published"
+    );
+    assert!(
+        artifacts.iter().all(|artifact| {
+            !matches!(
+                artifact.relative_path.as_str(),
+                "eigen/spectrum.json" | "eigen/spectrum.v2.json" | "eigen/spectrum.v3.json"
+            ) && !artifact.relative_path.starts_with("eigen/modes/")
+        }),
+        "diagnostics-only output must not publish a spectrum or per-mode fields"
+    );
+}
+
+#[test]
+fn eigen_diagnostics_native_modal_publisher_all_false_preserves_counts_without_mode_fields() {
+    let outputs = [OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: false,
+        include_overlaps: false,
+        include_tangent_leakage: false,
+        include_orthogonality: false,
+    }];
+    let artifacts = eigen_diagnostics_only_native_modal_artifacts(&outputs);
+    assert_eigen_diagnostics_only_artifacts(&artifacts);
+
+    let diagnostics = eigen_diagnostics_published_json(&artifacts, "eigen/diagnostics.v2.json");
+    assert_eq!(diagnostics["schema_version"], "eigen_diagnostics.v2");
+    assert_eq!(diagnostics["sample_count"], 1);
+    assert_eq!(diagnostics["mode_count"], 1);
+    assert_eq!(diagnostics["dispersion"]["mode_count_requested"], 6);
+    for section_name in [
+        "tracking",
+        "residuals",
+        "overlaps",
+        "tangent_leakage",
+        "orthogonality",
+    ] {
+        let section = &diagnostics[section_name];
+        assert_eq!(section["status"], "not_requested", "{section_name}");
+        assert_eq!(section["available"], false, "{section_name}");
+        assert!(section["data"].is_null(), "{section_name}");
+    }
+
+    let raw = eigen_diagnostics_published_json(&artifacts, "eigen/diagnostics/solver.v1.json");
+    assert_eq!(raw["solver_model"], "native_modal_diagnostics_fixture");
+    assert_eq!(raw["mode_count"], 1);
+    assert_eq!(raw["requested_mode_count"], 6);
+    assert!(raw.get("method_evidence").is_none());
+    let manifest = eigen_diagnostics_published_json(&artifacts, "frequency_domain/manifest.v1.json");
+    assert!(manifest.get("method_evidence").is_none());
+}
+
+#[test]
+fn eigen_diagnostics_native_modal_publisher_emits_enabled_residual_and_leakage_records() {
+    let outputs = [OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: true,
+        include_overlaps: false,
+        include_tangent_leakage: true,
+        include_orthogonality: false,
+    }];
+    let artifacts = eigen_diagnostics_only_native_modal_artifacts(&outputs);
+    assert_eigen_diagnostics_only_artifacts(&artifacts);
+
+    let diagnostics = eigen_diagnostics_published_json(&artifacts, "eigen/diagnostics.v2.json");
+    assert_eq!(diagnostics["mode_count"], 1);
+    assert_eq!(diagnostics["dispersion"]["mode_count_requested"], 6);
+
+    let residuals = &diagnostics["residuals"];
+    assert_eq!(residuals["status"], "available");
+    assert_eq!(residuals["available"], true);
+    assert_eq!(residuals["data"]["mode_count"], 1);
+    let residual = &residuals["data"]["records"][0];
+    assert_eq!(residual["residual_absolute_l2"], 1.25e-5);
+    assert_eq!(residual["residual_relative_l2"], 2.5e-8);
+    assert_eq!(residual["residual_linf"], 3.75e-4);
+
+    let leakage = &diagnostics["tangent_leakage"];
+    assert_eq!(leakage["status"], "available");
+    assert_eq!(leakage["available"], true);
+    assert_eq!(leakage["data"]["mode_count"], 1);
+    let leakage_record = &leakage["data"]["records"][0];
+    for metric in ["mean_abs", "max_abs", "weighted_relative_l2"] {
+        assert!(
+            leakage_record[metric].is_number(),
+            "native publisher should provide measured {metric}: {leakage_record}"
+        );
+    }
+    assert_eq!(diagnostics["tracking"]["status"], "not_requested");
+    assert_eq!(diagnostics["overlaps"]["status"], "not_requested");
+    assert_eq!(diagnostics["orthogonality"]["status"], "not_requested");
+}
+
+#[test]
+fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provider() {
+    let mut plan = minimal_native_modal_plan();
+    plan.equilibrium = EquilibriumSourceIR::Provided;
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = false;
+    plan.enable_demag = false;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.material.uniaxial_anisotropy = Some(1.0e4);
+    plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.count = 1;
+    let handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &plan,
+        plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "a".repeat(64)),
+        format!("sha256:{}", "b".repeat(64)),
+    )
+    .expect("the small in-memory plan should create an accepted-equilibrium fixture");
+    let outputs = [OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: true,
+        include_overlaps: false,
+        include_tangent_leakage: true,
+        include_orthogonality: false,
+    }];
+
+    let mut policy_plan = plan.clone();
+    policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: Some(1.0e-8),
+        max_outer_iterations: None,
+        max_linear_iterations: None,
+    });
+    let policy_handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &policy_plan,
+        policy_plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "c".repeat(64)),
+        format!("sha256:{}", "d".repeat(64)),
+    )
+    .expect("the reference policy fixture should retain a valid accepted handoff");
+    let callback_count = std::sync::atomic::AtomicUsize::new(0);
+    let mut callback = |_event: FemEigenProgress| {
+        callback_count.fetch_add(1, Ordering::Relaxed);
+        StepAction::Continue
+    };
+    let before_outputs = outputs.clone();
+    let policy_error = execute_fem_eigen_inner(
+        &policy_plan,
+        &outputs,
+        false,
+        false,
+        Some(&mut callback),
+        0,
+        None,
+        None,
+        Some(&policy_handoff),
+        None,
+        None,
+    )
+    .expect_err("reference runtime must reject explicit native solver controls");
+    assert!(
+        policy_error
+            .message
+            .contains("modal_solver_policy_requires_native_petsc_slepc_path"),
+        "unexpected policy error: {}",
+        policy_error.message
+    );
+    assert_eq!(
+        callback_count.load(Ordering::Relaxed),
+        0,
+        "reference policy rejection must happen before progress"
+    );
+    assert_eq!(
+        outputs, before_outputs,
+        "rejection must preserve output intent"
+    );
+
+    let run = execute_fem_eigen_inner(
+        &plan,
+        &outputs,
+        false,
+        false,
+        None,
+        0,
+        None,
+        None,
+        Some(&handoff),
+        None,
+        None,
+    )
+    .expect("reference CPU entry should execute without a native provider");
+    assert!(run.provenance.execution_engine.contains("cpu_baseline_fem_eigen"));
+    assert_eigen_diagnostics_only_artifacts(&run.auxiliary_artifacts);
+
+    let diagnostics = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/diagnostics.v2.json",
+    );
+    assert_eq!(diagnostics["schema_version"], "eigen_diagnostics.v2");
+    assert_eq!(diagnostics["sample_count"], 1);
+    assert_eq!(diagnostics["dispersion"]["mode_count_requested"], 1);
+    assert!(diagnostics["mode_count"].as_u64().unwrap_or_default() > 0);
+    assert_eq!(diagnostics["residuals"]["status"], "available");
+    assert_eq!(diagnostics["tangent_leakage"]["status"], "available");
+    assert_eq!(diagnostics["residuals"]["data"]["mode_count"], diagnostics["mode_count"]);
+    assert_eq!(diagnostics["tangent_leakage"]["data"]["mode_count"], diagnostics["mode_count"]);
+
+    let solver_diagnostics = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/diagnostics/solver.v1.json",
+    );
+    let method_evidence = &solver_diagnostics["method_evidence"];
+    assert_eq!(method_evidence["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(method_evidence["damping"]["requested_policy"], "ignore");
+    assert_eq!(
+        method_evidence["damping"]["resolved_method"],
+        "undamped_reference_eigenbasis"
+    );
+    assert_eq!(method_evidence["damping"]["exact_damped_eigenproblem"], false);
+    let reference_summary = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/metadata/eigen_summary.json",
+    );
+    assert_eq!(
+        reference_summary["solver_diagnostics"]["method_evidence"],
+        *method_evidence
+    );
+
+    let manifest = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "frequency_domain/manifest.v1.json",
+    );
+    assert_eq!(manifest["method_evidence"], *method_evidence);
+    assert_eq!(manifest["complete"], true);
+
+    let mut empty_policy_plan = plan.clone();
+    empty_policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: None,
+        max_outer_iterations: None,
+        max_linear_iterations: None,
+    });
+    let empty_policy_handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &empty_policy_plan,
+        empty_policy_plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "e".repeat(64)),
+        format!("sha256:{}", "f".repeat(64)),
+    )
+    .expect("an all-null manual policy should retain a valid accepted handoff");
+    let empty_policy_run = execute_fem_eigen_inner(
+        &empty_policy_plan,
+        &outputs,
+        false,
+        false,
+        None,
+        0,
+        None,
+        None,
+        Some(&empty_policy_handoff),
+        None,
+        None,
+    )
+    .expect("manual all-null policy must preserve reference compatibility");
+    assert!(empty_policy_run
+        .provenance
+        .execution_engine
+        .contains("cpu_baseline_fem_eigen"));
+    assert_eigen_diagnostics_only_artifacts(&empty_policy_run.auxiliary_artifacts);
+}
+
+#[test]
+fn reference_include_method_evidence_reaches_spectrum_v2_diagnostics_and_manifest() {
+    let mut plan = minimal_native_modal_plan();
+    plan.equilibrium = EquilibriumSourceIR::Provided;
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = false;
+    plan.enable_demag = false;
+    plan.damping_policy = EigenDampingPolicyIR::Include;
+    plan.material.uniaxial_anisotropy = Some(1.0e4);
+    plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.count = 1;
+    let handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &plan,
+        plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "a".repeat(64)),
+        format!("sha256:{}", "b".repeat(64)),
+    )
+    .expect("the small in-memory plan should create an accepted-equilibrium fixture");
+    let outputs = [OutputIR::EigenSpectrum {
+        quantity: "eigenfrequency".to_string(),
+        scope: None,
+    }];
+
+    let run = execute_fem_eigen_inner(
+        &plan,
+        &outputs,
+        false,
+        false,
+        None,
+        0,
+        None,
+        None,
+        Some(&handoff),
+        None,
+        None,
+    )
+    .expect("reference Include run should publish without a native provider");
+
+    let solver_diagnostics = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/diagnostics/solver.v1.json",
+    );
+    let method_evidence = &solver_diagnostics["method_evidence"];
+    assert_eq!(method_evidence["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(method_evidence["damping"]["requested_policy"], "include");
+    assert_eq!(method_evidence["damping"]["alpha_in_pencil"], false);
+    assert_eq!(method_evidence["damping"]["exact_damped_eigenproblem"], false);
+
+    let spectrum_v2 = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/spectrum.v2.json",
+    );
+    let spectrum_sample = &spectrum_v2["samples"][0];
+    assert_eq!(spectrum_sample["method_evidence"], *method_evidence);
+
+    let manifest = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "frequency_domain/manifest.v1.json",
+    );
+    assert_eq!(manifest["method_evidence"], *method_evidence);
+
+    let reference_summary = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/metadata/eigen_summary.json",
+    );
+    assert_eq!(
+        reference_summary["solver_diagnostics"]["method_evidence"],
+        *method_evidence
+    );
+    let notes = reference_summary["solver_notes"]
+        .as_str()
+        .expect("reference summary should describe its damping method");
+    assert!(notes.contains("approximate"));
+    assert!(notes.contains("does not solve the exact damped eigenproblem"));
+
+    let mode = &reference_summary["modes"][0];
+    let frequency_real_hz = mode["frequency_real_hz"]
+        .as_f64()
+        .expect("real reference frequency should be numeric");
+    let frequency_imag_hz = mode["frequency_imag_hz"]
+        .as_f64()
+        .expect("approximate reference damping rate should be numeric");
+    let linewidth_fwhm_hz = mode["linewidth_fwhm_hz"]
+        .as_f64()
+        .expect("approximate reference linewidth should be numeric");
+    let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy)
+        .expect("the fixture damping should be legal");
+    let expected_frequency_imag_hz = frequency_real_hz * damping_factor;
+    let frequency_tolerance = expected_frequency_imag_hz.abs().max(1.0) * 1.0e-12;
+    assert!(frequency_imag_hz > 0.0);
+    assert!(
+        (frequency_imag_hz - expected_frequency_imag_hz).abs() <= frequency_tolerance,
+        "reference imaginary frequency should use the documented proportional correction"
+    );
+    let linewidth_tolerance = linewidth_fwhm_hz.abs().max(1.0) * 1.0e-12;
+    assert!((linewidth_fwhm_hz - 2.0 * frequency_imag_hz).abs() <= linewidth_tolerance);
+}
+
+#[test]
+fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.count = 2;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_pair_to_plan(&mut plan);
+
+    let expected_k_vectors = [
+        [1.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [3.0, 0.0, 0.0],
+    ];
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: expected_k_vectors
+            .iter()
+            .enumerate()
+            .map(|(index, k_vector)| fullmag_ir::KPointIR {
+                label: Some(format!("K{index}")),
+                k_vector: *k_vector,
+            })
+            .collect(),
+        samples_per_segment: vec![1, 1],
+        closed: false,
+    });
+    plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: None,
+        max_outer_iterations: None,
+        max_linear_iterations: None,
+    });
+
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("Floquet path fixture topology");
+    let phase_signatures = expected_k_vectors
+        .iter()
+        .map(|k_vector| {
+            let sample_k = KSamplingIR::Single {
+                k_vector: *k_vector,
+            };
+            let reduction = build_reduction_map(
+                &topology,
+                &plan.spin_wave_bc,
+                Some(&sample_k),
+            )
+            .expect("each nonzero k should have a Floquet reduction");
+            assert!(reduction.complex_reduction);
+            reduction.node_phases
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        phase_signatures.windows(2).all(|pair| pair[0] != pair[1]),
+        "the Floquet reduction must change with each sample's k"
+    );
+
+    // This is an accepted-relax source fixture for runner integration only;
+    // it is not the result of a physical relaxation or stationarity check.
+    let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("the source fixture should create a typed accepted handoff");
+    let handoff_sha256 = handoff.content_sha256();
+    let outputs = [
+        OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope: None,
+        },
+        OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope: Some(fullmag_ir::EigenSpectrumScopeIR::Global),
+        },
+        OutputIR::DispersionCurve {
+            name: "dispersion".to_string(),
+            include_branch_table: true,
+        },
+    ];
+
+    let mut policy_plan = plan.clone();
+    policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: None,
+        max_outer_iterations: Some(24),
+        max_linear_iterations: None,
+    });
+    let policy_handoff = relax_handoff_from_completion(&policy_plan, &accepted_relax_completion())
+        .expect("the reference-policy path fixture should carry an accepted handoff");
+    let callback_count = std::sync::atomic::AtomicUsize::new(0);
+    let mut callback = |_event: FemEigenProgress| {
+        callback_count.fetch_add(1, Ordering::Relaxed);
+        StepAction::Continue
+    };
+    let before_outputs = outputs.clone();
+    let policy_error = super::execute_fem_eigen_path_with_producer_identity(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &policy_plan,
+        &outputs,
+        Some(&policy_handoff),
+        Some(&mut callback),
+        None,
+    )
+    .expect_err("reference k path must reject controls before progress or artifacts");
+    assert!(
+        policy_error
+            .message
+            .contains("modal_solver_policy_requires_native_petsc_slepc_path"),
+        "unexpected path policy error: {}",
+        policy_error.message
+    );
+    assert_eq!(
+        callback_count.load(Ordering::Relaxed),
+        0,
+        "the path-level policy preflight must precede per-sample progress"
+    );
+    assert_eq!(
+        outputs, before_outputs,
+        "rejection must preserve output intent"
+    );
+
+    let missing_handoff_error =
+        super::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
+            PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+            &plan,
+            &outputs,
+            None,
+            None,
+            None,
+            &fullmag_ir::ParallelExecutionPolicyIR::default(),
+            None,
+        )
+        .expect_err("a direct relaxed path without its accepted source handoff must fail closed");
+    assert_eq!(
+        missing_handoff_error.message,
+        "accepted relaxation handoff is required before FEM eigensolve"
+    );
+
+    // Each sample stage-continuation binder rejects a single-k spectrum
+    // with nonzero relaxation_steps before the path can complete.
+    let run = super::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &plan,
+        &outputs,
+        Some(&handoff),
+        None,
+        None,
+        &fullmag_ir::ParallelExecutionPolicyIR::default(),
+        None,
+    )
+    .expect("the real path runner should consume the supplied source handoff");
+    assert_eq!(run.result.status, RunStatus::Completed);
+    assert_eq!(run.initial_magnetization, plan.equilibrium_magnetization);
+    assert_eq!(run.result.final_magnetization, plan.equilibrium_magnetization);
+
+    let legacy_spectrum = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("the real path publisher should emit its legacy spectrum");
+    assert_eq!(legacy_spectrum["relaxation_steps"], 0);
+    assert_eq!(
+        legacy_spectrum["equilibrium_source"]["kind"],
+        "relaxed_initial_state"
+    );
+
+    let spectrum_v3 = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.v3.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("the real path publisher should emit spectrum.v3");
+    let samples = spectrum_v3["samples"]
+        .as_array()
+        .expect("spectrum.v3 should retain all path samples");
+    assert_eq!(samples.len(), expected_k_vectors.len());
+    for (sample_index, (sample, k_vector)) in
+        samples.iter().zip(expected_k_vectors).enumerate()
+    {
+        assert_eq!(sample["sample_index"].as_u64(), Some(sample_index as u64));
+        assert_eq!(
+            sample["sample_id"],
+            format!("k-path-sample-{sample_index:04}")
+        );
+        assert_eq!(sample["k_vector"], serde_json::json!(k_vector));
+        let modes = sample["modes"]
+            .as_array()
+            .expect("each published path sample should retain its modes");
+        assert_eq!(modes.len(), plan.count as usize);
+        assert!(modes.iter().all(|mode| {
+            mode
+                .get("relax_to_eigen_handoff_sha256")
+                .and_then(serde_json::Value::as_str)
+                == Some(handoff_sha256)
+        }));
+    }
+    let frequency_domain_manifest = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("the real path publisher should emit a frequency-domain manifest");
+    assert_eq!(
+        frequency_domain_manifest["spectrum_output_scopes"],
+        serde_json::json!(["per_sample", "global"])
+    );
 }

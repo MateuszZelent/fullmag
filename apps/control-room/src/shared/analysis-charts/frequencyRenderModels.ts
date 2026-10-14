@@ -5,15 +5,27 @@ import type {
   FrequencyDomainChartSeries,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
+const FREQUENCY_OVERLAY_QUANTITIES = new Set([
+  "frequency",
+  "analytic_frequency",
+  "reference_frequency",
+]);
+
+/** Reference quantities remain visible but cannot select a computed result. */
+export function isReferenceChartQuantity(quantity: string): boolean {
+  return quantity === "analytic_frequency" || quantity.startsWith("reference_");
+}
+
 export function frequencySpectrumRenderModel<
   T extends { dampingRateHz?: number | null; frequencyValue: number; rowIndex: number },
 >(
   data: readonly T[],
   frequencyUnit: string,
 ): ChartRenderModel {
-  const envelope = spectralEnvelope(data);
+  const hertzPerUnit = frequencyHertzPerUnit(frequencyUnit);
+  const envelope = hertzPerUnit == null ? [] : spectralEnvelope(data, hertzPerUnit);
   return {
-    ariaLabel: "FMR / eigen modal spectrum",
+    ariaLabel: "Eigen modes with illustrative modal envelope",
     key: `frequency-spectrum:${frequencyUnit}:${data.length}:${data.at(-1)?.rowIndex ?? -1}`,
     provenance: {
       dataRevision: null,
@@ -21,11 +33,11 @@ export function frequencySpectrumRenderModel<
       query: `frequencyUnit=${frequencyUnit}`,
       resourceKey: "analysis/frequency-domain/eigen/spectrum",
     },
-    series: [
+    series: hertzPerUnit == null ? [] : [
       ...(envelope.length > 0 ? [{
         id: "spectral-envelope",
         kind: "line" as const,
-        label: "Spectral envelope",
+        label: "Illustrative modal envelope",
         points: envelope,
         unit: "a.u.",
         yAxis: 0,
@@ -39,20 +51,32 @@ export function frequencySpectrumRenderModel<
         yAxis: 0,
       },
     ],
-    status: data.length > 0 ? "ready" : "empty",
+    status: hertzPerUnit == null ? "unsupported" : data.length > 0 ? "ready" : "empty",
+    ...(hertzPerUnit == null ? { statusMessage: `Unsupported frequency unit: ${frequencyUnit}` } : {}),
     xAxis: { label: `frequency [${frequencyUnit}]`, unit: frequencyUnit },
-    yAxes: [{ label: "intensity [a.u.]", unit: "a.u." }],
+    yAxes: [{ label: "normalized modal weight [a.u.]", unit: "a.u." }],
   };
+}
+
+function frequencyHertzPerUnit(unit: string): number | null {
+  switch (unit) {
+    case "Hz": return 1;
+    case "kHz": return 1e3;
+    case "MHz": return 1e6;
+    case "GHz": return 1e9;
+    default: return null;
+  }
 }
 
 function spectralEnvelope(
   data: readonly { dampingRateHz?: number | null; frequencyValue: number }[],
+  hertzPerUnit: number,
 ): { rowIndex: number; x: number; y: number }[] {
   const damped = data.filter((point) =>
     point.dampingRateHz != null && Number.isFinite(point.dampingRateHz) && point.dampingRateHz > 0
   );
   if (damped.length === 0) return [];
-  const frequencies = data.map((point) => point.frequencyValue);
+  const frequencies = data.map((point) => point.frequencyValue * hertzPerUnit);
   const fMin = Math.min(...frequencies);
   const fMax = Math.max(...frequencies);
   const fRange = fMax - fMin || fMax * 0.1 || 1;
@@ -61,10 +85,11 @@ function spectralEnvelope(
   const points = Array.from({ length: 501 }, (_, rowIndex) => {
     const x = fStart + step * rowIndex;
     const y = damped.reduce((sum, point) => {
-      const halfGamma = point.dampingRateHz! / 2;
-      return sum + 1 / ((x - point.frequencyValue) ** 2 + halfGamma ** 2);
+      // exp(i omega t): damping_rate_hz is HWHM; FWHM is twice this rate.
+      const halfWidthHz = point.dampingRateHz!;
+      return sum + 1 / ((x - point.frequencyValue * hertzPerUnit) ** 2 + halfWidthHz ** 2);
     }, 0);
-    return { rowIndex, x, y };
+    return { rowIndex, x: x / hertzPerUnit, y };
   });
   const peak = points.reduce((value, point) => Math.max(value, point.y), 0);
   return peak > 0 ? points.map((point) => ({ ...point, y: point.y / peak })) : points;
@@ -89,9 +114,10 @@ export function frequencySeriesRenderModel(
     },
     series: compatible.map((entry) => ({
       id: entry.id,
-      kind: "line",
+      kind: entry.kind ?? "line",
       label: entry.label,
       points: entry.points,
+      selectable: !isReferenceChartQuantity(entry.quantity),
       unit: entry.unit,
       yAxis: 0,
     })),
@@ -117,10 +143,19 @@ export function compatibleFrequencySeries(
   if (!first) return [];
   return series.filter((entry) =>
     entry.points.length > 0 &&
-    entry.quantity === first.quantity &&
     entry.unit === first.unit &&
-    entry.xUnit === first.xUnit
+    entry.xUnit === first.xUnit &&
+    (entry.quantity === first.quantity ||
+      isFrequencyOverlayPair(first.quantity, entry.quantity))
   );
+}
+
+function isFrequencyOverlayPair(
+  firstQuantity: string,
+  candidateQuantity: string,
+): boolean {
+  return FREQUENCY_OVERLAY_QUANTITIES.has(firstQuantity) &&
+    FREQUENCY_OVERLAY_QUANTITIES.has(candidateQuantity);
 }
 
 export function frequencyYAxisLabel(series: readonly FrequencyDomainChartSeries[]): string {

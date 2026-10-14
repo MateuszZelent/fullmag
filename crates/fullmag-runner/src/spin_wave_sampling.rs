@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::types::{AuxiliaryArtifact, RunError};
-use fullmag_ir::{BackendPlanIR, DriveActivationIR, ExecutionPlanIR, ProblemIR};
+use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, ProblemIR};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct P1CrossSectionProbeRow {
@@ -553,7 +553,7 @@ pub fn dynamic_structure_factor_1d_with_axes(
     let mut power = vec![0.0; frequency_count * space_count];
     for frequency in 0..frequency_count {
         for shifted_k in 0..space_count {
-            let unshifted_k = (shifted_k + space_count / 2) % space_count;
+            let unshifted_k = (shifted_k + space_count.div_ceil(2)) % space_count;
             let value = unshifted_spectrum[frequency * space_count + unshifted_k];
             let index = frequency * space_count + shifted_k;
             spectrum[index] = value;
@@ -633,15 +633,10 @@ pub(crate) fn requested_finite_k_artifacts(
             "finite-k time-domain analysis currently requires a FEM plan",
         ));
     };
-    let active_stage_id = fem.time_stage.active_stage_id.as_deref();
-    let has_active_drive = fem.field_drives.iter().any(|drive| {
-        drive.enabled
-            && match &drive.activation {
-                DriveActivationIR::AllTimeEvolution {} => true,
-                DriveActivationIR::StageIds { stage_ids } => active_stage_id
-                    .is_some_and(|active| stage_ids.iter().any(|stage| stage == active)),
-            }
-    });
+    let has_active_drive = fem
+        .field_drives
+        .iter()
+        .any(|drive| crate::time_events::resolved_field_drive_is_active(drive, &fem.time_stage));
     if !has_active_drive {
         return Ok(vec![]);
     }
@@ -1007,5 +1002,67 @@ mod tests {
             .power
             .iter()
             .all(|value| value.is_finite() && *value >= 0.0));
+    }
+
+    #[test]
+    fn finite_k_shift_matches_direct_dft_for_odd_even_signed_and_zero_k() {
+        let nt = 32;
+        let frequency_bin = 7;
+        let dt = 1e-12;
+        let dx = 2e-9;
+        for nx in [15, 16] {
+            for signed_bin in [-3, 0, 3] {
+                let samples = (0..nt)
+                    .map(|time| {
+                        (0..nx)
+                            .map(|space| {
+                                (2.0 * std::f64::consts::PI
+                                    * (signed_bin as f64 * space as f64 / nx as f64
+                                        - frequency_bin as f64 * time as f64 / nt as f64))
+                                    .cos()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let artifact = dynamic_structure_factor_1d(&samples, dt, dx).unwrap();
+                let normalization = nx as f64
+                    * nt as f64
+                    * artifact.spatial_window_power_sum
+                    * artifact.temporal_window_power_sum;
+                for shifted in 0..nx {
+                    let k_bin = shifted as isize - (nx / 2) as isize;
+                    let mut direct = Complex64::new(0.0, 0.0);
+                    for time in 0..nt {
+                        for space in 0..nx {
+                            let phase = 2.0 * std::f64::consts::PI
+                                * (frequency_bin as f64 * time as f64 / nt as f64
+                                    - k_bin as f64 * space as f64 / nx as f64);
+                            let value = (samples[time][space] - samples[0][space])
+                                * artifact.spatial_window[space]
+                                * artifact.temporal_window[time];
+                            direct += Complex64::from_polar(value, phase);
+                        }
+                    }
+                    let index = frequency_bin * nx + shifted;
+                    let actual = Complex64::new(
+                        artifact.spectrum_real[index],
+                        artifact.spectrum_imag[index],
+                    );
+                    assert!((actual - direct).norm() < 1e-10 * (nx * nt) as f64,
+                        "nx={nx}, source={signed_bin}, bin={k_bin}");
+                    let expected_power = 2.0 * direct.norm_sqr() / normalization;
+                    assert!((artifact.power[index] - expected_power).abs() < 1e-12);
+                    let expected_k = 2.0 * std::f64::consts::PI * k_bin as f64
+                        / (nx as f64 * dx);
+                    assert!((artifact.k_rad_per_m[shifted] - expected_k).abs() < 1e-6);
+                }
+                let row = &artifact.power[frequency_bin * nx..(frequency_bin + 1) * nx];
+                let peak = row.iter().enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1)).unwrap().0;
+                assert_eq!(peak as isize - (nx / 2) as isize, signed_bin);
+                assert_eq!(artifact.phase_convention, "exp[-i(k*x-2*pi*f*t)]");
+                assert_eq!(artifact.normalization, "one_sided_abs_fft2_squared_over_Nx_Nt_Ux_Ut");
+            }
+        }
     }
 }

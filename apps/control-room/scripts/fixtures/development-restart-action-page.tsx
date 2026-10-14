@@ -66,6 +66,7 @@ class RestartActionFixture {
   private formResetCalls = 0;
   private cleanupFaultUnsubscribe: (() => void) | null = null;
   private guardedCaptureReads = 0;
+  private captureCandidateChange = false;
 
   readonly fetch: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
@@ -84,7 +85,8 @@ class RestartActionFixture {
       if (this.holdStatus) await new Promise<void>((resolve) => this.heldStatus.push(resolve));
       const observation = this.backend(pin);
       const action = this.activeKernel?.developmentWorkspace?.restartAction.getSnapshot();
-      if (this.cleanupFaultUnsubscribe && action?.busy && ["checking", "capturing"].includes(action.state)) {
+      if ((this.cleanupFaultUnsubscribe || this.captureCandidateChange)
+        && action?.busy && ["checking", "capturing"].includes(action.state)) {
         this.guardedCaptureReads += 1;
         if (this.guardedCaptureReads === 3) {
           return jsonResponse({ ...observation, ready_build: { id: "changed-during-capture", source_sha256: SOURCES[4] } }, pin);
@@ -183,6 +185,15 @@ class RestartActionFixture {
       apply: () => { this.formApplyCalls += 1; return true; },
       reset: () => { this.formResetCalls += 1; },
     });
+  }
+
+  armPreIntentCandidateChange(): void {
+    this.guardedCaptureReads = 0;
+    this.captureCandidateChange = true;
+  }
+
+  clearPreIntentCandidateChange(): void {
+    this.captureCandidateChange = false;
   }
 
   armPreIntentCleanupFault(): void {

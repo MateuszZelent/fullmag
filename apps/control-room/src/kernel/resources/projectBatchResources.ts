@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 
 import type {
+  ProjectBatchCaseSummaryResource,
   ProjectBatchCasesQuery,
   ProjectBatchCasesResource,
   ProjectBatchListQuery,
@@ -15,6 +16,21 @@ import { useResource } from "./useResource";
 
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
+type ProjectBatchCaseTaskLifecycle = NonNullable<
+  ProjectBatchCaseSummaryResource["published_run"]
+>["tasks"][number]["lifecycle"];
+
+const PROJECT_BATCH_CASE_TASK_LIFECYCLES = new Set<ProjectBatchCaseTaskLifecycle>([
+  "accepted",
+  "queued",
+  "preparing",
+  "running",
+  "stopping",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
 
 export function projectBatchesResourcePrefix(projectId: string): string {
   return `project-batches:${encodeURIComponent(projectId)}:`;
@@ -122,7 +138,8 @@ export function validateProjectBatchCasesEnvelope(
       !isNonEmptyString(item.planned_run_id) ||
       !isRecord(item.parameter_tuple) ||
       !matchesParameterTuple(item.parameter_tuple, axisNames) ||
-      !isBatchCaseState(item.state)
+      !isBatchCaseState(item.state) ||
+      !matchesPublishedRun(item, item.state)
     ) {
       throw new Error("Batch case page contains a malformed or duplicate identity.");
     }
@@ -247,8 +264,55 @@ function isFailurePolicy(
 
 function isBatchCaseState(
   value: unknown,
-): value is "pending_expansion" | "pending_materialization" {
-  return value === "pending_expansion" || value === "pending_materialization";
+): value is "pending_expansion" | "pending_materialization" | "materialized" {
+  return value === "pending_expansion" ||
+    value === "pending_materialization" ||
+    value === "materialized";
+}
+
+function matchesPublishedRun(
+  item: ProjectBatchCaseSummaryResource,
+  state: ProjectBatchCaseSummaryResource["state"],
+): boolean {
+  const publishedRun = item.published_run ?? null;
+  if (state === "pending_expansion") return publishedRun === null;
+  if (
+    publishedRun === null ||
+    publishedRun.run_id !== item.planned_run_id ||
+    !Array.isArray(publishedRun.tasks)
+  ) {
+    return false;
+  }
+
+  const taskIds = new Set<string>();
+  for (const task of publishedRun.tasks) {
+    if (
+      !isRecord(task) ||
+      !isNonEmptyString(task.task_id) ||
+      taskIds.has(task.task_id) ||
+      !isProjectBatchCaseTaskLifecycle(task.lifecycle)
+    ) {
+      return false;
+    }
+    taskIds.add(task.task_id);
+  }
+
+  if (state === "pending_materialization") {
+    return publishedRun.catalog_state === "pending_materialization" &&
+      publishedRun.catalog_revision == null &&
+      publishedRun.tasks.length === 0;
+  }
+
+  return publishedRun.catalog_state === "materialized" &&
+    isPositiveSafeInteger(publishedRun.catalog_revision);
+}
+
+function isProjectBatchCaseTaskLifecycle(
+  value: unknown,
+): value is ProjectBatchCaseTaskLifecycle {
+  return typeof value === "string" && PROJECT_BATCH_CASE_TASK_LIFECYCLES.has(
+    value as ProjectBatchCaseTaskLifecycle,
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {

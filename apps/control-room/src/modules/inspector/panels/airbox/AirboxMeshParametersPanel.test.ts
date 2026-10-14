@@ -16,7 +16,7 @@ describe("AirboxMeshParametersPanel apply boundary", () => {
     const replace = vi.fn(async (request) => ({ config: request.config, effective_config: null, revision: 2 }));
     const draft = {
       ...draftFromUniverseMeshPolicyResource({
-        config: { airbox_hmax: 1e-9, mode: "manual" },
+        config: { airbox_hmax: 1e-9, mode: "manual", size: [1e-6, 2e-6, 3e-6] },
         revision: 1,
       }),
       airboxHmax: "-1",
@@ -25,7 +25,7 @@ describe("AirboxMeshParametersPanel apply boundary", () => {
 
     await expect(submitAirboxPolicyDraft(draft, replace, { lane: "fdm" })).resolves.toMatchObject({
       kind: "submitted",
-      resource: { config: { mode: "manual" } },
+      resource: { config: { mode: "manual", size: [1e-6, 2e-6, 3e-6] } },
     });
   });
 });

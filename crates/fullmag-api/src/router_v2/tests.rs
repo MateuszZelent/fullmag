@@ -29,14 +29,15 @@ use crate::schemas::realtime::{
 };
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
-    CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest, CurrentWorkspaceLayout,
-    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState,
-    GlobalScalarPreviewState, LatestFields, LiveState, PreviewState, RunManifest,
-    RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
-    SessionStateResponse, SimulationPreparationClockAdjustmentSnapshot,
-    SimulationPreparationFailureSnapshot, SimulationPreparationLogEntrySnapshot,
-    SimulationPreparationSnapshot, SimulationPreparationStageSnapshot, StageExecutionRecord,
-    StageExecutionState, StageLifecycleState, StepUpdateView, TrackedCommandRecord,
+    CurrentLiveFieldFrameRequest, CurrentLiveRuntimeFrameRequest, CurrentLiveScalarFrameRequest,
+    CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
+    CurrentWorkspaceSelection, DisplayPresentationState, GlobalScalarPreviewState, LatestFields,
+    LiveState, PreviewState, RunManifest, RuntimeLifecycleState, RuntimeStatusView, ScalarRow,
+    SessionCommand, SessionManifest, SessionStateResponse,
+    SimulationPreparationClockAdjustmentSnapshot, SimulationPreparationFailureSnapshot,
+    SimulationPreparationLogEntrySnapshot, SimulationPreparationSnapshot,
+    SimulationPreparationStageSnapshot, StageExecutionRecord, StageExecutionState,
+    StageLifecycleState, StepUpdateView, TrackedCommandRecord,
 };
 use crate::uuid_v4_hex;
 use fullmag_runner::eigen::{
@@ -57,8 +58,13 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         execution_layers: vec![],
         revision: 3,
         backend: None,
+        requested_backend: None,
+        requested_device: None,
+        requested_precision: None,
         requested_mode: Some("strict".to_string()),
         cpu_threads: None,
+        parallel_execution: None,
+        pbc: None,
         fem_demag_solver_policy: None,
         exchange_enabled: true,
         demag_enabled: true,
@@ -166,6 +172,11 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         spin_transports: Vec::new(),
         spin_torques: Vec::new(),
         oersted_terms: Vec::new(),
+        antenna_port_modes: Vec::new(),
+        antenna_field_solve_stages: Vec::new(),
+        antenna_target_projections: Vec::new(),
+        solved_antenna_drives: Vec::new(),
+        antenna_spectrum_requests: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
@@ -963,6 +974,8 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
             operator_version: "fem_charge_conforming_h1_p1.transparent.v1".into(),
         },
         conservative_current_view: None,
+        conservative_current_source: None,
+        external_lead_preparation: None,
         structured_current_closure: None,
     };
     problem.current_modules = vec![CurrentModuleIR::CurrentTransport {
@@ -1052,6 +1065,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
@@ -1088,9 +1102,11 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     current_settle_step_index: None,
                     current_settle_step_kind: None,
                     current_settle_step_method: None,
+                    parallel_execution: None,
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
@@ -1127,6 +1143,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     current_settle_step_index: None,
                     current_settle_step_kind: None,
                     current_settle_step_method: None,
+                    parallel_execution: None,
                 },
             ],
             stage_statuses: vec![
@@ -1187,15 +1204,14 @@ async fn model_readiness_reports_all_empty_scene_blockers_in_stable_order() {
             .map(|check| check["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
         vec![
-            "geometry",
-            "material",
-            "texture",
-            "interactions",
-            "discretization",
-            "study",
+            "method", "domain", "geometry", "material", "texture",
+            "interactions", "discretization", "study", "execution",
         ]
     );
     assert_eq!(body["blockers"][0], "Add at least one magnetic object.");
+    assert_eq!(body["checks"][0]["state"], "complete");
+    assert_eq!(body["checks"][1]["state"], "complete");
+    assert!(body["checks"][1]["reason"].as_str().unwrap().contains("after geometry is added"));
     assert_eq!(body["capabilities"]["move"]["available"], true);
     assert_eq!(body["capabilities"]["rotate"]["available"], false);
     assert_eq!(
@@ -1279,6 +1295,7 @@ async fn model_readiness_blocks_material_without_ms() {
         .find(|check| check["id"] == "material")
         .unwrap();
     assert_eq!(material["state"], "blocked");
+    assert_eq!(material["target_resource"], "model/objects/body");
     assert_eq!(
         material["reason"],
         "missing Ms material property for object 'body'"
@@ -1325,6 +1342,7 @@ async fn model_readiness_blocks_material_without_aex() {
         .find(|check| check["id"] == "material")
         .unwrap();
     assert_eq!(material["state"], "blocked");
+    assert_eq!(material["target_resource"], "model/objects/body");
     assert_eq!(
         material["reason"],
         "missing Aex material property for object 'body'"
@@ -1551,6 +1569,157 @@ async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests
     assert_eq!(body["status"]["effective_execution"]["precision"], "double");
     assert!(body["status"].get("fallback").is_some());
     assert!(body["status"]["fallback"].is_null());
+}
+
+#[tokio::test]
+async fn scratch_session_status_and_domain_meta_follow_resolved_lane_before_mesh_materializes() {
+    let state = test_app_state();
+    let app = build_v2_router().with_state(state.clone());
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FEM lane","backend":"fem","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().expect("scratch session is active");
+        let capabilities = snapshot
+            .capabilities
+            .as_ref()
+            .expect("scratch FEM publishes lane capabilities");
+        assert_eq!(snapshot.session.resolved_backend.as_deref(), Some("fem"));
+        assert!(snapshot.session.resolved_runtime_family.is_none());
+        assert!(snapshot.session.resolved_engine_id.is_none());
+        assert_eq!(capabilities.engine_id.as_str(), "fem_cpu_native");
+        assert_eq!(
+            crate::router_v2::handlers::sessions::status::domain_generation_revision(snapshot),
+            0
+        );
+    }
+
+    let fem_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fem_status.status(), StatusCode::OK);
+    let fem_status = body_json(fem_status).await;
+    assert_eq!(fem_status["domain"]["discretization"], "fem");
+    assert_eq!(fem_status["domain"]["cell_count"], 0);
+    assert_eq!(
+        fem_status["capabilities"]["active_lane"]["resolved"]["discretization"],
+        "fem"
+    );
+    assert_eq!(
+        fem_status["resources"]["domain_generation_id"],
+        "fem:unmaterialized"
+    );
+    assert_eq!(fem_status["resources"]["topology_revision"], 0);
+
+    let fem_domain = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fem_domain.status(), StatusCode::OK);
+    let fem_domain = body_json(fem_domain).await;
+    assert_eq!(fem_domain["discretization"], "fem");
+    assert_eq!(fem_domain["generation_id"], "fem:unmaterialized");
+    assert_eq!(fem_domain["grid"], serde_json::Value::Null);
+    assert_eq!(
+        fem_domain["counts"],
+        serde_json::json!({
+            "cells": null,
+            "nodes": null,
+            "elements": null,
+            "boundary_faces": null
+        })
+    );
+    assert_eq!(fem_domain["bounds"]["min"], serde_json::json!([0.0, 0.0, 0.0]));
+    assert_eq!(fem_domain["bounds"]["max"], serde_json::json!([0.0, 0.0, 0.0]));
+
+    let replaced = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FDM lane","backend":"fdm","device":"cpu","precision":"double","replace_current":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replaced.status(), StatusCode::CREATED);
+    {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().expect("replacement scratch session is active");
+        let capabilities = snapshot
+            .capabilities
+            .as_ref()
+            .expect("scratch FDM publishes lane capabilities");
+        assert_eq!(snapshot.session.resolved_backend.as_deref(), Some("fdm"));
+        assert!(snapshot.session.resolved_runtime_family.is_none());
+        assert!(snapshot.session.resolved_engine_id.is_none());
+        assert_eq!(capabilities.engine_id.as_str(), "fdm_cpu_reference");
+    }
+
+    let fdm_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fdm_status.status(), StatusCode::OK);
+    let fdm_status = body_json(fdm_status).await;
+    assert_eq!(fdm_status["domain"]["discretization"], "fdm");
+    assert_eq!(fdm_status["domain"]["cell_count"], 0);
+    assert_ne!(
+        fdm_status["resources"]["domain_generation_id"],
+        "fem:unmaterialized"
+    );
+
+    let fdm_domain = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fdm_domain.status(), StatusCode::OK);
+    let fdm_domain = body_json(fdm_domain).await;
+    assert_eq!(fdm_domain["discretization"], "fdm");
+    assert_eq!(fdm_domain["counts"]["cells"], 0);
+    assert_eq!(fdm_domain["grid"], serde_json::Value::Null);
 }
 
 #[tokio::test]
@@ -2094,6 +2263,8 @@ async fn internal_idle_heartbeat_restores_connectivity_without_resource_revision
 
 fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
     ScalarRow {
+        kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+        solver_progress: None,
         observation_frame: None,
         step,
         time,
@@ -2122,6 +2293,179 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         per_object_scalars: HashMap::new(),
         table_expressions: Vec::new(),
     }
+}
+
+fn physical_test_live_state(
+    step: u64,
+    time: f64,
+    grid: [u32; 3],
+    magnetization: Option<Vec<f64>>,
+) -> LiveState {
+    LiveState {
+        status: "running".into(),
+        updated_at_unix_ms: 1_700_000_000_100,
+        latest_step: StepUpdateView {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
+            step,
+            time,
+            dt: 1.0e-13,
+            pseudo_time_s: None,
+            e_ex: 0.0,
+            e_demag: 0.0,
+            e_ext: 0.0,
+            e_ani: 0.0,
+            e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
+            e_total: 0.0,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_all_Apm: 0.0,
+            max_torque_T: 0.0,
+            frozen_reference_max_drift: 0.0,
+            active_dof_count: 0,
+            frozen_dof_count: 0,
+            free_dof_count: 0,
+            wall_time_ns: 100,
+            grid,
+            fem_mesh_generation_id: None,
+            fem_mesh: None,
+            magnetization,
+            per_object_scalars: HashMap::new(),
+            field_materialization_states: Vec::new(),
+            preview_field: None,
+            finished: false,
+        },
+    }
+}
+
+fn apply_test_runtime_frame(
+    snapshot: &mut SessionStateResponse,
+    live_state: LiveState,
+) -> Result<(), crate::error::ApiError> {
+    let session_id = snapshot.session.session_id.clone();
+    crate::session::apply_current_live_runtime_frame(
+        snapshot,
+        CurrentLiveRuntimeFrameRequest {
+            session_id,
+            live_state: Some(live_state),
+            frozen_spins_runtime_status: None,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        },
+    )
+}
+
+fn publish_test_latest_fields(
+    snapshot: &mut SessionStateResponse,
+    latest_fields: LatestFields,
+) -> Result<(), crate::error::ApiError> {
+    let session_id = snapshot.session.session_id.clone();
+    crate::session::apply_current_live_field_frame(
+        snapshot,
+        CurrentLiveFieldFrameRequest {
+            session_id,
+            latest_fields: Some(latest_fields),
+            replace_latest_fields: false,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+        },
+    )
+}
+
+fn publish_test_preview_fields(
+    snapshot: &mut SessionStateResponse,
+    preview_fields: Vec<LivePreviewField>,
+) -> Result<(), crate::error::ApiError> {
+    let session_id = snapshot.session.session_id.clone();
+    crate::session::apply_current_live_field_frame(
+        snapshot,
+        CurrentLiveFieldFrameRequest {
+            session_id,
+            latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
+            preview_fields: Some(preview_fields),
+            clear_preview_cache: false,
+        },
+    )
+}
+
+fn publish_test_fields_from_physical_step(
+    snapshot: &mut SessionStateResponse,
+    mut live_state: LiveState,
+    mut latest_fields: LatestFields,
+) -> Result<(), crate::error::ApiError> {
+    if let Some(mesh) = snapshot.fem_mesh.as_ref() {
+        live_state.latest_step.fem_mesh_generation_id = mesh.generation_id.clone();
+    }
+    let source_step = live_state.latest_step.step;
+    let source_time = live_state.latest_step.time;
+    apply_test_runtime_frame(snapshot, live_state)?;
+    for (_, value) in latest_fields.entries_mut() {
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        object
+            .entry("source_step")
+            .or_insert_with(|| serde_json::json!(source_step));
+        object
+            .entry("source_time_seconds")
+            .or_insert_with(|| serde_json::json!(source_time));
+    }
+    publish_test_latest_fields(snapshot, latest_fields)
+}
+
+fn admit_test_latest_fields_from_physical_step(
+    snapshot: &mut SessionStateResponse,
+    live_state: LiveState,
+) -> Result<(), crate::error::ApiError> {
+    let latest_fields = snapshot.latest_fields.clone();
+    publish_test_fields_from_physical_step(snapshot, live_state, latest_fields)
+}
+
+#[tokio::test]
+async fn test_field_publisher_rejects_unaccepted_and_solver_progress_sources() {
+    let state = test_app_state_with_live_session().await;
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("test live session");
+    let fields = || {
+        serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[1.0, 0.0, 0.0]],
+                "source_step": 8,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("source-negative field fixture")
+    };
+
+    apply_test_runtime_frame(
+        snapshot,
+        physical_test_live_state(7, 7.0e-12, [1, 1, 1], None),
+    )
+    .expect("physical source frame should apply");
+    let unknown_source = publish_test_latest_fields(snapshot, fields())
+        .expect_err("a field may not refer to a future, unaccepted source step");
+    assert!(unknown_source
+        .to_string()
+        .contains("no accepted physical observation source"));
+
+    let mut progress = physical_test_live_state(8, 8.0e-12, [1, 1, 1], None);
+    progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+    progress.latest_step.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+        metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+    });
+    apply_test_runtime_frame(snapshot, progress).expect("typed progress frame should apply");
+    let progress_source = publish_test_latest_fields(snapshot, fields())
+        .expect_err("solver progress must not qualify a physical field payload");
+    assert!(progress_source
+        .to_string()
+        .contains("no accepted physical observation source"));
 }
 
 async fn test_router_with_scene_document() -> axum::Router {
@@ -2298,6 +2642,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 42,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -2332,6 +2678,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
         });
         snapshot.scalar_rows = vec![
             ScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 observation_frame: None,
                 step: 41,
                 time: 2.4e-9,
@@ -2361,6 +2709,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 table_expressions: Vec::new(),
             },
             ScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 observation_frame: None,
                 step: 42,
                 time: 2.5e-9,
@@ -2396,6 +2746,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
@@ -2432,9 +2783,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     current_settle_step_index: None,
                     current_settle_step_kind: None,
                     current_settle_step_method: None,
+                    parallel_execution: None,
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
@@ -2471,6 +2824,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     current_settle_step_index: Some(1),
                     current_settle_step_kind: Some("minimize".into()),
                     current_settle_step_method: Some("projected_gradient_bb".into()),
+                    parallel_execution: None,
                 },
             ],
             stage_statuses: vec![
@@ -2879,6 +3233,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             status: "paused".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 42,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -2991,12 +3347,33 @@ fn fmvp_values_offset(bytes: &[u8]) -> usize {
         bytes.len() >= 48,
         "FMVP payload must include a 48 byte header"
     );
-    if bytes[4] == 3 {
+    if bytes[4] >= 3 {
         let metadata_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
         48 + metadata_len
     } else {
         48
     }
+}
+
+fn decode_fmvp_v5_full_quantity_id(bytes: &[u8]) -> String {
+    assert!(bytes.len() >= 48, "FMVP payload must include its header");
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 5, "full quantity identity requires FMVP v5");
+    let metadata_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    assert!(metadata_len >= 88);
+    assert!(48 + metadata_len <= bytes.len());
+    let metadata = &bytes[48..48 + metadata_len];
+    assert_eq!(&metadata[..4], b"FMMI");
+    assert_eq!(u16::from_le_bytes(metadata[4..6].try_into().unwrap()), 4);
+
+    let string_lengths = [64usize, 66, 8, 10, 12, 14].map(|offset| {
+        u16::from_le_bytes(metadata[offset..offset + 2].try_into().unwrap()) as usize
+    });
+    let quantity_id_len = u16::from_le_bytes(metadata[80..82].try_into().unwrap()) as usize;
+    let quantity_id_start = 88 + string_lengths.iter().sum::<usize>();
+    assert!(quantity_id_start + quantity_id_len <= metadata.len());
+    String::from_utf8(metadata[quantity_id_start..quantity_id_start + quantity_id_len].to_vec())
+        .expect("FMVP v5 full quantity id should be valid UTF-8")
 }
 
 fn decode_fmvp_node_indices(bytes: &[u8]) -> Vec<u32> {
@@ -4054,6 +4431,158 @@ async fn domain_meta_returns_json_with_session() {
 }
 
 #[tokio::test]
+async fn domain_status_and_meta_preserve_built_fem_and_explicit_fdm_with_retained_mesh() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("fixture session is active");
+        snapshot.session.requested_backend = "fem".into();
+        snapshot.session.resolved_backend = Some("fem".into());
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 17;
+        snapshot.metadata = None;
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let fem_status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fem_status_response.status(), StatusCode::OK);
+    let fem_status = body_json(fem_status_response).await;
+    assert_eq!(fem_status["domain"]["discretization"], "fem");
+    assert_eq!(fem_status["domain"]["cell_count"], 1);
+    assert_eq!(fem_status["resources"]["domain_generation_id"], "42");
+    assert_eq!(fem_status["resources"]["topology_revision"], 17);
+
+    let fem_domain_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fem_domain_response.status(), StatusCode::OK);
+    let fem_domain = body_json(fem_domain_response).await;
+    assert_eq!(fem_domain["discretization"], "fem");
+    assert_eq!(fem_domain["generation_id"], "42");
+    assert_eq!(fem_domain["counts"]["nodes"], 4);
+    assert_eq!(fem_domain["counts"]["elements"], 1);
+    assert_eq!(fem_domain["counts"]["boundary_faces"], 1);
+    assert_eq!(fem_domain["grid"], serde_json::Value::Null);
+    for key in ["min", "max"] {
+        for coordinate in fem_domain["bounds"][key]
+            .as_array()
+            .expect("FEM bounds are three-vectors")
+        {
+            assert!(coordinate.as_f64().is_some_and(f64::is_finite));
+        }
+    }
+
+    let mut empty_fem_mesh = sample_fem_mesh_payload();
+    empty_fem_mesh.nodes.clear();
+    empty_fem_mesh.cells = fullmag_ir::FemConnectivityIR::from_tet4(Vec::new());
+    empty_fem_mesh.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new());
+    empty_fem_mesh.element_markers.clear();
+    empty_fem_mesh.boundary_markers.clear();
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("fixture session is active");
+        snapshot.session.requested_backend = "fem".into();
+        snapshot.session.resolved_backend = Some("fem".into());
+        snapshot.fem_mesh = Some(empty_fem_mesh);
+        snapshot.metadata = None;
+    }
+
+    let empty_fem_domain_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty_fem_domain_response.status(), StatusCode::OK);
+    let empty_fem_domain = body_json(empty_fem_domain_response).await;
+    assert_eq!(empty_fem_domain["discretization"], "fem");
+    assert_eq!(empty_fem_domain["counts"]["nodes"], 0);
+    assert_eq!(empty_fem_domain["counts"]["elements"], 0);
+    assert_eq!(empty_fem_domain["counts"]["boundary_faces"], 0);
+    assert_eq!(empty_fem_domain["bounds"]["min"], serde_json::json!([0.0, 0.0, 0.0]));
+    assert_eq!(empty_fem_domain["bounds"]["max"], serde_json::json!([0.0, 0.0, 0.0]));
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("fixture session is active");
+        snapshot.session.requested_backend = "fdm".into();
+        snapshot.session.resolved_backend = Some("fdm".into());
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [4, 3, 2],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            },
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm",
+                    "grid_certificate": {
+                        "grid_fingerprint": "fdm-retained-mesh-grid"
+                    }
+                }
+            }
+        }));
+    }
+
+    let fdm_status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fdm_status_response.status(), StatusCode::OK);
+    let fdm_status = body_json(fdm_status_response).await;
+    assert_eq!(fdm_status["domain"]["discretization"], "fdm");
+    assert_eq!(fdm_status["domain"]["cell_count"], 24);
+    assert_eq!(
+        fdm_status["resources"]["domain_generation_id"],
+        "fdm-retained-mesh-grid"
+    );
+
+    let fdm_domain_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fdm_domain_response.status(), StatusCode::OK);
+    let fdm_domain = body_json(fdm_domain_response).await;
+    assert_eq!(fdm_domain["discretization"], "fdm");
+    assert_eq!(fdm_domain["generation_id"], "fdm-retained-mesh-grid");
+    assert_eq!(fdm_domain["counts"]["cells"], 24);
+    assert_eq!(fdm_domain["grid"]["shape"], serde_json::json!([4, 3, 2]));
+}
+
+#[tokio::test]
 async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -4069,6 +4598,8 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -4102,7 +4633,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
             },
         });
     }
-    let app = build_v2_router().with_state(state);
+    let app = build_v2_router().with_state(state.clone());
     let response = app
         .oneshot(
             Request::builder()
@@ -4777,7 +5308,7 @@ async fn fem_string_generation_identity_is_preserved_across_domain_status_catalo
         let mut mesh = sample_fem_mesh_payload();
         mesh.generation_id = Some(generation_id.to_string());
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -4789,6 +5320,19 @@ async fn fem_string_generation_identity_is_preserved_across_domain_status_catalo
             }
         }))
         .expect("FEM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FEM field should be admitted from a physical observation");
     }
     let app = build_v2_router().with_state(state);
 
@@ -4915,6 +5459,8 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -5139,7 +5685,7 @@ async fn fdm_multilayer_field_slice_uses_common_grid_geometry() {
                 "layers": []
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
@@ -5150,6 +5696,17 @@ async fn fdm_multilayer_field_slice_uses_common_grid_geometry() {
             }
         }))
         .expect("multilayer field payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 2, 1],
+                Some(vec![[1.0, 0.0, 0.0]; 8].into_iter().flatten().collect()),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer slice field should be admitted from a physical step");
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -5493,6 +6050,8 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_100,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 4,
                 time: 4.0e-12,
                 dt: 1.0e-13,
@@ -5651,6 +6210,8 @@ async fn field_vector_keeps_unknown_scope_not_found_while_materialization_is_pen
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_100,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 4,
                 time: 4.0e-12,
                 dt: 1.0e-13,
@@ -5735,6 +6296,8 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                     status: "running".into(),
                     updated_at_unix_ms: 1_700_000_000_000,
                     latest_step: StepUpdateView {
+                        kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                        solver_progress: None,
                         step: 10,
                         time: 1e-9,
                         dt: 1e-13,
@@ -5765,8 +6328,8 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         field_materialization_states: Vec::new(),
                         preview_field: Some(LivePreviewField {
                             config_revision: 4,
-                            source_step: 0,
-                            source_time_seconds: None,
+                            source_step: 10,
+                            source_time_seconds: Some(1e-9),
                             source_revision: 4,
                             materialized_at_unix_ms: 0,
                             materialization_wall_time_ns: 0,
@@ -5931,6 +6494,11 @@ async fn terminal_field_frame_removes_absent_quantity_from_field_api() {
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], None),
+        )
+        .expect("terminal field source observation should apply");
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "H_dmi": {
                 "values": [[1.0, 0.0, 0.0]],
@@ -5946,6 +6514,8 @@ async fn terminal_field_frame_removes_absent_quantity_from_field_api() {
                 latest_fields: Some(
                     serde_json::from_value(serde_json::json!({
                         "H_eff": {
+                            "source_step": 1,
+                            "source_time_seconds": 1.0e-12,
                             "values": [[0.0, 1.0, 0.0]],
                             "layout": { "grid_cells": [1, 1, 1] }
                         }
@@ -5985,6 +6555,11 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [2, 1, 1], None),
+        )
+        .expect("cached preview source observation should apply");
         let runtime_preview = LivePreviewField {
             config_revision: 7,
             source_step: 52,
@@ -6008,7 +6583,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
             auto_downscale_message: None,
             active_mask: None,
         };
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
                 "field_revision": 7,
@@ -6019,14 +6594,14 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
             }
         }))
         .expect("stale latest H_demag field");
+        publish_test_latest_fields(snapshot, latest_fields)
+            .expect("stale H_demag field should bind through the accepted field-frame publisher");
         snapshot
             .field_quantity_revisions
             .insert("H_demag".to_string(), 7);
         snapshot.field_samples_revision = 7;
-        crate::session::merge_cached_preview_fields(
-            &mut snapshot.preview_cache,
-            vec![runtime_preview.clone()],
-        );
+        publish_test_preview_fields(snapshot, vec![runtime_preview.clone()])
+            .expect("cached preview should publish through an accepted field frame");
     }
 
     let app = build_v2_router().with_state(state.clone());
@@ -6106,8 +6681,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
 async fn field_vector_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 23;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -6119,6 +6693,18 @@ async fn field_vector_returns_304_when_etag_matches() {
             }
         }))
         .expect("latest_fields payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("ETag field should publish from a physical observation");
+        snapshot.state_version = 23;
     }
     let app = build_v2_router().with_state(state);
 
@@ -6161,8 +6747,7 @@ async fn field_vector_returns_304_when_etag_matches() {
 async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 23;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 10.0, 100.0],
@@ -6174,6 +6759,18 @@ async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
             }
         }))
         .expect("latest_fields payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 10.0, 100.0, 2.0, 20.0, 200.0]),
+            ),
+            latest_fields,
+        )
+        .expect("component projection field should publish from a physical observation");
+        snapshot.state_version = 23;
     }
     let app = build_v2_router().with_state(state);
 
@@ -6226,8 +6823,7 @@ async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
 async fn slice_meta_revision_changes_with_component() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 9;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -6241,6 +6837,20 @@ async fn slice_meta_revision_changes_with_component() {
             }
         }))
         .expect("latest_fields payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("slice field should publish from a physical observation");
+        snapshot.state_version = 9;
     }
     let app = build_v2_router().with_state(state);
 
@@ -9008,6 +9618,7 @@ async fn frozen_spins_uses_quantity_catalog_field_catalog_and_fmvp_scalar_data_p
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 2]);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": {
                 "backend_plan": {
@@ -9023,7 +9634,7 @@ async fn frozen_spins_uses_quantity_catalog_field_catalog_and_fmvp_scalar_data_p
             }
         }));
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["frozen_spins"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "frozen_spins": {
                 "quantity": "frozen_spins",
                 "unit": "1",
@@ -9041,6 +9652,13 @@ async fn frozen_spins_uses_quantity_catalog_field_catalog_and_fmvp_scalar_data_p
             }
         }))
         .expect("Frozen Spins scalar field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(17, 1.7e-12, [2, 1, 2], None),
+            latest_fields,
+        )
+        .expect("Frozen Spins field should bind to an accepted physical observation");
+        snapshot.state_version = source_state_revision;
     }
     let quantities_response = app
         .clone()
@@ -9166,7 +9784,7 @@ async fn fem_frozen_spins_object_scope_uses_true_mesh_node_carrier() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
         snapshot.mesh_revision = 11;
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["frozen_spins"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "frozen_spins": {
                 "quantity": "frozen_spins",
                 "unit": "1",
@@ -9184,6 +9802,12 @@ async fn fem_frozen_spins_object_scope_uses_true_mesh_node_carrier() {
             }
         }))
         .expect("FEM Frozen Spins scalar field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(19, 1.9e-12, [4, 1, 1], None),
+            latest_fields,
+        )
+        .expect("FEM Frozen Spins field should bind to an accepted physical observation");
     }
     let app = build_v2_router().with_state(state);
 
@@ -9306,13 +9930,123 @@ async fn display_put_replaces_full_selection() {
     assert_eq!(sel.selection.every_n, 25);
     assert_eq!(sel.selection.layer, 3);
     assert!(!sel.selection.auto_scale_enabled);
-    // One revision for the mutation and one for the observation-demand change
-    // from the empty default (synchronize_observation_quantities).
-    assert_eq!(sel.revision, 2);
+    // Reconcile observation demand under the same revision as the API mutation.
+    assert_eq!(sel.revision, 1);
+    assert_eq!(
+        sel.observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "H_eff")
+            .count(),
+        1,
+        "the active quantity must have exactly one canonical observation demand"
+    );
     assert_eq!(presentation.colormap, "plasma");
     assert_eq!(presentation.contrast_min, Some(-2.0));
     assert_eq!(presentation.contrast_max, Some(4.0));
     assert!(!presentation.vector_glyphs);
+}
+
+#[tokio::test]
+async fn runtime_display_selection_waits_for_patch_observation_demand_commit() {
+    use std::future::Future;
+
+    let state = test_app_state_with_live_session().await;
+    let initial_revision = state.current_display_selection.read().await.revision;
+    let app = build_v2_router().with_state(state.clone());
+
+    let transition_guard = state.current_live_session_transition.lock().await;
+    let selection_guard = state.current_display_selection.try_write();
+    assert!(
+        selection_guard.is_ok(),
+        "the fence probe must hold only the session transition"
+    );
+    drop(selection_guard);
+
+    let mut runtime_get_fence_probe = Box::pin(crate::read_current_live_display_selection(
+        axum::extract::State(state.clone()),
+    ));
+    let fence_probe_first_poll = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(runtime_get_fence_probe.as_mut().poll(cx))
+    })
+    .await;
+    assert!(
+        fence_probe_first_poll.is_pending(),
+        "runtime GET must wait for the session transition even when selection is readable"
+    );
+    drop(transition_guard);
+    let initial_snapshot = runtime_get_fence_probe
+        .await
+        .expect("runtime GET should resume after the transition")
+        .0;
+    assert_eq!(initial_snapshot.revision, initial_revision);
+
+    let presentation_guard = state.current_display_presentation.write().await;
+
+    let patch_task = tokio::spawn(async move {
+        app.oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "active_quantity_id": "h_eff"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let transition_is_held = state.current_live_session_transition.try_lock().is_err();
+            let selection_is_held = state.current_display_selection.try_write().is_err();
+            if transition_is_held && selection_is_held {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect(
+        "PATCH should hold the session transition and selection while waiting for presentation",
+    );
+
+    let mut runtime_get = Box::pin(crate::read_current_live_display_selection(
+        axum::extract::State(state.clone()),
+    ));
+    let patch_get_first_poll =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(runtime_get.as_mut().poll(cx))).await;
+    assert!(
+        patch_get_first_poll.is_pending(),
+        "runtime GET must wait for the display mutation's session transition"
+    );
+
+    drop(presentation_guard);
+
+    let patch_response = patch_task.await.expect("PATCH task should complete");
+    assert_eq!(patch_response.status(), StatusCode::OK);
+    let patch_json = body_json(patch_response).await;
+    assert_eq!(patch_json["active_quantity_id"], "h_eff");
+
+    let observed = runtime_get
+        .await
+        .expect("runtime GET should complete after the mutation")
+        .0;
+    assert_eq!(observed.selection.quantity, "h_eff");
+    assert_eq!(observed.revision, initial_revision.wrapping_add(1));
+    assert_eq!(
+        observed
+            .observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "H_eff")
+            .count(),
+        1,
+        "runtime GET must observe canonical H_eff demand under the published display revision"
+    );
 }
 
 #[tokio::test]
@@ -9346,9 +10080,16 @@ async fn display_patch_updates_view_mode_and_field_component() {
 
     let sel = state.current_display_selection.read().await;
     assert_eq!(sel.selection.preview_component(), "z");
-    // One revision for the mutation and one for the observation-demand change
-    // from the empty default (synchronize_observation_quantities).
-    assert_eq!(sel.revision, 2);
+    // Reconcile observation demand under the same revision as the API mutation.
+    assert_eq!(sel.revision, 1);
+    assert_eq!(
+        sel.observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "m")
+            .count(),
+        1,
+        "the active quantity must have exactly one canonical observation demand"
+    );
 }
 
 #[tokio::test]
@@ -9386,9 +10127,16 @@ async fn display_patch_accepts_partial_update() {
     assert_eq!(sel.selection.max_points, 4096);
     assert_eq!(sel.selection.x_chosen_size, 32);
     assert_eq!(sel.selection.y_chosen_size, 16);
-    // One revision for the mutation and one for the observation-demand change
-    // from the empty default (synchronize_observation_quantities).
-    assert_eq!(sel.revision, 2);
+    // Reconcile observation demand under the same revision as the API mutation.
+    assert_eq!(sel.revision, 1);
+    assert_eq!(
+        sel.observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "H_demag")
+            .count(),
+        1,
+        "the active quantity must have exactly one canonical observation demand"
+    );
     assert_eq!(presentation.colormap, "viridis");
     assert!(!presentation.vector_glyphs);
 }
@@ -11614,9 +12362,18 @@ async fn fdm_grid_refresh_command_is_queued_for_atomic_runtime_replan() {
 async fn fdm_grid_refresh_command_rejects_non_fdm_sessions_without_queueing() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.resolved_backend = Some("fem".into());
+        snapshot.session.requested_backend = "fdm".into();
+        snapshot.session.explicit_selection = true;
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        let mut scene = snapshot
+            .scene_document
+            .take()
+            .unwrap_or_else(sample_scene_document);
+        scene.study.requested_backend = "fdm".into();
+        snapshot.scene_document = Some(scene);
         snapshot.metadata = Some(serde_json::json!({
-            "execution_plan": { "backend_plan": { "kind": "fem" } }
+            "artifact_layout": { "backend": "fdm" }
         }));
     }
     let app = build_v2_router().with_state(state.clone());
@@ -11646,6 +12403,139 @@ async fn fdm_grid_refresh_command_rejects_non_fdm_sessions_without_queueing() {
         ledger.back().map(|record| record.status),
         Some(CommandLifecycleState::Rejected)
     );
+    assert!(ledger
+        .back()
+        .and_then(|record| record.command.mesh_options.as_ref())
+        .and_then(|options| options.get("scene_problem_patch"))
+        .is_some());
+}
+
+#[tokio::test]
+async fn fdm_grid_refresh_rejects_unknown_or_automatic_lane_without_artifact_fallback() {
+    let cases = [
+        (
+            "resolved unknown",
+            Some("unknown"),
+            Some("fdm"),
+            "fdm",
+        ),
+        ("resolved auto", Some("auto"), Some("fdm"), "fdm"),
+        ("plan unknown", None, Some("unknown"), "fdm"),
+        ("plan auto", None, Some("auto"), "fdm"),
+        ("requested auto", None, None, "auto"),
+    ];
+
+    for (case, resolved_backend, plan_backend_kind, requested_backend) in cases {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.session.resolved_backend = resolved_backend.map(str::to_string);
+            snapshot.session.requested_backend = requested_backend.into();
+            snapshot.session.explicit_selection = true;
+            let mut scene = snapshot
+                .scene_document
+                .take()
+                .unwrap_or_else(sample_scene_document);
+            scene.study.requested_backend = "fdm".into();
+            snapshot.scene_document = Some(scene);
+
+            let mut metadata = serde_json::json!({
+                "artifact_layout": { "backend": "fdm" }
+            });
+            if let Some(kind) = plan_backend_kind {
+                metadata["execution_plan"] = serde_json::json!({
+                    "backend_plan": { "kind": kind }
+                });
+            }
+            snapshot.metadata = Some(metadata);
+        }
+        let app = build_v2_router().with_state(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/simulation/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind":"fdm_grid_refresh"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "case: {case}");
+        let json = body_json(response).await;
+        assert_eq!(json["accepted"], false, "case: {case}: {json}");
+        assert!(state.current_control_queue.lock().await.is_empty(), "case: {case}");
+        assert_eq!(
+            state
+                .current_command_ledger
+                .lock()
+                .await
+                .back()
+                .map(|record| record.status),
+            Some(CommandLifecycleState::Rejected),
+            "case: {case}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fdm_grid_refresh_uses_active_plan_or_explicit_request_without_resolved_backend() {
+    let cases = [
+        (
+            "active execution plan",
+            "auto",
+            false,
+            serde_json::json!({
+                "execution_plan": { "backend_plan": { "kind": "fdm" } },
+                "artifact_layout": { "backend": "fem" }
+            }),
+        ),
+        (
+            "explicit requested backend",
+            "fdm",
+            true,
+            serde_json::json!({ "artifact_layout": { "backend": "fem" } }),
+        ),
+    ];
+
+    for (case, requested_backend, explicit_selection, metadata) in cases {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.session.status = "awaiting_command".into();
+            snapshot.live_state = None;
+            snapshot.stage_execution = None;
+            snapshot.session.resolved_backend = None;
+            snapshot.session.requested_backend = requested_backend.into();
+            snapshot.session.explicit_selection = explicit_selection;
+            let mut scene = snapshot
+                .scene_document
+                .take()
+                .unwrap_or_else(sample_scene_document);
+            scene.study.requested_backend = "fdm".into();
+            snapshot.scene_document = Some(scene);
+            snapshot.metadata = Some(metadata);
+            crate::session::refresh_runtime_status(snapshot);
+        }
+        let app = build_v2_router().with_state(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/simulation/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind":"fdm_grid_refresh"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "case: {case}");
+        let json = body_json(response).await;
+        assert_eq!(json["accepted"], true, "case: {case}: {json}");
+        assert_eq!(state.current_control_queue.lock().await.len(), 1, "case: {case}");
+    }
 }
 
 #[tokio::test]
@@ -14114,7 +15004,7 @@ async fn response_magnetic_sweep_v1_endpoint_returns_artifact_json() {
     )
     .expect("response sweep artifact should be written");
 
-    let response = app
+    let response = app.clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1")
@@ -14129,6 +15019,267 @@ async fn response_magnetic_sweep_v1_endpoint_returns_artifact_json() {
     assert_eq!(json["schema_version"], "magnetic_response_sweep.v1");
     assert_eq!(json["frequencies_hz"][0], 1.0e9);
 
+    let catalog_response = app.clone().oneshot(
+        Request::builder()
+            .uri("/v2/sessions/current/analysis/results/runs/run:current/datasets")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    assert_eq!(catalog["total_count"], 1);
+    assert_eq!(catalog["items"][0]["product_kind"], "driven_response");
+    let dataset_id = catalog["items"][0]["dataset_id"].as_str().unwrap();
+    let manifest_response = app.clone().oneshot(
+        Request::builder()
+            .uri(format!("/v2/sessions/current/analysis/results/runs/run:current/datasets/{dataset_id}"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(manifest_response.status(), StatusCode::OK);
+    let manifest = body_json(manifest_response).await;
+    assert_eq!(manifest["source_artifacts"][0]["artifact"], "response/magnetic_response_sweep.v1.json");
+
+    // Both legal versions present: the preferred v2 owns dataset provenance.
+    let mut preferred: serde_json::Value = serde_json::from_slice(
+        &fs::read(response_dir.join("magnetic_response_sweep.v1.json")).unwrap(),
+    ).unwrap();
+    preferred["schema_version"] = serde_json::json!("magnetic_response_sweep.v2");
+    fs::write(response_dir.join("magnetic_response_sweep.v2.json"),
+        serde_json::to_vec(&preferred).unwrap()).unwrap();
+    let preferred_response = app.clone().oneshot(
+        Request::builder()
+            .uri(format!("/v2/sessions/current/analysis/results/runs/run:current/datasets/{dataset_id}"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(preferred_response.status(), StatusCode::OK);
+    let preferred_manifest = body_json(preferred_response).await;
+    assert_eq!(preferred_manifest["source_artifacts"][0]["artifact"], "response/magnetic_response_sweep.v2.json");
+
+    // Corrupt preferred bytes must fail closed rather than expose stale v1.
+    fs::write(response_dir.join("magnetic_response_sweep.v2.json"), b"{").unwrap();
+    let invalid_response = app.oneshot(
+        Request::builder()
+            .uri("/v2/sessions/current/analysis/results/runs/run:current/datasets")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(invalid_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn result_catalog_uses_committed_eigen_owner_after_active_stage_advances() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_running_stage_execution(&state, 11).await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let execution = guard
+            .as_mut()
+            .and_then(|snapshot| snapshot.stage_execution.as_mut())
+            .expect("stage execution should exist");
+        execution.stages[0].stage_id = Some("eigen-stage".into());
+        execution.stages[0].kind = Some("flat_eigenmodes".into());
+        execution.stages[0].artifact_refs.clear();
+        execution.stages[1].stage_id = Some("later-relax-stage".into());
+        execution.stages[1].kind = Some("relax".into());
+        execution.stages[1].artifact_refs.clear();
+    }
+
+    let artifact_path = "eigen/spectrum.v2.json";
+    let artifact_bytes = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_spectrum.v2",
+        "samples": []
+    }))
+    .expect("spectrum fixture should serialize");
+    fs::create_dir_all(artifact_dir.join("eigen")).expect("eigen directory should exist");
+    fs::write(artifact_dir.join(artifact_path), &artifact_bytes)
+        .expect("spectrum fixture should be written");
+    let analysis_dir = artifact_dir.join("analysis");
+    fs::create_dir_all(&analysis_dir).expect("analysis directory should exist");
+    fs::write(
+        analysis_dir.join("spin_wave_response.gamma.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version":"spin_wave_response.gamma.v1","time_unit":"s","frequency_unit":"Hz","trace_unit":"1","source_unit":"A/m","susceptibility_unit":"m/A",
+            "weighting":"fixture","detrend":"none","window":"none","normalization":"fixture",
+            "reference_m0":1.0,"reference_m0_secondary":0.0,"response_component":"my","transverse_components":["my","mz"],
+            "time_s":[],"response_trace":[],"secondary_response_trace":[],"source_trace":[],"frequency_hz":[],
+            "response_psd":[],"primary_response_psd":[],"secondary_response_psd":[],"source_psd":[],
+            "response_spectrum_real":[],"response_spectrum_imag":[],"secondary_response_spectrum_real":[],"secondary_response_spectrum_imag":[],
+            "source_spectrum_real":[],"source_spectrum_imag":[],"window_values":[],"window_power_sum":0.0,"nyquist_hz":0.0,
+            "susceptibility_abs":[],"peaks":[]
+        }))
+        .expect("gamma fixture should serialize"),
+    )
+    .expect("gamma fixture should be written");
+    fs::write(
+        analysis_dir.join("dynamic_structure_factor.1d.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version":"dynamic_structure_factor.1d.v1","artifact_ref":"analysis/dynamic_structure_factor.1d.v1.json","bounded":false,
+            "original_frequency_count":0,"original_wavevector_count":0,"wavevector_unit":"rad/m","frequency_unit":"Hz",
+            "x_m":[],"time_s":[],"k_rad_per_m":[],"frequency_hz":[],"power":[],"spectrum_real":[],"spectrum_imag":[],
+            "source_power":[],"source_spectrum_real":[],"source_spectrum_imag":[],"source_observable":"H_drive_y","source_unit":"A/m",
+            "component":"my","propagation_axis":"x","phase_convention":"fixture","normalization":"fixture",
+            "spatial_window":[],"temporal_window":[],"spatial_window_power_sum":0.0,"temporal_window_power_sum":0.0,
+            "mesh_probe_signature":"fixture","invalid_probe_mask":[],"excluded_absorber_ranges_m":[],"frequency_count":0,"wavevector_count":0
+        }))
+        .expect("DSF fixture should serialize"),
+    )
+    .expect("DSF fixture should be written");
+    super::handlers::analysis::results::write_result_generation_for_test(
+        &artifact_dir,
+        artifact_path,
+        &artifact_bytes,
+        Some(fullmag_runner::artifact_generation::PublicationOwner {
+            run_id: "test-run".into(),
+            stage_id: "eigen-stage".into(),
+            stage_kind: "flat_eigenmodes".into(),
+        }),
+    );
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/results/runs/run:current/datasets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let catalog_items = catalog["items"]
+        .as_array()
+        .expect("result catalog should contain items");
+    let eigen = catalog_items
+        .iter()
+        .find(|item| item["dataset_id"] == "result:test-run:eigen-stage:modal-eigen-spectrum")
+        .expect("eigen dataset id should be present");
+    let dataset_id = eigen["dataset_id"]
+        .as_str()
+        .expect("eigen dataset id should be present");
+    assert_eq!(dataset_id, "result:test-run:eigen-stage:modal-eigen-spectrum");
+    let gamma = catalog_items
+        .iter()
+        .find(|item| item["dataset_id"] == "result:test-run:stage:analysis:time-domain-spectrum")
+        .expect("legacy gamma should not inherit the eigen producer");
+    let dsf = catalog_items
+        .iter()
+        .find(|item| item["dataset_id"] == "result:test-run:stage:analysis:dynamic-structure-factor")
+        .expect("legacy DSF should not inherit the eigen producer");
+    assert_eq!(gamma["stage_id"], "stage:analysis");
+    assert_eq!(dsf["stage_id"], "stage:analysis");
+    let manifest_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v2/sessions/current/analysis/results/runs/run:current/datasets/{dataset_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest_response.status(), StatusCode::OK);
+    let manifest = body_json(manifest_response).await;
+    assert_eq!(manifest["stage_id"], "eigen-stage");
+
+    fs::remove_file(artifact_dir.join(fullmag_runner::artifact_generation::COMMIT_PATH))
+        .expect("legacy fixture should remove the generation receipt");
+    let legacy_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/results/runs/run:current/datasets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy_response.status(), StatusCode::OK);
+    let legacy_catalog = body_json(legacy_response).await;
+    assert_eq!(
+        legacy_catalog["items"][0]["dataset_id"],
+        "result:test-run:stage:analysis:modal-eigen-spectrum"
+    );
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn result_catalog_rejects_generation_run_and_stage_reference_mismatches() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_running_stage_execution(&state, 12).await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let execution = guard
+            .as_mut()
+            .and_then(|snapshot| snapshot.stage_execution.as_mut())
+            .expect("stage execution should exist");
+        execution.stages[0].stage_id = Some("eigen-stage".into());
+        execution.stages[0].kind = Some("flat_eigenmodes".into());
+        execution.stages[1].stage_id = Some("later-relax-stage".into());
+        execution.stages[1].kind = Some("relax".into());
+        execution.stages[0].artifact_refs.clear();
+        execution.stages[1].artifact_refs.clear();
+    }
+    let artifact_path = "eigen/spectrum.v2.json";
+    let artifact_bytes = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_spectrum.v2",
+        "samples": []
+    }))
+    .expect("spectrum fixture should serialize");
+    fs::create_dir_all(artifact_dir.join("eigen")).expect("eigen directory should exist");
+    let artifact_file = artifact_dir.join(artifact_path);
+    fs::write(&artifact_file, &artifact_bytes).expect("spectrum fixture should be written");
+    let make_owner = |run_id: &str, stage_id: &str| {
+        Some(fullmag_runner::artifact_generation::PublicationOwner {
+            run_id: run_id.into(),
+            stage_id: stage_id.into(),
+            stage_kind: "flat_eigenmodes".into(),
+        })
+    };
+    let catalog_request = || {
+        Request::builder()
+            .uri("/v2/sessions/current/analysis/results/runs/run:current/datasets")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    super::handlers::analysis::results::write_result_generation_for_test(
+        &artifact_dir,
+        artifact_path,
+        &artifact_bytes,
+        make_owner("other-run", "eigen-stage"),
+    );
+    let wrong_run = app.clone().oneshot(catalog_request()).await.unwrap();
+    assert_eq!(wrong_run.status(), StatusCode::CONFLICT);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let execution = guard
+            .as_mut()
+            .and_then(|snapshot| snapshot.stage_execution.as_mut())
+            .expect("stage execution should exist");
+        execution.stages[1].artifact_refs = vec![artifact_file.to_string_lossy().into_owned()];
+    }
+    super::handlers::analysis::results::write_result_generation_for_test(
+        &artifact_dir,
+        artifact_path,
+        &artifact_bytes,
+        make_owner("test-run", "eigen-stage"),
+    );
+    let conflicting_ref = app.clone().oneshot(catalog_request()).await.unwrap();
+    assert_eq!(conflicting_ref.status(), StatusCode::CONFLICT);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let execution = guard
+            .as_mut()
+            .and_then(|snapshot| snapshot.stage_execution.as_mut())
+            .expect("stage execution should exist");
+        execution.stages[0].artifact_refs = vec![artifact_file.to_string_lossy().into_owned()];
+    }
+    let multiple_refs = app.oneshot(catalog_request()).await.unwrap();
+    assert_eq!(multiple_refs.status(), StatusCode::CONFLICT);
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 
@@ -16553,6 +17704,57 @@ async fn authoring_scene_patch_applies_merge_patch() {
     assert_eq!(committed.scene.name, "Patched Scene");
 }
 
+#[test]
+fn authoring_transaction_ack_schema_exposes_canonical_scene_resource() {
+    let document = crate::openapi_v2::openapi_json();
+    let schema = &document["components"]["schemas"]["AuthoringTransactionResponse"];
+    assert_eq!(schema["properties"]["committed_scene"]["$ref"],
+               "#/components/schemas/SceneResource");
+}
+
+#[tokio::test]
+async fn authoring_transaction_ack_matches_current_scene_resource_and_revision() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let response = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/v2/sessions/current/model/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "kind": "merge_patch",
+                "base_revision": 3,
+                "merge_patch": { "scene": { "name": "Canonical ACK resource" } },
+            }).to_string()))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let ack = body_json(response).await;
+    let response = app.oneshot(
+        Request::builder()
+            .method("GET")
+            .uri("/v2/sessions/current/model/scene")
+            .body(Body::empty())
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let current_resource = body_json(response).await;
+    assert_eq!(ack["committed_scene"], current_resource);
+    assert_eq!(ack["scene_revision"], current_resource["revision"]);
+    assert_eq!(current_resource["scene"]["name"], "Canonical ACK resource");
+    let guard = state.current_live_state.read().await;
+    let committed = guard.as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("canonical document remains committed");
+    let projected = crate::schemas::authoring::SceneResource::from_scene_document(
+        committed.clone(),
+    ).unwrap();
+    assert_eq!(serde_json::to_value(projected).unwrap(), current_resource);
+}
+
 #[tokio::test]
 async fn authoring_transactions_replace_scene_commits_document() {
     let state = test_app_state_with_live_session().await;
@@ -17116,7 +18318,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -17139,6 +18341,19 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("planar monitor magnetization should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 7);
         snapshot
             .field_quantity_revisions
@@ -17497,13 +18712,19 @@ async fn planar_field_rejects_grid_values_without_a_truthful_spatial_carrier() {
         snapshot.session.script_path.clear();
         snapshot.metadata = None;
         snapshot.fem_mesh = None;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0]],
                 "layout": {"grid_cells": [1, 1, 1]}
             }
         }))
         .expect("mock field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], Some(vec![1.0, 0.0, 0.0])),
+            latest_fields,
+        )
+        .expect("unresolved spatial carrier field should have an accepted physical source");
     }
     let response = build_v2_router()
         .with_state(state)
@@ -17592,15 +18813,33 @@ async fn planar_field_fdm_object_target_uses_published_membership_and_grid_geome
                 "grid_cells": [2, 1, 1],
                 "origin_m": [0.0, 0.0, 0.0],
                 "cell_size": [1.0, 1.0, 1.0]
+            },
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm",
+                    "grid": { "cells": [2, 1, 1] },
+                    "material": { "ms_field": [4.0, 9.0] }
+                }
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "mat_ms": {
                 "values": [4.0, 9.0],
-                "layout": {"grid_cells": [2, 1, 1]}
+                "layout": { "grid_cells": [2, 1, 1] }
             }
         }))
-        .expect("mock FDM scalar field should deserialize");
+        .expect("FDM material Ms field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM material Ms field should be published from an accepted physical step");
     }
 
     let response = app
@@ -17658,7 +18897,7 @@ async fn planar_field_fem_overlay_is_fmcs_v4_and_mesh_part_scope_changes_samplin
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -17674,6 +18913,20 @@ async fn planar_field_fem_overlay_is_fmcs_v4_and_mesh_part_scope_changes_samplin
             }
         }))
         .expect("scoped FEM field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0,
+                    2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("scoped FEM field should publish from its physical observation");
     }
     let app = build_v2_router().with_state(state);
     let base = "/v2/sessions/current/data/fields/m/planar-monitors/fem_domain_xy";
@@ -19214,6 +20467,120 @@ async fn authoring_study_runtime_get_returns_requested_selection() {
     let json = body_json(response).await;
     assert_eq!(json["requested_backend"], "auto");
     assert_eq!(json["requested_precision"], "double");
+}
+
+#[test]
+fn authoring_study_runtime_parallel_patch_preserves_nullable_optional_wire_schema() {
+    let document = crate::openapi_v2::openapi_json();
+    let schema = &document["components"]["schemas"]["StudyRuntimePatchRequest"];
+    assert_eq!(schema["properties"]["parallel_execution"], serde_json::json!({
+        "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/components/schemas/ParallelExecutionResource" },
+        ],
+    }));
+    assert!(!schema["required"].as_array().is_some_and(|required| {
+        required.iter().any(|field| field == "parallel_execution")
+    }));
+}
+
+#[tokio::test]
+async fn authoring_study_runtime_parallel_patch_preserves_sets_and_resets_policy() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    // Adaptive authoring is supported only for an explicit FEM CPU request.
+    scene.study.requested_backend = "fem".to_string();
+    scene.study.requested_device = "cpu".to_string();
+    let initial = fullmag_ir::ParallelExecutionPolicyIR {
+        mode: fullmag_ir::ParallelExecutionModeIR::Adaptive,
+        max_cpu_percent: 55.0,
+        max_memory_percent: 60.0,
+        memory_reserve_bytes: 123,
+        max_workers: Some(3),
+        threads_per_worker: 2,
+    };
+    scene.study.parallel_execution = initial.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let replacement = fullmag_ir::ParallelExecutionPolicyIR {
+        max_cpu_percent: 70.0,
+        max_workers: Some(4),
+        ..initial.clone()
+    };
+    let replacement_resource = crate::schemas::authoring::ParallelExecutionResource::from(&replacement);
+    for (patch, expected) in [
+        (serde_json::json!({}), initial),
+        (serde_json::json!({ "parallel_execution": replacement_resource }), replacement),
+        (serde_json::json!({ "parallel_execution": null }), fullmag_ir::ParallelExecutionPolicyIR::default()),
+        (serde_json::json!({}), fullmag_ir::ParallelExecutionPolicyIR::default()),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/study")
+                .header("content-type", "application/json")
+                .body(Body::from(patch.to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        let status = response.status();
+        let response = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "patch: {patch}; response: {response}");
+        let expected_resource = serde_json::to_value(
+            crate::schemas::authoring::ParallelExecutionResource::from(&expected),
+        ).unwrap();
+        assert_eq!(response["parallel_execution"], expected_resource, "patch: {patch}");
+        let guard = state.current_live_state.read().await;
+        let committed = guard.as_ref()
+            .and_then(|snapshot| snapshot.scene_document.as_ref())
+            .expect("scene document committed");
+        assert_eq!(committed.study.parallel_execution, expected, "patch: {patch}");
+    }
+}
+
+#[tokio::test]
+async fn authoring_study_runtime_parallel_patch_rejects_invalid_policy_without_commit() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    // Adaptive authoring is supported only for an explicit FEM CPU request.
+    scene.study.requested_backend = "fem".to_string();
+    scene.study.requested_device = "cpu".to_string();
+    let initial = fullmag_ir::ParallelExecutionPolicyIR {
+        mode: fullmag_ir::ParallelExecutionModeIR::Adaptive,
+        max_workers: Some(3),
+        ..fullmag_ir::ParallelExecutionPolicyIR::default()
+    };
+    scene.study.parallel_execution = initial.clone();
+    let revision = scene.revision;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let mut invalid_policy = serde_json::to_value(
+        crate::schemas::authoring::ParallelExecutionResource::from(&initial),
+    ).unwrap();
+    invalid_policy["max_cpu_percent"] = serde_json::json!(0);
+    for (value, status) in [
+        (invalid_policy, StatusCode::BAD_REQUEST),
+        (serde_json::json!("adaptive"), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/study")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({ "parallel_execution": value }).to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), status);
+        let guard = state.current_live_state.read().await;
+        let committed = guard.as_ref()
+            .and_then(|snapshot| snapshot.scene_document.as_ref())
+            .expect("original scene document preserved");
+        assert_eq!(committed.study.parallel_execution, initial);
+        assert_eq!(committed.revision, revision);
+    }
 }
 
 #[tokio::test]
@@ -21640,6 +23007,19 @@ async fn dispatch_compute_fields_command(state: &Arc<AppState>, command_id: &str
     record.dispatched_at_unix_ms = Some(1_700_000_001_000);
 }
 
+async fn publish_compute_fields_result(state: &Arc<AppState>, command_id: &str) {
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("compute_fields requires a live session");
+    snapshot.engine_log.push(crate::types::EngineLogEntry {
+        timestamp_unix_ms: 1_700_000_001_000,
+        level: "success".to_string(),
+        message: "Field snapshots computed for the current magnetization".to_string(),
+        source: None,
+        phase_id: None,
+        command_id: Some(command_id.to_string()),
+    });
+}
+
 async fn reconcile_compute_fields_command(state: &Arc<AppState>) -> bool {
     let snapshot = state
         .current_live_state
@@ -21721,7 +23101,7 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
             }
         }));
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -21733,6 +23113,19 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
     let app = build_v2_router().with_state(state.clone());
@@ -21752,6 +23145,7 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
     );
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -21847,7 +23241,7 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -21859,6 +23253,19 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
 
@@ -21882,6 +23289,7 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
     assert!(requirements[1]["carrier_fingerprint"].is_string());
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -21950,7 +23358,7 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -21962,6 +23370,19 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
 
@@ -21987,15 +23408,28 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
         .and_then(|snapshot| snapshot.latest_fields.get("m"))
         .cloned()
         .expect("full magnetization field should be present");
+    let saved_live_magnetization = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .and_then(|snapshot| snapshot.live_state.as_ref())
+        .and_then(|live_state| live_state.latest_step.magnetization.clone())
+        .expect("physical source magnetization should be present");
 
     dispatch_compute_fields_command(&state, &command_id).await;
+    publish_compute_fields_result(&state, &command_id).await;
 
     {
         let mut guard = state.current_live_state.write().await;
-        guard
+        let snapshot = guard.as_mut().expect("live session should exist");
+        snapshot.latest_fields = LatestFields::default();
+        snapshot
+            .live_state
             .as_mut()
-            .expect("live session should exist")
-            .latest_fields = LatestFields::default();
+            .expect("physical source should remain present")
+            .latest_step
+            .magnetization = None;
     }
     assert!(
         !reconcile_compute_fields_command(&state).await,
@@ -22004,11 +23438,14 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
 
     {
         let mut guard = state.current_live_state.write().await;
-        guard
+        let snapshot = guard.as_mut().expect("live session should exist");
+        snapshot.latest_fields.insert("m".into(), saved_m);
+        snapshot
+            .live_state
             .as_mut()
-            .expect("live session should exist")
-            .latest_fields
-            .insert("m".into(), saved_m);
+            .expect("physical source should remain present")
+            .latest_step
+            .magnetization = Some(saved_live_magnetization);
     }
 
     {
@@ -22082,7 +23519,7 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -22094,6 +23531,19 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
 
@@ -22127,6 +23577,7 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
         .is_some_and(|value| !value.is_empty()));
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     assert!(!reconcile_compute_fields_command(&state).await);
     let still_dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(still_dispatched["status"], "dispatched");
@@ -22148,7 +23599,7 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
         }));
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m"]));
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -22159,6 +23610,19 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
             }
         }))
         .expect("FEM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FEM field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
     let app = build_v2_router().with_state(state.clone());
@@ -22176,6 +23640,7 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
     assert_eq!(requirements[0]["generation_id"], "42");
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -22358,6 +23823,8 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
@@ -22620,6 +24087,7 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hysteresis-run".into()),
@@ -22656,6 +24124,7 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("relax".into()),
                 current_settle_step_method: Some("llg_heun".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -22826,6 +24295,7 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Cancelled,
                 command_id: Some("cmd-solve".into()),
@@ -22862,6 +24332,7 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Cancelled],
             active_stage_index: None,
@@ -23340,6 +24811,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
@@ -23376,6 +24848,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -24239,6 +25712,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-003".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_frequency_response".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-stage-3".into()),
@@ -24275,6 +25749,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24285,6 +25760,8 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_011_250,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 257,
                 time: 0.0,
                 dt: 0.0,
@@ -24694,6 +26171,7 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-hyst".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -24730,6 +26208,7 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
                 current_settle_step_index: Some(1),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24796,6 +26275,7 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -24832,6 +26312,7 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24888,6 +26369,7 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-angle".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -24924,6 +26406,7 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24973,6 +26456,7 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-measurement-axis".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25009,6 +26493,7 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -25065,6 +26550,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-magnetic-average".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25101,6 +26587,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -25158,6 +26645,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-volume-average".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25194,6 +26682,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -25251,6 +26740,7 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-snapshot-fem-average".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25287,6 +26777,7 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -25384,6 +26875,7 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25420,6 +26912,7 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
                 current_settle_step_index: Some(1),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -25543,6 +27036,7 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -25579,6 +27073,7 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -25694,6 +27189,7 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -25730,6 +27226,7 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -25880,6 +27377,7 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -25916,6 +27414,7 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -26063,6 +27562,7 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-branches".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -26099,6 +27599,7 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -26186,6 +27687,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-relax".into()),
@@ -26222,6 +27724,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -26382,6 +27885,8 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
             status: "finished".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 50_000,
                 time: 0.0,
                 dt: 0.0,
@@ -26419,6 +27924,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
@@ -26455,6 +27961,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -26488,6 +27995,8 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
@@ -26624,6 +28133,8 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 4.2e-12,
                 dt: 1.0e-13,
@@ -26705,6 +28216,8 @@ async fn object_metrics_keep_step_and_energy_without_inventing_magnetization() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 9,
                 time: 5.0e-12,
                 dt: 1.0e-13,
@@ -26768,6 +28281,8 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 4.2e-12,
                 dt: 1.0e-13,
@@ -27010,7 +28525,14 @@ async fn session_import_inspect_round_trips_exported_session() {
         .await
         .unwrap();
 
-    assert_eq!(export_response.status(), StatusCode::OK);
+    if export_response.status() != StatusCode::OK {
+        let status = export_response.status();
+        let body = body_bytes(export_response).await;
+        panic!(
+            "compact export returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     let exported = body_json(export_response).await;
     let fms_base64 = exported["fms_base64"]
         .as_str()
@@ -27196,8 +28718,10 @@ async fn session_import_replace_project_reports_semantic_differences_without_com
         )
         .await
         .unwrap();
-    assert_eq!(export_response.status(), StatusCode::OK);
-    let fms_base64 = body_json(export_response).await["fms_base64"]
+    let export_status = export_response.status();
+    let export_json = body_json(export_response).await;
+    assert_eq!(export_status, StatusCode::OK, "{export_json}");
+    let fms_base64 = export_json["fms_base64"]
         .as_str()
         .expect("export must include fms payload")
         .to_string();
@@ -27241,6 +28765,30 @@ async fn session_import_replace_project_reports_semantic_differences_without_com
         .await
         .clone()
         .expect("replace_project must publish the imported snapshot");
+    let restored_scene = restored
+        .scene_document
+        .as_ref()
+        .expect("replace_project must publish the imported typed scene");
+    let restored_object = restored_scene
+        .objects
+        .first()
+        .expect("imported scene must retain its object");
+    assert_eq!(
+        restored_object.geometry.geometry_params,
+        serde_json::json!({"size": [2.0, 1.0, 1.0]})
+    );
+    assert!(restored_scene
+        .materials
+        .iter()
+        .any(|material| material.id == restored_object.material_ref));
+    let restored_magnetization_ref = restored_object
+        .magnetization_ref
+        .as_ref()
+        .expect("imported object must retain its magnetization asset reference");
+    assert!(restored_scene
+        .magnetization_assets
+        .iter()
+        .any(|asset| &asset.id == restored_magnetization_ref));
     let restored_script = PathBuf::from(&restored.session.script_path);
     let restored_artifacts = PathBuf::from(&restored.session.artifact_dir);
     assert!(
@@ -27387,7 +28935,8 @@ fn assert_active_session_store_uninitialized(repo_root: &std::path::Path, contex
 
 #[tokio::test]
 async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store() {
-    use std::io::Cursor;
+    use std::io::{Cursor, Read, Write};
+    use zip::write::SimpleFileOptions;
 
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     let active_before = serde_json::to_value(
@@ -27436,7 +28985,9 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
     )
     .expect("fixture archive should pack");
     use base64::Engine;
-    let fms_base64 = base64::engine::general_purpose::STANDARD.encode(archive.into_inner());
+    let valid_archive_bytes = archive.into_inner();
+    let fms_base64 =
+        base64::engine::general_purpose::STANDARD.encode(valid_archive_bytes.clone());
 
     let response = app
         .clone()
@@ -27471,24 +29022,35 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
         "preflight failure must not initialize the active SessionStore",
     );
 
-    let mut corrupt_documents = documents;
-    corrupt_documents.insert(
-        "current_live_snapshot.json".to_string(),
-        b"{not valid JSON".to_vec(),
-    );
-    let mut corrupt_archive = Cursor::new(Vec::new());
-    fullmag_session::pack_fms(
-        &mut corrupt_archive,
-        &source_store,
-        &session,
-        &workspace,
-        &fullmag_session::FmsExportProfile::for_profile(fullmag_session::SaveProfile::Compact),
-        &corrupt_documents,
-        &fullmag_session::PackOptions::default(),
-    )
-    .expect("corrupt snapshot fixture archive should pack");
-    let corrupt_fms_base64 =
-        base64::engine::general_purpose::STANDARD.encode(corrupt_archive.into_inner());
+    // Keep the producer on a valid archive. Add or replace the malformed
+    // member afterward so the importer, rather than pack_fms validation,
+    // owns this negative case. ZipWriter recalculates the member CRC and sizes.
+    let mut source = zip::ZipArchive::new(Cursor::new(valid_archive_bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut replaced_snapshot = false;
+    for index in 0..source.len() {
+        let mut member = source.by_index(index).unwrap();
+        let name = member.name().to_string();
+        let mut data = Vec::new();
+        member.read_to_end(&mut data).unwrap();
+        drop(member);
+        if name == "project/current_live_snapshot.json" {
+            data = b"{not valid JSON".to_vec();
+            replaced_snapshot = true;
+        }
+        writer.start_file(name, options).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    if !replaced_snapshot {
+        writer
+            .start_file("project/current_live_snapshot.json", options)
+            .unwrap();
+        writer.write_all(b"{not valid JSON").unwrap();
+    }
+    let corrupt_archive = writer.finish().unwrap().into_inner();
+    let corrupt_fms_base64 = base64::engine::general_purpose::STANDARD.encode(corrupt_archive);
     let corrupt_response = app
         .oneshot(
             Request::builder()
@@ -27520,6 +29082,84 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
         "corrupt snapshot must not initialize the active SessionStore",
     );
 
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn compact_session_import_missing_declared_artifact_preserves_active_workspace() {
+    use base64::Engine;
+    use std::io::{Cursor, Read, Write};
+    use zip::write::SimpleFileOptions;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(state.current_live_state.read().await.clone())
+        .expect("active snapshot must serialize");
+    let selection_before = serde_json::to_value(state.current_display_selection.read().await.clone())
+        .expect("selection must serialize");
+    let presentation_before =
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize");
+    let response = app.clone().oneshot(
+        Request::builder().method("POST")
+            .uri("/v2/sessions/current/persistence/exports")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"profile": "compact"}).to_string()))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let exported = body_json(response).await;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(
+        exported["fms_base64"].as_str().expect("export must return an archive"),
+    ).expect("archive must decode");
+
+    // Mutate a valid archive after the public writer has validated it. Retain
+    // its run, session, script digest and every payload; only declare one
+    // additional artifact without its member, with valid ZIP sizes and CRCs.
+    let mut source = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut changed_snapshot = false;
+    for index in 0..source.len() {
+        let mut member = source.by_index(index).unwrap();
+        let name = member.name().to_string();
+        let mut data = Vec::new();
+        member.read_to_end(&mut data).unwrap();
+        drop(member);
+        if name == "project/current_live_snapshot.json" {
+            let mut snapshot: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            snapshot["artifacts"].as_array_mut().expect("typed artifact array")
+                .push(serde_json::json!({
+                    "path": "missing-spectrum.json", "kind": "eigen_spectrum"
+                }));
+            let run_id = snapshot["session"]["run_id"].as_str().unwrap();
+            assert!(source.by_name(&format!("runs/{run_id}/artifacts/missing-spectrum.json")).is_err());
+            data = serde_json::to_vec(&snapshot).unwrap();
+            changed_snapshot = true;
+        }
+        writer.start_file(name, options).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    assert!(changed_snapshot, "regression must mutate the actual persisted snapshot");
+    let malformed = writer.finish().unwrap().into_inner();
+    let response = app.oneshot(
+        Request::builder().method("POST")
+            .uri("/v2/sessions/current/persistence/imports")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "fms_base64": base64::engine::general_purpose::STANDARD.encode(malformed)
+            }).to_string())).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let error = body_json(response).await;
+    assert!(error.to_string().contains("missing-spectrum.json"),
+        "failure must identify the absent declared payload: {error}");
+    assert_eq!(serde_json::to_value(state.current_live_state.read().await.clone()).unwrap(), active_before);
+    assert_eq!(serde_json::to_value(state.current_display_selection.read().await.clone()).unwrap(), selection_before);
+    assert_eq!(serde_json::to_value(state.current_display_presentation.read().await.clone()).unwrap(), presentation_before);
+    let imports = repo_root.join(".fullmag/local-live/session-store/imports");
+    assert!(!imports.exists() || fs::read_dir(&imports).unwrap().next().is_none(),
+        "failed payload validation must not publish an import");
     let _ = fs::remove_dir_all(&repo_root);
 }
 
@@ -27775,7 +29415,11 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
         .unwrap();
     assert_eq!(inspect_response.status(), StatusCode::OK);
     let inspection = body_json(inspect_response).await;
-    assert_eq!(inspection["inspection"]["warnings"], serde_json::json!([]));
+    assert_eq!(
+        inspection["inspection"]["warnings"],
+        serde_json::json!([]),
+        "the API-generated live snapshot has a typed reachability schema"
+    );
 
     fs::remove_dir_all(&source_artifact_dir)
         .expect("simulated local-live history should be removable after save");
@@ -28119,6 +29763,13 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .iter()
         .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
 
+    // A committed checkpoint read must remain available while another handle writes.
+    let store_root = state
+        .current_command_journal_store_root
+        .clone()
+        .unwrap_or_else(|| repo_root.join(".fullmag/local-live/session-store"));
+    let active_writer = fullmag_session::SessionStore::open_existing(store_root).unwrap();
+    let writer_lease = active_writer.write_transaction().unwrap();
     let detail_response = app
         .clone()
         .oneshot(
@@ -28132,7 +29783,16 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .await
         .unwrap();
 
-    assert_eq!(detail_response.status(), StatusCode::OK);
+    drop(writer_lease);
+    drop(active_writer);
+    if detail_response.status() != StatusCode::OK {
+        let status = detail_response.status();
+        let body = body_bytes(detail_response).await;
+        panic!(
+            "checkpoint detail returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     let detail = body_json(detail_response).await;
     assert_eq!(detail["checkpoint_id"], checkpoint_id.as_str());
     assert_eq!(detail["vector_count"], 2);
@@ -28900,7 +30560,7 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
         let (before_m, before_step, before_time, before_version) = {
             let mut guard = state.current_live_state.write().await;
             let snapshot = guard.as_mut().unwrap();
-            snapshot.coupled_checkpoint = Some(candidate);
+            snapshot.coupled_checkpoint = Some(candidate.clone());
             let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
             (
                 latest.magnetization.clone(),
@@ -28923,9 +30583,15 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             )
             .await
             .unwrap();
-        if create.status() == StatusCode::BAD_REQUEST {
+        let create_status = create.status();
+        if create_status == StatusCode::BAD_REQUEST {
             let mut guard = state.current_live_state.write().await;
             let snapshot = guard.as_mut().unwrap();
+            assert_eq!(
+                snapshot.coupled_checkpoint.as_ref(),
+                Some(&candidate),
+                "capture {label} coupled checkpoint"
+            );
             let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
             assert_eq!(latest.magnetization, before_m, "capture {label}");
             assert_eq!(latest.step, before_step, "capture {label}");
@@ -28934,7 +30600,10 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             snapshot.coupled_checkpoint = Some(expected.clone());
             continue;
         }
-        assert_eq!(create.status(), StatusCode::OK, "capture {label}");
+        if create_status != StatusCode::OK {
+            let response_body = body_json(create).await;
+            panic!("capture {label}: unexpected HTTP {create_status}: {response_body}");
+        }
         let checkpoint_id = body_json(create).await["checkpoint"]["checkpoint_id"]
             .as_str()
             .unwrap()
@@ -28959,7 +30628,17 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             )
             .await
             .unwrap();
-        assert_eq!(restore.status(), StatusCode::BAD_REQUEST, "restore {label}");
+        let restore_status = restore.status();
+        let restore_body = axum::body::to_bytes(restore.into_body(), 64 * 1024)
+            .await
+            .expect("bounded restore error response");
+        assert_eq!(
+            restore_status,
+            StatusCode::BAD_REQUEST,
+            "restore {label}; fixture_root={}; response_body={}",
+            repo_root.display(),
+            String::from_utf8_lossy(&restore_body),
+        );
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref().unwrap();
         let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
@@ -29991,6 +31670,871 @@ async fn artifacts_list_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn antenna_result_resources_publish_metadata_and_etags() {
+    let state = test_app_state_with_live_session().await;
+    let magnet_target_signature = format!("sha256:{}", "4".repeat(64));
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-antenna-result-resources-{}",
+        uuid_v4_hex()
+    ));
+    let field_dir = artifact_dir.join("antenna/field_solutions/solution-1");
+    let spectrum_dir = artifact_dir.join("antenna/source_spectra/spectrum-output");
+    fs::create_dir_all(&field_dir).expect("field solution artifact directory");
+    fs::create_dir_all(&spectrum_dir).expect("source spectrum artifact directory");
+    fs::create_dir_all(field_dir.join("port-1")).expect("port payload directory");
+    let field_payload = |name: &str, values: &[f64], layout: &str, unit: &str| {
+        let bytes = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        fs::write(field_dir.join(name), &bytes).expect("write field payload");
+        serde_json::json!({
+            "path": format!("antenna/field_solutions/solution-1/{name}"),
+            "sha256": format!("{:x}", Sha256::digest(&bytes)),
+            "scalar_type": "float64_le",
+            "layout": layout,
+            "unit": unit,
+            "value_count": values.len()
+        })
+    };
+    let conductor_positions = field_payload(
+        "conductor_positions_xyz_m.f64le", &[0.0, 0.0, 0.0], "node_xyz_interleaved", "m"
+    );
+    let sample_positions = field_payload(
+        "sample_positions_xyz_m.f64le", &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        "sample_xyz_interleaved", "m"
+    );
+    let potential = field_payload("port-1/V_per_A.f64le", &[1.0], "node_scalar", "V/A");
+    let current = field_payload(
+        "port-1/J_per_A.f64le", &[1.0, 0.0, 0.0],
+        "sample_xyz_interleaved", "A/m^2/A"
+    );
+    let magnetic = field_payload(
+        "port-1/H_per_A.f64le", &[0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        "sample_xyz_interleaved", "A/m/A"
+    );
+    let mut field_manifest = serde_json::json!({
+            "schema_version": "antenna_field_solution.v1",
+            "asset_id": "asset-1",
+            "status": "ready",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "current_transport_id": "current-1",
+            "stage_id": "solve-1",
+            "geometry_revision": "geometry-1",
+            "material_revision": "material-1",
+            "mesh_digest": "mesh-1",
+            "requested_execution": {"backend": "fem", "device": "cpu"},
+            "resolved_execution": {"backend": "fem", "device": "cpu"},
+            "gauge_policy": "zero_mean",
+            "solver_policy": {"linear": "cg"},
+            "signatures": {
+                "current_solution_signature": format!("sha256:{}", "1".repeat(64)),
+                "field_solution_signature": format!("sha256:{}", "2".repeat(64)),
+                "target_projection_signatures": {
+                    "global": format!("sha256:{}", "3".repeat(64)),
+                    "magnet": magnet_target_signature
+                }
+            },
+            "conductor_positions": conductor_positions,
+            "sample_positions": sample_positions,
+            "sample_carrier": {
+                "domain": {"kind": "object", "object_id": "magnet"},
+                "carrier_kind": "fem_mesh_asset:magnet",
+                "location": "node",
+                "topology_digest": format!("sha256:{}", "4".repeat(64))
+            },
+            "sample_topology": null,
+            "assumptions": ["static current", "linear conductor"],
+            "bases": [{
+                "port_mode_id": "port-1",
+                "measured_positive_terminal_current_a": 1.0,
+                "normalization_current_a": 1.0,
+                "normalization_scale": 1.0,
+                "current_balance_certificate_digest": "sha256:balance",
+                "electric_potential_per_ampere": potential,
+                "current_density_per_ampere": current,
+                "magnetic_field_per_ampere": magnetic,
+                "oersted_operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION,
+                "quadrature_diagnostics": {
+                    "order": 2,
+                    "operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION
+                }
+            }]
+        });
+    field_manifest["content_digest"] = serde_json::json!(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&field_manifest).unwrap())
+    ));
+    fs::write(
+        field_dir.join("manifest.v1.json"),
+        serde_json::to_vec_pretty(&field_manifest).expect("serialize field solution manifest"),
+    )
+    .expect("write field solution manifest");
+    fs::write(
+        spectrum_dir.join("spectrum.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "antenna_source_spectrum_artifact.v1",
+            "request_id": "spectrum-request-1",
+            "output_id": "spectrum-output",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "port_mode_id": "port-1",
+            "solution_content_digest": "sha256:solution",
+            "content_digest": "sha256:spectrum",
+            "sampling": {
+                "schema_version": "antenna_spectrum_sampling.v1",
+                "solution_id": "solution-1",
+                "source_object_id": "antenna-1",
+                "port_mode_id": "port-1",
+                "target": {"kind": "global"},
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 2,
+                "sample_count_v": 2,
+                "interpolation": "fem_element",
+                "realization": "fem_p1_interpolation_v1",
+                "outside_policy": "zero",
+                "outside_count": 0,
+                "source_sample_count": 4,
+                "mapping_digest": "sha256:mapping",
+                "fourier_origin_uv_m": [-0.5, -0.5],
+                "fourier_phase_convention": "centered_plane_origin_phase_corrected.v1"
+            },
+            "spectrum": {
+                "schema_version": "antenna_source_spectrum.v1",
+                "request_id": "spectrum-request-1",
+                "output_id": "spectrum-output",
+                "component": "H_z",
+                "k_u_rad_per_m": [0.0, 1.0],
+                "k_v_rad_per_m": [0.0, 1.0],
+                "component_labels": ["z"],
+                "amplitudes_re_im": [[1.0, 0.0]],
+                "power": [1.0],
+                "coherent_gain": 1.0,
+                "equivalent_noise_bandwidth_bins": 1.0,
+                "normalization": "unitary_discrete",
+                "amplitude_unit": "A/m/A",
+                "wave_vector_unit": "rad/m"
+            }
+        }))
+        .expect("serialize source spectrum artifact"),
+    )
+    .expect("write source spectrum artifact");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let field = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let field_status = field.status();
+    let field_etag = field.headers().get("etag").cloned();
+    let field_json = body_json(field).await;
+    assert_eq!(field_status, StatusCode::OK, "{field_json}");
+    let field_etag = field_etag.expect("successful antenna metadata has an ETag");
+    assert_eq!(field_json["bases"][0]["magnetic_field_per_ampere"]["sha256"],
+        format!("{:x}", Sha256::digest(fs::read(field_dir.join("port-1/H_per_A.f64le")).unwrap())));
+    assert_eq!(field_json["solution_id"], "solution-1");
+    assert_eq!(field_json["quantity"], "H_ant_basis");
+    assert_eq!(field_json["sample_positions"]["value_count"], 6);
+    assert_eq!(field_json["sample_carrier"]["domain"]["object_id"], "magnet");
+    assert_eq!(field_json["sample_carrier"]["location"], "node");
+    assert!(field_json["target_projection_signature"].is_null());
+    assert_eq!(
+        field_json["signatures"]["target_projection_signatures"]["magnet"],
+        magnet_target_signature
+    );
+
+    let field_not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(field_not_modified).await.is_empty());
+
+    let field_manifest_path = field_dir.join("manifest.v1.json");
+    let mut tampered_field_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&field_manifest_path).expect("read field manifest"))
+            .expect("parse field manifest");
+    tampered_field_manifest["assumptions"] = serde_json::json!(["updated assumption"]);
+    fs::write(&field_manifest_path, serde_json::to_vec(&tampered_field_manifest).unwrap())
+        .expect("update field metadata without changing declared content digest");
+    let changed_field = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed_field.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&field_manifest_path, serde_json::to_vec(&field_manifest).unwrap())
+        .expect("restore verified field manifest");
+
+    let field_payload_uri = "/v2/sessions/current/data/antenna/field-solutions/solution-1/payloads/magnetic_field_per_ampere?port_mode_id=port-1";
+    let field_bytes = app
+        .clone()
+        .oneshot(Request::builder().uri(field_payload_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(field_bytes.status(), StatusCode::OK);
+    let field_payload_etag = field_bytes.headers().get("etag").unwrap().clone();
+    assert_eq!(body_bytes(field_bytes).await.len(), 6 * 8);
+    let sample_positions_binary = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1/payloads/sample_positions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sample_positions_binary.status(), StatusCode::OK);
+    assert_eq!(body_bytes(sample_positions_binary).await.len(), 6 * 8);
+    let field_range = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("range", "bytes=0-7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_range.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(body_bytes(field_range).await, vec![0u8; 8]);
+    let field_payload_not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_payload_not_modified.status(), StatusCode::NOT_MODIFIED);
+    let write_rehashed_field_manifest = |mut manifest: serde_json::Value| {
+        manifest.as_object_mut().unwrap().remove("content_digest");
+        manifest["content_digest"] = serde_json::json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&manifest).unwrap())
+        ));
+        fs::write(&field_manifest_path, serde_json::to_vec(&manifest).unwrap())
+            .expect("write rehashed field solution manifest");
+    };
+    let mut missing_operator = field_manifest.clone();
+    missing_operator["bases"][0].as_object_mut().unwrap().remove("oersted_operator_version");
+    write_rehashed_field_manifest(missing_operator);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut mismatched_operator = field_manifest.clone();
+    mismatched_operator["bases"][0]["quadrature_diagnostics"]["operator_version"] =
+        serde_json::json!(fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION);
+    write_rehashed_field_manifest(mismatched_operator);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut legacy_manifest = field_manifest.clone();
+    let mut invalid_signature = field_manifest.clone();
+    invalid_signature["signatures"]["current_solution_signature"] =
+        serde_json::json!("sha256:current");
+    write_rehashed_field_manifest(invalid_signature);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut single_target_manifest = field_manifest.clone();
+    single_target_manifest["signatures"]["target_projection_signatures"] =
+        serde_json::json!({"magnet": magnet_target_signature});
+    write_rehashed_field_manifest(single_target_manifest);
+    let single_target_response = app.clone().oneshot(
+        Request::builder()
+            .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(single_target_response.status(), StatusCode::OK);
+    let single_target_json = body_json(single_target_response).await;
+    assert!(single_target_json["target_projection_signature"].is_null());
+    assert_eq!(single_target_json["signatures"]["target_projection_signatures"]["magnet"], magnet_target_signature);
+    legacy_manifest.as_object_mut().unwrap().remove("sample_carrier");
+    write_rehashed_field_manifest(legacy_manifest);
+    let legacy_response = app.clone().oneshot(
+        Request::builder()
+            .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(legacy_response.status(), StatusCode::OK);
+    assert!(body_json(legacy_response).await["sample_carrier"].is_null());
+    for (key, value) in [
+        ("carrier_kind", serde_json::json!("")),
+        ("location", serde_json::json!("cell")),
+        ("topology_digest", serde_json::json!("sha256:invalid")),
+        ("domain", serde_json::json!({"kind": "object", "object_id": ""})),
+    ] {
+        let mut invalid_carrier = field_manifest.clone();
+        invalid_carrier["sample_carrier"][key] = value;
+        write_rehashed_field_manifest(invalid_carrier);
+        let response = app.clone().oneshot(
+            Request::builder().uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag.clone())
+                .body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR, "{key}");
+    }
+    let mut false_shape = field_manifest.clone();
+    false_shape["bases"][0]["current_density_per_ampere"]["value_count"] =
+        serde_json::json!(6);
+    write_rehashed_field_manifest(false_shape);
+    let invalid_shape = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_shape.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut false_unit = field_manifest.clone();
+    false_unit["bases"][0]["magnetic_field_per_ampere"]["unit"] =
+        serde_json::json!("T/A");
+    write_rehashed_field_manifest(false_unit);
+    let invalid_unit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_unit.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut false_normalization = field_manifest.clone();
+    false_normalization["bases"][0]["normalization_scale"] = serde_json::json!(2.0);
+    write_rehashed_field_manifest(false_normalization);
+    let invalid_normalization = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_normalization.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut duplicated_payload = field_manifest.clone();
+    let mut second_basis = duplicated_payload["bases"][0].clone();
+    second_basis["port_mode_id"] = serde_json::json!("port-2");
+    duplicated_payload["bases"].as_array_mut().unwrap().push(second_basis);
+    write_rehashed_field_manifest(duplicated_payload);
+    let invalid_payload_alias = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_payload_alias.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut missing_identity = field_manifest.clone();
+    missing_identity["source_object_id"] = serde_json::json!("");
+    write_rehashed_field_manifest(missing_identity);
+    let invalid_identity = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_identity.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&field_manifest_path, serde_json::to_vec(&field_manifest).unwrap())
+        .expect("restore verified field solution manifest");
+    let missing_port = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1/payloads/magnetic_field_per_ampere")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_port.status(), StatusCode::BAD_REQUEST);
+
+    let magnetic_path = field_dir.join("port-1/H_per_A.f64le");
+    let non_finite_bytes = [0.0, f64::NAN, 0.0, 0.0, 1.0, 0.0]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    fs::write(&magnetic_path, &non_finite_bytes).expect("write non-finite field payload");
+    let mut non_finite_manifest = field_manifest.clone();
+    non_finite_manifest["bases"][0]["magnetic_field_per_ampere"]["sha256"] =
+        serde_json::json!(format!("{:x}", Sha256::digest(&non_finite_bytes)));
+    write_rehashed_field_manifest(non_finite_manifest);
+    let non_finite_payload = app
+        .clone()
+        .oneshot(Request::builder().uri(field_payload_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(non_finite_payload.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let _ = field_payload(
+        "port-1/H_per_A.f64le", &[0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        "sample_xyz_interleaved", "A/m/A"
+    );
+
+    let invalid_topology_bytes = [0u32, 1, 0, 2]
+        .iter()
+        .flat_map(|index| index.to_le_bytes())
+        .collect::<Vec<_>>();
+    fs::write(field_dir.join("sample_topology.u32le"), &invalid_topology_bytes)
+        .expect("write out-of-bounds topology payload");
+    let mut invalid_topology_manifest = field_manifest.clone();
+    invalid_topology_manifest["sample_topology"] = serde_json::json!({
+        "path": "antenna/field_solutions/solution-1/sample_topology.u32le",
+        "sha256": format!("{:x}", Sha256::digest(&invalid_topology_bytes)),
+        "scalar_type": "uint32_le",
+        "layout": "tet4_connectivity",
+        "unit": "1",
+        "value_count": 4
+    });
+    write_rehashed_field_manifest(invalid_topology_manifest);
+    let invalid_topology = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_topology.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&field_manifest_path, serde_json::to_vec(&field_manifest).unwrap())
+        .expect("restore verified field solution manifest");
+
+    fs::write(&magnetic_path, [0u8; 4]).expect("truncate field payload");
+    let corrupt_payload = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt_payload.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let corrupt_binary = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt_binary.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::remove_file(&magnetic_path).expect("remove field payload fixture");
+    let missing_payload = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_payload.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(missing_payload).await["code"], "missing_payload");
+    let _ = field_payload(
+        "port-1/H_per_A.f64le", &[0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        "sample_xyz_interleaved", "A/m/A"
+    );
+
+    let spectrum = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spectrum.status(), StatusCode::OK);
+    let spectrum_etag = spectrum.headers().get("etag").unwrap().clone();
+    let spectrum_json = body_json(spectrum).await;
+    assert_eq!(spectrum_json["output_id"], "spectrum-output");
+    assert_eq!(spectrum_json["k_u_count"], 2);
+    assert_eq!(spectrum_json["sampling"]["realization"], "fem_p1_interpolation_v1");
+
+    let spectrum_manifest_path = spectrum_dir.join("spectrum.v1.json");
+    let mut spectrum_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&spectrum_manifest_path).expect("read spectrum manifest"))
+            .expect("parse spectrum manifest");
+    spectrum_manifest["sampling"]["mapping_digest"] =
+        serde_json::json!("sha256:updated-mapping");
+    fs::write(&spectrum_manifest_path, serde_json::to_vec(&spectrum_manifest).unwrap())
+        .expect("update spectrum metadata without changing declared content digest");
+    let changed_spectrum = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .header("if-none-match", spectrum_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed_spectrum.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(changed_spectrum).await["sampling"]["mapping_digest"],
+        "sha256:updated-mapping"
+    );
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    fs::write(field_dir.join("manifest.v1.json"), b"not-json")
+        .expect("corrupt field manifest");
+    let corrupt = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn antenna_source_spectrum_v2_serves_hashed_binary_payloads_with_ranges() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-antenna-spectrum-v2-{}",
+        uuid_v4_hex()
+    ));
+    let spectrum_dir = artifact_dir.join("antenna/source_spectra/spectrum-output");
+    fs::create_dir_all(&spectrum_dir).expect("source spectrum artifact directory");
+    let f64_payload = |values: &[f64]| {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>()
+    };
+    let k_u = f64_payload(&[0.0, 1.0]);
+    let k_v = f64_payload(&[0.0, 2.0]);
+    let amplitudes = f64_payload(&[1.0, 0.0, 2.0, -1.0, 3.0, 0.0, 4.0, 0.0]);
+    let power = f64_payload(&[1.0, 5.0, 9.0, 16.0]);
+    let digest = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+    fs::write(
+        spectrum_dir.join("k_u_rad_per_m.f64le"),
+        &k_u,
+    )
+    .expect("write k_u payload");
+    fs::write(
+        spectrum_dir.join("k_v_rad_per_m.f64le"),
+        &k_v,
+    )
+    .expect("write k_v payload");
+    fs::write(
+        spectrum_dir.join("amplitudes_re_im.f64le"),
+        &amplitudes,
+    )
+    .expect("write amplitudes payload");
+    fs::write(spectrum_dir.join("power.f64le"), &power).expect("write power payload");
+    let payload_ref = |name: &str, bytes: &[u8], layout: &str, unit: &str, value_count: usize| {
+        serde_json::json!({
+            "path": format!("antenna/source_spectra/spectrum-output/{name}.f64le"),
+            "sha256": digest(bytes),
+            "scalar_type": "float64_le",
+            "layout": layout,
+            "unit": unit,
+            "value_count": value_count
+        })
+    };
+    let mut spectrum_manifest = serde_json::json!({
+            "schema_version": "antenna_source_spectrum_artifact.v2",
+            "request_id": "spectrum-request-1",
+            "output_id": "spectrum-output",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "port_mode_id": "port-1",
+            "solution_content_digest": "sha256:solution",
+            "sampling": {
+                "schema_version": "antenna_spectrum_sampling.v1",
+                "solution_id": "solution-1",
+                "source_object_id": "antenna-1",
+                "port_mode_id": "port-1",
+                "target": {"kind": "global"},
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 2,
+                "sample_count_v": 2,
+                "interpolation": "fem_element",
+                "transform": "spatial_fft",
+                "window": "rectangular",
+                "fourier_realization": "structured_fft_rustfft_centered_v1",
+                "realization": "fem_p1_interpolation_v1",
+                "outside_policy": "zero",
+                "outside_count": 0,
+                "source_sample_count": 4,
+                "mapping_digest": "sha256:mapping",
+                "fourier_origin_uv_m": [-0.5, -0.5],
+                "fourier_phase_convention": "centered_plane_origin_phase_corrected.v1"
+            },
+            "spectrum": {
+                "schema_version": "antenna_source_spectrum.v1",
+                "request_id": "spectrum-request-1",
+                "output_id": "spectrum-output",
+                "component": "z",
+                "component_labels": ["z"],
+                "k_u_count": 2,
+                "k_v_count": 2,
+                "amplitude_count": 4,
+                "power_count": 4,
+                "coherent_gain": 1.0,
+                "equivalent_noise_bandwidth_bins": 1.0,
+                "normalization": "unitary_discrete",
+                "amplitude_unit": "A/m/A",
+                "wave_vector_unit": "rad/m"
+            },
+            "payloads": {
+                "k_u_rad_per_m": payload_ref("k_u_rad_per_m", &k_u, "axis_u_1d", "rad/m", 2),
+                "k_v_rad_per_m": payload_ref("k_v_rad_per_m", &k_v, "axis_v_1d", "rad/m", 2),
+                "amplitudes_re_im": payload_ref("amplitudes_re_im", &amplitudes, "component_kv_ku_complex_re_im", "A/m/A", 8),
+                "power": payload_ref("power", &power, "kv_ku_power", "(A/m/A)^2", 4)
+            }
+        });
+    spectrum_manifest["content_digest"] = serde_json::json!(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&spectrum_manifest).unwrap())
+    ));
+    fs::write(
+        spectrum_dir.join("spectrum.v2.json"),
+        serde_json::to_vec_pretty(&spectrum_manifest)
+            .expect("serialize source spectrum v2 manifest"),
+    )
+    .expect("write source spectrum v2 manifest");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let metadata = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metadata.status(), StatusCode::OK);
+    let metadata_json = body_json(metadata).await;
+    assert_eq!(metadata_json["schema_version"], "antenna_source_spectrum_artifact.v2");
+    assert_eq!(metadata_json["payloads"]["amplitudes_re_im"]["value_count"], 8);
+
+    let mut tampered_manifest = spectrum_manifest.clone();
+    tampered_manifest["spectrum"]["coherent_gain"] = serde_json::json!(0.5);
+    let manifest_path = spectrum_dir.join("spectrum.v2.json");
+    fs::write(&manifest_path, serde_json::to_vec(&tampered_manifest).unwrap())
+        .expect("tamper source spectrum manifest");
+    let tampered_metadata = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tampered_metadata.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&manifest_path, serde_json::to_vec(&spectrum_manifest).unwrap())
+        .expect("restore source spectrum manifest");
+
+    for (pointer, replacement) in [
+        ("/spectrum/coherent_gain", serde_json::json!(0.5)),
+        ("/payloads/power/unit", serde_json::json!("wrong")),
+        ("/sampling/fourier_phase_convention", serde_json::json!("wrong")),
+    ] {
+        let mut invalid = spectrum_manifest.clone();
+        *invalid.pointer_mut(pointer).unwrap() = replacement;
+        invalid.as_object_mut().unwrap().remove("content_digest");
+        invalid["content_digest"] = serde_json::json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&invalid).unwrap())
+        ));
+        fs::write(&manifest_path, serde_json::to_vec(&invalid).unwrap())
+            .expect("write rehashed inconsistent source spectrum manifest");
+        let response = app.clone().oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let binary_response = app.clone().oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/power")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(binary_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    fs::write(&manifest_path, serde_json::to_vec(&spectrum_manifest).unwrap())
+        .expect("restore source spectrum manifest after semantic tamper");
+
+    let binary = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(binary.status(), StatusCode::OK);
+    assert_eq!(binary.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    let binary_etag = binary.headers()[header::ETAG].clone();
+    assert_eq!(body_bytes(binary).await, amplitudes);
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::IF_NONE_MATCH, binary_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(not_modified).await.is_empty());
+
+    fs::write(spectrum_dir.join("power.f64le"), b"corrupted")
+        .expect("corrupt a different spectrum payload");
+    let incomplete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::IF_NONE_MATCH, binary_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(incomplete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(spectrum_dir.join("power.f64le"), &power)
+        .expect("restore other spectrum payload");
+
+    let partial = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::RANGE, "bytes=0-7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(partial.headers()[header::CONTENT_RANGE], "bytes 0-7/64");
+    assert_eq!(body_bytes(partial).await, amplitudes[..8]);
+
+    fs::write(spectrum_dir.join("amplitudes_re_im.f64le"), b"corrupted")
+        .expect("corrupt amplitudes payload");
+    let corrupt = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     fs::write(
@@ -30523,12 +33067,18 @@ async fn resolved_current_spatial_field_accepts_fem_element_cardinality() {
         snapshot.session.requested_backend = "fem".to_string();
         snapshot.session.resolved_backend = Some("fem_cpu_native".to_string());
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eps": {
                 "values": [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]
             }
         }))
         .expect("FEM element field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [6, 1, 1], None),
+            latest_fields,
+        )
+        .expect("FEM element field should publish from an accepted physical observation");
     }
 
     let guard = state.current_live_state.read().await;
@@ -30978,13 +33528,24 @@ async fn fdm_field_vector_object_scope_uses_membership_cell_ordinals() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 "layout": { "grid_cells": [2, 1, 1] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM membership field should be admitted from a physical step");
     }
 
     let response = app
@@ -31069,13 +33630,24 @@ async fn fdm_field_vector_object_scope_rejects_mixed_default_numeric_membership(
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 "layout": { "grid_cells": [2, 1, 1] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM field should be admitted before the membership conflict check");
     }
 
     let response = app
@@ -31109,7 +33681,7 @@ async fn fdm_terminal_spatial_scalar_full_grid_preserves_values_and_object_indic
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_demag": {
                 "quantity": "eden_demag",
                 "unit": "J/m³",
@@ -31127,6 +33699,12 @@ async fn fdm_terminal_spatial_scalar_full_grid_preserves_values_and_object_indic
             }
         }))
         .expect("terminal scalar field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [2, 1, 2], None),
+            latest_fields,
+        )
+        .expect("terminal scalar field should be admitted from its physical source");
     }
 
     let meta = app
@@ -31195,7 +33773,7 @@ async fn fdm_terminal_spatial_scalar_plane_is_not_a_current_3d_field() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_demag": {
                 "quantity": "eden_demag",
                 "unit": "J/m³",
@@ -31209,6 +33787,12 @@ async fn fdm_terminal_spatial_scalar_plane_is_not_a_current_3d_field() {
             }
         }))
         .expect("terminal scalar plane fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [2, 1, 2], None),
+            latest_fields,
+        )
+        .expect("terminal plane should be source-qualified before its shape rejection");
     }
 
     let response = app
@@ -31271,13 +33855,19 @@ async fn fdm_field_vector_airbox_surface_and_max_samples_use_cell_ordinals() {
         let values = (0..27)
             .map(|index| [index as f64, 0.0, 0.0])
             .collect::<Vec<_>>();
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": values,
                 "layout": { "grid_cells": [3, 3, 3] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [3, 3, 3], None),
+            latest_fields,
+        )
+        .expect("FDM field should be admitted before scoped sampling");
     }
 
     let response = app
@@ -31349,13 +33939,24 @@ async fn fdm_field_vector_region_scope_requires_owner_for_duplicate_region_ids()
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 "layout": { "grid_cells": [2, 1, 1] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM region field should be admitted from a physical step");
     }
 
     let ambiguous = app
@@ -31552,7 +34153,7 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
             }
         }));
         snapshot.live_state = None;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -31562,6 +34163,17 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be admitted from a physical step");
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -31710,8 +34322,7 @@ async fn fdm_multilayer_field_vector_object_scope_preserves_object_identity() {
                 }]
             }
         }));
-        snapshot.live_state = None;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -31721,6 +34332,17 @@ async fn fdm_multilayer_field_vector_object_scope_preserves_object_identity() {
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be admitted from a physical step");
     }
     let app = build_v2_router().with_state(state);
 
@@ -33255,9 +35877,8 @@ async fn middleware_headers_on_all_endpoints() {
 async fn test_router_with_mock_field() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 11;
         // 4 points × 3 components, interleaved: p0=[1,0,0], p1=[0,1,0], p2=[0,0,1], p3=[1,2,2]
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -33271,6 +35892,20 @@ async fn test_router_with_mock_field() -> axum::Router {
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("mock magnetization should be admitted and published from a physical step");
+        snapshot.state_version = 11;
     }
     build_v2_router().with_state(state)
 }
@@ -33278,9 +35913,8 @@ async fn test_router_with_mock_field() -> axum::Router {
 async fn test_router_with_fem_nodal_field() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 17;
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [2.0, 0.0, 0.0],
@@ -33294,6 +35928,20 @@ async fn test_router_with_fem_nodal_field() -> axum::Router {
             }
         }))
         .expect("mock FEM latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("mock FEM magnetization should be admitted from a physical step");
+        snapshot.state_version = 17;
     }
     build_v2_router().with_state(state)
 }
@@ -33301,16 +35949,21 @@ async fn test_router_with_fem_nodal_field() -> axum::Router {
 async fn test_router_with_material_scalar_field() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 18;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
-            "mat_ms": {
-                "values": [800000.0, 800000.0, 400000.0, 400000.0],
-                "layout": {
-                    "grid_cells": [2, 2, 1]
+        crate::session::apply_current_live_metadata(
+            snapshot,
+            serde_json::json!({
+                "execution_plan": {
+                    "backend_plan": {
+                        "kind": "fdm",
+                        "grid": { "cells": [2, 2, 1] },
+                        "material": {
+                            "ms_field": [800000.0, 800000.0, 400000.0, 400000.0]
+                        }
+                    }
                 }
-            }
-        }))
-        .expect("mock material latest_fields should deserialize");
+            }),
+        );
+        snapshot.state_version = 18;
     }
     build_v2_router().with_state(state)
 }
@@ -33449,6 +36102,8 @@ async fn test_router_with_live_magnetization() -> axum::Router {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -33490,8 +36145,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
 async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 11;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -33505,6 +36159,20 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("mock FEM field should be published from a physical observation");
+        snapshot.state_version = 11;
         snapshot.fem_mesh = Some(FemMeshPayload {
             mesh_name: "fem-empty-topology".to_string(),
             mesh_id: "fem-empty-topology:1".to_string(),
@@ -34684,6 +37352,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
             stage_statuses: vec![StageLifecycleState::Completed],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
@@ -34720,6 +37389,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
         });
     }
@@ -34807,7 +37477,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
 }
 
 #[tokio::test]
-async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_algorithm() {
+async fn hysteresis_analysis_uses_active_hysteresis_kind_only_when_record_kind_is_missing() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     let stage_dir = artifact_dir
         .parent()
@@ -34845,7 +37515,8 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
-                kind: Some("relax".into()),
+                antenna_solve_stage_id: None,
+                kind: None,
                 status: StageLifecycleState::Running,
                 command_id: None,
                 mesh_generation_id: None,
@@ -34881,6 +37552,7 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("relax".into()),
                 current_settle_step_method: Some("llg_overdamped".into()),
+                parallel_execution: None,
             }],
         });
     }
@@ -34905,6 +37577,7 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
     assert_eq!(points[0]["field_value_mT"], 200.0);
 
     let progress_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/simulation/stages/0/hysteresis/progress")
@@ -34919,6 +37592,40 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
     assert_eq!(progress["stage_id"], "stage-000");
     assert_eq!(progress["stage_index"], 0);
     assert_eq!(progress["current_field_mT"], 200.0);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot
+            .stage_execution
+            .as_mut()
+            .expect("stage execution should be active")
+            .stages[0]
+            .kind = Some("relax".into());
+    }
+
+    let conflicting_kind_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/0/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflicting_kind_response.status(), StatusCode::NOT_FOUND);
+
+    let conflicting_progress_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/stages/0/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflicting_progress_response.status(), StatusCode::NOT_FOUND);
 
     let _ = fs::remove_dir_all(stage_dir);
     let _ = fs::remove_dir_all(artifact_dir);
@@ -34973,6 +37680,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -35009,6 +37717,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
         });
     }
@@ -35074,6 +37783,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -35110,6 +37820,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
         });
     }
@@ -35154,6 +37865,7 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -35190,6 +37902,7 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             total_stages: 1,
         });
@@ -35710,6 +38423,7 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -35746,6 +38460,7 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
         });
     }
@@ -36262,6 +38977,8 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_456,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 8,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -36328,6 +39045,8 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_100,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 1.0e-12,
                 dt: 1.0e-13,
@@ -36363,7 +39082,11 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
         snapshot.field_quantity_revisions.insert("m".to_string(), 1);
         snapshot.field_samples_revision = 1;
 
-        let session_id = snapshot.session.session_id.clone();
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(2, 1.0e-12, [2, 1, 1], Some(legacy_a.clone())),
+        )
+        .expect("physical source step 2 should be admitted before field B");
         let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0]],
@@ -36375,18 +39098,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             }
         }))
         .expect("provenance-rich field B should deserialize");
-        crate::session::apply_current_live_field_frame(
-            snapshot,
-            CurrentLiveFieldFrameRequest {
-                session_id,
-                latest_fields: Some(latest_fields),
-                replace_latest_fields: false,
-                field_generation: None,
-                preview_fields: None,
-                clear_preview_cache: false,
-            },
-        )
-        .expect("field B frame should apply");
+        publish_test_latest_fields(snapshot, latest_fields).expect("field B frame should apply");
     }
 
     let app = build_v2_router().with_state(state.clone());
@@ -36465,7 +39177,11 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
-        let session_id = snapshot.session.session_id.clone();
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(3, 1.0e-12, [2, 1, 1], Some(legacy_a.clone())),
+        )
+        .expect("physical source step 3 should be admitted before field C");
         let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]],
@@ -36477,18 +39193,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             }
         }))
         .expect("provenance-rich field C should deserialize");
-        crate::session::apply_current_live_field_frame(
-            snapshot,
-            CurrentLiveFieldFrameRequest {
-                session_id,
-                latest_fields: Some(latest_fields),
-                replace_latest_fields: false,
-                field_generation: None,
-                preview_fields: None,
-                clear_preview_cache: false,
-            },
-        )
-        .expect("field C frame should apply");
+        publish_test_latest_fields(snapshot, latest_fields).expect("field C frame should apply");
     }
 
     let meta_c_response = app
@@ -36574,7 +39279,7 @@ async fn field_meta_component_query_reports_scoped_object_stats() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [10.0, 10.1, 10.2],
@@ -36592,6 +39297,20 @@ async fn field_meta_component_query_reports_scoped_object_stats() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    10.0, 10.1, 10.2, 11.0, 11.1, 11.2, 12.0, 12.1, 12.2, 13.0, 13.1, 13.2, 0.0,
+                    0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("scoped magnetization should publish from its physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -36617,7 +39336,7 @@ async fn field_meta_component_query_reports_scoped_h_demag_object_stats() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [
                     [10.0, 10.1, 10.2],
@@ -36635,6 +39354,12 @@ async fn field_meta_component_query_reports_scoped_h_demag_object_stats() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped H_demag field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -36661,7 +39386,7 @@ async fn field_meta_energy_density_accepts_object_prefixed_scope_ids() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_total": {
                 "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
                 "layout": {
@@ -36670,6 +39395,12 @@ async fn field_meta_energy_density_accepts_object_prefixed_scope_ids() {
             }
         }))
         .expect("scoped eden_total latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped energy-density field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -36703,7 +39434,7 @@ async fn field_meta_energy_density_accepts_geom_suffixed_part_ids() {
         mesh.mesh_parts[0].object_id = None;
         mesh.mesh_parts[0].geometry_id = None;
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_total": {
                 "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
                 "layout": {
@@ -36712,6 +39443,12 @@ async fn field_meta_energy_density_accepts_geom_suffixed_part_ids() {
             }
         }))
         .expect("scoped eden_total latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped energy-density field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -36743,7 +39480,7 @@ async fn field_meta_energy_density_accepts_geom_suffixed_object_segment_geometry
         mesh.object_segments[0].object_id = "native-segment-0".to_string();
         mesh.object_segments[0].geometry_id = Some("permalloy_layer_geom".to_string());
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_total": {
                 "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
                 "layout": {
@@ -36752,6 +39489,12 @@ async fn field_meta_energy_density_accepts_geom_suffixed_object_segment_geometry
             }
         }))
         .expect("scoped eden_total latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped energy-density field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -36778,8 +39521,7 @@ async fn field_meta_energy_density_accepts_geom_suffixed_object_segment_geometry
 async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 11;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -36793,6 +39535,20 @@ async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("ETag magnetization should publish from a physical observation");
+        snapshot.state_version = 11;
     }
     let app = build_v2_router().with_state(state.clone());
     let uri = "/v2/sessions/current/data/fields/m/samples/vector?component=magnitude";
@@ -36991,6 +39747,8 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -37070,6 +39828,8 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -37168,6 +39928,8 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -37244,9 +40006,9 @@ async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_ident
         snapshot.mesh_revision = 19;
         snapshot.fem_mesh = Some(mesh);
         snapshot.preview_cache = Default::default();
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
-                "values": values,
+                "values": values.clone(),
                 "source_step": 52,
                 "source_revision": 19,
                 "materialized_at_unix_ms": 1_700_000_000_456_u64,
@@ -37254,6 +40016,14 @@ async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_ident
             }
         }))
         .expect("terminal FEM m field should deserialize");
+        let live_magnetization = values.iter().flatten().copied().collect::<Vec<_>>();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [0, 0, 0], Some(live_magnetization)),
+            latest_fields,
+        )
+        .expect("terminal FEM field should publish from its physical observation");
+        snapshot.state_version = 52;
     }
     let app = build_v2_router().with_state(state);
 
@@ -37302,8 +40072,7 @@ async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_ident
 async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 24;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -37315,10 +40084,18 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
             }
         }))
         .expect("mock latest_fields should deserialize");
-        snapshot.live_state = Some(LiveState {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(7, 1.9e-9, [2, 1, 1], None),
+            latest_fields,
+        )
+        .expect("stale latest magnetization should bind to its physical source step");
+        let current_live_state = LiveState {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_456,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 8,
                 time: 2.0e-9,
                 dt: 1.0e-13,
@@ -37346,13 +40123,156 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
+                field_materialization_states: vec![
+                    fullmag_runner::LiveFieldMaterializationStatus {
+                        quantity: "m".into(),
+                        source_step: 7,
+                        request_revision: 1,
+                        state: fullmag_runner::LiveFieldMaterializationState::Error,
+                        error: Some("step 7 materialization failed".into()),
+                    },
+                ],
                 preview_field: None,
                 finished: false,
             },
-        });
+        };
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current step 8 magnetization should apply as a physical observation");
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            crate::types::CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(8, 2.0e-9, 0.0)),
+            },
+        )
+        .expect("step 8 physical scalar row should bind to the selected live field");
+        snapshot.state_version = 24;
     }
-    let app = build_v2_router().with_state(state);
+    let app = build_v2_router().with_state(state.clone());
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 8);
+    assert_eq!(meta["source_time_seconds"], 2.0e-9);
+    assert_eq!(meta["observation_frame"]["source_step"], 8);
+    assert_eq!(meta["observation_frame"]["source_time_seconds"], 2.0e-9);
+    assert_eq!(meta["state"], "complete");
+    assert!(meta["materialization_error"].is_null());
+    if !meta["publication_bundle"].is_null() {
+        assert_eq!(
+            meta["publication_bundle"]["observation_frame"],
+            meta["observation_frame"]
+        );
+    }
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let live_m = catalog["quantities"]
+        .as_array()
+        .and_then(|quantities| {
+            quantities
+                .iter()
+                .find(|quantity| quantity["quantity_id"] == "m")
+        })
+        .expect("selected live magnetization should be listed");
+    assert_eq!(live_m["source_step"], 8);
+    assert_eq!(live_m["source_time_seconds"], 2.0e-9);
+    assert_eq!(live_m["state"], "complete");
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .live_state
+            .as_mut()
+            .expect("live state remains available")
+            .latest_step
+            .field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 8,
+                request_revision: 2,
+                state: fullmag_runner::LiveFieldMaterializationState::Pending,
+                error: None,
+            },
+        ];
+    }
+    let same_step_pending_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let same_step_pending = body_json(same_step_pending_response).await;
+    assert_eq!(same_step_pending["state"], "stale_complete");
+    assert_eq!(
+        same_step_pending["materialization_reason_code"],
+        "field_stale_complete"
+    );
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .live_state
+            .as_mut()
+            .expect("live state remains available")
+            .latest_step
+            .field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 9,
+                request_revision: 3,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("step 9 materialization failed".into()),
+            },
+        ];
+    }
+    let newer_step_error_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let newer_step_error = body_json(newer_step_error_response).await;
+    assert_eq!(newer_step_error["state"], "error");
+    assert_eq!(
+        newer_step_error["materialization_error"],
+        "step 9 materialization failed"
+    );
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .live_state
+            .as_mut()
+            .expect("live state remains available")
+            .latest_step
+            .field_materialization_states = Vec::new();
+    }
     let response = app
         .oneshot(
             Request::builder()
@@ -37371,6 +40291,563 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+}
+
+#[tokio::test]
+async fn v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let mesh = sample_fem_mesh_payload();
+        let expected_topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 7;
+        let selected_m = vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+        ];
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(8, 8.0e-12, [4, 1, 1], Some(selected_m)),
+        )
+        .expect("step 8 m should publish through the runtime frame path");
+
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            crate::types::CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(8, 8.0e-12, 0.0)),
+            },
+        )
+        .expect("step 8 scalar row should bind to the selected physical source");
+        assert!(
+            snapshot.field_publication_bundles.contains_key("m"),
+            "a matching physical scalar row and FEM carrier should publish the m bundle"
+        );
+        let initial_bundle = snapshot
+            .field_publication_bundles
+            .get("m")
+            .expect("matching physical scalar row and FEM carrier produce a bundle");
+        assert!(snapshot.scalar_rows.iter().any(|row| {
+            row.is_physical_observation()
+                && row.observation_frame.as_ref() == Some(&initial_bundle.observation_frame)
+        }));
+        assert_eq!(initial_bundle.topology_hash, expected_topology_hash);
+        assert_eq!(initial_bundle.field.quantity_id, "m");
+        assert!(!initial_bundle.field.carrier_id.is_empty());
+        assert!(!initial_bundle.field.carrier_fingerprint.is_empty());
+
+        let intermediate_older_m = vec![
+            0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0,
+        ];
+        let mut intermediate_older_state =
+            physical_test_live_state(7, 7.0e-12, [4, 1, 1], Some(intermediate_older_m));
+        intermediate_older_state
+            .latest_step
+            .field_materialization_states = vec![fullmag_runner::LiveFieldMaterializationStatus {
+            quantity: "m".into(),
+            source_step: 7,
+            request_revision: 1,
+            state: fullmag_runner::LiveFieldMaterializationState::Pending,
+            error: None,
+        }];
+        apply_test_runtime_frame(
+            snapshot,
+            intermediate_older_state,
+        )
+        .expect("older step 7 callback should preserve selected step 8 m");
+        assert_eq!(
+            snapshot
+                .live_state
+                .as_ref()
+                .expect("live state remains")
+                .latest_step
+                .step,
+            7
+        );
+        assert!(crate::session::relevant_field_materialization_status(snapshot, "m").is_none());
+        assert_eq!(
+            snapshot
+                .field_publication_bundles
+                .get("m")
+                .expect("selected step 8 bundle remains available")
+                .observation_frame
+                .source_step,
+            8
+        );
+
+        let older_m = vec![
+            0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, -1.0, 0.0,
+        ];
+        let mut older_state = physical_test_live_state(6, 6.0e-12, [4, 1, 1], Some(older_m));
+        older_state.latest_step.field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 7,
+                request_revision: 1,
+                state: fullmag_runner::LiveFieldMaterializationState::Pending,
+                error: None,
+            },
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 6,
+                request_revision: 2,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("step 6 materialization failed".into()),
+            },
+        ];
+        apply_test_runtime_frame(
+            snapshot,
+            older_state,
+        )
+        .expect("older step 6 callback should apply without replacing selected m");
+        assert!(crate::session::relevant_field_materialization_status(snapshot, "m").is_none());
+
+        assert_eq!(
+            snapshot
+                .live_state
+                .as_ref()
+                .expect("live state remains")
+                .latest_step
+                .step,
+            6
+        );
+        let bundle = snapshot
+            .field_publication_bundles
+            .get("m")
+            .expect("preserved step 8 source should retain an exact publication bundle");
+        assert_eq!(bundle.observation_frame.source_step, 8);
+        assert_eq!(
+            bundle.observation_frame.source_time_seconds,
+            Some(8.0e-12)
+        );
+        assert_eq!(bundle.topology_revision, "7");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 8);
+    assert_eq!(meta["source_time_seconds"], 8.0e-12);
+    assert_eq!(meta["state"], "complete");
+    assert!(meta["materialization_error"].is_null());
+    assert_eq!(meta["observation_frame"]["source_step"], 8);
+    assert!(
+        meta["publication_bundle"].is_object(),
+        "the selected step 8 publication bundle must remain available"
+    );
+    assert_eq!(
+        meta["publication_bundle"]["observation_frame"],
+        meta["observation_frame"]
+    );
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let magnetization = catalog["quantities"]
+        .as_array()
+        .and_then(|quantities| {
+            quantities
+                .iter()
+                .find(|quantity| quantity["quantity_id"] == "m")
+        })
+        .expect("selected magnetization should be in the field catalog");
+    assert_eq!(magnetization["source_step"], 8);
+    assert_eq!(magnetization["source_time_seconds"], 8.0e-12);
+    assert_eq!(magnetization["state"], "complete");
+
+    let vector_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::OK);
+    assert_eq!(vector_response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    let bytes = body_bytes(vector_response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let values = decode_fmvp_payload_f64(&bytes);
+    assert_eq!(values.len(), 12);
+    assert_eq!(
+        values,
+        vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn v2_m_publication_bundle_requires_matching_physical_scalar_row() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 7;
+        let selected_m = vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+        ];
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(8, 8.0e-12, [4, 1, 1], Some(selected_m)),
+        )
+        .expect("step 8 m should publish through the runtime frame path");
+        assert!(
+            !snapshot.field_publication_bundles.contains_key("m"),
+            "a physical scalar row is required before publishing an m bundle"
+        );
+
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            crate::types::CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(7, 7.0e-12, 0.0)),
+            },
+        )
+        .expect("step 7 scalar row should apply as a separate physical observation");
+        assert!(
+            !snapshot.field_publication_bundles.contains_key("m"),
+            "a scalar row from a different physical frame cannot certify the m bundle"
+        );
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["source_step"], 8);
+    assert!(
+        meta["publication_bundle"].is_null(),
+        "metadata must report the bundle as unavailable without an exact scalar frame"
+    );
+}
+
+#[tokio::test]
+async fn v2_progress_keeps_live_magnetization_at_its_original_observation_step() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(
+                7,
+                7.0e-12,
+                [2, 1, 1],
+                Some(vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]),
+            ),
+        )
+        .expect("step 7 magnetization should apply as a physical observation");
+
+        let mut progress = physical_test_live_state(8, 8.0e-12, [2, 1, 1], None);
+        progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        progress.latest_step.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+            metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+        });
+        apply_test_runtime_frame(snapshot, progress)
+            .expect("solver progress should not become a magnetization observation");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 7);
+    assert_eq!(meta["source_time_seconds"], 7.0e-12);
+    assert_eq!(meta["observation_frame"]["source_step"], 7);
+    assert_eq!(meta["stale_by_steps"], 1);
+    assert_eq!(meta["state"], "stale_complete");
+    assert_eq!(meta["materialization_reason_code"], "field_stale_complete");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]);
+}
+
+#[tokio::test]
+async fn v2_equal_or_newer_cached_magnetization_keeps_precedence_over_live() {
+    for cached_step in [8_u64, 9_u64] {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            let cached_value = cached_step as f64;
+            let latest_fields = serde_json::from_value(serde_json::json!({
+                "m": {
+                    "values": [
+                        [cached_value, 0.0, 0.0],
+                        [cached_value, 0.0, 0.0]
+                    ],
+                    "layout": { "grid_cells": [2, 1, 1] }
+                }
+            }))
+            .expect("cached m fixture should deserialize");
+            publish_test_fields_from_physical_step(
+                snapshot,
+                physical_test_live_state(
+                    cached_step,
+                    cached_step as f64 * 1.0e-12,
+                    [2, 1, 1],
+                    None,
+                ),
+                latest_fields,
+            )
+            .expect("cached m should bind to an accepted physical source");
+            apply_test_runtime_frame(
+                snapshot,
+                physical_test_live_state(
+                    8,
+                    8.0e-12,
+                    [2, 1, 1],
+                    Some(vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+                ),
+            )
+            .expect("live step 8 magnetization should apply");
+        }
+        let app = build_v2_router().with_state(state);
+        let meta_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/meta")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(meta_response.status(), StatusCode::OK);
+        let meta = body_json(meta_response).await;
+        assert_eq!(meta["source_step"], cached_step);
+        assert_eq!(meta["observation_frame"]["source_step"], cached_step);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = body_bytes(response).await;
+        let values: Vec<f64> = bytes[48..]
+            .chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        assert_eq!(
+            values,
+            vec![cached_step as f64, 0.0, 0.0, cached_step as f64, 0.0, 0.0]
+        );
+    }
+}
+
+#[tokio::test]
+async fn v2_newer_live_magnetization_supersedes_older_preview_source() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(7, 7.0e-12, [2, 1, 1], None),
+        )
+        .expect("preview source step should be an accepted physical observation");
+        publish_test_preview_fields(
+            snapshot,
+            vec![LivePreviewField {
+                config_revision: 1,
+                source_step: 7,
+                source_time_seconds: Some(7.0e-12),
+                source_revision: 7,
+                materialized_at_unix_ms: 1_700_000_000_107,
+                materialization_wall_time_ns: 10,
+                quantity: "m".to_string(),
+                unit: "1".to_string(),
+                spatial_kind: "grid".to_string(),
+                quantity_domain: "magnetic_only".to_string(),
+                preview_grid: [2, 1, 1],
+                original_grid: [2, 1, 1],
+                vector_field_values: vec![-1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+                x_chosen_size: 2,
+                y_chosen_size: 1,
+                applied_x_chosen_size: 2,
+                applied_y_chosen_size: 1,
+                applied_layer_stride: 1,
+                auto_downscaled: false,
+                auto_downscale_message: None,
+                active_mask: None,
+            }],
+        )
+        .expect("step 7 preview should publish with its accepted source identity");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(
+                8,
+                8.0e-12,
+                [2, 1, 1],
+                Some(vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+        )
+        .expect("step 8 live m should supersede the older preview");
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
+}
+
+#[tokio::test]
+async fn v2_unqualified_physical_m_does_not_replace_previous_live_source() {
+    for incoming_m in [
+        vec![f64::NAN, 0.0, 0.0, 0.0, 1.0, 0.0],
+        vec![0.0, 0.0, 1.0],
+    ] {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            apply_test_runtime_frame(
+                snapshot,
+                physical_test_live_state(
+                    7,
+                    7.0e-12,
+                    [2, 1, 1],
+                    Some(vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]),
+                ),
+            )
+            .expect("step 7 magnetization should apply");
+            apply_test_runtime_frame(
+                snapshot,
+                physical_test_live_state(8, 8.0e-12, [2, 1, 1], Some(incoming_m)),
+            )
+            .expect("a physical frame with an unqualified m payload may still advance");
+        }
+        let app = build_v2_router().with_state(state);
+        let meta_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/meta")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(meta_response.status(), StatusCode::OK);
+        let meta = body_json(meta_response).await;
+        assert_eq!(meta["source_step"], 7);
+        assert_eq!(meta["source_time_seconds"], 7.0e-12);
+        assert_eq!(meta["stale_by_steps"], 1);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = body_bytes(response).await;
+        let values: Vec<f64> = bytes[48..]
+            .chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        assert_eq!(values, vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]);
+    }
+}
+
+#[tokio::test]
+async fn v2_m_cached_source_is_invalidated_by_same_cardinality_topology_change() {
+    let state = test_app_state_with_live_session().await;
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("topology fixture requires a live session");
+    let latest_fields = serde_json::from_value(serde_json::json!({
+        "m": {
+            "values": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            "layout": { "grid_cells": [2, 1, 1] }
+        }
+    }))
+    .expect("source fixture should deserialize");
+    publish_test_fields_from_physical_step(
+        snapshot,
+        physical_test_live_state(7, 7.0e-12, [2, 1, 1], None),
+        latest_fields,
+    )
+    .expect("step 7 source should publish before the topology changes");
+    let cached_m = snapshot.latest_fields.get("m").expect("cached m");
+    assert!(crate::session::latest_field_source_is_qualified(
+        snapshot, "m", cached_m
+    ));
+
+    snapshot.mesh_revision = snapshot.mesh_revision.saturating_add(1);
+    let cached_m = snapshot.latest_fields.get("m").expect("cached m remains");
+    assert!(!crate::session::latest_field_source_is_qualified(
+        snapshot, "m", cached_m
+    ));
+    assert!(crate::session::resolved_current_field_source(snapshot, "m", 3).is_none());
 }
 
 #[tokio::test]
@@ -37786,8 +41263,7 @@ async fn python_waveguide_box_region_ms_override_changes_backend_mat_ms_mean() {
 async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 25;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -37799,7 +41275,13 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
             }
         }))
         .expect("mock latest_fields should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(3, 3.0e-12, [2, 1, 1], None),
+            latest_fields,
+        )
+        .expect("stale latest magnetization should bind to its physical source step");
+        let preview = LivePreviewField {
             config_revision: 4,
             source_step: 4,
             source_time_seconds: None,
@@ -37821,11 +41303,20 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
+        };
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(4, 4.0e-12, [2, 1, 1], None),
+        )
+        .expect("fresh magnetization preview source step should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("fresh magnetization preview should publish through an accepted field frame");
+        let current_live_state = LiveState {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 9,
                 time: 3.0e-9,
                 dt: 1.0e-13,
@@ -37857,7 +41348,10 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 preview_field: None,
                 finished: false,
             },
-        });
+        };
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current step 9 observation should advance the preview source");
+        snapshot.state_version = 25;
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -37911,7 +41405,8 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
         snapshot.state_version = 26;
         // A reused session may still carry the previous FEM solver mesh.  The
         // requested FDM lane must not inherit its topology metadata.
-        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        let stale_fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.fem_mesh = None;
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": { "backend_plan": {
                 "kind": "fdm",
@@ -37925,7 +41420,7 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
         }));
         // The solver domain is a 4-cell FDM grid.  Both the legacy materialized
         // field and the preview cache below only carry a 2-cell display preview.
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -37940,7 +41435,13 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
             }
         }))
         .expect("downscaled latest preview should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(7, 2.9e-9, [4, 1, 1], None),
+            latest_fields,
+        )
+        .expect("downscaled latest field should bind to its physical FDM source");
+        let preview = LivePreviewField {
             config_revision: 8,
             source_step: 8,
             source_time_seconds: None,
@@ -37962,45 +41463,22 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
             auto_downscaled: true,
             auto_downscale_message: Some("preview only".to_string()),
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
-            status: "running".into(),
-            updated_at_unix_ms: 1_700_000_000_789,
-            latest_step: StepUpdateView {
-                step: 8,
-                time: 3.0e-9,
-                dt: 1.0e-13,
-                pseudo_time_s: None,
-                e_ex: 0.0,
-                e_demag: 0.0,
-                e_ext: 0.0,
-                e_ani: 0.0,
-                e_dmi: 0.0,
-                e_rotated_dmi: 0.0,
-                e_total: 0.0,
-                max_dm_dt: 0.0,
-                max_h_eff: 0.0,
-                max_h_demag: 0.0,
-                max_torque_Apm: 0.0,
-                max_torque_T: 0.0,
-                max_torque_all_Apm: 0.0,
-                frozen_reference_max_drift: 0.0,
-                active_dof_count: 0,
-                frozen_dof_count: 0,
-                free_dof_count: 0,
-                wall_time_ns: 100,
-                grid: [4, 1, 1],
-                fem_mesh_generation_id: None,
-                fem_mesh: None,
-                magnetization: Some(vec![
-                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
-                ]),
-                per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
-                preview_field: None,
-                finished: false,
-            },
-        });
+        };
+        let mut current_live_state = physical_test_live_state(
+            8,
+            3.0e-9,
+            [4, 1, 1],
+            Some(vec![
+                1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+            ]),
+        );
+        current_live_state.updated_at_unix_ms = 1_700_000_000_789;
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current FDM physical step should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("downscaled preview should publish through an accepted field frame");
+        snapshot.fem_mesh = stale_fem_mesh;
+        snapshot.state_version = 26;
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -38062,8 +41540,7 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
 async fn v2_live_magnetization_preserves_capture_step_across_scalar_only_frames() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 25;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[0.0, 0.0, -1.0], [0.0, -1.0, 0.0]],
                 "source_step": 4,
@@ -38074,37 +41551,32 @@ async fn v2_live_magnetization_preserves_capture_step_across_scalar_only_frames(
             }
         }))
         .expect("captured magnetization field should deserialize");
-        snapshot.live_state = Some(
-            serde_json::from_value(serde_json::json!({
-                "status": "running",
-                "updated_at_unix_ms": 1_700_000_000_789_u64,
-                "latest_step": {
-                    "step": 9,
-                    "time": 3.0e-9,
-                    "dt": 1.0e-13,
-                    "e_ex": 0.0,
-                    "e_demag": 0.0,
-                    "e_ext": 0.0,
-                    "e_ani": 0.0,
-                    "e_dmi": 0.0,
-                    "e_total": 0.0,
-                    "max_dm_dt": 0.0,
-                    "max_h_eff": 0.0,
-                    "max_h_demag": 0.0,
-                    "max_torque_Apm": 0.0,
-                    "max_torque_T": 0.0,
-                    "wall_time_ns": 100,
-                    "grid": [2, 1, 1],
-                    "magnetization": [0.0, 0.0, -1.0, 0.0, -1.0, 0.0],
-                    "magnetization_source_step": 4,
-                    "magnetization_source_revision": 11,
-                    "magnetization_materialized_at_unix_ms": 1_700_000_000_456_u64,
-                    "magnetization_materialization_wall_time_ns": 80_000_000_u64,
-                    "finished": false
-                }
-            }))
-            .expect("live state with carried magnetization provenance should deserialize"),
-        );
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                4,
+                3.0e-9,
+                [2, 1, 1],
+                Some(vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("capture-step magnetization should be admitted and published");
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(9, 3.0e-9, 0.0)),
+            },
+        )
+        .expect("scalar-only step 9 should be admitted");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(9, 3.0e-9, [2, 1, 1], None),
+        )
+        .expect("step 9 runtime frame should advance the current source step");
+        snapshot.state_version = 25;
     }
     let app = build_v2_router().with_state(state);
 
@@ -38133,7 +41605,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.state_version = 25;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -38148,7 +41620,13 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
             }
         }))
         .expect("mock latest_fields should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(0, 0.0, [2, 1, 1], None),
+            latest_fields,
+        )
+        .expect("stale H_demag field should still have its accepted source observation");
+        let preview = LivePreviewField {
             config_revision: 4,
             source_step: 52,
             source_time_seconds: None,
@@ -38170,43 +41648,15 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
-            status: "completed".into(),
-            updated_at_unix_ms: 1_700_000_000_789,
-            latest_step: StepUpdateView {
-                step: 52,
-                time: 5.2e-12,
-                dt: 1.0e-13,
-                pseudo_time_s: None,
-                e_ex: 0.0,
-                e_demag: 0.0,
-                e_ext: 0.0,
-                e_ani: 0.0,
-                e_dmi: 0.0,
-                e_rotated_dmi: 0.0,
-                e_total: 0.0,
-                max_dm_dt: 0.0,
-                max_h_eff: 0.0,
-                max_h_demag: 0.0,
-                max_torque_Apm: 0.0,
-                max_torque_T: 0.0,
-                max_torque_all_Apm: 0.0,
-                frozen_reference_max_drift: 0.0,
-                active_dof_count: 0,
-                frozen_dof_count: 0,
-                free_dof_count: 0,
-                wall_time_ns: 100,
-                grid: [2, 1, 1],
-                fem_mesh_generation_id: None,
-                fem_mesh: None,
-                magnetization: None,
-                per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
-                preview_field: None,
-                finished: true,
-            },
-        });
+        };
+        let mut latest_state = physical_test_live_state(52, 5.2e-12, [2, 1, 1], None);
+        latest_state.status = "completed".into();
+        latest_state.updated_at_unix_ms = 1_700_000_000_789;
+        latest_state.latest_step.finished = true;
+        apply_test_runtime_frame(snapshot, latest_state)
+            .expect("current H_demag physical observation should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("H_demag preview should publish through an accepted field frame");
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -38274,7 +41724,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
 async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[4.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
                 "source_step": 4,
@@ -38285,7 +41735,7 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
             }
         }))
         .expect("complete latest H_demag field should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        let preview = LivePreviewField {
             config_revision: 4,
             source_step: 4,
             source_time_seconds: None,
@@ -38307,43 +41757,17 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
-            status: "completed".into(),
-            updated_at_unix_ms: 1_700_000_000_789,
-            latest_step: StepUpdateView {
-                step: 4,
-                time: 4.0e-13,
-                dt: 1.0e-13,
-                pseudo_time_s: None,
-                e_ex: 0.0,
-                e_demag: 0.0,
-                e_ext: 0.0,
-                e_ani: 0.0,
-                e_dmi: 0.0,
-                e_rotated_dmi: 0.0,
-                e_total: 0.0,
-                max_dm_dt: 0.0,
-                max_h_eff: 0.0,
-                max_h_demag: 0.0,
-                max_torque_Apm: 0.0,
-                max_torque_T: 0.0,
-                max_torque_all_Apm: 0.0,
-                frozen_reference_max_drift: 0.0,
-                active_dof_count: 0,
-                frozen_dof_count: 0,
-                free_dof_count: 0,
-                wall_time_ns: 100,
-                grid: [2, 1, 1],
-                fem_mesh_generation_id: None,
-                fem_mesh: None,
-                magnetization: None,
-                per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
-                preview_field: None,
-                finished: true,
-            },
-        });
+        };
+        let mut live_state = physical_test_live_state(4, 4.0e-13, [2, 1, 1], None);
+        live_state.status = "completed".into();
+        live_state.updated_at_unix_ms = 1_700_000_000_789;
+        live_state.latest_step.finished = true;
+        apply_test_runtime_frame(snapshot, live_state)
+            .expect("equal-generation H_demag source observation should apply");
+        publish_test_latest_fields(snapshot, latest_fields)
+            .expect("equal-generation latest field should publish through the field-frame binder");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("equal-generation preview should publish through the field-frame binder");
     }
     let app = build_v2_router().with_state(state);
 
@@ -38389,6 +41813,8 @@ async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
             status: "awaiting_command".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 52,
                 time: 5.2e-12,
                 dt: 1.0e-13,
@@ -38448,7 +41874,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
 
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.preview_cache.insert(LivePreviewField {
+        let preview = LivePreviewField {
             config_revision: 3,
             source_step: 4,
             source_time_seconds: None,
@@ -38470,11 +41896,20 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
+        };
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(4, 4.0e-12, [2, 1, 1], None),
+        )
+        .expect("last-good H_demag source observation should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("last-good H_demag preview should publish through an accepted field frame");
+        let current_live_state = LiveState {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 9,
                 time: 9.0e-12,
                 dt: 1.0e-13,
@@ -38521,7 +41956,9 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
                 preview_field: None,
                 finished: false,
             },
-        });
+        };
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current pending step 9 observation should apply");
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -38669,7 +42106,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
 async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.preview_cache.insert(LivePreviewField {
+        let preview = LivePreviewField {
             config_revision: 3,
             source_step: 4,
             source_time_seconds: None,
@@ -38691,7 +42128,14 @@ async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: Some(vec![true, true]),
-        });
+        };
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(4, 4.0e-12, [2, 1, 1], None),
+        )
+        .expect("energy-density source observation should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("energy-density preview should publish through an accepted field frame");
     }
     let app = build_v2_router().with_state(state);
 
@@ -38743,6 +42187,8 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,
@@ -38816,6 +42262,8 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,
@@ -38894,6 +42342,101 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
 }
 
 #[tokio::test]
+async fn topological_charge_uses_fdm_field_topology_with_retained_fem_mesh() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm" } }
+        }));
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 0.0,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
+                wall_time_ns: 100,
+                grid: [3, 3, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: Some(vec![
+                    0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                ]),
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.field_quantity_revisions.insert("m".to_string(), 9);
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "ready");
+    assert_eq!(json["provenance"]["discretization"], "fdm");
+    assert_eq!(json["provenance"]["field_storage_domain"], "fdm_cell_centered");
+    assert!(json["provenance"]["mesh_revision"].is_null());
+    assert_eq!(json["provenance"]["field_revision"], "9");
+    assert_eq!(json["provenance"]["source_kind"], "current_live");
+    assert_eq!(json["resolved_support"]["plane"], "xy");
+    assert_eq!(json["quality"]["total_vertex_count"], 9);
+    assert_eq!(json["quality"]["valid_vertex_count"], 9);
+    assert_eq!(json["quality"]["total_triangle_count"], 8);
+    assert_eq!(json["quality"]["valid_triangle_count"], 8);
+    assert_eq!(json["quality"]["connected_component_count"], 1);
+    assert_eq!(json["quality"]["boundary_edge_count"], 8);
+    assert_eq!(json["quality"]["boundary_loop_count"], 1);
+    assert_eq!(json["quality"]["euler_characteristic"], 1);
+    assert_eq!(json["quality"]["boundary_max_deviation_rad"], 0.0);
+    assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
+    assert_eq!(json["trust"], "qualified");
+    assert_eq!(json["nearest_integer"], 0);
+    assert_eq!(json["integer_error"], 0.0);
+    assert!(json["computed_at_unix_ms"]
+        .as_u64()
+        .is_some_and(|value| value > 0));
+    assert!(json["warnings"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn topological_charge_cache_key_tracks_field_revision() {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
@@ -38904,6 +42447,8 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,
@@ -39036,6 +42581,8 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,
@@ -39307,6 +42854,12 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("mesh-scoped H_demag field should bind to its physical FEM source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -39378,6 +42931,12 @@ async fn v2_field_vector_applies_max_samples_to_scoped_samples() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("sampled H_demag field should bind to its physical FEM source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -39455,6 +43014,12 @@ async fn v2_fem_field_vector_max_samples_one_preserves_sampled_node_ordinal() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("FEM airbox field should bind to its physical mesh source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -39506,6 +43071,12 @@ async fn v2_field_vector_applies_max_samples_to_part_scope() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("part-scoped field should bind to its physical FEM source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -39566,6 +43137,11 @@ async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
             }
         }))
         .expect("latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [5, 1, 1], None),
+        )
+        .expect("unscoped H_demag field should bind to a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -39623,6 +43199,20 @@ async fn v2_field_vector_rejects_magnetic_only_quantity_on_airbox_scope() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2, 4.0, 4.1, 4.2, 5.0,
+                    5.1, 5.2, 6.0, 6.1, 6.2, 7.0, 7.1, 7.2,
+                ]),
+            ),
+        )
+        .expect("magnetic-only field should bind to its physical FEM source");
+        snapshot.state_version = 30;
     }
     let app = build_v2_router().with_state(state);
 
@@ -39698,6 +43288,12 @@ async fn v2_field_vector_accepts_quantity_alias_for_scoped_airbox_samples() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("airbox H_demag field should bind to its physical FEM source");
+        snapshot.state_version = 30;
     }
     let app = build_v2_router().with_state(state);
 
@@ -39764,6 +43360,11 @@ async fn v2_field_vector_airbox_scope_excludes_shared_magnetic_nodes() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [10, 1, 1], None),
+        )
+        .expect("shared-node H_demag field should bind to its physical mesh source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -39814,6 +43415,11 @@ async fn v2_field_vector_airbox_surface_scope_samples_only_surface_nodes() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("surface H_demag field should bind to its physical mesh source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -39884,6 +43490,11 @@ async fn v2_field_vector_rejects_airbox_surface_without_surface_membership() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("surface-rejection field should bind to a physical FEM source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -39929,6 +43540,19 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2, 4.0, 4.1, 4.2, 5.0,
+                    5.1, 5.2, 6.0, 6.1, 6.2, 7.0, 7.1, 7.2,
+                ]),
+            ),
+        )
+        .expect("object-scoped magnetization should bind to its physical FEM source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40035,6 +43659,19 @@ async fn v2_field_vector_object_scope_fallback_uses_segment_element_nodes() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2, 4.0, 4.1, 4.2, 5.0,
+                    5.1, 5.2, 6.0, 6.1, 6.2, 7.0, 7.1, 7.2,
+                ]),
+            ),
+        )
+        .expect("fallback object magnetization should bind to its physical FEM source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40089,6 +43726,20 @@ async fn v2_field_vector_supports_workspace_selection_scope() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 4.0, 0.0, 0.0, 5.0,
+                    0.0, 0.0, 6.0, 0.0, 0.0, 7.0, 0.0, 0.0,
+                ]),
+            ),
+        )
+        .expect("selection-scoped magnetization should bind to its physical FEM source");
+        snapshot.state_version = 30;
     }
     {
         let mut selection = state.current_workspace_selection.write().await;
@@ -40527,13 +44178,19 @@ async fn field_vector_cache_identity_includes_session_id() {
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[1.0, 2.0, 3.0]],
                 "layout": { "grid_cells": [1, 1, 1] }
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], None),
+            latest_fields,
+        )
+        .expect("first cache field should publish from a physical observation");
         snapshot.field_samples_revision = 1;
         snapshot
             .field_quantity_revisions
@@ -40554,13 +44211,19 @@ async fn field_vector_cache_identity_includes_session_id() {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
         snapshot.session.session_id = "replacement-session".to_string();
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[4.0, 5.0, 6.0]],
                 "layout": { "grid_cells": [1, 1, 1] }
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], None),
+            latest_fields,
+        )
+        .expect("replacement-session cache field should have a new physical source");
     }
 
     let second = app
@@ -40585,7 +44248,7 @@ async fn projection_and_slice_etags_are_scoped_to_session_identity() {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
         snapshot.state_version = 11;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -40597,6 +44260,20 @@ async fn projection_and_slice_etags_are_scoped_to_session_identity() {
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("projection field should publish from a physical observation");
+        snapshot.state_version = 11;
     }
     let app = build_v2_router().with_state(state.clone());
     let paths = [
@@ -40664,13 +44341,27 @@ async fn field_vector_topology_change_invalidates_etag_without_field_revision_ch
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": { "values": [
                 [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]
             ], "layout": { "grid_cells": [8, 1, 1] } }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("topology ETag field should publish from a physical observation");
     }
     let app = build_v2_router().with_state(state.clone());
     let uri = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body";
@@ -41689,7 +45380,7 @@ async fn default_planar_fdm_test_state() -> Arc<AppState> {
                 "cell_size": [1.0, 2.0, 4.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -41702,6 +45393,19 @@ async fn default_planar_fdm_test_state() -> Arc<AppState> {
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("default planar field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 7);
     }
     state
@@ -41733,7 +45437,7 @@ async fn planar_default_fdm_even_depth_uses_cell_centered_midplane() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -41750,6 +45454,20 @@ async fn planar_default_fdm_even_depth_uses_cell_centered_midplane() {
             }
         }))
         .expect("even-depth FDM field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 2],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("even-depth FDM field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 8);
     }
     let app = build_v2_router().with_state(state);
@@ -41821,7 +45539,7 @@ async fn source_parity_across_meta_vector_and_planar() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -41838,6 +45556,20 @@ async fn source_parity_across_meta_vector_and_planar() {
             }
         }))
         .expect("source parity FDM field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 2],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("source parity field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 8);
     }
     let app = build_v2_router().with_state(state);
@@ -41938,7 +45670,7 @@ async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
                 "cell_size": [1.0, 2.0, 4.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -41951,6 +45683,19 @@ async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("offset planar field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 7);
     }
     let app = build_v2_router().with_state(state);
@@ -44085,6 +47830,20 @@ fn openapi_frequency_domain_text_artifact_schema_exposes_path_metadata() {
         text_props.contains("path_metadata"),
         "FrequencyDomainTextArtifactResource missing `path_metadata`"
     );
+    for property in [
+        "artifact_set_id",
+        "revision",
+        "content_digest",
+        "session_id",
+        "run_id",
+        "stage_id",
+        "mesh_generation_id",
+    ] {
+        assert!(
+            text_props.contains(property),
+            "FrequencyDomainTextArtifactResource missing `{property}`"
+        );
+    }
     let text_schema = schemas
         .get("FrequencyDomainTextArtifactResource")
         .expect("FrequencyDomainTextArtifactResource schema must be present");
@@ -44149,6 +47908,7 @@ fn openapi_frequency_domain_json_artifact_schema_is_typed_and_revisioned() {
         .expect("artifact resource properties must be present");
     assert!(properties.contains_key("revision"));
     assert!(properties.contains_key("content_digest"));
+    assert!(properties.contains_key("artifact_set_id"));
     for (schema_name, field) in [
         ("FrequencyDomainSpectrumSamplePayload", "sample_id"),
         ("FrequencyDomainSpectrumModePayload", "mode_id"),
@@ -44188,6 +47948,53 @@ fn openapi_frequency_domain_json_artifact_schema_is_typed_and_revisioned() {
         assert!(
             allows_additional_properties,
             "{schema_name} must allow forward-compatible JSON properties"
+        );
+    }
+}
+
+#[test]
+fn openapi_mode_field_availability_is_optional_boolean() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    for schema_name in [
+        "FrequencyDomainSpectrumV3ModePayload",
+        "FrequencyDomainFieldSweepModePayload",
+    ] {
+        let schema = schemas
+            .get(schema_name)
+            .expect("mode schema must be present");
+        let schema_parts: Vec<&serde_json::Value> = schema
+            .get("allOf")
+            .and_then(|all_of| all_of.as_array())
+            .map(|all_of| std::iter::once(schema).chain(all_of.iter()).collect())
+            .unwrap_or_else(|| vec![schema]);
+        let availability = schema_parts
+            .iter()
+            .find_map(|part| {
+                part.get("properties")
+                    .and_then(|properties| properties.get("mode_field_available"))
+            })
+            .expect("mode schema must expose typed availability");
+        assert_eq!(
+            availability.get("type"),
+            Some(&serde_json::json!(["boolean", "null"])),
+            "{schema_name}.mode_field_available must be a nullable boolean"
+        );
+        let is_required = schema_parts
+            .iter()
+            .filter_map(|part| part.get("required").and_then(|value| value.as_array()))
+            .any(|required| {
+                required
+                    .iter()
+                    .any(|field| field.as_str() == Some("mode_field_available"))
+            });
+        assert!(
+            !is_required,
+            "{schema_name}.mode_field_available must remain optional"
         );
     }
 }
@@ -44262,6 +48069,7 @@ fn openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract() {
                 "mode_artifact_path",
                 "mode_field_id",
                 "mode_field_resource_key",
+                "mode_field_available",
                 "source_revision",
                 "status",
             ][..],
@@ -44824,6 +48632,12 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .expect("frequency-domain manifest fixture should serialize"),
     )
     .expect("frequency-domain manifest fixture should be written");
+    let canonical_artifact_root =
+        fs::canonicalize(&artifact_dir).expect("artifact root should have a canonical path");
+    let expected_artifact_set_id = format!(
+        "sha256:{:x}",
+        Sha256::digest(canonical_artifact_root.to_string_lossy().as_bytes())
+    );
 
     let response = app
         .clone()
@@ -44982,6 +48796,16 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/spectrum.v2.json");
+    let artifact_set_id = payload["artifact_set_id"]
+        .as_str()
+        .expect("spectrum should identify its shared artifact set")
+        .to_string();
+    let spectrum_digest = payload["content_digest"]
+        .as_str()
+        .expect("spectrum should expose its own content digest")
+        .to_string();
+    assert_eq!(artifact_set_id, expected_artifact_set_id);
+    assert_eq!(payload["revision"], payload["content_digest"]);
     assert_eq!(payload["session_id"], "test-session");
     assert_eq!(payload["run_id"], "test-run");
     assert_eq!(payload["stage_id"], "eigen-stage");
@@ -45017,6 +48841,13 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/branches.v2.json");
     assert_eq!(payload["payload"]["schema_version"], "eigen_branches.v2");
+    assert_eq!(payload["artifact_set_id"], artifact_set_id);
+    assert_eq!(payload["revision"], payload["content_digest"]);
+    let branches_digest = payload["content_digest"]
+        .as_str()
+        .expect("branches should expose their own content digest")
+        .to_string();
+    assert_ne!(branches_digest, spectrum_digest);
 
     let response = app
         .clone()
@@ -45035,6 +48866,17 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/dispersion.csv");
     assert_eq!(payload["content_type"], "text/csv; charset=utf-8");
+    assert_eq!(payload["artifact_set_id"], artifact_set_id);
+    assert_eq!(payload["revision"], payload["content_digest"]);
+    assert_ne!(payload["content_digest"], spectrum_digest);
+    assert_ne!(payload["content_digest"], branches_digest);
+    assert_eq!(payload["session_id"], "test-session");
+    assert_eq!(payload["run_id"], "test-run");
+    assert_eq!(payload["stage_id"], "eigen-stage");
+    assert_eq!(payload["mesh_generation_id"], "mesh-generation-eigen");
+    assert!(!payload
+        .to_string()
+        .contains(&artifact_dir.to_string_lossy().to_string()));
     assert_eq!(
         payload["path_metadata"]["sampling"]["points"][1]["label"],
         "X"
@@ -45201,8 +49043,7 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         Some("3")
     );
     let body = body_bytes(response).await;
-    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
-    let values: Vec<f64> = body[48 + metadata_length..]
+    let values: Vec<f64> = body[fmvp_values_offset(&body)..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
@@ -45253,6 +49094,17 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .as_str()
         .expect("error should be present")
         .contains("payload"));
+
+    // The response artifact carries a single global vector sample without a
+    // source-mesh identity. Exercise the declared v5 no-topology sentinel
+    // instead of asking the API to infer a node mapping for this payload.
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("session snapshot should exist")
+            .fem_mesh = None;
+    }
 
     let response = app
         .clone()
@@ -45341,7 +49193,175 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         Some("6")
     );
     let body = body_bytes(response).await;
-    assert_eq!(body.len(), 48 + 6 * std::mem::size_of::<f64>());
+    assert_eq!(
+        body.len(),
+        fmvp_values_offset(&body) + 6 * std::mem::size_of::<f64>()
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_set_fence_rejects_run_or_root_switches() {
+    let state = test_app_state_with_live_session().await;
+    let root = std::env::temp_dir().join(format!(
+        "fullmag-frequency-domain-artifact-set-fence-{}",
+        uuid_v4_hex()
+    ));
+    let artifact_root_a = root.join("run-a");
+    let artifact_root_b = root.join("run-b");
+    fs::create_dir_all(&artifact_root_a).expect("run A artifact root should be created");
+    fs::create_dir_all(&artifact_root_b).expect("run B artifact root should be created");
+    set_running_stage_execution(&state, 1).await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("live session should exist");
+        snapshot.session.artifact_dir = artifact_root_a.to_string_lossy().into_owned();
+        let stage = &mut snapshot
+            .stage_execution
+            .as_mut()
+            .expect("stage execution should exist")
+            .stages[0];
+        stage.stage_id = Some("eigen-stage-a".to_string());
+        stage.kind = Some("flat_eigenmodes".to_string());
+        stage.mesh_generation_id = Some("mesh-generation-a".to_string());
+        stage.artifact_refs = vec!["eigen/branches.v2.json".to_string()];
+    }
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(
+            &state,
+            &["eigen/branches.v2.json"],
+        )
+        .await
+        .expect("run A artifact context should capture");
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .session
+            .artifact_dir = artifact_root_b.to_string_lossy().into_owned();
+    }
+    let root_error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a changed artifact root must reject publication");
+    assert_eq!(root_error.status, StatusCode::CONFLICT);
+    assert_eq!(root_error.message, "frequency_domain_artifact_set_stale");
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(
+            &state,
+            &["eigen/branches.v2.json"],
+        )
+        .await
+        .expect("stage A artifact context should capture");
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let stage = &mut snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .stage_execution
+            .as_mut()
+            .expect("stage execution should exist")
+            .stages[0];
+        stage.stage_id = Some("eigen-stage-b".to_string());
+    }
+    let stage_error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a changed stage must reject publication");
+    assert_eq!(stage_error.status, StatusCode::CONFLICT);
+    assert_eq!(stage_error.message, "frequency_domain_artifact_set_stale");
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(
+            &state,
+            &["eigen/branches.v2.json"],
+        )
+        .await
+        .expect("run B artifact context should capture");
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .session
+            .run_id = "replacement-run".to_string();
+    }
+    let run_error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a changed run must reject publication");
+    assert_eq!(run_error.status, StatusCode::CONFLICT);
+    assert_eq!(run_error.message, "request_context_stale");
+
+    fs::remove_dir_all(root).expect("temporary artifact roots should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_set_fence_rejects_root_appearing_after_capture() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_root = std::env::temp_dir().join(format!(
+        "fullmag-frequency-domain-artifact-set-appears-{}",
+        uuid_v4_hex()
+    ));
+    assert!(
+        !artifact_root.exists(),
+        "artifact root should be absent before capture"
+    );
+    set_running_stage_execution(&state, 1).await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .session
+            .artifact_dir = artifact_root.to_string_lossy().into_owned();
+    }
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(&state, &["eigen/branches.v2.json"])
+            .await
+            .expect("missing artifact root should still capture its live context");
+    fs::create_dir_all(&artifact_root).expect("artifact root should now appear");
+    let error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a root appearing after capture must reject publication");
+
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "frequency_domain_artifact_set_stale");
+    fs::remove_dir_all(artifact_root).expect("temporary artifact root should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_missing_resource_has_no_artifact_identity() {
+    let (app, _state, _artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["status"], "missing");
+    for field in [
+        "text",
+        "revision",
+        "content_digest",
+        "artifact_set_id",
+        "session_id",
+        "run_id",
+        "stage_id",
+        "mesh_generation_id",
+        "path_metadata",
+    ] {
+        assert!(payload[field].is_null(), "missing resource has {field}");
+    }
 }
 
 #[tokio::test]
@@ -45629,6 +49649,7 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
     assert_eq!(payload["artifact_path"], zarr_chunk_path);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -45639,15 +49660,39 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=5");
     let body = body_bytes(response).await;
-    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
-    let values: Vec<f64> = body[48 + metadata_length..]
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
+    let quantity_id = "analysis:eigen:sample-0000:mode-0003";
+    assert_eq!(body[4], 5);
+    assert_eq!(&body[28..44], &quantity_id.as_bytes()[..16]);
+    assert_eq!(decode_fmvp_v5_full_quantity_id(&body), quantity_id);
+    let values = decode_fmvp_payload_f64(&body);
     assert_eq!(
         values,
         vec![2.0, 0.0, 5.0, 3.0, 4.0, 6.0, 4.0, 5.0, 7.0, 5.0, 6.0, 8.0]
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=complex")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=5");
+    assert_eq!(response.headers()["x-fullmag-n-comp"], "6");
+    let body = body_bytes(response).await;
+    assert_eq!(decode_fmvp_v5_full_quantity_id(&body), quantity_id);
+    assert_eq!(
+        decode_fmvp_payload_f64(&body),
+        vec![
+            2.0, 0.0, 0.0, 2.0, 5.0, 12.0, 3.0, 0.0, 4.0, 0.0, 6.0, 0.0, 4.0, 0.0, 5.0, 0.0, 7.0,
+            0.0, 5.0, 0.0, 6.0, 0.0, 8.0, 0.0,
+        ]
     );
 }
 
@@ -45810,10 +49855,14 @@ async fn frequency_domain_eigen_mode_field_rejects_payload_without_metadata() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_bytes(response).await;
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(payload["error"]
-        .as_str()
-        .expect("error should be present")
-        .contains("metadata"));
+    assert!(
+        payload["error"]
+            .as_str()
+            .expect("error should be present")
+            .contains("metadata"),
+        "unexpected eigen mode metadata response body: {}",
+        String::from_utf8_lossy(&body)
+    );
 
     let response = app
         .oneshot(
@@ -46398,7 +50447,13 @@ async fn frequency_domain_response_field_fallback_uses_spatial_xyz_payload() {
 
 #[tokio::test]
 async fn frequency_domain_response_field_prefers_zarr_payload_path() {
-    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let expected_domain_generation_id = {
+        let snapshot = state.current_live_state.read().await;
+        crate::router_v2::handlers::sessions::status::domain_generation_id(
+            snapshot.as_ref().expect("session snapshot should exist"),
+        )
+    };
     let response_dir = artifact_dir.join("response");
     let frequency_points_dir = response_dir.join("frequency_points");
     let zarr_array_dir = response_dir
@@ -46493,6 +50548,14 @@ async fn frequency_domain_response_field_prefers_zarr_payload_path() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=5");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "legacy_count_only"
+    );
+    assert!(!response
+        .headers()
+        .contains_key("x-fullmag-mesh-topology-hash"));
     assert_eq!(
         response
             .headers()
@@ -46508,11 +50571,40 @@ async fn frequency_domain_response_field_prefers_zarr_payload_path() {
         Some("3")
     );
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
-    assert_eq!(values, vec![9.0, 1.0, 8.0, 2.0, 7.0, 3.0]);
+    let quantity_id = "analysis:frequency-response:frequency-0001";
+    assert_eq!(body[4], 5);
+    assert_eq!(&body[28..44], &quantity_id.as_bytes()[..16]);
+    assert_eq!(decode_fmvp_v5_full_quantity_id(&body), quantity_id);
+    let metadata_len = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    let metadata = &body[48..48 + metadata_len];
+    assert_eq!(u16::from_le_bytes(metadata[4..6].try_into().unwrap()), 4);
+    assert_eq!(u64::from_le_bytes(metadata[16..24].try_into().unwrap()), 0);
+    assert!(metadata[24..56].iter().all(|byte| *byte == 0));
+    assert_eq!(u32::from_le_bytes(metadata[56..60].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(metadata[60..64].try_into().unwrap()), 0);
+    assert!(metadata[10..16].iter().all(|byte| *byte == 0));
+    assert_eq!(u64::from_le_bytes(metadata[68..76].try_into().unwrap()), 0);
+    assert!(metadata[76..80].iter().all(|byte| *byte == 0));
+    assert!(metadata[82..88].iter().all(|byte| *byte == 0));
+    let scope_kind_len = u16::from_le_bytes(metadata[64..66].try_into().unwrap()) as usize;
+    let scope_id_len = u16::from_le_bytes(metadata[66..68].try_into().unwrap()) as usize;
+    let domain_generation_id_len = u16::from_le_bytes(metadata[8..10].try_into().unwrap()) as usize;
+    let scope_kind_start = 88;
+    assert_eq!(
+        &metadata[scope_kind_start..scope_kind_start + scope_kind_len],
+        b"full"
+    );
+    let domain_generation_id_start = scope_kind_start + scope_kind_len + scope_id_len;
+    assert_eq!(
+        &metadata
+            [domain_generation_id_start..domain_generation_id_start + domain_generation_id_len],
+        expected_domain_generation_id.as_bytes()
+    );
+    assert_eq!(metadata_len % 8, 0);
+    assert_eq!(
+        decode_fmvp_payload_f64(&body),
+        vec![9.0, 1.0, 8.0, 2.0, 7.0, 3.0]
+    );
 }
 
 #[tokio::test]
@@ -47610,7 +51702,7 @@ async fn frequency_domain_response_data_plane_uses_point_default_view_and_phase(
         Some("3")
     );
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
+    let values: Vec<f64> = body[fmvp_values_offset(&body)..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
@@ -48114,6 +52206,7 @@ async fn frozen_spins_test_state() -> Arc<AppState> {
     let mut scene = sample_scene_document();
     scene.revision = 12;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         // This fixture models idle authoring; hot-apply tests explicitly start a stage.
         snapshot.session.status = "awaiting_command".into();
         crate::session::refresh_runtime_status(snapshot);
@@ -48147,6 +52240,16 @@ async fn frozen_spins_test_state() -> Arc<AppState> {
             }
         }))
         .expect("frozen-spins magnetization fixture");
+        let mut live_state = physical_test_live_state(
+            1,
+            1.0e-12,
+            [3, 1, 1],
+            Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+        );
+        live_state.status = snapshot.session.status.clone();
+        admit_test_latest_fields_from_physical_step(snapshot, live_state)
+            .expect("frozen-spins magnetization should come from a physical observation");
+        snapshot.state_version = source_state_revision;
         snapshot.field_quantity_revisions.insert("m".into(), 7);
     }
     state
@@ -48641,11 +52744,12 @@ async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
     let mesh = sample_fem_mesh_payload();
     let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {"backend": "fem"}
         }));
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -48656,7 +52760,30 @@ async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
             }
         }))
         .expect("FEM nodal magnetization fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                2,
+                2.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FEM nodal magnetization should bind to its physical mesh frame");
+        snapshot.state_version = source_state_revision;
     }
+    let expected_source_state_revision = {
+        let guard = state.current_live_state.read().await;
+        guard
+            .as_ref()
+            .and_then(|snapshot| snapshot.field_quantity_revisions.get("m"))
+            .copied()
+            .filter(|revision| *revision > 0)
+            .expect("accepted FEM magnetization should expose a source-state revision")
+    };
     let app = build_v2_router().with_state(state);
     let response = app
         .oneshot(
@@ -48667,7 +52794,7 @@ async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
                 .body(Body::from(
                     serde_json::json!({
                         "expected_revision": 12,
-                        "expected_source_state_revision": 7,
+                        "expected_source_state_revision": expected_source_state_revision,
                         "expected_topology_fingerprint": topology_fingerprint,
                         "target_object_id": "body",
                         "selector": {"kind": "all_magnetic"}
@@ -48710,11 +52837,12 @@ async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airb
     });
     let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {"backend": "fem"}
         }));
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -48725,7 +52853,30 @@ async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airb
             }
         }))
         .expect("compact FEM magnetic-node fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                2,
+                2.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("compact FEM magnetization should bind to its physical mesh frame");
+        snapshot.state_version = source_state_revision;
     }
+    let expected_source_state_revision = {
+        let guard = state.current_live_state.read().await;
+        guard
+            .as_ref()
+            .and_then(|snapshot| snapshot.field_quantity_revisions.get("m"))
+            .copied()
+            .filter(|revision| *revision > 0)
+            .expect("accepted FEM magnetization should expose a source-state revision")
+    };
     let app = build_v2_router().with_state(state);
     let response = app
         .clone()
@@ -48737,7 +52888,7 @@ async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airb
                 .body(Body::from(
                     serde_json::json!({
                         "expected_revision": 12,
-                        "expected_source_state_revision": 7,
+                        "expected_source_state_revision": expected_source_state_revision,
                         "expected_topology_fingerprint": topology_fingerprint,
                         "target_object_id": "body",
                         "selector": {"kind": "all_magnetic"}
@@ -48777,11 +52928,12 @@ async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
     mesh.object_segments.push(mesh.object_segments[0].clone());
     let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {"backend": "fem"}
         }));
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -48792,7 +52944,30 @@ async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
             }
         }))
         .expect("ambiguous FEM segment fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                2,
+                2.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("ambiguous FEM fixture should retain a physical source identity");
+        snapshot.state_version = source_state_revision;
     }
+    let expected_source_state_revision = {
+        let guard = state.current_live_state.read().await;
+        guard
+            .as_ref()
+            .and_then(|snapshot| snapshot.field_quantity_revisions.get("m"))
+            .copied()
+            .filter(|revision| *revision > 0)
+            .expect("accepted FEM magnetization should expose a source-state revision")
+    };
     let response = build_v2_router()
         .with_state(state)
         .oneshot(
@@ -48803,7 +52978,7 @@ async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
                 .body(Body::from(
                     serde_json::json!({
                         "expected_revision": 12,
-                        "expected_source_state_revision": 7,
+                        "expected_source_state_revision": expected_source_state_revision,
                         "expected_topology_fingerprint": topology_fingerprint,
                         "target_object_id": "body",
                         "selector": {"kind": "all_magnetic"}
@@ -50185,6 +54360,7 @@ async fn frozen_spins_preview_intersects_all_magnetic_with_target_object() {
     )
     .expect("write membership mask");
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         let mut scene = sample_scene_document();
         scene.revision = 12;
         let mut other = scene.objects[0].clone();
@@ -50206,7 +54382,7 @@ async fn frozen_spins_preview_intersects_all_magnetic_with_target_object() {
                 "cell_size": [1.0, 1.0, 1.0]
             }}}
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -50217,7 +54393,19 @@ async fn frozen_spins_preview_intersects_all_magnetic_with_target_object() {
             }
         }))
         .expect("multi-object magnetization fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [3, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            ),
+            latest_fields,
+        )
+        .expect("multi-object magnetization should bind to its physical FDM source");
         snapshot.field_quantity_revisions.insert("m".into(), 7);
+        snapshot.state_version = source_state_revision;
     }
 
     let response = app
@@ -50363,9 +54551,176 @@ mod remesh_admission;
 
 #[path = "tests/project_documents.rs"]
 mod project_documents;
+#[path = "tests/postprocessing_definitions.rs"]
+mod postprocessing_definitions;
 
+
+#[tokio::test]
+async fn stage_execution_identity_matches_the_snapshot_and_uses_session_run_fallback() {
+    let (app, state, _artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_running_stage_execution(&state, 23).await;
+    let (session_id, run_id, session_run_id) = {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        (
+            snapshot.session.session_id.clone(),
+            snapshot.run.as_ref().map(|run| run.run_id.clone())
+                .unwrap_or_else(|| snapshot.session.run_id.clone()),
+            snapshot.session.run_id.clone(),
+        )
+    };
+    let response = app.clone().oneshot(
+        Request::builder().uri("/v2/sessions/current/simulation/stages/execution")
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["session_id"], serde_json::json!(session_id));
+    assert_eq!(body["run_id"], serde_json::json!(run_id));
+    assert!(body["session_epoch"].as_str().is_some_and(|epoch| epoch.starts_with(&format!("{session_id}@"))));
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard.as_mut().unwrap().run = None;
+    }
+    let response = app.oneshot(
+        Request::builder().uri("/v2/sessions/current/simulation/stages/execution")
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["run_id"], serde_json::json!(session_run_id));
+    assert!(body["request_scope_epoch"].as_str().is_some());
+}
+
+#[test]
+fn openapi_stage_execution_requires_explicit_snapshot_identity() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schema = &openapi["components"]["schemas"]["StageExecutionResource"];
+    let required = schema["required"].as_array().unwrap();
+    for field in ["session_id", "session_epoch", "request_scope_epoch", "run_id"] {
+        assert!(required.iter().any(|value| value.as_str() == Some(field)));
+    }
+    assert_eq!(schema["properties"]["run_id"]["type"], "string");
+}
 #[path = "tests/session_scope.rs"]
 mod session_scope;
 
 #[path = "tests/workspace_items.rs"]
 mod workspace_items;
+
+#[path = "tests/antenna_inspection.rs"]
+mod antenna_inspection;
+
+#[tokio::test]
+async fn status_keeps_accepted_fem_method_without_runtime_capabilities() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_relax", "kind": "relax",
+            "algorithm": "projected_gradient_bb", "stage_id": "relax-1"
+        }));
+        scene.study.requested_backend = "fem".into();
+        scene.study.requested_device = "auto".into();
+        snapshot.scene_document = Some(scene);
+        snapshot.capabilities = None;
+        snapshot.session.resolved_backend = None;
+        snapshot.session.resolved_device = None;
+        snapshot.session.resolved_precision = None;
+        snapshot.session.resolved_mode = None;
+    }
+    let response = build_v2_router().with_state(state).oneshot(
+        Request::builder().uri("/v2/sessions/current/status").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["capabilities"]["active_lane"]["authored"]["backend"], "fem");
+    assert_eq!(body["capabilities"]["active_lane"]["authored"]["discretization"], "fem");
+    assert_eq!(body["capabilities"]["active_lane"]["authored"]["device"], "auto");
+    assert_eq!(body["capabilities"]["active_lane"]["source"]["authored_intent"], "scene.study.requested_execution");
+    assert!(body["capabilities"]["active_lane"]["resolved"].is_null());
+}
+
+#[tokio::test]
+async fn readiness_routes_missing_object_assignments_to_the_object() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_relax", "kind": "relax",
+            "algorithm": "projected_gradient_bb", "stage_id": "relax-1"
+        }));
+        scene.study.requested_backend = "fem".into();
+        scene.objects[0].magnetization_ref = None;
+        scene.objects[0].physics_stack.clear();
+        snapshot.scene_document = Some(scene);
+    }
+    let response = build_v2_router().with_state(state).oneshot(
+        Request::builder().uri("/v2/sessions/current/model/readiness").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    for id in ["texture", "interactions"] {
+        let check = body["checks"].as_array().unwrap().iter().find(|check| check["id"] == id).unwrap();
+        assert_eq!(check["state"], "blocked");
+        assert_eq!(check["target_resource"], "model/objects/body");
+    }
+}
+
+
+#[tokio::test]
+async fn created_model_method_survives_partial_runtime_readback_for_both_methods() {
+    for method in ["fem", "fdm"] {
+        let state = test_app_state();
+        let app = build_v2_router().with_state(state.clone());
+        let created = app.clone().oneshot(Request::builder().method("POST").uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({"name": "First model", "backend": method, "device": "cpu", "precision": "double"}).to_string())).unwrap()
+        ).await.unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.capabilities = None;
+            snapshot.session.resolved_device = None;
+        }
+        let status = app.clone().oneshot(Request::builder().uri("/v2/sessions/current/status").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let status = body_json(status).await;
+        assert_eq!(status["capabilities"]["active_lane"]["authored"]["discretization"], method);
+        assert!(status["capabilities"]["active_lane"]["resolved"].is_null());
+        let readiness = app.oneshot(Request::builder().uri("/v2/sessions/current/model/readiness").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(readiness.status(), StatusCode::OK);
+        let readiness = body_json(readiness).await;
+        assert_eq!(readiness["checks"][0]["id"], "method");
+        assert_eq!(readiness["checks"][0]["state"], "complete");
+        assert_eq!(readiness["checks"][1]["id"], "domain");
+        assert_eq!(readiness["checks"][1]["state"], "complete");
+    }
+}
+
+#[tokio::test]
+async fn manual_domain_outside_blocks_readiness_and_mesh_command_before_queueing() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_relax", "kind": "relax", "algorithm": "projected_gradient_bb", "stage_id": "relax-1"
+        }));
+        scene.study.requested_backend = "fem".into();
+        scene.study.universe_mesh = Some(serde_json::from_value(serde_json::json!({
+            "mode": "manual", "size": [1e-12, 1e-12, 1e-12], "center": [0.0, 0.0, 0.0]
+        })).unwrap());
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let readiness = app.clone().oneshot(Request::builder().uri("/v2/sessions/current/model/readiness").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    let readiness = body_json(readiness).await;
+    let domain = readiness["checks"].as_array().unwrap().iter().find(|check| check["id"] == "domain").unwrap();
+    assert_eq!(domain["state"], "blocked");
+    assert_eq!(domain["target_resource"], "meshing/policies/universe");
+    assert!(domain["reason"].as_str().unwrap().contains("outside"));
+    let command = app.oneshot(Request::builder().method("POST").uri("/v2/sessions/current/simulation/commands")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({"kind": "mesh_build"}).to_string())).unwrap()
+    ).await.unwrap();
+    assert_eq!(command.status(), StatusCode::BAD_REQUEST);
+    assert!(String::from_utf8_lossy(&body_bytes(command).await).contains("outside"));
+    assert!(state.current_control_queue.lock().await.is_empty());
+}

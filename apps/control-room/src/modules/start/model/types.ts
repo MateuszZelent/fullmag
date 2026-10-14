@@ -1,3 +1,6 @@
+import type { ComputeNodesState } from "@/kernel/api/apiTypes";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+
 /**
  * Start screen types, mirroring docs/design/start-screen/schema/*.schema.json.
  * Only the shapes the shipped steps render are ported; the recent index and
@@ -56,8 +59,106 @@ export interface ComputeEnvironment {
  */
 export type ComputeProbeState = ComputeEnvironment | null | undefined;
 
+export type ComputeNodeFactStatus = "available" | "last_known" | "unavailable";
+
+export interface ComputeNodeFact<T> {
+  readonly status: ComputeNodeFactStatus;
+  readonly value: T | null;
+}
+
+export type ComputeNodeGpuPartition =
+  | { readonly kind: "full_device" }
+  | { readonly kind: "mig"; readonly parentGpuUuid: string; readonly partitionId: string }
+  | { readonly kind: "unknown" };
+
+export interface ComputeNodeGpuSummary {
+  readonly uuid: string;
+  readonly name: ComputeNodeFact<string>;
+  readonly pciId: ComputeNodeFact<string>;
+  readonly vramBytes: ComputeNodeFact<number>;
+  readonly partition: ComputeNodeFact<ComputeNodeGpuPartition>;
+  readonly numaNodeId: ComputeNodeFact<number>;
+}
+
+export interface ComputeNodeCpuTopologySummary {
+  readonly logicalProcessorCount: number;
+  readonly logicalCpuIds: readonly number[];
+  readonly socketIds: readonly number[];
+  readonly numaNodeIds: readonly number[];
+  readonly physicalCoreCount: number | null;
+}
+
+export type ComputeNodeEnforcementStatus = "supported" | "advisory" | "unavailable";
+
+export interface ComputeNodeSnapshotSummary {
+  readonly nodeId: string;
+  readonly inventoryRevision: number;
+  readonly sample: {
+    readonly source: string | null;
+    readonly collectedAt: string | null;
+    readonly freshness: string | null;
+  };
+  readonly cpu: {
+    readonly topology: ComputeNodeFact<ComputeNodeCpuTopologySummary>;
+    readonly allowedLogicalProcessorIds: ComputeNodeFact<readonly number[]>;
+    readonly effectiveCapacityMillis: number | null;
+    readonly effectiveCapacityAvailable: boolean;
+    readonly quota: ComputeNodeFact<
+      | { readonly mode: "unlimited" }
+      | { readonly mode: "limited"; readonly capacityMillis: number }
+    >;
+  };
+  readonly memory: {
+    readonly totalBytes: number | null;
+    readonly availableBytes: number | null;
+  };
+  readonly gpus: ComputeNodeFact<readonly ComputeNodeGpuSummary[]>;
+  readonly enforcement: {
+    readonly cpuAffinity: ComputeNodeEnforcementStatus | null;
+    readonly cpuQuota: ComputeNodeEnforcementStatus | null;
+    readonly memoryCap: ComputeNodeEnforcementStatus | null;
+    readonly gpuVisibility: ComputeNodeEnforcementStatus | null;
+    readonly storageQuota: ComputeNodeEnforcementStatus | null;
+  };
+}
+
+export interface ComputeNodePolicySummary {
+  readonly revision: number;
+  readonly activeWorkers: number;
+  readonly maxParallelWorkers: number;
+  readonly draining: boolean;
+  readonly overBudget: boolean;
+  readonly blockingReasons: readonly string[];
+  readonly allowedCpuIds: readonly number[];
+  readonly allowedGpuUuids: readonly string[];
+  readonly cpuReserveMillis: number;
+  readonly memoryReserveBytes: number;
+  readonly scratchReserveBytes: number;
+  readonly gpuVramReserves: Readonly<Record<string, number>>;
+  readonly priorityOrder: readonly number[];
+  readonly parallelismPatternCount: number;
+}
+
+export interface ComputeNodeInventoryNodeSummary {
+  readonly nodeId: string;
+  readonly state: ComputeNodesState;
+  readonly snapshot: ComputeNodeSnapshotSummary | null;
+  readonly nodePolicy: ComputeNodePolicySummary | null;
+}
+
+export interface ComputeNodeInventorySummary {
+  readonly hasSnapshot: boolean;
+  readonly nodeCount: number;
+  readonly nodes: readonly ComputeNodeInventoryNodeSummary[];
+  readonly refreshFailed: boolean;
+  readonly resourceStatus: ResourceStatus;
+  readonly staleAfterSeconds: number | null;
+  readonly state: ComputeNodesState | null;
+}
+
 export interface ComputeProbeController {
   readonly compute: ComputeProbeState;
+  readonly nodeInventory: ComputeNodeInventorySummary;
   readonly refreshing: boolean;
   readonly stale: boolean;
   readonly error: string | null;

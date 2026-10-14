@@ -267,7 +267,7 @@ export class DevelopmentRestartActionService {
             } catch {
               try { captured.release(); }
               catch { throw new DevelopmentRestartCaptureError(false); }
-              throw new DevelopmentRestartCaptureError(true);
+              throw new DevelopmentRestartCaptureError(true, "candidate_confirmation");
             }
             return captured;
           },

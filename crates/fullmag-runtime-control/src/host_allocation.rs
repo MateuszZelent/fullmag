@@ -120,7 +120,7 @@ pub fn host_request_for_task_claim(
         }
         _ => bail!("solver host allocation requires a CPU or GPU lease"),
     };
-    Ok(request(
+    request(
         ledger,
         HostReservationIdentity {
             store_id: HostResourceLedger::store_id(store.root())?,
@@ -141,7 +141,7 @@ pub fn host_request_for_task_claim(
         },
         placement.cpu_ids.clone(),
         gpu,
-    ))
+    )
 }
 
 /// Preparation retains its own process attempt instead of borrowing the solver
@@ -156,7 +156,7 @@ pub fn host_request_for_preparation_lease(
     if lease.budget.gpu_memory_bytes != 0 {
         bail!("preparation host allocation cannot reserve solver GPU memory");
     }
-    Ok(request(
+    request(
         ledger,
         HostReservationIdentity {
             store_id: HostResourceLedger::store_id(store.root())?,
@@ -171,7 +171,7 @@ pub fn host_request_for_preparation_lease(
         lease.budget.clone(),
         cpu_ids.clone(),
         None,
-    ))
+    )
 }
 
 fn request(
@@ -180,8 +180,14 @@ fn request(
     budget: FmsResourceBudget,
     cpu_ids: BTreeSet<u32>,
     gpu: Option<(String, u64)>,
-) -> HostReservationRequest {
+) -> Result<HostReservationRequest> {
     let policy = ledger.policy();
+    let node_policy_revision = ledger
+        .read()?
+        .node_policy
+        .map(|node_policy| node_policy.revision)
+        .ok_or_else(|| anyhow::anyhow!("compute host has no configured node policy"))?;
+    let compute_node_owner = ledger.current_compute_node_owner_for_admission()?;
     let (exclusive_gpu_uuids, gpu_vram_bytes_by_uuid) = match gpu {
         Some((uuid, bytes)) => (
             BTreeSet::from([uuid.clone()]),
@@ -189,17 +195,22 @@ fn request(
         ),
         None => (BTreeSet::new(), BTreeMap::new()),
     };
-    HostReservationRequest {
+    Ok(HostReservationRequest {
         identity,
         expected_host_id: policy.host_id.clone(),
         expected_policy_revision: policy.revision,
+        expected_node_policy_revision: node_policy_revision,
         expected_owner_epoch: policy.owner_epoch,
+        expected_compute_node_owner_id: Some(compute_node_owner.host_owner_id),
+        expected_compute_node_owner_epoch: Some(compute_node_owner.host_owner_epoch),
         expected_topology_sha256: policy.topology_sha256.clone(),
         budget,
         exclusive_gpu_uuids,
         gpu_vram_bytes_by_uuid,
         cpu_ids,
-    }
+        scheduling_priority: 0,
+        parallelism: fullmag_ir::compute_resources::ComputeParallelismIR::SingleProcess,
+    })
 }
 
 #[cfg(test)]
@@ -214,7 +225,12 @@ mod tests {
 
     const GPU: &str = "GPU-00000000-0000-4000-8000-000000000001";
 
-    fn fixture() -> (tempfile::TempDir, SessionStore, HostResourceLedger) {
+    fn fixture() -> (
+        tempfile::TempDir,
+        SessionStore,
+        HostResourceLedger,
+        fullmag_session::host_resource_ledger::HostInventoryOwner,
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let ledger = HostResourceLedger::initialize(
@@ -236,7 +252,17 @@ mod tests {
             },
         )
         .unwrap();
-        (directory, store, ledger)
+        let inventory_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let sample = crate::compute_node_probe::sample_compute_node_for_owner(
+            &ledger,
+            inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        ledger
+            .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
+            .unwrap();
+        (directory, store, ledger, inventory_owner)
     }
 
     fn claim(kind: ResourceKind, gpu_memory_bytes: u64) -> TaskClaim {
@@ -345,7 +371,7 @@ mod tests {
 
     #[test]
     fn gpu_offer_label_cannot_replace_explicit_physical_placement() {
-        let (_directory, store, ledger) = fixture();
+        let (_directory, store, ledger, _inventory_owner) = fixture();
         let claim = claim(ResourceKind::Gpu, 2048);
         let mut placement = HostTaskPlacement {
             cpu_ids: BTreeSet::new(),
@@ -366,7 +392,7 @@ mod tests {
 
     #[test]
     fn cpu_claim_cannot_acquire_gpu_capacity_from_placement() {
-        let (_directory, store, ledger) = fixture();
+        let (_directory, store, ledger, _inventory_owner) = fixture();
         let placement = HostTaskPlacement {
             cpu_ids: BTreeSet::new(),
             gpu_uuid: Some(GPU.into()),

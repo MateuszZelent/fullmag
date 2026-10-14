@@ -1,0 +1,982 @@
+//! Preparation and execution bridge for independent FEM eigen-k workers.
+
+use crate::dispatch::FemEngine;
+use crate::eigen::SingleKSolveResult;
+use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
+use crate::fem::eigen_reduction::build_reduction_map;
+use crate::fem_eigen;
+use crate::types::{AuxiliaryArtifact, LiveParallelExecutionTelemetry, RunError, StepAction};
+use fullmag_engine::fem::MeshTopology;
+use fullmag_ir::{FemEigenPlanIR, OutputIR, ParallelExecutionModeIR, ParallelExecutionPolicyIR};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+pub(super) struct PrecomputedSingleK {
+    pub(super) result: SingleKSolveResult,
+    pub(super) mode_artifacts: Vec<AuxiliaryArtifact>,
+    pub(super) final_magnetization: Vec<[f64; 3]>,
+}
+
+pub(super) enum ProcessPoolPreparation {
+    Ready {
+        precomputed: HashMap<usize, PrecomputedSingleK>,
+        report: crate::eigen::k_process_pool::ProcessPoolReportV1,
+    },
+    Interrupted(super::eigen_path::InterruptedSingleK),
+    InterruptedPool {
+        precomputed: HashMap<usize, PrecomputedSingleK>,
+        report: crate::eigen::k_process_pool::ProcessPoolReportV1,
+        action: StepAction,
+        accepted_prefix_len: usize,
+    },
+}
+
+fn accepted_sample_prefix_len(
+    samples: &[crate::eigen::KSampleDescriptor],
+    accepted_sample_indices: &HashSet<usize>,
+) -> usize {
+    samples
+        .iter()
+        .take_while(|sample| accepted_sample_indices.contains(&sample.sample_index))
+        .count()
+}
+
+fn completed_worker_run<'a>(
+    response: &'a crate::fem::eigen_k_worker::EigenKWorkerResponseV1,
+    sample_index: usize,
+) -> Result<&'a crate::fem::eigen_k_worker::EigenKWorkerRunV1, RunError> {
+    let run = response.run.as_ref().ok_or_else(|| RunError {
+        message: response
+            .error
+            .clone()
+            .unwrap_or_else(|| "adaptive worker returned no run payload".into()),
+    })?;
+    if !response.ok || !matches!(run.status, crate::types::RunStatus::Completed) {
+        return Err(RunError {
+            message: response.error.clone().unwrap_or_else(|| {
+                format!("adaptive worker sample {sample_index} did not complete")
+            }),
+        });
+    }
+    Ok(run)
+}
+
+fn parallel_admission_progress(
+    event: &crate::eigen::k_process_pool::ProcessAdmissionEventV1,
+    policy: &ParallelExecutionPolicyIR,
+    requested_modes: usize,
+    resolved_workers: Option<usize>,
+    terminal: bool,
+) -> fem_eigen::FemEigenProgress {
+    let snapshot = event.snapshot.as_ref();
+    let worker_peak = event.worker_peak.as_ref();
+    let to_u32 = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+    fem_eigen::FemEigenProgress {
+        phase: "admitting_eigen_k_workers",
+        requested_modes,
+        parallel_execution: Some(LiveParallelExecutionTelemetry {
+            sampled_at_unix_ms: u64::try_from(event.at_unix_ms).unwrap_or(u64::MAX),
+            active_workers: to_u32(event.active_workers),
+            admission_desired_workers: to_u32(event.desired_workers),
+            admission_worker_limit: policy.max_workers,
+            admission_pending_samples: to_u32(event.pending_samples),
+            resolved_workers: resolved_workers.map(to_u32),
+            cpu_target_percent: policy.max_cpu_percent,
+            memory_target_percent: policy.max_memory_percent,
+            memory_reserve_bytes: policy.memory_reserve_bytes,
+            cpu_target_kind: event.cpu_target_kind.clone(),
+            cpu_busy_percent: snapshot.map(|value| value.cpu_busy_percent),
+            allocated_cpu_cores: snapshot.map(|value| value.allocated_cpu_cores),
+            cpu_available_cores: snapshot.map(|value| value.cpu_available_cores),
+            memory_limit_bytes: snapshot.map(|value| value.memory_limit_bytes),
+            memory_available_bytes: snapshot.map(|value| value.memory_available_bytes),
+            worker_peak_cpu_cores: worker_peak.map(|value| value.cpu_cores),
+            worker_peak_rss_bytes: worker_peak.map(|value| value.rss_bytes),
+            admission_reason: event.reason.clone(),
+            terminal,
+        }),
+        ..Default::default()
+    }
+}
+
+fn apply_pool_progress_action(
+    requested_action: &mut Option<StepAction>,
+    action: StepAction,
+    pool_completed: bool,
+) {
+    if pool_completed {
+        return;
+    }
+    match action {
+        StepAction::Stop => *requested_action = Some(StepAction::Stop),
+        StepAction::Pause if requested_action.is_none() => {
+            *requested_action = Some(StepAction::Pause)
+        }
+        StepAction::Pause | StepAction::Continue => {}
+    }
+}
+
+/// Stage Relax→Eigen certificates under this invocation's canonical attempt root.
+fn stage_relax_bootstrap_certificates(
+    attempt_root: &Path,
+    artifacts: &[AuxiliaryArtifact],
+) -> Result<PathBuf, RunError> {
+    let bootstrap_root = attempt_root.join("bootstrap");
+    fs::create_dir_all(&bootstrap_root).map_err(|error| RunError {
+        message: format!("create adaptive eigen bootstrap root: {error}"),
+    })?;
+    let mut staged = HashMap::<String, PathBuf>::new();
+    for artifact in artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path.starts_with("eigen/metadata/"))
+    {
+        let relative = Path::new(&artifact.relative_path);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err(RunError {
+                message: format!(
+                    "adaptive eigen bootstrap artifact path escapes namespace: {}",
+                    artifact.relative_path
+                ),
+            });
+        }
+        let destination = bootstrap_root.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| RunError {
+                message: format!("create adaptive eigen bootstrap artifact parent: {error}"),
+            })?;
+        }
+        if destination.exists() {
+            let existing = fs::read(&destination).map_err(|error| RunError {
+                message: format!("read existing adaptive eigen bootstrap artifact: {error}"),
+            })?;
+            if existing != artifact.bytes {
+                return Err(RunError {
+                    message: format!(
+                        "adaptive eigen bootstrap artifact would overwrite different bytes: {}",
+                        artifact.relative_path
+                    ),
+                });
+            }
+        } else {
+            let temporary = destination.with_extension(format!("tmp-{}", std::process::id()));
+            fs::write(&temporary, &artifact.bytes).map_err(|error| RunError {
+                message: format!("write adaptive eigen bootstrap artifact: {error}"),
+            })?;
+            fs::rename(&temporary, &destination).map_err(|error| RunError {
+                message: format!("publish adaptive eigen bootstrap artifact: {error}"),
+            })?;
+        }
+        staged.insert(artifact.relative_path.clone(), destination);
+    }
+
+    let mut equilibrium_candidates = staged
+        .iter()
+        .filter(|(relative, _)| {
+            relative.ends_with("equilibrium_artifact.v7.json")
+                || relative.ends_with("equilibrium_artifact.v8.json")
+        })
+        .collect::<Vec<_>>();
+    equilibrium_candidates.sort_by_key(|(relative, _)| relative.len());
+    let (equilibrium_relative, equilibrium_path) = equilibrium_candidates
+        .first()
+        .map(|(relative, path)| ((*relative).clone(), (*path).clone()))
+        .ok_or_else(|| RunError {
+            message: "Relax→Eigen bootstrap did not publish equilibrium_artifact.v7/v8".into(),
+        })?;
+    let equilibrium_value: Value =
+        serde_json::from_slice(&fs::read(&equilibrium_path).map_err(|error| RunError {
+            message: format!("read staged adaptive eigen equilibrium artifact: {error}"),
+        })?)
+        .map_err(|error| RunError {
+            message: format!("parse staged adaptive eigen equilibrium artifact: {error}"),
+        })?;
+    let schema = equilibrium_value
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunError {
+            message: "adaptive eigen bootstrap equilibrium artifact has no schema_version".into(),
+        })?;
+    let state_name = match schema {
+        "equilibrium_artifact.v7" => "linearization_state.v6.json",
+        "equilibrium_artifact.v8" => "linearization_state.v7.json",
+        _ => {
+            return Err(RunError {
+                message: format!(
+                    "unsupported adaptive eigen bootstrap equilibrium schema {schema}"
+                ),
+            })
+        }
+    };
+    let equilibrium_parent = Path::new(&equilibrium_relative)
+        .parent()
+        .ok_or_else(|| RunError {
+            message: "adaptive eigen bootstrap equilibrium artifact has no parent path".into(),
+        })?;
+    let state_relative = equilibrium_parent
+        .join(state_name)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let state_path = staged.get(&state_relative).ok_or_else(|| RunError {
+        message: format!("adaptive eigen bootstrap is missing schema-matched {state_name} sidecar"),
+    })?;
+    let state_value: Value =
+        serde_json::from_slice(&fs::read(state_path).map_err(|error| RunError {
+            message: format!("read staged adaptive eigen linearization state: {error}"),
+        })?)
+        .map_err(|error| RunError {
+            message: format!("parse staged adaptive eigen linearization state: {error}"),
+        })?;
+    let expected_state_schema = if schema == "equilibrium_artifact.v8" {
+        "LinearizationState.v7"
+    } else {
+        "LinearizationState.v6"
+    };
+    if state_value.get("schema_version").and_then(Value::as_str) != Some(expected_state_schema) {
+        return Err(RunError {
+            message: format!(
+                "adaptive eigen bootstrap sidecar schema mismatch: expected {expected_state_schema}"
+            ),
+        });
+    }
+    Ok(equilibrium_path)
+}
+
+fn bind_relax_bootstrap_equilibrium_to_worker_plan(
+    worker_plan: &mut FemEigenPlanIR,
+    equilibrium_path: &Path,
+    equilibrium_magnetization: Vec<[f64; 3]>,
+) {
+    worker_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Artifact {
+        path: equilibrium_path.to_string_lossy().to_string(),
+    };
+    worker_plan.equilibrium_magnetization = equilibrium_magnetization;
+}
+
+pub(super) fn prepare_process_pool_samples(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    tracking_outputs: &[OutputIR],
+    publication_outputs: &[OutputIR],
+    parallel_policy: &ParallelExecutionPolicyIR,
+    process_root: Option<&Path>,
+    checkpoint_root: Option<&Path>,
+    source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+    progress: &mut Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
+) -> Result<ProcessPoolPreparation, RunError> {
+    if parallel_policy.mode != ParallelExecutionModeIR::Adaptive {
+        return Err(RunError {
+            message: "process pool preparation requires parallel_execution.mode=adaptive".into(),
+        });
+    }
+    let process_root = process_root.ok_or_else(|| RunError {
+        message: "adaptive FEM eigen path requires a managed process staging root".into(),
+    })?;
+    let resolution = execution.resolution().ok_or_else(|| RunError {
+        message: "adaptive FEM eigen path requires an exact execution resolution".into(),
+    })?;
+    if execution.lane() != FemEigenExecutionLane::Cpu {
+        return Err(RunError {
+            message: "adaptive FEM eigen process pool supports CPU lane only; GPU remains serial"
+                .into(),
+        });
+    }
+    if !plan.bias_field_samples.is_empty() {
+        return Err(RunError {
+            message:
+                "adaptive FEM eigen process pool rejects bias_field_samples; continuation remains serial"
+                    .into(),
+        });
+    }
+    let samples = crate::eigen::expand_k_sampling(plan.k_sampling.as_ref())
+        .map_err(|message| RunError { message })?;
+    if samples.is_empty() {
+        return Err(RunError {
+            message: "adaptive FEM eigen path expanded to zero samples".into(),
+        });
+    }
+    if !matches!(
+        plan.equilibrium,
+        fullmag_ir::EquilibriumSourceIR::Artifact { .. }
+    ) && source_relax_handoff.is_none()
+    {
+        return Err(RunError {
+            message: "adaptive FEM eigen path requires an immutable certified equilibrium Artifact or a verified Relax→Eigen handoff for serial bootstrap".into(),
+        });
+    }
+    let tracking_topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
+        message: format!("adaptive eigen tracking mesh topology: {error}"),
+    })?;
+    let tracking_metric =
+        super::eigen_path::eigen_path_consistent_tracking_metric(&tracking_topology, &plan.mesh)?;
+    let mut precomputed = HashMap::with_capacity(samples.len());
+    let mut worker_plan = plan.clone();
+    let mut bootstrap_sample_index = None;
+    if !matches!(
+        plan.equilibrium,
+        fullmag_ir::EquilibriumSourceIR::Artifact { .. }
+    ) {
+        let checkpoint_root = checkpoint_root.ok_or_else(|| RunError {
+            message: "adaptive bootstrap has no preflighted raw checkpoint attempt".into(),
+        })?;
+        let handoff = source_relax_handoff.ok_or_else(|| RunError {
+            message:
+                "adaptive FEM eigen path cannot bootstrap Relax→Eigen without a verified handoff"
+                    .into(),
+        })?;
+        let bootstrap_sample = samples.first().ok_or_else(|| RunError {
+            message: "adaptive FEM eigen path has no sample for Relax→Eigen bootstrap".into(),
+        })?;
+        let bootstrap_point_plan =
+            super::eigen_path::eigen_path_single_k_point_plan(plan, bootstrap_sample, false, None)?;
+        let bootstrap_reduction = build_reduction_map(
+            &tracking_topology,
+            &bootstrap_point_plan.spin_wave_bc,
+            bootstrap_point_plan.k_sampling.as_ref(),
+        )?;
+        let mut bootstrap_progress = |event: fem_eigen::FemEigenProgress| {
+            progress
+                .as_deref_mut()
+                .map(|callback| callback(event))
+                .unwrap_or(crate::types::StepAction::Continue)
+        };
+        let potential_publication = super::eigen_path::EigenPathPotentialPublication {
+            outputs: publication_outputs.to_vec(),
+            sample_index: bootstrap_sample.sample_index,
+            sample_label: bootstrap_sample.label.clone(),
+        };
+        let bootstrap_run =
+            crate::fem::eigen_execution::execute_fem_eigen_path_single_k(
+                execution,
+                &bootstrap_point_plan,
+                tracking_outputs,
+                &potential_publication,
+                Some(&mut bootstrap_progress),
+                bootstrap_sample.sample_index,
+                Some(bootstrap_sample.sample_index),
+                Some(handoff),
+                producer_identity,
+            )?;
+        // A pool failure must not discard the serial bootstrap's raw bytes.
+        // Workers already persist their own raw response/artifact closure.
+        match super::eigen_path::checkpoint_and_admit_single_k(
+            Some(checkpoint_root),
+            bootstrap_sample,
+            &bootstrap_point_plan,
+            &bootstrap_run,
+        )? {
+            super::eigen_path::SingleKCheckpointAdmission::Completed => {}
+            super::eigen_path::SingleKCheckpointAdmission::Interrupted(interrupted) => {
+                return Ok(ProcessPoolPreparation::Interrupted(interrupted));
+            }
+        }
+        let bootstrap_magnetization = bootstrap_run.result.final_magnetization.clone();
+        if bootstrap_magnetization.len() != plan.mesh.nodes.len()
+            || bootstrap_magnetization
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "Relax→Eigen bootstrap did not produce a finite accepted equilibrium"
+                    .into(),
+            });
+        }
+        // The caller allocated this fresh canonical attempt for this invocation.
+        // Keep bootstrap certificates out of the persistent process root shared by retries.
+        let equilibrium_path = stage_relax_bootstrap_certificates(
+            checkpoint_root,
+            &bootstrap_run.auxiliary_artifacts,
+        )?;
+        bind_relax_bootstrap_equilibrium_to_worker_plan(
+            &mut worker_plan,
+            &equilibrium_path,
+            bootstrap_magnetization.clone(),
+        );
+        let (bootstrap_result, mut bootstrap_mode_artifacts) =
+            super::eigen_path::parse_worker_single_k_result(
+                plan,
+                &bootstrap_point_plan,
+                tracking_outputs,
+                bootstrap_sample,
+                FemEngine::CpuNative,
+                &bootstrap_run.auxiliary_artifacts,
+                &tracking_topology,
+                &bootstrap_reduction,
+                &tracking_metric,
+            )?;
+        bootstrap_mode_artifacts.extend(bootstrap_run.auxiliary_artifacts.clone());
+        precomputed.insert(
+            bootstrap_sample.sample_index,
+            PrecomputedSingleK {
+                result: bootstrap_result,
+                mode_artifacts: bootstrap_mode_artifacts,
+                final_magnetization: bootstrap_magnetization,
+            },
+        );
+        bootstrap_sample_index = Some(bootstrap_sample.sample_index);
+    }
+    let placeholder_root = process_root.join("requests");
+    let worker_samples = samples
+        .iter()
+        .filter(|sample| Some(sample.sample_index) != bootstrap_sample_index)
+        .collect::<Vec<_>>();
+    if worker_samples.is_empty() {
+        let report = crate::eigen::k_process_pool::ProcessPoolReportV1 {
+            protocol: crate::fem::eigen_k_worker::EIGEN_K_WORKER_PROTOCOL_V2.to_string(),
+            requested_mode: parallel_policy.mode,
+            resolved_mode: "serial_bootstrap_only".into(),
+            resolved_workers: 1,
+            policy: parallel_policy.clone(),
+            inputs: Vec::new(),
+            thread_bindings: Vec::new(),
+            cpu_observations: Vec::new(),
+            worker_logs: Vec::new(),
+            events: Vec::new(),
+            events_truncated: false,
+            telemetry_reason: Some(
+                "single sample completed by verified Relax→Eigen bootstrap".into(),
+            ),
+        };
+        return Ok(ProcessPoolPreparation::Ready {
+            precomputed,
+            report,
+        });
+    }
+    let requests = worker_samples
+        .iter()
+        .map(|sample| {
+            Ok(crate::fem::eigen_k_worker::EigenKWorkerRequestV2 {
+                protocol: crate::fem::eigen_k_worker::EIGEN_K_WORKER_PROTOCOL_V2.to_string(),
+                plan: super::eigen_path::eigen_path_single_k_point_plan(
+                    &worker_plan,
+                    sample,
+                    false,
+                    None,
+                )?,
+                outputs: tracking_outputs.to_vec(),
+                publication_outputs: publication_outputs.to_vec(),
+                sample_label: sample.label.clone(),
+                execution: resolution.clone(),
+                parallel_policy: parallel_policy.clone(),
+                thread_budget: crate::fem::eigen_k_worker::EigenKWorkerThreadBudgetV1 {
+                    requested_threads: parallel_policy.threads_per_worker,
+                    resolved_threads: 1,
+                    cap_reason: "parent_admission_pending".into(),
+                    allocation_cpu_cores: 1.0,
+                    host_cpu_cores: std::thread::available_parallelism()
+                        .map(|value| value.get().min(u32::MAX as usize) as u32)
+                        .unwrap_or(1),
+                },
+                sample_index: sample.sample_index,
+                k_vector: sample.k_vector,
+                expected_plan_sha256: String::new(),
+                expected_equilibrium_artifact_sha256: String::new(),
+                artifact_dir: placeholder_root.join(format!("sample-{}", sample.sample_index)),
+                response_path: placeholder_root
+                    .join(format!("sample-{}.response.json", sample.sample_index)),
+                cancel_path: None,
+            })
+        })
+        .collect::<Result<Vec<_>, RunError>>()?;
+    let mut requests = requests;
+    for request in &mut requests {
+        request.expected_plan_sha256 = crate::fem::eigen_k_worker::plan_sha256(&request.plan)?;
+        request.expected_equilibrium_artifact_sha256 =
+            crate::fem::eigen_k_worker::equilibrium_artifact_sha256(&request.plan)?;
+    }
+    let pool = crate::eigen::k_process_pool::EigenKProcessPool::new(
+        process_root.join("eigen-k-workers"),
+        parallel_policy.clone(),
+    )
+    .map_err(|message| RunError { message })?;
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let mut last_admission_publish = None::<Instant>;
+    let mut last_admission_reason = None::<String>;
+    let mut requested_action = None::<StepAction>;
+    let mut check_control = |event: Option<
+        &crate::eigen::k_process_pool::ProcessAdmissionEventV1,
+    >| -> StepAction {
+        if requested_action == Some(StepAction::Stop) {
+            return StepAction::Stop;
+        }
+        if let Some(event) = event {
+            let reason_changed = last_admission_reason
+                .as_deref()
+                .is_none_or(|reason| reason != event.reason);
+            let publish = reason_changed
+                || last_admission_publish
+                    .is_none_or(|published_at| published_at.elapsed() >= Duration::from_secs(1));
+            if publish {
+                let action = progress.as_deref_mut().map(|callback| {
+                    callback(parallel_admission_progress(
+                        event,
+                        parallel_policy,
+                        plan.count as usize,
+                        None,
+                        false,
+                    ))
+                });
+                last_admission_publish = Some(Instant::now());
+                last_admission_reason = Some(event.reason.clone());
+                if let Some(action) = action {
+                    apply_pool_progress_action(&mut requested_action, action, false);
+                }
+            }
+            return requested_action.unwrap_or(StepAction::Continue);
+        }
+        let action = progress.as_deref_mut().map_or(StepAction::Continue, |callback| {
+            callback(fem_eigen::FemEigenProgress {
+                phase: "admitting_eigen_k_workers",
+                requested_modes: plan.count as usize,
+                ..Default::default()
+            })
+        });
+        apply_pool_progress_action(&mut requested_action, action, false);
+        requested_action.unwrap_or(StepAction::Continue)
+    };
+    let pool_outcome = pool
+        .execute(&requests, cancellation, Some(&mut check_control))
+        .map_err(|message| RunError { message })?;
+    drop(check_control);
+    let (pool_result, mut interrupted_action) = match pool_outcome {
+        crate::eigen::k_process_pool::ProcessPoolOutcome::Completed(result) => (result, None),
+        crate::eigen::k_process_pool::ProcessPoolOutcome::Interrupted { action, partial } => {
+            (partial, Some(action))
+        }
+    };
+    if interrupted_action.is_none() {
+        if let Some(event) = pool_result.report.events.last() {
+            if let Some(callback) = progress.as_deref_mut() {
+                let action = callback(parallel_admission_progress(
+                    event,
+                    parallel_policy,
+                    plan.count as usize,
+                    Some(pool_result.report.resolved_workers),
+                    true,
+                ));
+                apply_pool_progress_action(&mut interrupted_action, action, true);
+            }
+        }
+    }
+    let crate::eigen::k_process_pool::ProcessPoolResult { responses, report } = pool_result;
+    let completed_sample_indices = responses
+        .iter()
+        .map(|response| response.sample_index)
+        .collect::<HashSet<_>>();
+    let accepted_sample_indices = precomputed
+        .keys()
+        .copied()
+        .chain(completed_sample_indices.iter().copied())
+        .collect::<HashSet<_>>();
+    let accepted_prefix_len = accepted_sample_prefix_len(&samples, &accepted_sample_indices);
+    let accepted_prefix_indices = samples
+        .iter()
+        .take(accepted_prefix_len)
+        .map(|sample| sample.sample_index)
+        .collect::<HashSet<_>>();
+    for response in responses {
+        let sample = samples
+            .iter()
+            .find(|sample| sample.sample_index == response.sample_index)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "adaptive worker returned unknown sample_index {}",
+                    response.sample_index
+                ),
+            })?;
+        let run = completed_worker_run(&response, sample.sample_index)?;
+        let request = requests
+            .iter()
+            .find(|request| request.sample_index == response.sample_index)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "adaptive worker request disappeared for sample {}",
+                    response.sample_index
+                ),
+            })?;
+        if run.plan_sha256 != request.expected_plan_sha256
+            || run.equilibrium_artifact_sha256 != request.expected_equilibrium_artifact_sha256
+        {
+            return Err(RunError {
+                message: format!(
+                    "adaptive worker input digest mismatch for sample {}",
+                    response.sample_index
+                ),
+            });
+        }
+        if run.thread_budget.requested_threads != request.parallel_policy.threads_per_worker
+            || run.thread_budget.resolved_threads == 0
+            || run.thread_budget.resolved_threads > run.thread_budget.requested_threads
+            || run.thread_budget.cap_reason.trim().is_empty()
+            || !run.thread_budget.allocation_cpu_cores.is_finite()
+            || run.thread_budget.allocation_cpu_cores <= 0.0
+        {
+            return Err(RunError {
+                message: format!(
+                    "adaptive worker sample {} returned an invalid thread budget",
+                    sample.sample_index
+                ),
+            });
+        }
+        if run.final_magnetization.len() != plan.mesh.nodes.len()
+            || run
+                .final_magnetization
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: format!(
+                    "adaptive worker sample {} returned an invalid final magnetization",
+                    sample.sample_index
+                ),
+            });
+        }
+        let artifacts = pool
+            .load_artifacts(&response)
+            .map_err(|message| RunError { message })?;
+        let point_plan =
+            super::eigen_path::eigen_path_single_k_point_plan(&worker_plan, sample, false, None)?;
+        if interrupted_action.is_some()
+            && !accepted_prefix_indices.contains(&sample.sample_index)
+        {
+            let checkpoint_root = checkpoint_root.ok_or_else(|| RunError {
+                message: format!(
+                    "adaptive worker sample {} completed beyond the accepted prefix without a raw checkpoint root",
+                    sample.sample_index
+                ),
+            })?;
+            let mut raw_response_artifacts = artifacts;
+            let response_bytes = fs::read(&request.response_path).map_err(|error| RunError {
+                message: format!(
+                    "failed to read completed adaptive worker response for sample {}: {error}",
+                    sample.sample_index
+                ),
+            })?;
+            raw_response_artifacts.push(AuxiliaryArtifact {
+                relative_path: "eigen/diagnostics/adaptive_worker_response.v2.json".to_string(),
+                bytes: response_bytes,
+            });
+            super::single_k_checkpoint::write_raw_single_k_checkpoint(
+                checkpoint_root,
+                sample.sample_index,
+                sample.k_vector,
+                &point_plan,
+                &raw_response_artifacts,
+            )
+            .map_err(|error| RunError {
+                message: format!(
+                    "failed to preserve completed adaptive sample {} beyond the accepted prefix: {error}",
+                    sample.sample_index
+                ),
+            })?;
+            continue;
+        }
+        let tracking_reduction = build_reduction_map(
+            &tracking_topology,
+            &point_plan.spin_wave_bc,
+            point_plan.k_sampling.as_ref(),
+        )?;
+        let (result, mode_artifacts) = super::eigen_path::parse_worker_single_k_result(
+            plan,
+            &point_plan,
+            tracking_outputs,
+            sample,
+            FemEngine::CpuNative,
+            &artifacts,
+            &tracking_topology,
+            &tracking_reduction,
+            &tracking_metric,
+        )?;
+        // Artifact and run validation above borrow the response. Transfer the
+        // already validated vector instead of keeping and cloning each payload.
+        let final_magnetization = response
+            .run
+            .expect("worker run payload was validated above")
+            .final_magnetization;
+        if precomputed
+            .insert(
+                sample.sample_index,
+                PrecomputedSingleK {
+                    result,
+                    mode_artifacts,
+                    final_magnetization,
+                },
+            )
+            .is_some()
+        {
+            return Err(RunError {
+                message: format!("adaptive worker duplicated sample {}", sample.sample_index),
+            });
+        }
+    }
+    if let Some(action) = interrupted_action {
+        if let Some(missing_sample) = samples[..accepted_prefix_len]
+            .iter()
+            .find(|sample| !precomputed.contains_key(&sample.sample_index))
+        {
+            return Err(RunError {
+                message: format!(
+                    "adaptive interruption accepted prefix includes sample {} without a validated worker result",
+                    missing_sample.sample_index
+                ),
+            });
+        }
+        return Ok(ProcessPoolPreparation::InterruptedPool {
+            precomputed,
+            report,
+            action,
+            accepted_prefix_len,
+        });
+    }
+    if precomputed.len() != samples.len() {
+        return Err(RunError {
+            message: format!(
+                "adaptive worker returned {} of {} samples",
+                precomputed.len(),
+                samples.len()
+            ),
+        });
+    }
+    Ok(ProcessPoolPreparation::Ready {
+        precomputed,
+        report,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let id = NEXT_TEST_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "fullmag-eigen-k-pool-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create test-owned temporary root");
+            Self(fs::canonicalize(&path).expect("canonicalize test root"))
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            // This test removes only the unique directory it created.
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn accepted_pool_samples_form_only_the_contiguous_planned_prefix() {
+        let samples = (0..4)
+            .map(|sample_index| crate::eigen::KSampleDescriptor {
+                sample_index,
+                label: Some(format!("sample-{sample_index}")),
+                segment_index: Some(0),
+                path_s: sample_index as f64,
+                t_in_segment: sample_index as f64 / 3.0,
+                k_vector: [sample_index as f64, 0.0, 0.0],
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(accepted_sample_prefix_len(&samples, &HashSet::new()), 0);
+        assert_eq!(
+            accepted_sample_prefix_len(&samples, &HashSet::from([0, 2, 3])),
+            1,
+            "completed responses after a missing sample are raw diagnostics, not path samples"
+        );
+        assert_eq!(
+            accepted_sample_prefix_len(&samples, &HashSet::from([0, 1, 2])),
+            3,
+            "the accepted prefix ends at the first planned sample not returned"
+        );
+    }
+
+    #[test]
+    fn terminal_action_after_completed_pool_does_not_interrupt_but_active_actions_do() {
+        for action in [StepAction::Stop, StepAction::Pause] {
+            let mut terminal_action = None;
+            apply_pool_progress_action(&mut terminal_action, action, true);
+            assert_eq!(terminal_action, None);
+
+            let mut active_action = None;
+            apply_pool_progress_action(&mut active_action, action, false);
+            assert_eq!(active_action, Some(action));
+        }
+    }
+
+    #[test]
+    fn genuine_worker_failure_remains_an_error_during_controlled_interruption() {
+        let response = crate::fem::eigen_k_worker::EigenKWorkerResponseV1 {
+            protocol: crate::fem::eigen_k_worker::EIGEN_K_WORKER_PROTOCOL_V2.to_string(),
+            sample_index: 1,
+            worker_request_index: 1,
+            ok: false,
+            worker_executable_sha256: None,
+            worker_build_identity: None,
+            terminal_peak: None,
+            run: Some(crate::fem::eigen_k_worker::EigenKWorkerRunV1 {
+                status: crate::types::RunStatus::Failed,
+                final_magnetization: Vec::new(),
+                plan_sha256: "plan".into(),
+                equilibrium_artifact_sha256: "equilibrium".into(),
+                thread_budget: crate::fem::eigen_k_worker::EigenKWorkerThreadBudgetV1 {
+                    requested_threads: 1,
+                    resolved_threads: 1,
+                    cap_reason: "fixture".into(),
+                    allocation_cpu_cores: 1.0,
+                    host_cpu_cores: 1,
+                },
+                artifacts: Vec::new(),
+            }),
+            error: Some("native worker solve failed".into()),
+        };
+
+        let error = completed_worker_run(&response, 1)
+            .expect_err("a failed worker is not an accepted partial pool result");
+
+        assert!(error.message.contains("native worker solve failed"));
+    }
+
+    fn bootstrap_fixture_artifacts(payload: &str) -> Vec<AuxiliaryArtifact> {
+        vec![
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/equilibrium_artifact.v8.json".to_string(),
+                bytes: serde_json::to_vec(&serde_json::json!({
+                    "schema_version": "equilibrium_artifact.v8",
+                    "test_payload": payload,
+                }))
+                .expect("serialize equilibrium writer fixture"),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/linearization_state.v7.json".to_string(),
+                bytes: serde_json::to_vec(&serde_json::json!({
+                    "schema_version": "LinearizationState.v7",
+                }))
+                .expect("serialize linearization sidecar fixture"),
+            },
+        ]
+    }
+
+    #[test]
+    fn relax_bootstrap_certificates_are_attempt_scoped_and_worker_plans_bind_their_bytes() {
+        let output_root = TestDirectory::new();
+        let first_attempt =
+            super::super::single_k_checkpoint::create_raw_checkpoint_attempt(output_root.path())
+                .expect("allocate first canonical attempt");
+        let second_attempt =
+            super::super::single_k_checkpoint::create_raw_checkpoint_attempt(output_root.path())
+                .expect("allocate second canonical attempt");
+        assert_ne!(first_attempt, second_attempt);
+        assert_eq!(first_attempt.parent(), second_attempt.parent());
+
+        let first_artifacts = bootstrap_fixture_artifacts("first relax payload");
+        let second_artifacts = bootstrap_fixture_artifacts("second relax payload");
+        let first_equilibrium =
+            stage_relax_bootstrap_certificates(&first_attempt, &first_artifacts)
+                .expect("stage first bootstrap");
+        let first_bytes = fs::read(&first_equilibrium).expect("read first certificate");
+        let second_equilibrium =
+            stage_relax_bootstrap_certificates(&second_attempt, &second_artifacts)
+                .expect("stage retry bootstrap");
+
+        assert!(first_equilibrium.starts_with(first_attempt.join("bootstrap")));
+        assert!(second_equilibrium.starts_with(second_attempt.join("bootstrap")));
+        assert_ne!(first_equilibrium, second_equilibrium);
+        assert_eq!(
+            fs::read(&first_equilibrium).expect("first attempt remains immutable"),
+            first_bytes
+        );
+        assert_eq!(
+            fs::read(&second_equilibrium).expect("read second certificate"),
+            second_artifacts[0].bytes
+        );
+
+        let source_plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        let samples = crate::eigen::expand_k_sampling(source_plan.k_sampling.as_ref())
+            .expect("expand single-k fixture");
+        let sample = samples.first().expect("single-k sample");
+        let mut first_worker_plan = source_plan.clone();
+        bind_relax_bootstrap_equilibrium_to_worker_plan(
+            &mut first_worker_plan,
+            &first_equilibrium,
+            source_plan.equilibrium_magnetization.clone(),
+        );
+        let mut second_worker_plan = source_plan.clone();
+        bind_relax_bootstrap_equilibrium_to_worker_plan(
+            &mut second_worker_plan,
+            &second_equilibrium,
+            source_plan.equilibrium_magnetization.clone(),
+        );
+        let first_point_plan = super::super::eigen_path::eigen_path_single_k_point_plan(
+            &first_worker_plan,
+            sample,
+            false,
+            None,
+        )
+        .expect("build first worker point plan");
+        let second_point_plan = super::super::eigen_path::eigen_path_single_k_point_plan(
+            &second_worker_plan,
+            sample,
+            false,
+            None,
+        )
+        .expect("build second worker point plan");
+        let equilibrium_path = |plan: &FemEigenPlanIR| match &plan.equilibrium {
+            fullmag_ir::EquilibriumSourceIR::Artifact { path } => PathBuf::from(path.as_str()),
+            other => panic!("worker plan must carry an artifact source, got {other:?}"),
+        };
+        assert_eq!(equilibrium_path(&first_point_plan), first_equilibrium);
+        assert_eq!(equilibrium_path(&second_point_plan), second_equilibrium);
+        let first_digest =
+            crate::fem::eigen_k_worker::equilibrium_artifact_sha256(&first_point_plan)
+                .expect("hash first worker equilibrium");
+        let second_digest =
+            crate::fem::eigen_k_worker::equilibrium_artifact_sha256(&second_point_plan)
+                .expect("hash second worker equilibrium");
+        assert_ne!(first_digest, second_digest);
+
+        let collision = stage_relax_bootstrap_certificates(&first_attempt, &second_artifacts)
+            .expect_err("same attempt must reject different bootstrap bytes");
+        assert!(
+            collision
+                .message
+                .contains("adaptive eigen bootstrap artifact would overwrite different bytes"),
+            "{collision:?}"
+        );
+        assert_eq!(
+            fs::read(&first_equilibrium).expect("failed collision does not replace first bytes"),
+            first_bytes
+        );
+        assert_eq!(
+            crate::fem::eigen_k_worker::equilibrium_artifact_sha256(&first_point_plan)
+                .expect("first worker remains bound to its original bytes"),
+            first_digest
+        );
+    }
+}

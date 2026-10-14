@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import type {
+  ChartRenderModel,
   ChartRenderResultCoordinate,
   ChartRenderResultSelectionRef,
   ChartResultExportContext,
@@ -12,6 +13,7 @@ import type {
   AnalysisResultItemKind,
   AnalysisResultProductKind,
   AnalysisResultSelectionRef,
+  AnalysisResultSpectrumOutputScope,
 } from "@/shared/domain/analysis/results";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 
@@ -25,12 +27,13 @@ import {
 
 import type { AnalysisResultProjectionChartModel } from "@/shared/domain/analysis/results";
 
-import { EChartsSurface } from "./EChartsSurface";
+import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
 
 export interface AnalysisResultProjectionSurfaceProps {
   kernel: KernelApi;
   model: AnalysisResultProjectionChartModel;
   onProjectionSelect: (projectionId: string) => void;
+  onSpectrumOutputScopeSelect?: (scope: AnalysisResultSpectrumOutputScope) => void;
   onPointSelect: (selection: AnalysisResultProjectionSelection) => void;
   projections: readonly AnalysisResultProjectionDescriptor[];
   productKind: AnalysisResultProductKind | null;
@@ -52,6 +55,7 @@ export function AnalysisResultProjectionSurface({
   kernel,
   model,
   onProjectionSelect,
+  onSpectrumOutputScopeSelect,
   onPointSelect,
   projections,
   productKind,
@@ -68,7 +72,7 @@ export function AnalysisResultProjectionSurface({
       : null;
   const projectionStatus = resource?.unsupported_reason ? "unsupported" : status;
   const subtitle = resource
-    ? `${resource.dataset_id} · revision ${resource.projection_revision}`
+    ? `${resource.dataset_id} Â· revision ${resource.projection_revision}`
     : "Run-scoped result projection";
   const selectedLabel = useMemo(() => {
     if (!resource || selectedOrdinal == null) return null;
@@ -78,18 +82,63 @@ export function AnalysisResultProjectionSurface({
     if (!point) return null;
     return point.item_id ?? point.sample_id ?? `point ${point.ordinal}`;
   }, [resource, selectedOrdinal]);
-  const exportProvenance = resource
-    ? {
-        datasetId: resource.dataset_id,
-        datasetRevision: resource.dataset_revision,
-        fixedCoordinates: resource.fixed_coordinates.map(resultCoordinate),
-        projectionId: resource.projection_id,
-        projectionRevision: resource.projection_revision,
-        runId: resource.run_id,
-        selectionRefs: projectionSelectionRefs(model),
-        stageId: selectedSelection?.stageId ?? null,
-      } satisfies ChartResultExportContext
-    : undefined;
+  const exportSelectionRefs = useMemo(
+    () => projectionSelectionRefs(model.exportSeries ?? model.series),
+    [model.exportSeries, model.series],
+  );
+  const exportProvenance = useMemo(
+    () =>
+      resource
+        ? {
+            datasetId: resource.dataset_id,
+            datasetRevision: resource.dataset_revision,
+            fixedCoordinates: resource.fixed_coordinates.map(resultCoordinate),
+            projectionId: resource.projection_id,
+            projectionRevision: resource.projection_revision,
+            runId: resource.run_id,
+            selectionRefs: exportSelectionRefs,
+            stageId: selectedSelection?.stageId ?? null,
+          } satisfies ChartResultExportContext
+        : undefined,
+    [exportSelectionRefs, resource, selectedSelection?.stageId],
+  );
+  const xAxisLabel = resource?.axis_labels.x ?? resource?.axis_mapping.x ?? "x";
+  const modelExportSeries = model.exportSeries ?? model.series;
+  const dataExportModel = useMemo(() => {
+    if (!resource) return undefined;
+    const exportRenderModel = tableSeriesRenderModel(
+      modelExportSeries,
+      modelExportSeries,
+      xAxisLabel,
+      projectionStatus,
+    );
+    return {
+      ...exportRenderModel,
+      provenance: {
+        ...(exportRenderModel.provenance ?? {}),
+        ...(exportProvenance ?? {}),
+        dataRevision: resource.projection_revision,
+        decimation: "none",
+        descriptorId: `analysis:result-projection:${resource.dataset_id}:${resource.projection_id}`,
+        displayUnits: exportRenderModel.provenance?.displayUnits ?? {},
+        query: JSON.stringify({
+          projectionId: resource.projection_id,
+          series: modelExportSeries.map((series) => series.id),
+          spectrumScope: model.scopeView?.kind ?? "unknown",
+          sampleId: model.scopeView?.sampleId ?? null,
+        }),
+        resourceKey: `analysis:results:${resource.run_id}:${resource.dataset_id}:${resource.projection_id}`,
+      },
+    } satisfies ChartRenderModel;
+  }, [exportProvenance, model.scopeView, modelExportSeries, projectionStatus, resource, xAxisLabel]);
+  const scopeCaption = spectrumScopeCaption(productKind, model);
+  const hasProjectionPoints = model.series.some((series) => series.points.length > 0);
+  const requestedSpectrumScopes = model.requestedSpectrumOutputScopes ?? null;
+  const hasPerSampleScope = requestedSpectrumScopes?.includes("per_sample") ?? false;
+  const hasGlobalScope = requestedSpectrumScopes?.includes("global") ?? false;
+  const selectedSpectrumScope = model.scopeView?.kind;
+  const showSpectrumScopeSelect =
+    productKind === "modal_eigen" && hasPerSampleScope && hasGlobalScope;
 
   return (
     <ChartSection
@@ -98,7 +147,7 @@ export function AnalysisResultProjectionSurface({
       status={{
         primary: projectionStatus,
         pointSummary: resource
-          ? `${resource.selection_index.length} selectable points`
+          ? `${modelExportSeries.reduce((count, series) => count + series.points.length, 0)} projection rows`
           : undefined,
         revision: resource?.projection_revision ?? null,
         trust: "unknown",
@@ -106,36 +155,71 @@ export function AnalysisResultProjectionSurface({
       subtitle={subtitle}
       title={resultProjectionTitle(productKind, resource?.projection_id)}
       toolbar={
-        projections.length > 0 ? (
-          <Select
-            onValueChange={onProjectionSelect}
-            value={selectedProjectionId ?? ""}
-          >
-            <SelectTrigger aria-label="Analysis result projection">
-              <SelectValue placeholder="Select projection" />
-            </SelectTrigger>
-            <SelectContent>
-              {projections.map((projection) => (
-                <SelectItem
-                  disabled={!projection.selectable}
-                  key={projection.projection_id}
-                  value={projection.projection_id}
-                >
-                  {projection.title}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        projections.length > 0 || showSpectrumScopeSelect ? (
+          <>
+            {projections.length > 0 ? (
+              <Select
+                onValueChange={onProjectionSelect}
+                value={selectedProjectionId ?? ""}
+              >
+                <SelectTrigger aria-label="Analysis result projection">
+                  <SelectValue placeholder="Select projection" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projections.map((projection) => (
+                    <SelectItem
+                      disabled={!projection.selectable}
+                      key={projection.projection_id}
+                      value={projection.projection_id}
+                    >
+                      {projection.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
+            {showSpectrumScopeSelect ? (
+              <Select
+                onValueChange={(value) => {
+                  if (isSpectrumOutputScope(value)) {
+                    onSpectrumOutputScopeSelect?.(value);
+                  }
+                }}
+                value={
+                  selectedSpectrumScope === "per_sample" || selectedSpectrumScope === "global"
+                    ? selectedSpectrumScope
+                    : ""
+                }
+              >
+                <SelectTrigger aria-label="Spectrum output scope">
+                  <SelectValue placeholder="Select spectrum scope" />
+                </SelectTrigger>
+                <SelectContent>
+                  {requestedSpectrumScopes?.includes("per_sample") ? (
+                    <SelectItem value="per_sample">Per sample</SelectItem>
+                  ) : null}
+                  {requestedSpectrumScopes?.includes("global") ? (
+                    <SelectItem value="global">Global</SelectItem>
+                  ) : null}
+                </SelectContent>
+              </Select>
+            ) : null}
+          </>
         ) : undefined
       }
     >
+      {scopeCaption ? (
+        <div className="fm-analysis-plots__status" role="status">
+          {scopeCaption}
+        </div>
+      ) : null}
       {resource?.unsupported_reason ? (
         <div className="fm-analysis-plots__empty" role="status">
           {resource.unsupported_reason}
         </div>
-      ) : model.series.length === 0 ? (
+      ) : model.series.length === 0 || !hasProjectionPoints ? (
         <div className="fm-analysis-plots__empty" role="status">
-          {resource ? "The selected result has no plottable projection points." : "Loading result projection…"}
+          {resource ? projectionEmptyMessage(model) : "Loading result projectionâ€¦"}
         </div>
       ) : resource ? (
         <div
@@ -161,8 +245,9 @@ export function AnalysisResultProjectionSurface({
               });
             }}
             exportProvenance={exportProvenance}
+            dataExportModel={dataExportModel}
             series={model.series}
-            xAxisLabel={resource.axis_labels.x ?? resource.axis_mapping.x ?? "x"}
+            xAxisLabel={xAxisLabel}
           />
         </div>
       ) : null}
@@ -174,7 +259,7 @@ export function AnalysisResultProjectionSurface({
         >
           Fixed coordinates: {resource.fixed_coordinates
             .map((coordinate) => `${coordinate.axis_id}=${coordinate.label ?? coordinate.token}`)
-            .join(" · ")}
+            .join(" Â· ")}
         </div>
       ) : null}
     </ChartSection>
@@ -198,11 +283,11 @@ function resultCoordinate(
 }
 
 function projectionSelectionRefs(
-  model: AnalysisResultProjectionChartModel,
+  series: NonNullable<AnalysisResultProjectionChartModel["exportSeries"]>,
 ): readonly ChartRenderResultSelectionRef[] {
   const selections = new Map<number, ChartRenderResultSelectionRef>();
-  for (const series of model.series) {
-    for (const point of series.points) {
+  for (const entry of series) {
+    for (const point of entry.points) {
       if (selections.has(point.rowIndex)) continue;
       selections.set(point.rowIndex, {
         branchId: point.branchId ?? null,
@@ -213,6 +298,56 @@ function projectionSelectionRefs(
     }
   }
   return [...selections.values()];
+}
+
+function spectrumScopeCaption(
+  productKind: AnalysisResultProductKind | null,
+  model: AnalysisResultProjectionChartModel,
+): string | null {
+  if (productKind !== "modal_eigen") return null;
+  const requested = model.requestedSpectrumOutputScopes ?? null;
+  const scopeView = model.scopeView ?? { kind: "unknown" as const, sampleId: null };
+  const requestedLabel = requested === null
+    ? "unknown (not recorded)"
+    : requested.length === 0
+      ? "none"
+      : requested.join(", ");
+  let viewCopy: string;
+  switch (scopeView.kind) {
+    case "none":
+      viewCopy = "No spectrum output scope was requested.";
+      break;
+    case "global":
+      viewCopy = "The global view keeps returned sample and mode rows separate, with no averaging.";
+      break;
+    case "per_sample":
+      viewCopy = scopeView.sampleId
+        ? `The projection is filtered to sample ${scopeView.sampleId}.`
+        : "Select a sample to view its per_sample projection.";
+      break;
+    case "unknown":
+      viewCopy = "Projection rows are shown without scope filtering.";
+      break;
+  }
+  return `Requested spectrum output scopes: ${requestedLabel}. ${viewCopy}`;
+}
+
+function projectionEmptyMessage(model: AnalysisResultProjectionChartModel): string {
+  const scopeView = model.scopeView ?? { kind: "unknown" as const, sampleId: null };
+  if (scopeView.kind === "none") {
+    return "No spectrum output scopes were requested.";
+  }
+  if (scopeView.kind === "per_sample" && !scopeView.sampleId) {
+    return "Select a sample to view its per_sample projection.";
+  }
+  if (scopeView.kind === "per_sample" && scopeView.sampleId) {
+    return `The selected sample ${scopeView.sampleId} has no plottable projection points.`;
+  }
+  return "The selected result has no plottable projection points.";
+}
+
+function isSpectrumOutputScope(value: string): value is AnalysisResultSpectrumOutputScope {
+  return value === "per_sample" || value === "global";
 }
 
 function resultProjectionTitle(

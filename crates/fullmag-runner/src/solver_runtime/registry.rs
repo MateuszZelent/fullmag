@@ -317,6 +317,37 @@ fn planned_fem_eigen_dispatch_resolution(
     })
 }
 
+pub(crate) fn resolve_antenna_inspection_runtime(
+    inspection: &fullmag_ir::AntennaExternalLeadInspectionBackendPlanIR,
+    registry: Option<&RuntimeRegistry>,
+) -> Result<DispatchEngineResolution, RunError> {
+    crate::antenna_external_lead_solution::validate_execution(&inspection.requested_execution)?;
+    let runtime = registry
+        .map(|registry| {
+            registry.resolve("fem", "cpu", "double").ok_or_else(|| RunError {
+                message: "antenna inspection requires an advertised FEM CPU double runtime; no GPU or magnetic fallback".into(),
+            })
+        })
+        .transpose()?;
+    if registry.is_none() && !crate::native_fem::is_cpu_available() {
+        return Err(RunError {
+            message: "antenna inspection requires native FEM CPU availability; no legacy or magnetic fallback".into(),
+        });
+    }
+    Ok(DispatchEngineResolution {
+        engine: DispatchEngine::Fem(FemEngine::CpuNative),
+        fallback: None,
+        runtime_family: runtime
+            .as_ref()
+            .map(|runtime| runtime.runtime_family.clone()),
+        worker: runtime.map(|runtime| runtime.worker),
+        resolved_backend: "fem".into(),
+        resolved_device: "cpu".into(),
+        resolved_precision: "double".into(),
+        fem_crossover_decision: None,
+    })
+}
+
 pub(crate) fn resolve_with_registry(
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
@@ -357,6 +388,9 @@ pub(crate) fn resolve_with_registry(
             }
             BackendPlanIR::FemFrequencyResponse(_) => {
                 resolve_fem_engine_with_registry(problem, registry, explicit_selection, None, false)
+            }
+            BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
+                resolve_antenna_inspection_runtime(inspection, Some(registry))
             }
         },
         None => match &plan.backend_plan {
@@ -447,6 +481,9 @@ pub(crate) fn resolve_with_registry(
                     resolved_precision: runtime_precision(problem).to_string(),
                     fem_crossover_decision: None,
                 })
+            }
+            BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
+                resolve_antenna_inspection_runtime(inspection, None)
             }
         },
     }

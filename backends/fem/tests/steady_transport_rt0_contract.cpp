@@ -252,6 +252,40 @@ void run_closed_geometry_rt0_contract()
                 "fem_conservative_current_rt0_view.v1") != std::string::npos,
         "public RT0 diagnostics schema is missing");
 
+    std::vector<double> charge_potential(stable_ids.size());
+    std::vector<std::uint64_t> charge_ids(stable_ids.size());
+    std::vector<double> charge_xyz(nodes_xyz.size());
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 charge_snapshot{};
+    charge_snapshot.abi_version =
+        FULLMAG_FEM_STEADY_TRANSPORT_RT0_CHARGE_SNAPSHOT_ABI_VERSION;
+    charge_snapshot.struct_size = sizeof(charge_snapshot);
+    charge_snapshot.electric_potential_v = charge_potential.data();
+    charge_snapshot.electric_potential_v_capacity = charge_potential.size();
+    charge_snapshot.stable_vertex_ids = charge_ids.data();
+    charge_snapshot.stable_vertex_ids_capacity = charge_ids.size();
+    charge_snapshot.vertex_xyz_m = charge_xyz.data();
+    charge_snapshot.vertex_xyz_m_capacity = charge_xyz.size();
+    const auto verify_charge_snapshot = [&](const char *source_digest) {
+        require(charge_snapshot.electric_potential_v_len == stable_ids.size() &&
+                charge_snapshot.stable_vertex_ids_len == stable_ids.size() &&
+                charge_snapshot.vertex_xyz_m_len == nodes_xyz.size() &&
+                charge_ids == stable_ids && charge_xyz == nodes_xyz,
+            "public charge snapshot lost V/IDs/xyz vertex ordering");
+        require(std::string(charge_snapshot.stable_vertex_id_version) ==
+                "stable_mesh_vertex_u64.v1" &&
+                std::string(charge_snapshot.source_view_identity_digest) == source_digest,
+            "public charge snapshot is not bound to the RT0 source");
+        for (std::size_t vertex = 0; vertex < stable_ids.size(); ++vertex) {
+            require(std::abs(charge_potential[vertex] -
+                    (0.5 - nodes_xyz[3u * vertex])) <= 1.0e-12,
+                "public charge snapshot differs from analytic periodic V");
+        }
+    };
+    require(fullmag_fem_solve_steady_transport_rt0_with_charge_snapshot_v1(
+                &request, &result, &charge_snapshot) == FULLMAG_FEM_OK,
+        "public RT0 charge snapshot solve failed");
+    verify_charge_snapshot(result.view_identity_digest);
+
     const std::vector<double> target_points_xyz{
         0.0, 0.0, 0.0,
         3.0, 0.25, 0.25,
@@ -292,17 +326,54 @@ void run_closed_geometry_rt0_contract()
             oersted_result.h_xyz_apm_len == h_xyz_apm.size(),
         "public RT0 OE-F1 result did not publish a complete field");
     require(std::string(oersted_result.operator_version) ==
-            "fem_oersted_direct_tetra_quadrature.v1",
+            "fem_oersted_direct_tetra_quadrature.v3",
         "public RT0 OE-F1 operator identity is wrong");
     require(std::string(oersted_result.source_view_identity_digest) ==
             std::string(result.view_identity_digest),
         "public RT0 OE-F1 source view digest is not bound to RT0");
     require(std::string(oersted_result.diagnostics_json).find(
-                "fem_oersted_direct_tetra_quadrature.v1") != std::string::npos,
+                "fem_oersted_direct_tetra_quadrature.v3") != std::string::npos,
         "public RT0 OE-F1 diagnostics schema is missing");
     require(std::all_of(h_xyz_apm.begin(), h_xyz_apm.end(),
                 [](double value) { return std::isfinite(value); }),
         "public RT0 OE-F1 field contains a non-finite value");
+    require(fullmag_fem_solve_steady_transport_rt0_oersted_with_charge_snapshot_v1(
+                &oersted_request, &oersted_result, &charge_snapshot) == FULLMAG_FEM_OK,
+        "public RT0 OE-F1 charge snapshot solve failed");
+    verify_charge_snapshot(oersted_result.source_view_identity_digest);
+    for (int failure = 0; failure < 7; ++failure) {
+        auto failed_snapshot = charge_snapshot;
+        auto failed_result = oersted_result;
+        auto failed_request = oersted_request;
+        if (failure == 0) failed_snapshot.electric_potential_v_capacity = 0;
+        if (failure == 1) failed_snapshot.stable_vertex_ids_capacity = 0;
+        if (failure == 2) failed_snapshot.vertex_xyz_m_capacity = 0;
+        if (failure == 3) failed_result.rt0.rt0_dof_values_capacity = 0;
+        if (failure == 4) failed_result.h_xyz_apm_capacity = 0;
+        if (failure == 5) failed_snapshot.reserved_flags = 1;
+        if (failure == 6) failed_request.abi_version = 0;
+        require(fullmag_fem_solve_steady_transport_rt0_oersted_with_charge_snapshot_v1(
+                    &failed_request, &failed_result, &failed_snapshot) ==
+                    FULLMAG_FEM_ERR_INVALID,
+            "public charge snapshot accepted an invalid header or capacity");
+        require(failed_snapshot.electric_potential_v_len == 0 &&
+                failed_snapshot.stable_vertex_ids_len == 0 &&
+                failed_snapshot.vertex_xyz_m_len == 0 &&
+                failed_snapshot.source_view_identity_digest[0] == '\0' &&
+                failed_result.h_xyz_apm_len == 0 &&
+                failed_result.rt0.converged == 0 &&
+                failed_result.rt0.rt0_dof_values_len == 0 &&
+                failed_result.rt0.canonical_face_records_len == 0,
+            "public charge snapshot failure published stale result lengths");
+    }
+    auto null_request_snapshot = charge_snapshot;
+    auto null_request_result = result;
+    require(fullmag_fem_solve_steady_transport_rt0_with_charge_snapshot_v1(
+                nullptr, &null_request_result, &null_request_snapshot) ==
+                FULLMAG_FEM_ERR_INVALID &&
+            null_request_snapshot.electric_potential_v_len == 0 &&
+            null_request_result.rt0_dof_values_len == 0,
+        "null RT0 request did not reset both published results");
 
     std::vector<double> a_dofs_t_m(8192, 0.0);
     std::vector<double> gauge_dofs_apm(4096, 0.0);
@@ -380,6 +451,11 @@ void run_closed_geometry_rt0_contract()
     require(std::string(vector_potential_result.diagnostics_json).find(
                 "fem_oersted_hcurl_h1_gauge.v1") != std::string::npos,
         "public RT0 OE-F2 diagnostics schema is missing");
+    require(fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
+                &vector_potential_request, &vector_potential_result, &charge_snapshot) ==
+                FULLMAG_FEM_OK,
+        "public RT0 OE-F2 charge snapshot solve failed");
+    verify_charge_snapshot(vector_potential_result.source_view_identity_digest);
 
     auto failed_vector_potential_result = vector_potential_result;
     failed_vector_potential_result.a_dofs_t_m_capacity = 0;
@@ -402,8 +478,13 @@ void run_closed_geometry_rt0_contract()
     failed_vector_potential_result.rt0.scaled_kkt_residual = 1.0;
     failed_vector_potential_result.rt0.correction_norm_mw = 1.0;
     const int failed_vector_potential_status =
-        fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
-            &vector_potential_request, &failed_vector_potential_result);
+        fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
+            &vector_potential_request, &failed_vector_potential_result, &charge_snapshot);
+    require(charge_snapshot.electric_potential_v_len == 0 &&
+            charge_snapshot.stable_vertex_ids_len == 0 &&
+            charge_snapshot.vertex_xyz_m_len == 0 &&
+            charge_snapshot.source_view_identity_digest[0] == '\0',
+        "OE-F2 failure did not reset the associated charge snapshot");
     require(failed_vector_potential_status == FULLMAG_FEM_ERR_INVALID,
         "public RT0 OE-F2 capacity failure did not return invalid");
     require(failed_vector_potential_result.converged == 0 &&

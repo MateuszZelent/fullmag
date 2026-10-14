@@ -1,16 +1,32 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const testState = vi.hoisted(() => ({
   calls: [] as boolean[],
   discretization: "fdm" as "fdm" | "fem" | null,
+  authoringMethod: null as "fdm" | "fem" | null,
+  resolvedDiscretization: null as "fdm" | "fem" | null,
 }));
+
+const kernelMocks = vi.hoisted(() => ({
+  commands: { execute: vi.fn() },
+  layout: { openBottomPanel: vi.fn() },
+  selection: { set: vi.fn() },
+}));
+
+vi.mock("@/kernel/KernelContext", () => ({ useKernel: () => kernelMocks }));
+vi.mock("@/kernel/commands/commandContext", () => ({ createCommandContext: () => ({}) }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
   useSessionStatusSelector: (selector: (value: unknown) => unknown) =>
     selector({
       data: testState.discretization === null ? null : {
-        capabilities: { explicit_topology: false },
+        capabilities: {
+          explicit_topology: false,
+          ...(testState.authoringMethod
+            ? { active_lane: { authored: { discretization: testState.authoringMethod }, requested: { discretization: testState.authoringMethod }, resolved: testState.resolvedDiscretization ? { discretization: testState.resolvedDiscretization } : null } }
+            : {}),
+        },
         domain: { discretization: testState.discretization },
         resources: { mesh_build_revision: 0, mesh_revision: 0 },
       },
@@ -82,11 +98,11 @@ vi.mock("./AirboxOverviewPanel", () => ({
 }));
 vi.mock("./AirboxMeshBuildPanel", () => ({ AirboxMeshBuildPanel: () => <div>FEM Airbox child</div> }));
 vi.mock("./AirboxMeshOverviewPanel", () => ({ AirboxMeshOverviewPanel: () => <div>FEM Airbox child</div> }));
-const parameterPanelLanes = vi.hoisted(() => ({ values: [] as string[] }));
+const parameterPanelLanes = vi.hoisted(() => ({ values: [] as Array<{ lane: string; runtimeLane: string | null }> }));
 vi.mock("./AirboxMeshParametersPanel", () => ({
-  AirboxMeshParametersPanel: ({ lane = "fem" }: { lane?: string }) => {
-    parameterPanelLanes.values.push(lane);
-    return <div>{lane === "fdm" ? "FDM Airbox parameters" : "FEM Airbox child"}</div>;
+  AirboxMeshParametersPanel: ({ lane = "fem", runtimeLane = null }: { lane?: string; runtimeLane?: string | null }) => {
+    parameterPanelLanes.values.push({ lane, runtimeLane });
+    return <div>{lane} policy editor</div>;
   },
 }));
 vi.mock("./AirboxMeshQualityGatesPanel", () => ({ AirboxMeshQualityGatesPanel: () => <div>FEM Airbox child</div> }));
@@ -137,6 +153,14 @@ const staleAirboxSelection = {
 } satisfies Selection;
 
 describe("AirboxInspectorLanePanel", () => {
+  beforeEach(() => {
+    testState.calls.length = 0;
+    parameterPanelLanes.values.length = 0;
+    testState.discretization = "fdm";
+    testState.authoringMethod = null;
+    testState.resolvedDiscretization = null;
+  });
+
   it.each([
     AirboxOverviewLanePanel,
     AirboxMeshParametersLanePanel,
@@ -193,6 +217,7 @@ describe("AirboxInspectorLanePanel", () => {
 
   it("does not infer the runtime lane from a legacy FDM Airbox selection", () => {
     testState.discretization = null;
+    testState.authoringMethod = null;
     testState.calls.length = 0;
 
     const html = renderToStaticMarkup(
@@ -201,7 +226,36 @@ describe("AirboxInspectorLanePanel", () => {
 
     expect(testState.calls).toEqual([false, false]);
     expect(html).not.toContain("Airbox · FDM structured universe");
-    expect(html).toContain("FEM Airbox child");
+    expect(html).not.toContain("FEM Airbox child");
+    expect(html).toContain("The accepted model method has not been published.");
+    expect(html).not.toContain("runtime lane conflict");
+  });
+
+  it("keeps accepted requested FEM policy authoring available before runtime resolution", () => {
+    testState.discretization = "fdm";
+    testState.authoringMethod = "fem";
+    testState.resolvedDiscretization = null;
+    testState.calls.length = 0;
+    parameterPanelLanes.values.length = 0;
+
+    const html = renderToStaticMarkup(
+      <AirboxMeshParametersLanePanel selection={selection} />,
+    );
+
+    expect(html).toContain("fem policy editor");
+    expect(parameterPanelLanes.values).toEqual([{ lane: "fem", runtimeLane: null }]);
+    expect(testState.calls).toEqual([false, false]);
+  });
+
+  it("does not expose runtime actions when the resolved lane conflicts with authored intent", () => {
+    testState.discretization = "fdm";
+    testState.authoringMethod = "fem";
+    testState.resolvedDiscretization = "fdm";
+    parameterPanelLanes.values.length = 0;
+
+    renderToStaticMarkup(<AirboxMeshParametersLanePanel selection={selection} />);
+
+    expect(parameterPanelLanes.values).toEqual([{ lane: "fem", runtimeLane: null }]);
   });
 
   it("uses the current runtime lane despite a legacy FDM Airbox selection", () => {
@@ -220,6 +274,8 @@ describe("AirboxInspectorLanePanel", () => {
 
   it("uses the shared parameters panel with an explicit FDM lane", () => {
     testState.discretization = "fdm";
+    testState.authoringMethod = null;
+    testState.resolvedDiscretization = null;
     testState.calls.length = 0;
     parameterPanelLanes.values.length = 0;
 
@@ -227,8 +283,8 @@ describe("AirboxInspectorLanePanel", () => {
       <AirboxMeshParametersLanePanel selection={selection} />,
     );
 
-    expect(parameterPanelLanes.values).toEqual(["fdm"]);
-    expect(html).toContain("FDM Airbox parameters");
+    expect(parameterPanelLanes.values).toEqual([{ lane: "fdm", runtimeLane: "fdm" }]);
+    expect(html).toContain("fdm policy editor");
     expect(html).not.toContain("Airbox · FDM structured universe");
   });
 

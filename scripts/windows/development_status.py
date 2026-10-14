@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import threading
 import time
@@ -24,7 +25,7 @@ class DevelopmentStatusError(RuntimeError):
     """A managed development status cannot be published or trusted."""
 
 
-def _write_status_json(path, document):
+def _write_status_json(path: Path, document: Mapping[str, Any]) -> None:
     # A transient Windows rename denial must not permanently kill liveness.
     # Persistent errors still poison the publisher after a bounded one second.
     atomic_json(path, document, retry_windows_replace=True)

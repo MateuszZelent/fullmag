@@ -182,6 +182,55 @@ fn validate_scene_document_with_mode(
             scene.study.requested_mode
         )));
     }
+    scene
+        .study
+        .parallel_execution
+        .validate()
+        .map_err(SceneDocumentValidationError::new)?;
+    if scene.study.parallel_execution.mode == fullmag_ir::ParallelExecutionModeIR::Adaptive {
+        let explicit_fem_cpu = if let Some(profile) = scene.study.execution_profile.as_ref() {
+            let materialized = fullmag_ir::materialize_execution_request(
+                Some(profile.clone()),
+                scene.study.execution_layers.clone(),
+            )
+            .map_err(|error| {
+                SceneDocumentValidationError::new(format!(
+                    "study.execution_profile materialization is invalid: {error}"
+                ))
+            })?;
+            materialized.requested.backend == fullmag_ir::BackendTarget::Fem
+                && materialized.requested.device == fullmag_ir::ExecutionDevice::Cpu
+        } else {
+            scene.study.requested_backend.eq_ignore_ascii_case("fem")
+                && scene.study.requested_device.eq_ignore_ascii_case("cpu")
+        };
+        if !explicit_fem_cpu {
+            return Err(SceneDocumentValidationError::new(concat!(
+                "unsupported parallel_execution realization: adaptive mode requires ",
+                "effective requested_backend='fem' and requested_device='cpu' for independent eigen k execution",
+            )));
+        }
+    }
+    if let Some(Some(pbc)) = &scene.study.pbc {
+        if pbc.demag != fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
+            && pbc.image_counts.is_some()
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.pbc.image_counts require demag='truncated_images'",
+            ));
+        }
+        if pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0
+            && pbc.axes != [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+            ]
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.pbc.demag='periodic_airbox_k0' requires x/y periodic axes and open z",
+            ));
+        }
+    }
     validate_solver_state(&scene.study.solver, false, "study.solver")?;
     validate_fdm_discretization(scene.study.fdm.as_ref())?;
     let fdm_lane = scene.study.requested_backend.eq_ignore_ascii_case("fdm")
@@ -267,13 +316,10 @@ fn validate_scene_document_with_mode(
                 scene.study.requested_mode != "extended",
             )?;
         }
-        if object.role != "magnet" {
-            continue;
-        }
-        if !require_solve_refs {
-            continue;
-        }
-        if !material_ids.contains(&object.material_ref) {
+        let requires_magnetic_refs = require_solve_refs && object.role == "magnet";
+        if (requires_magnetic_refs || !object.material_ref.trim().is_empty())
+            && !material_ids.contains(&object.material_ref)
+        {
             return Err(SceneDocumentValidationError::new(format!(
                 "object '{}' references missing material '{}'",
                 object.id, object.material_ref
@@ -282,18 +328,21 @@ fn validate_scene_document_with_mode(
         let magnetization_ref = object
             .magnetization_ref
             .as_ref()
-            .filter(|reference| !reference.trim().is_empty())
-            .ok_or_else(|| {
-                SceneDocumentValidationError::new(format!(
+            .filter(|reference| !reference.trim().is_empty());
+        match magnetization_ref {
+            Some(reference) if !magnetization_ids.contains(reference) => {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "object '{}' references missing magnetization asset '{}'",
+                    object.id, reference
+                )));
+            }
+            None if requires_magnetic_refs => {
+                return Err(SceneDocumentValidationError::new(format!(
                     "object '{}' must reference a magnetization asset",
                     object.id
-                ))
-            })?;
-        if !magnetization_ids.contains(magnetization_ref) {
-            return Err(SceneDocumentValidationError::new(format!(
-                "object '{}' references missing magnetization asset '{}'",
-                object.id, magnetization_ref
-            )));
+                )));
+            }
+            _ => {}
         }
     }
     validate_region_owned_scene_payloads(scene, &object_ids)?;
@@ -304,6 +353,7 @@ fn validate_scene_document_with_mode(
     }
     validate_scene_field_drives(scene, &object_ids)?;
     validate_scene_planar_monitors(scene, &object_ids)?;
+    validate_scene_postprocessing_definitions(scene)?;
     validate_scene_magnetization_constraints(scene, &object_ids)?;
 
     Ok(())
@@ -829,6 +879,78 @@ fn validate_scene_planar_monitors(
                     )));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// User-created Results nodes (ADR 0054): stable ids, module ownership, a
+/// published data identity, and parents that exist and are not cyclic.
+fn validate_scene_postprocessing_definitions(
+    scene: &SceneDocument,
+) -> Result<(), SceneDocumentValidationError> {
+    let definitions = &scene.analysis.postprocessing_definitions;
+    let mut ids = BTreeSet::new();
+    for (index, definition) in definitions.iter().enumerate() {
+        let context = format!("analysis.postprocessing_definitions[{index}]");
+        if definition.definition_id.trim().is_empty() || !ids.insert(definition.definition_id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} definition_id must be non-empty and unique"
+            )));
+        }
+        for (field, value) in [
+            ("module_id", &definition.module_id),
+            ("module_version", &definition.module_version),
+            ("definition_schema", &definition.definition_schema),
+            ("node_kind", &definition.node_kind),
+            ("label", &definition.label),
+            ("data_ref.run_id", &definition.data_ref.run_id),
+            ("data_ref.dataset_id", &definition.data_ref.dataset_id),
+            ("data_ref.dataset_revision", &definition.data_ref.dataset_revision),
+        ] {
+            if value.trim().is_empty() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{context} {field} must be non-empty"
+                )));
+            }
+        }
+        if !definition.module_id.starts_with("analysis.")
+            || !definition.node_kind.starts_with(&format!("{}.", definition.module_id))
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} node_kind '{}' must belong to module '{}'",
+                definition.node_kind, definition.module_id
+            )));
+        }
+        if !definition.settings.is_null() && !definition.settings.is_object() {
+            let settings_kind = match &definition.settings {
+                Value::Array(_) => "array",
+                Value::String(_) => "string",
+                Value::Number(_) => "number",
+                Value::Bool(_) => "boolean",
+                Value::Null | Value::Object(_) => unreachable!("settings kind checked above"),
+            };
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context}.settings must be an object or null, got {settings_kind}"
+            )));
+        }
+    }
+    for (index, definition) in definitions.iter().enumerate() {
+        let mut parent = definition.parent_definition_id.as_deref();
+        let mut hops = 0usize;
+        while let Some(parent_id) = parent {
+            if parent_id == definition.definition_id || hops > definitions.len() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "analysis.postprocessing_definitions[{index}] parent chain is cyclic"
+                )));
+            }
+            let Some(next) = definitions.iter().find(|candidate| candidate.definition_id == parent_id) else {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "analysis.postprocessing_definitions[{index}] parent '{parent_id}' does not exist"
+                )));
+            };
+            parent = next.parent_definition_id.as_deref();
+            hops += 1;
         }
     }
     Ok(())
@@ -1729,6 +1851,66 @@ fn validate_current_transport(
             validate_scene_charge_contract(index, transport, object_ids)?;
         }
     }
+    if let Some(value) = transport.external_lead_preparation.as_ref() {
+        let prefix = format!("current_transports[{index}].external_lead_preparation");
+        if transport.model != CurrentTransportModel::OhmicPoisson
+            || transport.coupling != SceneTransportCoupling::OneWay
+            || transport.conservative_current_source.is_some()
+            || transport.conservative_current_view.is_some()
+            || transport.structured_current_closure.is_some()
+            || transport.time_envelope.is_some()
+        {
+            return Err(SceneDocumentValidationError::new(format!("{prefix} requires static one-way ohmic_poisson and no source/view/closure")));
+        }
+        let preparation: fullmag_ir::ExternalLeadPreparationIR = serde_json::from_value(
+            serde_json::to_value(value).expect("JSON object is serializable"),
+        ).map_err(|error| SceneDocumentValidationError::new(format!("{prefix}: {error}")))?;
+        let errors = preparation.validation_errors(&prefix);
+        if !errors.is_empty() {
+            return Err(SceneDocumentValidationError::new(errors.join("; ")));
+        }
+        for extension in &preparation.extensions {
+            if !object_ids.contains(&extension.object_id)
+                || !transport.domain.iter().any(|region| region.object_id == extension.object_id)
+            {
+                return Err(SceneDocumentValidationError::new(format!("{prefix} observation '{}' must belong to an existing charge-domain object", extension.observation_id)));
+            }
+        }
+    }
+    if let Some(value) = transport.conservative_current_source.as_ref() {
+        if transport.model != CurrentTransportModel::OhmicPoisson
+            || transport.coupling != SceneTransportCoupling::OneWay
+            || transport.conservative_current_view.is_some()
+            || transport.structured_current_closure.is_some()
+            || transport.time_envelope.is_some()
+        {
+            return Err(SceneDocumentValidationError::new(format!("current_transports[{index}].conservative_current_source requires one-way ohmic_poisson and no other source/view")));
+        }
+        let source: fullmag_ir::ConservativeCurrentSourceIR = serde_json::from_value(
+            serde_json::to_value(value).expect("JSON object is serializable"),
+        )
+        .map_err(|error| {
+            SceneDocumentValidationError::new(format!(
+                "current_transports[{index}].conservative_current_source: {error}"
+            ))
+        })?;
+        let errors = source.validation_errors(&format!(
+            "current_transports[{index}].conservative_current_source"
+        ));
+        if !errors.is_empty() {
+            return Err(SceneDocumentValidationError::new(errors.join("; ")));
+        }
+        for observation in source.terminal_observations() {
+            if !object_ids.contains(&observation.object_id)
+                || !transport
+                    .domain
+                    .iter()
+                    .any(|region| region.object_id == observation.object_id)
+            {
+                return Err(SceneDocumentValidationError::new(format!("current_transports[{index}].conservative_current_source observation '{}' must belong to an existing charge-domain object", observation.id)));
+            }
+        }
+    }
     if let Some(view) = transport.conservative_current_view.as_ref() {
         if transport.model != CurrentTransportModel::OhmicPoisson
             || transport.coupling != SceneTransportCoupling::OneWay
@@ -2375,13 +2557,26 @@ fn validate_scene_charge_contract(
     let prefix = format!("current_transports[{index}]");
     if transport.domain.is_empty()
         || transport.materials.is_empty()
-        || transport.boundaries.is_empty()
+        || (transport.boundaries.is_empty() && transport.conservative_current_source.is_none()
+            && transport.external_lead_preparation.is_none())
         || transport.gauge.is_none()
         || transport.solver.is_none()
     {
         return Err(SceneDocumentValidationError::new(format!(
             "{prefix} ohmic_poisson requires non-empty domain, materials, boundaries, gauge, and solver"
         )));
+    }
+    if transport.conservative_current_source.is_some()
+        && (!transport.boundaries.is_empty()
+            || transport.gauge != Some(SceneChargePotentialGauge::TerminalReference))
+    {
+        return Err(SceneDocumentValidationError::new(format!("{prefix}.conservative_current_source requires empty boundaries and gauge=terminal_reference")));
+    }
+    if transport.external_lead_preparation.is_some()
+        && (!transport.boundaries.is_empty()
+            || transport.gauge != Some(SceneChargePotentialGauge::TerminalReference))
+    {
+        return Err(SceneDocumentValidationError::new(format!("{prefix}.external_lead_preparation requires empty boundaries and gauge=terminal_reference")));
     }
     let mut domain = BTreeSet::new();
     for (region_index, region) in transport.domain.iter().enumerate() {
@@ -2464,8 +2659,14 @@ fn validate_scene_charge_contract(
     let mut boundary_ids = BTreeSet::new();
     let mut surfaces = BTreeSet::new();
     let mut voltage_count = 0usize;
+    let mut terminal_count = 0usize;
+    let mut current_density_count = 0usize;
     for (boundary_index, boundary) in transport.boundaries.iter().enumerate() {
         let (id, selected_surfaces) = match boundary {
+            SceneChargeBoundary::EquipotentialCurrentTerminal { id, surfaces } => {
+                terminal_count += 1;
+                (id, surfaces)
+            }
             SceneChargeBoundary::VoltageElectrode {
                 id,
                 surfaces,
@@ -2483,6 +2684,7 @@ fn validate_scene_charge_contract(
                 surfaces,
                 outward_current_density_apm2,
             } => {
+                current_density_count += 1;
                 finite(
                     *outward_current_density_apm2,
                     &format!("{prefix}.boundaries[{boundary_index}].outward_current_density_Apm2"),
@@ -2522,14 +2724,38 @@ fn validate_scene_charge_contract(
                 "{prefix}.gauge=zero_mean conflicts with voltage electrodes"
             )));
         }
+        Some(SceneChargePotentialGauge::TerminalReference)
+            if transport.conservative_current_source.is_none()
+                && transport.external_lead_preparation.is_none()
+                && (terminal_count == 0 || voltage_count != 0 || current_density_count != 0) =>
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.gauge=terminal_reference requires current terminals and no voltage or current-density electrodes"
+            )));
+        }
+        _ if terminal_count != 0
+            && transport.gauge != Some(SceneChargePotentialGauge::TerminalReference) =>
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix} equipotential current terminals require gauge=terminal_reference"
+            )));
+        }
         _ => {}
     }
     let solver = transport.solver.as_ref().expect("checked above");
     let reciprocal = transport.coupling == SceneTransportCoupling::Bidirectional
         || transport.model == CurrentTransportModel::MagnetoresistivePoisson;
+    if terminal_count != 0 && reciprocal {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix} equipotential current terminals require one-way Ohmic transport"
+        )));
+    }
     let expected_engine = if reciprocal { "block_gmres" } else { "cg" };
     let expected_operator = if reciprocal {
         "fdm_coupled_charge_spin_fv_block_gmres.v1"
+    } else if terminal_count != 0 || transport.conservative_current_source.is_some()
+        || transport.external_lead_preparation.is_some() {
+        "fem_charge_conforming_h1_p1.transparent.v1"
     } else if transport.structured_current_closure.is_some() {
         "fv_charge_harmonic_source_cut_v1"
     } else {
@@ -3190,14 +3416,14 @@ fn validate_study_pipeline_document(
             document.version
         )));
     }
-    validate_study_pipeline_nodes(&document.nodes)?;
+    validate_study_pipeline_nodes(&document.nodes, &mut BTreeSet::new())?;
     Ok(())
 }
 
 fn validate_study_pipeline_nodes(
     nodes: &[StudyPipelineNode],
+    node_ids: &mut BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
-    let mut node_ids = BTreeSet::new();
     for node in nodes {
         match node {
             StudyPipelineNode::Primitive(node) => {
@@ -3256,7 +3482,7 @@ fn validate_study_pipeline_nodes(
                         node.id
                     )));
                 }
-                validate_study_pipeline_nodes(&node.children)?;
+                validate_study_pipeline_nodes(&node.children, node_ids)?;
             }
         }
     }
@@ -3266,6 +3492,69 @@ fn validate_study_pipeline_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pipeline_with_nodes(nodes: Value) -> StudyPipelineDocument {
+        serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": nodes,
+        }))
+        .expect("pipeline fixture must deserialize")
+    }
+
+    #[test]
+    fn study_pipeline_rejects_duplicate_ids_in_different_groups() {
+        let document = pipeline_with_nodes(serde_json::json!([
+            {"node_kind": "group", "id": "first", "label": "First", "children": [
+                {"node_kind": "primitive", "id": "shared", "label": "Solve", "stage_kind": "antenna_field_solve"}
+            ]},
+            {"node_kind": "group", "id": "second", "label": "Second", "children": [
+                {"node_kind": "macro", "id": "shared", "label": "Relax and run", "macro_kind": "relax_run"}
+            ]}
+        ]));
+        let error = validate_study_pipeline_document(&document)
+            .expect_err("IDs must be unique across groups and node kinds");
+        assert_eq!(error.message, "duplicate study pipeline node id 'shared'");
+    }
+
+    #[test]
+    fn study_pipeline_rejects_group_child_id_collision() {
+        let document = pipeline_with_nodes(serde_json::json!([
+            {"node_kind": "group", "id": "shared", "label": "Group", "children": [
+                {"node_kind": "primitive", "id": "shared", "label": "Run", "stage_kind": "run"}
+            ]}
+        ]));
+        let error = validate_study_pipeline_document(&document)
+            .expect_err("a group and its child cannot share an ID");
+        assert_eq!(error.message, "duplicate study pipeline node id 'shared'");
+    }
+
+    #[test]
+    fn study_pipeline_rejects_id_collision_inside_disabled_group() {
+        let document = pipeline_with_nodes(serde_json::json!([
+            {"node_kind": "group", "id": "disabled", "label": "Disabled", "enabled": false, "children": [
+                {"node_kind": "primitive", "id": "shared", "label": "Solve", "stage_kind": "antenna_field_solve", "enabled": false}
+            ]},
+            {"node_kind": "primitive", "id": "shared", "label": "Run", "stage_kind": "run"}
+        ]));
+        let error = validate_study_pipeline_document(&document)
+            .expect_err("disabled authored nodes still reserve their IDs");
+        assert_eq!(error.message, "duplicate study pipeline node id 'shared'");
+    }
+
+    #[test]
+    fn study_pipeline_accepts_globally_distinct_nested_ids() {
+        let document = pipeline_with_nodes(serde_json::json!([
+            {"node_kind": "group", "id": "outer", "label": "Outer", "children": [
+                {"node_kind": "group", "id": "inner", "label": "Inner", "enabled": false, "children": [
+                    {"node_kind": "primitive", "id": "solve", "label": "Solve", "stage_kind": "antenna_field_solve"}
+                ]},
+                {"node_kind": "macro", "id": "relax-run", "label": "Relax and run", "macro_kind": "relax_run"}
+            ]},
+            {"node_kind": "primitive", "id": "run", "label": "Run", "stage_kind": "run"}
+        ]));
+        validate_study_pipeline_document(&document)
+            .expect("distinct IDs remain valid across nested and disabled groups");
+    }
 
     fn valid_generic_swept_prism() -> crate::ScriptBuilderPerGeometryMeshState {
         crate::ScriptBuilderPerGeometryMeshState {
@@ -3335,6 +3624,287 @@ mod tests {
             .expect("geometry may be authored before material and texture assignment");
         validate_scene_document(&scene)
             .expect_err("execution validation must still require material and texture");
+    }
+
+    #[test]
+    fn postprocessing_settings_accept_objects_and_null_defaults() {
+        let definition = serde_json::json!({
+            "definition_id": "pin-1",
+            "module_id": "analysis.dispersion",
+            "module_version": "0.1.0",
+            "definition_schema": "analysis.dispersion.mode_visualization.v1",
+            "node_kind": "analysis.dispersion.mode_visualization",
+            "label": "Mode 1",
+            "data_ref": {
+                "run_id": "run-1",
+                "dataset_id": "dataset-1",
+                "dataset_revision": "revision-1"
+            }
+        });
+        let definition_with_settings = |settings: Value| {
+            let mut value = definition.clone();
+            value["settings"] = settings;
+            value
+        };
+
+        for settings in [
+            serde_json::json!({}),
+            serde_json::json!({ "placement": "beside", "metadata": { "visible": true } }),
+            Value::Null,
+        ] {
+            let mut scene_value = serde_json::json!({
+                "version": "scene.v2",
+                "analysis": { "postprocessing_definitions": [] }
+            });
+            scene_value["analysis"]["postprocessing_definitions"] =
+                serde_json::json!([definition_with_settings(settings.clone())]);
+            let scene: SceneDocument = serde_json::from_value(scene_value)
+                .expect("object and null settings should deserialize");
+
+            validate_scene_document_for_authoring(&scene)
+                .expect("object and null settings should satisfy the authoring contract");
+            assert_eq!(scene.analysis.postprocessing_definitions[0].settings, settings);
+
+            let serialized = serde_json::to_value(&scene).expect("scene should serialize");
+            if settings.is_null() {
+                assert!(serialized["analysis"]["postprocessing_definitions"][0]
+                    .get("settings")
+                    .is_none());
+            } else {
+                assert_eq!(
+                    serialized["analysis"]["postprocessing_definitions"][0]["settings"],
+                    settings
+                );
+            }
+            let restored: SceneDocument = serde_json::from_value(serialized)
+                .expect("serialized settings should round-trip");
+            assert_eq!(restored.analysis.postprocessing_definitions[0].settings, settings);
+        }
+
+        let mut missing_settings = definition.clone();
+        missing_settings["definition_id"] = serde_json::json!("pin-default");
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "analysis": { "postprocessing_definitions": [missing_settings] }
+        }))
+        .expect("omitted settings should use the null default");
+        assert!(scene.analysis.postprocessing_definitions[0].settings.is_null());
+        validate_scene_document_for_authoring(&scene)
+            .expect("the omitted settings default should remain valid");
+        let serialized = serde_json::to_value(&scene).expect("default scene should serialize");
+        assert!(serialized["analysis"]["postprocessing_definitions"][0]
+            .get("settings")
+            .is_none());
+        let restored: SceneDocument = serde_json::from_value(serialized)
+            .expect("omitted default settings should round-trip");
+        assert!(restored.analysis.postprocessing_definitions[0]
+            .settings
+            .is_null());
+    }
+
+    #[test]
+    fn postprocessing_settings_reject_non_objects_without_mutating_input() {
+        let base_definition = serde_json::json!({
+            "definition_id": "pin-invalid",
+            "module_id": "analysis.dispersion",
+            "module_version": "0.1.0",
+            "definition_schema": "analysis.dispersion.mode_visualization.v1",
+            "node_kind": "analysis.dispersion.mode_visualization",
+            "label": "Mode 1",
+            "data_ref": {
+                "run_id": "run-1",
+                "dataset_id": "dataset-1",
+                "dataset_revision": "revision-1"
+            }
+        });
+
+        for (settings, expected_kind) in [
+            (serde_json::json!(["placement", "beside"]), "array"),
+            (serde_json::json!("beside"), "string"),
+            (serde_json::json!(3), "number"),
+            (serde_json::json!(true), "boolean"),
+        ] {
+            let mut definition = base_definition.clone();
+            definition["settings"] = settings.clone();
+            let input = serde_json::json!({
+                "version": "scene.v2",
+                "analysis": { "postprocessing_definitions": [definition] }
+            });
+            let scene: SceneDocument = serde_json::from_value(input.clone())
+                .expect("opaque settings values should remain available for validation");
+            let before = scene.clone();
+
+            let error = validate_scene_document_for_authoring(&scene)
+                .expect_err("non-object settings must be rejected");
+
+            assert!(
+                error.message.contains(
+                    "analysis.postprocessing_definitions[0].settings"
+                ),
+                "{error}"
+            );
+            assert!(error.message.contains(expected_kind), "{error}");
+            assert_eq!(scene, before, "validation must not mutate the scene");
+            assert_eq!(
+                serde_json::to_value(&scene).expect("scene should remain serializable")
+                    ["analysis"]["postprocessing_definitions"][0]["settings"],
+                settings,
+                "invalid settings should not be silently normalized"
+            );
+        }
+    }
+
+    #[test]
+    fn authoring_and_execution_reject_explicit_dangling_object_assignments() {
+        for role in ["magnet", "antenna", "conductor", "geometry"] {
+            let mut scene = region_owned_scene();
+            scene.objects[0].role = role.to_string();
+            validate_scene_document(&scene).expect("existing assignments remain valid");
+            validate_scene_document_for_authoring(&scene)
+                .expect("existing assignments remain authorable");
+            scene.objects[0].material_ref = "mat:missing".to_string();
+            for validate in [validate_scene_document, validate_scene_document_for_authoring] {
+                let error = validate(&scene).expect_err("explicit dangling material must fail");
+                assert!(error.message.contains("mat:missing"));
+            }
+            scene.objects[0].material_ref = "mat:body".to_string();
+            scene.objects[0].magnetization_ref = Some("mag:missing".to_string());
+            for validate in [validate_scene_document, validate_scene_document_for_authoring] {
+                let error = validate(&scene).expect_err("explicit dangling texture must fail");
+                assert!(error.message.contains("mag:missing"));
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_parallel_execution_requires_explicit_fem_cpu_lane() {
+        let mut scene = SceneDocument::default();
+        scene.study.parallel_execution.mode = fullmag_ir::ParallelExecutionModeIR::Adaptive;
+
+        for (backend, device) in [("fdm", "cpu"), ("fem", "gpu"), ("auto", "cpu")] {
+            scene.study.requested_backend = backend.to_string();
+            scene.study.requested_device = device.to_string();
+            let error = validate_scene_document_for_authoring(&scene)
+                .expect_err("unsupported adaptive lane must fail closed");
+            assert!(
+                error
+                    .message
+                    .contains("unsupported parallel_execution realization"),
+                "{}",
+                error.message
+            );
+        }
+
+        scene.study.requested_backend = "fem".to_string();
+        scene.study.requested_device = "cpu".to_string();
+        validate_scene_document_for_authoring(&scene)
+            .expect("explicit FEM CPU adaptive authoring should remain valid");
+    }
+
+    #[test]
+    fn adaptive_parallel_execution_uses_materialized_profile_instead_of_stale_legacy_lane() {
+        use fullmag_ir::{
+            BackendTarget, ExecutionDevice, ExecutionProfileIR, ExecutionRequestPatchIR,
+            FieldPatch, ParallelExecutionModeIR,
+        };
+        let mut scene = SceneDocument::default();
+        scene.study.parallel_execution.mode = ParallelExecutionModeIR::Adaptive;
+        scene.study.requested_backend = "fdm".into();
+        scene.study.requested_device = "gpu".into();
+        scene.study.execution_profile = Some(ExecutionProfileIR {
+            defaults: ExecutionRequestPatchIR {
+                backend: FieldPatch::Value(BackendTarget::Fem),
+                device: FieldPatch::Value(ExecutionDevice::Cpu),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let before = scene.clone();
+        validate_scene_document_for_authoring(&scene)
+            .expect("profile FEM CPU must override stale legacy scene fields");
+        assert_eq!(scene, before, "admission must not rewrite authored intent");
+        scene.study.requested_backend = "fem".into();
+        scene.study.requested_device = "cpu".into();
+        for (backend, device) in [
+            (BackendTarget::Fdm, ExecutionDevice::Cpu),
+            (BackendTarget::Fem, ExecutionDevice::Gpu),
+            (BackendTarget::Auto, ExecutionDevice::Cpu),
+        ] {
+            let profile = scene.study.execution_profile.as_mut().unwrap();
+            profile.defaults.backend = FieldPatch::Value(backend);
+            profile.defaults.device = FieldPatch::Value(device);
+            let error = validate_scene_document_for_authoring(&scene).expect_err(
+                "stale FEM CPU fields cannot legalize a different effective profile lane",
+            );
+            assert!(
+                error
+                    .message
+                    .contains("unsupported parallel_execution realization"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn auxiliary_authoring_does_not_require_magnetic_assignments() {
+        for role in ["antenna", "conductor", "geometry"] {
+            let mut scene = region_owned_scene();
+            scene.objects[0].role = role.to_string();
+            scene.objects[0].material_ref.clear();
+            scene.objects[0].magnetization_ref = None;
+            scene.objects[0].regions.clear();
+            scene.objects[0].material_parameter_fields.clear();
+            validate_scene_document_for_authoring(&scene)
+                .expect("auxiliary geometry does not imply magnetic physics");
+            validate_scene_document(&scene)
+                .expect("auxiliary geometry does not require magnetic solve assets");
+        }
+    }
+
+    #[test]
+    fn adaptive_parallel_execution_replays_layers_and_preserves_weakening_guard() {
+        use fullmag_ir::{
+            BackendTarget, ExecutionDevice, ExecutionFieldOriginIR, ExecutionOriginKindIR,
+            ExecutionProfileIR, ExecutionRequestLayerIR, ExecutionRequestPatchIR, FieldPatch,
+            ParallelExecutionModeIR,
+        };
+        let mut scene = SceneDocument::default();
+        scene.study.parallel_execution.mode = ParallelExecutionModeIR::Adaptive;
+        scene.study.execution_profile = Some(ExecutionProfileIR {
+            defaults: ExecutionRequestPatchIR {
+                backend: FieldPatch::Value(BackendTarget::Auto),
+                device: FieldPatch::Value(ExecutionDevice::Auto),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        scene.study.execution_layers = vec![ExecutionRequestLayerIR {
+            origin: ExecutionFieldOriginIR {
+                kind: ExecutionOriginKindIR::Study,
+                location: "study.adaptive".into(),
+            },
+            request: ExecutionRequestPatchIR {
+                backend: FieldPatch::Value(BackendTarget::Fem),
+                device: FieldPatch::Value(ExecutionDevice::Cpu),
+                ..Default::default()
+            },
+        }];
+        let before = scene.clone();
+        validate_scene_document_for_authoring(&scene)
+            .expect("explicit FEM CPU layer can narrow authored Auto defaults");
+        assert_eq!(scene, before);
+        let profile = scene.study.execution_profile.as_mut().unwrap();
+        profile.defaults.backend = FieldPatch::Value(BackendTarget::Fem);
+        profile.defaults.device = FieldPatch::Value(ExecutionDevice::Cpu);
+        scene.study.execution_layers[0].request.device = FieldPatch::Value(ExecutionDevice::Auto);
+        let error = validate_scene_document_for_authoring(&scene)
+            .expect_err("a Study layer requesting Auto is not explicit FEM CPU adaptive intent");
+        assert!(error.message.contains("unsupported parallel_execution realization"), "{error}");
+        scene.study.execution_layers[0].origin.kind = ExecutionOriginKindIR::Submit;
+        scene.study.execution_layers[0].origin.location = "submit.adaptive".into();
+        let error = validate_scene_document_for_authoring(&scene)
+            .expect_err("Submit must not weaken a pinned explicit CPU profile to Auto");
+        assert!(error.message.contains("materialization is invalid"), "{error}");
     }
 
     #[test]
@@ -4019,6 +4589,70 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn scene_current_source_policy_rejects_legacy_bcs_and_untyped_payloads() {
+        // Empty payload isolates charge policy; full transport validation must reject it.
+        let mut transport:KnownSceneCurrentTransport=serde_json::from_value(serde_json::json!({
+            "kind":"current_transport","name":"source","model":"ohmic_poisson","coupling":"one_way",
+            "domain":[{"object_id":"body"}],"materials":[{"region":{"object_id":"body"},"material":{"sigma_Spm":4.}}],
+            "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+            "conservative_current_source":{}
+        })).unwrap();
+        let objects = BTreeSet::from(["body".to_string()]);
+        validate_scene_charge_contract(0, &transport, &objects).unwrap();
+        assert!(validate_current_transport(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("conservative_current_source"));
+        transport.gauge = Some(SceneChargePotentialGauge::ZeroMean);
+        assert!(validate_scene_charge_contract(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("terminal_reference"));
+        transport.gauge = Some(SceneChargePotentialGauge::TerminalReference);
+        transport.boundaries.push(SceneChargeBoundary::Insulating {
+            id: "legacy".into(),
+            surfaces: vec![],
+        });
+        assert!(validate_scene_charge_contract(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("empty boundaries"));
+        transport.boundaries.clear();
+        transport.conservative_current_source = None;
+        assert!(validate_scene_charge_contract(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("non-empty"));
+    }
+
+    #[test]
+    fn scene_lead_preparation_is_authored_only_and_strictly_validated() {
+        let intent = serde_json::json!({"schema_version":"antenna_external_lead_preparation.v1", "kind":"isolated_branch_straight_stubs", "revision":"intent-r1",
+            "extensions":[
+                {"id":"minus","observation_id":"observe-minus","object_id":"body","boundary_markers":[11],"length_m":1e-6,"outward_direction_xyz":[-1.,0.,0.],"conductivity_spm":4e7},
+                {"id":"plus","observation_id":"observe-plus","object_id":"body","boundary_markers":[12],"length_m":1e-6,"outward_direction_xyz":[1.,0.,0.],"conductivity_spm":4e7}],
+            "drives":[{"id":"drive","port_mode_ref":"port","outer_terminal_currents_a":{"minus":-0.002,"plus":0.002}}]});
+        let mut transport: KnownSceneCurrentTransport = serde_json::from_value(serde_json::json!({
+            "kind":"current_transport","name":"source","model":"ohmic_poisson","coupling":"one_way",
+            "domain":[{"object_id":"body"}],"materials":[{"region":{"object_id":"body"},"material":{"sigma_Spm":4e7}}],
+            "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+            "external_lead_preparation":intent
+        })).unwrap();
+        let objects = BTreeSet::from(["body".to_string()]);
+        validate_current_transport(0, &transport, &objects).unwrap();
+        assert!(transport.conservative_current_source.is_none());
+        assert_eq!(serde_json::to_value(&transport).unwrap()["external_lead_preparation"], intent);
+        transport.external_lead_preparation.as_mut().unwrap().insert("certificate".into(), serde_json::json!("fake"));
+        assert!(validate_current_transport(0, &transport, &objects).unwrap_err().message.contains("external_lead_preparation"));
+        transport.external_lead_preparation = serde_json::from_value(intent.clone()).unwrap();
+        transport.conservative_current_source = Some(BTreeMap::new());
+        assert!(validate_current_transport(0, &transport, &objects).unwrap_err().message.contains("no source/view/closure"));
+        transport.conservative_current_source = None;
+        transport.gauge = Some(SceneChargePotentialGauge::ZeroMean);
+        assert!(validate_current_transport(0, &transport, &objects).unwrap_err().message.contains("terminal_reference"));
     }
 
     #[test]

@@ -10,6 +10,8 @@ import ctypes
 from ctypes import wintypes
 import copy
 import json
+import math
+import sys
 import os
 from pathlib import Path
 import queue
@@ -40,6 +42,8 @@ READY_SCHEMA = "fullmag.development-browser-native-ready.v1"
 RESULT_SCHEMA = "fullmag.development-browser-native-result.v1"
 API_LOG_SCHEMA = "fullmag.development-browser-api-log.v1"
 SCRATCH_CHILD_SCHEMA = "fullmag.development-browser-scratch-child.v1"
+RESTORED_SCHEMA_V1 = "fullmag.development-browser-native-restored.v1"
+RESTORED_SCHEMA_V2 = "fullmag.development-browser-native-restored.v2"
 SCRATCH_COMMAND_KINDS = frozenset({"fdm_grid_refresh", "remesh", "run", "relax", "solve"})
 COMPUTE_CHILD_KINDS = frozenset({"run", "relax", "solve"})
 EXECUTION_SCOPE_KEYS = ("api_instance_id", "session_id", "backend_session_epoch", "request_scope_epoch")
@@ -61,6 +65,66 @@ def utc_ms():
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def camera_for_proof(value):
+    """Require the exact camera contract; never normalize a lost view to defaults."""
+    fields = {"projection", "position", "target", "up", "fov_degrees", "orthographic_scale"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise storage.StorageError("Camera proof has an incomplete or foreign camera")
+
+    def finite_number(number):
+        return type(number) in (int, float) and math.isfinite(number)
+
+    if value["projection"] not in ("perspective", "orthographic"):
+        raise storage.StorageError("Camera proof has an invalid projection")
+    for field in ("position", "target", "up"):
+        vector = value[field]
+        if not isinstance(vector, list) or len(vector) != 3 or not all(map(finite_number, vector)):
+            raise storage.StorageError("Camera proof has an invalid vector")
+    if (value["position"] == value["target"]
+            or sum(component * component for component in value["up"]) <= sys.float_info.epsilon):
+        raise storage.StorageError("Camera proof has a degenerate view basis")
+    fov, scale = value["fov_degrees"], value["orthographic_scale"]
+    if (not finite_number(fov) or not 1 <= fov <= 179
+            or (scale is not None and (not finite_number(scale) or scale <= 0))):
+        raise storage.StorageError("Camera proof has an invalid projection parameter")
+    return copy.deepcopy(value)
+
+
+def validate_camera_preservation(before, after):
+    expected, observed = camera_for_proof(before), camera_for_proof(after)
+    changed = sorted(key for key in expected if expected[key] != observed[key])
+    if changed:
+        raise storage.StorageError("Native restart changed the captured camera: " + ", ".join(changed))
+    return {"preserved": True, "before": expected, "after": observed}
+
+
+def scene_after_successful_grid(scene):
+    """Only clear the production mesh-dirty tag; retain all authored data."""
+    expected = copy.deepcopy(scene)
+    for obj in expected.get("objects", []):
+        tags = obj.get("tags")
+        if isinstance(tags, list) and "mesh:dirty" in tags:
+            remaining = [tag for tag in tags if tag != "mesh:dirty"]
+            if remaining:
+                obj["tags"] = remaining
+            else:
+                obj.pop("tags")
+    return expected
+
+
+def validate_after_grid_document(before, expected):
+    """Pin predicted hashes before restart; never relax archive or metadata."""
+    if not isinstance(before, dict) or not isinstance(expected, dict):
+        raise storage.StorageError("After-grid document proof is missing")
+    hashes = ("scene_resource_sha256", "scene_document_sha256")
+    if any(not isinstance(expected.get(key), str) or not SHA256_RE.fullmatch(expected[key])
+           or not isinstance(before.get(key), str) or not SHA256_RE.fullmatch(before[key])
+           for key in hashes):
+        raise storage.StorageError("After-grid document hashes are invalid")
+    if canonical({**expected, **{key: before[key] for key in hashes}}) != canonical(before):
+        raise storage.StorageError("After-grid document changed archive or metadata")
 
 
 def check_material_anisotropy_plans(binaries, fixture, env, receipt):
@@ -193,6 +257,60 @@ def terminal_record(value):
             or value.get("waited") is not True or type(value.get("exit_code")) is not int):
         raise storage.StorageError("Native browser proof lacks terminal process custody")
     return dict(value)
+
+
+def validate_restored_frame(frame, expected, before, source_api_pid=None):
+    """Validate custody metadata; v2 additionally binds the consumed request.
+
+    This does not replace HTTP scene/camera hydration or terminal process
+    verification. Legacy v1 carries no request identity and cannot qualify it.
+    """
+    fields = {"schema", "nonce", "new_api_instance_id", "api_pid",
+              "old_api_exit_code", "helper_processes"}
+    if not isinstance(frame, dict) or frame.get("schema") not in {RESTORED_SCHEMA_V1, RESTORED_SCHEMA_V2}:
+        raise storage.StorageError("Native browser restore has an unsupported schema")
+    v2 = frame["schema"] == RESTORED_SCHEMA_V2
+    if v2:
+        fields |= {"request_id", "generation_id", "old_api_instance_id", "old_api_pid"}
+    if (set(frame) != fields or frame.get("nonce") != expected.get("nonce")
+            or not valid_uuid(frame.get("new_api_instance_id"))
+            or not isinstance(before, dict)
+            or frame["new_api_instance_id"] == before.get("api_instance_id")
+            or type(frame.get("api_pid")) is not int or frame["api_pid"] <= 0
+            or type(frame.get("old_api_exit_code")) is not int):
+        raise storage.StorageError("Native browser restore has invalid custody or scope")
+    helpers = frame["helper_processes"]
+    if not isinstance(helpers, list) or not helpers:
+        raise storage.StorageError("Native browser restore lacks helper custody")
+    seen = set()
+    for helper in helpers:
+        record = terminal_record(helper)
+        if (record["pid"] in seen or record["pid"] == frame["api_pid"]
+                or (source_api_pid is not None and record["pid"] == source_api_pid)):
+            raise storage.StorageError("Native browser restore duplicated process custody")
+        seen.add(record["pid"])
+    if v2 and (not valid_uuid(frame["request_id"])
+            or not valid_uuid(frame["old_api_instance_id"])
+            or frame["old_api_instance_id"] != before.get("api_instance_id")
+            or not isinstance(frame["generation_id"], str)
+            or not BUNDLE_ID_RE.fullmatch(frame["generation_id"])
+            or frame["generation_id"] != expected.get("generation_id")
+            or type(source_api_pid) is not int or source_api_pid <= 0
+            or type(frame["old_api_pid"]) is not int
+            or frame["old_api_pid"] != source_api_pid
+            or frame["old_api_pid"] == frame["api_pid"]):
+        raise storage.StorageError("Native browser restore differs from the consumed request scope")
+    return copy.deepcopy(frame)
+
+
+def restore_protocol_scope(validated_frame):
+    """Classify an already validated frame without promoting legacy proof."""
+    schema = validated_frame.get("schema")
+    if schema not in {RESTORED_SCHEMA_V1, RESTORED_SCHEMA_V2}:
+        raise storage.StorageError("Restore protocol scope has an unsupported schema")
+    return {"schema": schema, "authenticated_request_binding": schema == RESTORED_SCHEMA_V2,
+            "qualification": "authenticated_v2" if schema == RESTORED_SCHEMA_V2
+            else "legacy_v1_without_request_identity"}
 
 
 def read_api(port, pin, path):
@@ -708,7 +826,7 @@ class ProofBridge:
         queue_before = read_api(self.api_port, api_instance_id, "/v2/sessions/current/simulation/commands")
         scene = read_api(self.api_port, api_instance_id, "/v2/sessions/current/model/scene")
         scene_sha256 = hashlib.sha256(canonical(scene).encode()).hexdigest()
-        if (canonical(scene) != canonical(before.get("scene"))
+        if (canonical(scene) != canonical(scene_after_successful_grid(before.get("scene")))
                 or not same_execution_scope(scope_before, restore.get("scope"))):
             raise storage.StorageError("Restored scene or session scope changed after the restore observation")
 
@@ -889,13 +1007,14 @@ class ProofBridge:
 
     def capture_before(self, body):
         proof = self.eligibility()
-        if (set(body) != {"schema", "nonce", "api_instance_id", "project_document_before"}
+        if (set(body) != {"schema", "nonce", "api_instance_id", "project_document_before", "project_document_after_grid"}
                 or body["schema"] != "fullmag.development-browser-before.v1"
                 or body["nonce"] != self.expected["nonce"]
                 or body["api_instance_id"] != proof["api_instance_id"]
                 or not isinstance(body["project_document_before"], dict)
                 or not body["project_document_before"]):
             raise storage.StorageError("Browser before-capture has a different scope or empty draft")
+        validate_after_grid_document(body["project_document_before"], body["project_document_after_grid"])
         scene = read_api(self.api_port, proof["api_instance_id"], "/v2/sessions/current/model/scene")
         objects = scene.get("objects")
         if not isinstance(objects, list) or not objects:
@@ -907,6 +1026,9 @@ class ProofBridge:
                 or type(identity.get("session_epoch")) is not int):
             raise storage.StorageError("Nonempty browser scene has no exact workspace identity")
         session_scope = read_session_scope(self.api_port, proof["api_instance_id"], identity)
+        camera = camera_for_proof(read_api(
+            self.api_port, proof["api_instance_id"], "/v2/sessions/current/visualization/state"
+        ).get("camera"))
         admission = read_admission_observation(self.api_port, proof["api_instance_id"])
         if (admission["scope"]["session_id"] != identity["session_id"]
                 or admission["scope"]["session_resource_epoch"] != session_scope["session_resource_epoch"]
@@ -918,7 +1040,7 @@ class ProofBridge:
             if self.before is not None:
                 raise storage.StorageError("Browser before-capture is immutable")
             self.before = {**body, "scene": scene, "identity": identity, "session_scope": session_scope,
-                           "admission_observation": admission}
+                           "admission_observation": admission, "camera": camera}
             self.receipt["workspace_browser_before"] = copy.deepcopy(self.before)
             if self.receipt_path is not None:
                 storage.atomic_json(self.receipt_path, self.receipt)
@@ -936,13 +1058,16 @@ class ProofBridge:
                 or body.get("new_api_instance_id") != restored.get("new_api_instance_id")
                 or body["new_api_instance_id"] == before["api_instance_id"]
                 or canonical(body["project_document_before"]) != canonical(before["project_document_before"])
-                or canonical(body["project_document_after"]) != canonical(before["project_document_before"])):
+                or canonical(body["project_document_after"]) != canonical(before["project_document_after_grid"])):
             raise storage.StorageError("Browser hydration does not preserve the captured draft and new pin")
+        camera_evidence = validate_camera_preservation(before["camera"], read_api(
+            self.api_port, body["new_api_instance_id"], "/v2/sessions/current/visualization/state"
+        ).get("camera"))
         execution = self.execution()
         scene = read_api(self.api_port, body["new_api_instance_id"], "/v2/sessions/current/model/scene")
         backend = read_api(self.api_port, body["new_api_instance_id"], "/v2/platform/development-backend")
         identity = backend.get("workspace_identity", {})
-        if (canonical(scene) != canonical(before["scene"])
+        if (canonical(scene) != canonical(scene_after_successful_grid(before["scene"]))
                 or identity.get("api_instance_id") != body["new_api_instance_id"]
                 or not isinstance(identity.get("session_id"), str)
                 or identity["session_id"] == before["identity"]["session_id"]
@@ -959,6 +1084,7 @@ class ProofBridge:
                 raise storage.StorageError("Browser proof cancellation has already been submitted")
             if self.browser is not None:
                 raise storage.StorageError("Browser finish has already been submitted")
+            self.receipt["workspace_browser_camera"] = camera_evidence
             self.browser = {**body, "scene_sha256": hashlib.sha256(canonical(scene).encode()).hexdigest(),
                             "identity": identity, "session_scope": session_scope}
             self.process.stdin.write((canonical(command) + "\n").encode())
@@ -1386,12 +1512,14 @@ def exercise(repo, run_root, manifest, receipt, binaries, owner_bundle):
                             + validated["api_instance_id"])
                         print(canonical({"event": "browser-ready", "url": receipt["workspace_browser_url"],
                                          "receipt": str(run_root / "receipt.json")}), flush=True)
-                elif schema == "fullmag.development-browser-native-restored.v1":
-                    if (frame.get("nonce") != expected["nonce"]
-                            or not valid_uuid(frame.get("new_api_instance_id"))
-                            or type(frame.get("api_pid")) is not int or frame["api_pid"] <= 0
-                            or type(frame.get("old_api_exit_code")) is not int):
-                        raise storage.StorageError("Native browser restore has invalid custody or scope")
+                elif schema in {RESTORED_SCHEMA_V1, RESTORED_SCHEMA_V2}:
+                    with bridge.lock:
+                        before = copy.deepcopy(bridge.before)
+                    source_pids = {log["pid"] for log in receipt.get("workspace_browser_api_logs", [])
+                                   if before is not None and log["api_instance_id"] == before.get("api_instance_id")}
+                    source_pid = next(iter(source_pids)) if len(source_pids) == 1 else None
+                    frame = validate_restored_frame(frame, expected, before, source_pid)
+                    receipt["workspace_browser_restore_protocol"] = restore_protocol_scope(frame)
                     with bridge.lock:
                         bridge.restored = dict(frame)
                         bridge.ready = None
@@ -1463,6 +1591,8 @@ def exercise(repo, run_root, manifest, receipt, binaries, owner_bundle):
                 or result["new_api_pid"] == result["old_api_pid"]):
             raise storage.StorageError("Native custody and actual browser hydration did not both pass")
         receipt["workspace_browser_hydration"] = bridge.browser
+        if receipt.get("workspace_browser_restore_protocol", {}).get("authenticated_request_binding") is True:
+            receipt["checks"].append("browser-authenticated-v2-request-and-source-custody")
         receipt["checks"].extend(["browser-private-native-readiness", "browser-nonempty-scene-captured",
                                    "browser-exact-scene-restored", "browser-fresh-session-and-api-pin",
                                    "browser-unsaved-document-restored", "browser-native-processes-waited",

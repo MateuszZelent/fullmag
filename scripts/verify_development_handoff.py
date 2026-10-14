@@ -32,8 +32,16 @@ SOURCE_PATHS = (
     "scripts/test_windows_development_restore_launch.py",
     "scripts/windows/development_handoff.py",
     "scripts/windows/development_scene_handoff.py",
+    "scripts/windows/development_browser_chain.py",
+    "scripts/test_windows_development_browser_chain.py",
+    "scripts/test_windows_development_restore_frames.py",
+    "crates/fullmag-cli/src/control_room/development_workspace_probe.rs",
+    "crates/fullmag-cli/src/development_restart.rs",
     "scripts/test_windows_development_scene_handoff.py",
     "scripts/windows/development_scene_assets.py",
+    "scripts/windows/development_antenna_scene_assets.py",
+    "scripts/test_windows_development_antenna_scene_assets.py",
+    "scripts/test_windows_development_modal_scene_assets.py",
     "scripts/test_windows_development_scene_assets.py",
     "scripts/test_windows_development_scene_python.py",
     "scripts/test_windows_development_scene_render_incomplete.py",
@@ -49,6 +57,8 @@ SOURCE_PATHS = (
     "crates/fullmag-authoring/src/adapters.rs",
     "crates/fullmag-authoring/src/geometry.rs",
     "crates/fullmag-ir/src/model.rs",
+    "crates/fullmag-ir/src/antenna.rs",
+    "crates/fullmag-ir/src/study.rs",
     "crates/fullmag-ir/src/selection.rs",
     "crates/fullmag-ir/src/constraint.rs",
     "crates/fullmag-authoring/src/validation.rs",
@@ -57,8 +67,19 @@ SOURCE_PATHS = (
     "scripts/test_windows_development_handoff.py",
     "scripts/test_verify_development_handoff.py",
     "scripts/verify_development_handoff.py",
+    "scripts/verify_development_backend_api.py",
+    "scripts/test_windows_development_fixture_publication.py",
     "scripts/fullmag_storage.py",
+    "scripts/test_fullmag_storage.py",
+    "scripts/test_bootstrap_workflow_contract.py",
+    ".github/workflows/bootstrap.yml",
+    "scripts/ci/run_frontend3d_required_gate.sh",
     "scripts/windows/runtime_bundle.py",
+    "scripts/windows/compiler_inputs.py",
+    "scripts/windows/build_snapshot.py",
+    "scripts/windows/volatile_build_storage.py",
+    "scripts/test_windows_compiler_inputs.py",
+    "scripts/test_windows_development_compiler_inputs.py",
     "scripts/windows/development_status.py",
     "scripts/windows/watch_backend.py",
     "scripts/windows/workspace_backend_identity.py",
@@ -70,6 +91,7 @@ SOURCE_PATHS = (
     "scripts/windows/verify_workspace_browser.py",
     "scripts/test_windows_development_scratch_process_frames.py",
     "scripts/test_windows_development_admission_observation.py",
+    "scripts/test_windows_development_camera_proof.py",
     "scripts/just_storage_shell.sh",
     "justfile",
 )
@@ -86,7 +108,11 @@ def source_identity(repo: Path) -> str:
     return digest.hexdigest()
 
 
-def run(repo_root: str) -> int:
+def run(repo_root: str, suite: str = "handoff") -> int:
+    patterns = {"handoff": "test_*development_*.py", "storage": "test_fullmag_storage.py",
+                "bootstrap": "test_bootstrap_workflow_contract.py"}
+    if suite not in patterns:
+        raise storage.StorageError("Unknown interpreted check suite")
     layout = storage.resolve_layout(repo_root, "development-handoff-checks")
     repo = Path(layout["repo_root"])
     # Read-only preflight completes before creating any controlled output.
@@ -120,15 +146,17 @@ def run(repo_root: str) -> int:
             "source_sha256": source_before, "source_paths": list(SOURCE_PATHS),
             "started_at": storage.now(), "state": "running",
             "scope": "interpreted handoff and development watcher checks; no solver or process restart",
+            "suite": suite,
         }
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
             env = {**os.environ, **layout["env"],
                    "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1",
+                   "FULLMAG_TEST_TEMP_ROOT": str(fixtures),
                    "TEMP": str(fixtures), "TMP": str(fixtures), "TMPDIR": str(fixtures)}
             command = [sys.executable, "-m", "unittest", "discover", "-s", "scripts",
-                       "-p", "test_*development_*.py", "-v"]
+                       "-p", patterns[suite], "-v"]
             with log_path.open("w", encoding="utf-8") as log:
                 code = subprocess.run(command, cwd=repo, env=env, stdout=log,
                                       stderr=subprocess.STDOUT, check=False).returncode
@@ -164,9 +192,10 @@ def run(repo_root: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", required=True)
+    parser.add_argument("--suite", choices=("handoff", "storage", "bootstrap"), default="handoff")
     args = parser.parse_args()
     try:
-        return run(args.repo_root)
+        return run(args.repo_root, args.suite)
     except (storage.StorageError, OSError, ValueError) as error:
         print(f"Development handoff checks failed: {error}", file=sys.stderr)
         return 2

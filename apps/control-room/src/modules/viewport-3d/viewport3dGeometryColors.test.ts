@@ -10,12 +10,11 @@ import {
   canApplyVertexScalarColorBuffer,
   canApplyVertexScalarColors,
 } from "./viewport3dGeometryColors";
-import { srgbToLinearChannel } from "./viewport3dColorSpace";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
-// Vertex colour buffers hold linear-sRGB values; palettes are authored in sRGB.
+// The scalar palette API already returns linear-sRGB for vertex attributes.
 function linearMagnitudeColor(t: number): number[] {
-  return magnitudeColorRgb(t).map(srgbToLinearChannel);
+  return magnitudeColorRgb(t);
 }
 
 function vectorField(values: number[], nComp = 3): DecodedFieldVector {

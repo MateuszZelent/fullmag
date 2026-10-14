@@ -1,4 +1,4 @@
-use crate::study_contract::migrate_run_duration;
+use crate::study_contract::{authored_stage_output_ports, migrate_run_duration};
 use crate::{
     validate_scene_document_for_authoring, SceneDocument, StudyAcceptancePolicy,
     StudyAcquisitionPolicy, StudyContractError, StudyPlan, StudyPlanMigrationDefaults,
@@ -17,12 +17,13 @@ pub fn scene_document_to_study_plan(
 ) -> Result<StudyPlan, StudyContractError> {
     validate_execution_profile_binding(scene, defaults)?;
 
-    if let Some(pipeline) = scene
-        .study
-        .study_pipeline
-        .as_ref()
-        .filter(|pipeline| !pipeline.nodes.is_empty())
-    {
+    if let Some(pipeline) = scene.study.study_pipeline.as_ref() {
+        if pipeline.version != "study_pipeline.v1" {
+            return Err(StudyContractError::Invalid(format!(
+                "unsupported study pipeline version '{}'",
+                pipeline.version
+            )));
+        }
         return StudyPlan::from_pipeline(study_id, revision, pipeline, defaults);
     }
 
@@ -89,6 +90,7 @@ pub fn scene_document_to_study_plan(
             ),
         };
 
+        let outputs = authored_stage_output_ports(&kind);
         steps.push(StudyStep {
             step_id,
             label,
@@ -102,7 +104,7 @@ pub fn scene_document_to_study_plan(
             execution_profile: defaults.execution_profile.clone(),
             until_seconds,
             inputs: Vec::new(),
-            outputs: Vec::new(),
+            outputs,
             acceptance: StudyAcceptancePolicy::Any,
             acquisition: StudyAcquisitionPolicy::Exclusive,
             legacy_payload: Some(payload),

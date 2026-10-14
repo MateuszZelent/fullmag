@@ -1,4 +1,4 @@
-export type PhasorConvention = "exp_i_omega_t" | "exp_minus_i_omega_t";
+export type PhasorConvention = "exp_i_omega_t" | "exp_plus_i_omega_t" | "exp_minus_i_omega_t";
 export type FloquetSpatialConvention =
   | "dst_equals_src_exp_minus_i_k_dot_delta_r"
   | "dst_equals_src_exp_plus_i_k_dot_delta_r";
@@ -13,7 +13,7 @@ export interface FloquetPhaseAdapterResult {
 }
 
 export function phasorAdapter(convention: PhasorConvention): PhasorAdapterResult {
-  if (convention === "exp_i_omega_t") {
+  if (convention === "exp_i_omega_t" || convention === "exp_plus_i_omega_t") {
     return {
       decayRateSign: 1,
       phaseAnimationDirection: 1,

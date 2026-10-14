@@ -28,6 +28,7 @@ import { RealtimeConnectionController } from "@/kernel/realtime/RealtimeConnecti
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
+import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
 import { ObjectMoveToolController } from "@/kernel/authoring/ObjectMoveToolController";
 import { ObjectEditSessionController } from "@/kernel/authoring/object-edit/ObjectEditSessionController";
 import type { KernelApi } from "@/kernel/types";
@@ -881,6 +882,49 @@ describe("selectExplorerNode", () => {
     expect(ref).toBeNull();
   });
 
+  it("selects a pinned analysis group by its published run and module identity", () => {
+    const groupRef = selectionRefFromNode({
+      analysisModuleId: "analysis.dispersion",
+      analysisPinnedGroup: true,
+      analysisRunId: "run-17",
+      id: "results:run-17:dispersion:pinned",
+      kind: "results.pinned_visualizations.root",
+      label: "Pinned visualizations",
+      parentId: "results:run-17:dispersion",
+    });
+
+    expect(groupRef).toEqual({
+      kind: "results.pinned_visualizations.root",
+      moduleId: "analysis.dispersion",
+      nodeId: "results:run-17:dispersion:pinned",
+      runId: "run-17",
+      type: "analysis-pinned-group",
+    });
+    expect(selectionRefEquals(groupRef, {
+      kind: "results.pinned_visualizations.root",
+      moduleId: "analysis.dispersion",
+      nodeId: "results:run-17:dispersion:pinned",
+      runId: "run-17",
+      type: "analysis-pinned-group",
+    })).toBe(true);
+    expect(selectionRefEquals(groupRef, {
+      kind: "results.pinned_visualizations.root",
+      moduleId: "analysis.dispersion",
+      nodeId: "results:run-17:dispersion:pinned",
+      runId: "run-18",
+      type: "analysis-pinned-group",
+    })).toBe(false);
+
+    expect(selectionRefFromNode({
+      analysisModuleId: "analysis.dispersion",
+      analysisRunId: "run-17",
+      id: "results:run-17:dispersion:pinned-child",
+      kind: "results.pinned_visualizations.root",
+      label: "A pinned mode",
+      parentId: "results:run-17:dispersion:pinned",
+    })).toBeNull();
+  });
+
   it("preserves frequency-domain response observable metadata for inspectors", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
@@ -916,12 +960,14 @@ describe("selectExplorerNode", () => {
       id: "results:eigen:sample:0:mode:2",
       kind: "results.eigen.mode",
       label: "Sample 0 Mode 2",
+      modeId: "mode-stable-2",
       modeIndex: 2,
       parentId: "results:eigen:modes",
       resourceRef: analysisFieldVectorResourceKey(
         "analysis:eigen:sample-0000:mode-0002",
       ),
       sampleIndex: 0,
+      sampleId: "sample-stable-0",
     };
 
     selectExplorerNode(kernel, node, "explorer");
@@ -933,12 +979,14 @@ describe("selectExplorerNode", () => {
         branchId: "branch-0",
         fieldId: "analysis:eigen:sample-0000:mode-0002",
         kind: "results.eigen.mode",
+        modeId: "mode-stable-2",
         modeIndex: 2,
         nodeId: "results:eigen:sample:0:mode:2",
         resourceRef: analysisFieldVectorResourceKey(
           "analysis:eigen:sample-0000:mode-0002",
         ),
         sampleIndex: 0,
+        sampleId: "sample-stable-0",
         type: "frequency-domain",
       },
     });
@@ -1609,6 +1657,8 @@ describe("selectExplorerNode", () => {
       analysisRunId: "run-7",
       analysisStageId: "eigen-stage",
       artifactRevision: "eigen-r9",
+      datasetId: "catalog:eigen-dataset",
+      datasetRevision: "catalog-r9",
       equilibriumId: "eq-r4",
       id: "results:run:run-7:resonance:stage:eigen-stage:modal_eigen:spectrum",
       kContextKind: "finite_open",
@@ -1624,6 +1674,8 @@ describe("selectExplorerNode", () => {
       analysisRunId: "run-7",
       analysisStageId: "eigen-stage",
       artifactRevision: "eigen-r9",
+      datasetId: "catalog:eigen-dataset",
+      datasetRevision: "catalog-r9",
       equilibriumId: "eq-r4",
       kContextKind: "finite_open",
       kind: "results.resonance.modal.spectrum",
@@ -1632,6 +1684,35 @@ describe("selectExplorerNode", () => {
       resourceRef: "artifact-revision:eigen-r9",
       studyProduct: "modal_eigen",
       type: "frequency-domain",
+    });
+  });
+
+  it("selects a catalog hysteresis dataset by its canonical dataset identity", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      analysisRunId: "run-7",
+      analysisStageId: "hysteresis-stage",
+      datasetId: "catalog:hysteresis-loop",
+      datasetRevision: "catalog-r3",
+      id: "results:run:run-7:hysteresis:dataset-1",
+      kind: "results.hysteresis.dataset",
+      label: "Hysteresis loop",
+      parentId: "results:run:run-7:hysteresis",
+      studyProduct: "hysteresis_loop",
+    }, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.hysteresis.dataset",
+      nodeId: "results:run:run-7:hysteresis:dataset-1",
+      ref: {
+        datasetId: "catalog:hysteresis-loop",
+        datasetRevision: "catalog-r3",
+        focus: "dataset",
+        kind: "analysis.result",
+        runId: "run-7",
+        stageId: "hysteresis-stage",
+        type: "analysis-result",
+      },
     });
   });
 

@@ -190,6 +190,31 @@ i otwiera już istniejący ledger bez fallbacku lub initialization. Service
 przekazuje binding do schedulerów; start v2 jest jawnie odrzucany do odbioru
 pełnego recovery, owner/policy lifecycle, topology i runtime.
 
+### Właściciel próbki inventory na wspólnym hoście
+
+`RuntimeServiceOwner` pozostaje właścicielem jednego `SessionStore` i jego
+schedulerów. Własność próbkowania fizycznego hosta należy do osobnego,
+wyłącznego `HostInventoryOwner` zakotwiczonego we wspólnym root `HostResourceLedger`.
+Wiele usług store'owych może korzystać z tej samej próbki i ledgeru; tylko
+proces z hostowym lease'em publikuje snapshot. Per-store lock nie może być
+traktowany jako wyłączna własność hosta.
+
+Host inventory owner ma trwałą, stabilną tożsamość oraz własną monotoniczną
+`host_owner_epoch`, odrębną od `HostResourceLedgerPolicy.owner_epoch` (fence
+przypiętej polityki). W następnej wersji snapshot i każdy request admission są
+przypięte do bieżącej epoki host ownera. Publikacja weryfikuje lease i epokę pod
+blokadą writera host ledgeru. Przejęcie po kontrolowanym recovery inkrementuje
+epokę; restart jednego `SessionStore` jej nie zmienia, jeśli inny store nadal
+trzyma lease hosta. Format v1 zachowuje swoje dotychczasowe pola i znaczenie.
+
+Po przejęciu poprzedni snapshot nie staje się bieżący nawet wtedy, gdy ma mniej
+niż 30 sekund. Admission dla wszystkich store'ów czeka na pierwszą poprawną
+próbkę nowej epoki. Rezerwacje z poprzedniej epoki pozostają zajęte lub
+quarantined do exact reconciliation/release; samo przejęcie lease'a i wiek
+heartbeat nie zwalniają zasobów. Ten kontrakt wymaga wersjonowania snapshotu
+oraz odrębnych testów dwóch store'ów, właściciela inventory, awarii pierwszej
+próbki i recovery przed odblokowaniem admission.
+
 Try admission rozróżnia typed capacity contention nowego candidate od
 corruption/fencing/unknown publication. Tylko contention przed publikacją
 pozostawia task queued bez local claim i Prepare/Start. Nie wyprowadzamy

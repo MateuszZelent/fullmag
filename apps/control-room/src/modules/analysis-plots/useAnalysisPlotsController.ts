@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { analysisSurfaceForSelectionKind } from "@/kernel/analysis-modules/analysisSurfaceRouting";
 import { useDynamicStructureFactorResource, useSpinWaveGammaResource } from "@/kernel/resources/spinWaveResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -25,7 +26,11 @@ import {
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartValueRange } from "./chartTableModel";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
-import type { FrequencyDomainResultContext } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { isReferenceChartQuantity } from "@/shared/analysis-charts/frequencyRenderModels";
+import {
+  eigenModeFieldAvailable,
+  type FrequencyDomainResultContext,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 const EMPTY_DISPLAY_UNITS: Record<string, string> = {};
 const EMPTY_STRING_LIST: readonly string[] = Object.freeze([]);
@@ -169,6 +174,14 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     setPreferenceActiveSurface(surface);
     analysisWorkspaceStore.setActiveSurface(surface);
   }, [setPreferenceActiveSurface]);
+  // Analysis follows the Results Explorer: selecting a node owned by an
+  // analysis module shows that module's surface (ADR 0054, plan stage 3).
+  const selectionSurface = useSelectionSelector(selectionAnalysisSurface);
+  useEffect(() => {
+    if (selectionSurface && selectionSurface !== analysisWorkspaceStore.getSnapshot().activeSurface) {
+      setActiveSurface(selectionSurface);
+    }
+  }, [selectionSurface, setActiveSurface]);
   const onSubviewChange = useCallback(
     (subview: AnalysisSubview) => setPreferenceActiveSubview(activeSurface, subview),
     [activeSurface, setPreferenceActiveSubview],
@@ -181,7 +194,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     setSelectedPoint(point);
     const chartId = frequencyChartId ?? sourceChartId ?? descriptorId;
     analysisWorkspaceStore.setFocusedChartId(chartId);
-    if (activeSurface === "resonance-fmr" || activeSurface === "dispersion") {
+    // A reference point (analytic or imported) is not a computed mode: it must
+    // not select a mode nor imply a 3D field (ADR 0054, spec 32 §9).
+    const referencePoint = isReferenceChartQuantity(point.quantity);
+    if (!referencePoint && (activeSurface === "resonance-fmr" || activeSurface === "dispersion")) {
       const mapped = frequencyDomainSelectionFromPoint({
         artifactRevision: frequencyArtifactRevision,
         dispersionModel: frequency.frequencyDomainDispersionModel,
@@ -276,6 +292,12 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   };
 }
 
+function selectionAnalysisSurface(selection: Selection) {
+  return analysisSurfaceForSelectionKind(selection.kind);
+}
+
+export { isReferenceChartQuantity };
+
 export function selectedHysteresisStageIdFromSelection(selection: Selection | null): string | null {
   const ref = selection?.ref as { stageId?: string; stageKind?: string; type?: string } | null;
   if (!ref?.stageId) return null;
@@ -337,13 +359,41 @@ export function frequencyDomainSelectionFromPoint(input: {
     );
     return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: compactSelectionRef({ ...identity, calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? undefined, frequencyHz: match?.frequencyHz, frequencyIndex: match?.frequencyIndex ?? undefined, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId, resourceRef: point.source.resourceKey, source: "frequency-response" as const, type: "frequency-domain" as const }) };
   }
-  const spectrumMode = input.routeMode === "dispersion_modal"
-    ? null
-    : input.spectrumModel.points[point.point.rowIndex];
-  const mode = input.routeMode === "dispersion_modal"
+  const dispersionMode = input.routeMode === "dispersion_modal"
     ? input.dispersionModel.points[point.point.rowIndex]
-    : spectrumMode;
-  return { kind: "results.eigen.mode", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: compactSelectionRef({ ...identity, artifactPath: point.source.resourceKey, branchId: mode?.branchId ?? undefined, calculationMode: input.routeMode, chartId: input.chartId, fieldId: mode?.modeFieldId ?? undefined, frequencyHz: mode?.frequencyHz, kind: "results.eigen.mode", modeId: spectrumMode?.modeId ?? undefined, modeIndex: mode?.rawModeIndex, nodeId, resourceRef: mode?.modeFieldResourceKey ?? point.source.resourceKey, sampleId: spectrumMode?.sampleId ?? undefined, sampleIndex: mode?.sampleIndex, source: "eigen-mode" as const, type: "frequency-domain" as const }) };
+    : null;
+  const mode = input.routeMode === "dispersion_modal"
+    ? dispersionMode
+    : input.spectrumModel.points[point.point.rowIndex];
+  const modeFieldAvailable = mode == null || eigenModeFieldAvailable(mode);
+  return {
+    kind: "results.eigen.mode",
+    label: `${point.label} ${point.point.y} ${point.unit}`,
+    nodeId,
+    objectId: null,
+    ref: compactSelectionRef({
+      ...identity,
+      artifactPath: point.source.resourceKey,
+      branchId: mode?.branchId ?? undefined,
+      calculationMode: input.routeMode,
+      chartId: input.chartId,
+      fieldId: modeFieldAvailable ? mode?.modeFieldId ?? undefined : undefined,
+      frequencyHz: mode?.frequencyHz,
+      kPathCoordinateRadPerM: dispersionMode?.pathS,
+      kind: "results.eigen.mode",
+      modeId: mode?.modeId ?? undefined,
+      modeIndex: mode?.rawModeIndex,
+      nodeId,
+      resourceRef: modeFieldAvailable
+        ? mode?.modeFieldResourceKey ?? point.source.resourceKey
+        : point.source.resourceKey,
+      sampleId: mode?.sampleId ?? undefined,
+      sampleIndex: mode?.sampleIndex,
+      source: "eigen-mode" as const,
+      type: "frequency-domain" as const,
+      wavevectorKf: dispersionMode?.wavevectorKf ?? wavevectorKf,
+    }),
+  };
 }
 
 function compactSelectionRef<T extends Record<string, unknown>>(ref: T): T {

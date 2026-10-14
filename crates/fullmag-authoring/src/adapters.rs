@@ -84,19 +84,29 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         spin_transports: builder.spin_transports.clone(),
         spin_torques,
         oersted_fields,
+        antenna_port_modes: builder.antenna_port_modes.clone(),
+        antenna_field_solve_stages: builder.antenna_field_solve_stages.clone(),
+        antenna_target_projections: builder.antenna_target_projections.clone(),
+        solved_antenna_drives: builder.solved_antenna_drives.clone(),
+        antenna_spectrum_requests: builder.antenna_spectrum_requests.clone(),
         study: SceneStudyState {
             backend: builder.backend.clone(),
             requested_backend: builder
-                .backend
+                .requested_backend
                 .clone()
+                .or_else(|| builder.backend.clone())
                 .unwrap_or_else(|| "auto".to_string()),
-            requested_device: "auto".to_string(),
-            requested_precision: "double".to_string(),
+            requested_device: builder.requested_device.clone()
+                .unwrap_or_else(|| "auto".to_string()),
+            requested_precision: builder.requested_precision.clone()
+                .unwrap_or_else(|| "double".to_string()),
             requested_mode: builder
                 .requested_mode
                 .clone()
                 .unwrap_or_else(|| "strict".to_string()),
             requested_cpu_threads: builder.cpu_threads,
+            parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
+            pbc: Some(builder.pbc.clone()),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
@@ -127,6 +137,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         },
         outputs: SceneOutputsState::default(),
         editor: SceneEditorState::default(),
+        analysis: Default::default(),
     }
 }
 
@@ -229,8 +240,13 @@ pub fn scene_document_to_script_builder(
     Ok(ScriptBuilderState {
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
+        requested_backend: Some(normalized_scene.study.requested_backend.clone()),
+        requested_device: Some(normalized_scene.study.requested_device.clone()),
+        requested_precision: Some(normalized_scene.study.requested_precision.clone()),
         requested_mode: Some(normalized_scene.study.requested_mode.clone()),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
+        parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
+        pbc: normalized_scene.study.pbc.clone().flatten(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
@@ -275,6 +291,11 @@ pub fn scene_document_to_script_builder(
         spin_transports: normalized_scene.spin_transports.clone(),
         spin_torques: normalized_scene.spin_torques.clone(),
         oersted_terms: normalized_scene.oersted_fields.clone(),
+        antenna_port_modes: normalized_scene.antenna_port_modes.clone(),
+        antenna_field_solve_stages: normalized_scene.antenna_field_solve_stages.clone(),
+        antenna_target_projections: normalized_scene.antenna_target_projections.clone(),
+        solved_antenna_drives: normalized_scene.solved_antenna_drives.clone(),
+        antenna_spectrum_requests: normalized_scene.antenna_spectrum_requests.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
 }
@@ -401,6 +422,45 @@ pub fn scene_document_to_script_builder_overrides(
 ) -> Result<Value, SceneDocumentValidationError> {
     validate_stage_builder_numeric_values(scene)?;
     let builder = scene_document_to_script_builder(scene)?;
+    // The solver projection is magnetic-only; script export owns the complete
+    // authored inventory, including conductors without magnetic assignments.
+    let mut geometries = builder
+        .geometries
+        .iter()
+        .zip(crate::scene_solve_objects(scene))
+        .map(|(geometry, object)| {
+            let mut value = geometry_override_value(geometry);
+            value["object_id"] = Value::String(object.id.clone());
+            value["role"] = Value::String(object.role.clone());
+            value
+        })
+        .collect::<Vec<_>>();
+    for object in scene.objects.iter().filter(|object| object.role != "magnet") {
+        if !is_identity_quaternion(object.transform.rotation_quat)
+            || !is_identity_scale(object.transform.scale)
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "owner_transform_rotation_scale_unsupported: object '{}' uses rotation or scale that is not represented by the canonical owner-frame lowering",
+                object.id
+            )));
+        }
+        let mut geometry_params = object.geometry.geometry_params.clone();
+        strip_translation_fields(&mut geometry_params);
+        if !is_zero_vec3(object.transform.translation) {
+            insert_translation(&mut geometry_params, object.transform.translation);
+        }
+        geometries.push(serde_json::json!({
+            "name": builder_geometry_name_for_object(object),
+            "object_id": object.id,
+            "role": object.role,
+            "geometry_kind": object.geometry.geometry_kind,
+            "geometry_params": geometry_params,
+            "bounds_min": object.geometry.bounds_min,
+            "bounds_max": object.geometry.bounds_max,
+            "mesh": object.object_mesh.as_ref().or(object.mesh_override.as_ref())
+                .map(geometry_mesh_override_value),
+        }));
+    }
     let mut overrides = serde_json::json!({
         "runtime_selection": {
             "backend": scene.study.requested_backend,
@@ -408,13 +468,17 @@ pub fn scene_document_to_script_builder_overrides(
             "precision": scene.study.requested_precision,
             "mode": scene.study.requested_mode,
             "cpu_threads": scene.study.requested_cpu_threads,
+            "parallel_execution": scene.study.parallel_execution,
             "fem_demag_solver_policy": scene.study.fem_demag_solver_policy,
             "explicit_selection": scene.study.requested_backend != "auto"
                 || scene.study.requested_device != "auto"
                 || scene.study.requested_precision != "double"
                 || scene.study.requested_mode != "strict"
-                || scene.study.requested_cpu_threads.is_some(),
+                || scene.study.requested_cpu_threads.is_some()
+                || scene.study.parallel_execution
+                    != fullmag_ir::ParallelExecutionPolicyIR::default(),
         },
+        "pbc": builder.pbc,
         "exchange_enabled": builder.exchange_enabled,
         "demag_enabled": builder.demag_enabled,
         "demag_realization": builder.demag_realization,
@@ -497,38 +561,53 @@ pub fn scene_document_to_script_builder_overrides(
             "airbox_growth_rate": universe.airbox_growth_rate,
             "airbox_grading": universe.airbox_grading,
         })).unwrap_or(Value::Null),
-        "stages": builder.stages.iter().map(|stage| serde_json::json!({
-            "kind": stage.kind,
-            "entrypoint_kind": stage.entrypoint_kind,
-            "integrator": string_or_null(&stage.integrator),
-            "fixed_timestep": parse_optional_text_f64(&stage.fixed_timestep),
-            "adaptive_timestep": stage.adaptive_timestep.as_ref().map(adaptive_timestep_override_value).unwrap_or(Value::Null),
-            "until_seconds": parse_optional_text_f64(&stage.until_seconds),
-            "relax_algorithm": string_or_null(&stage.relax_algorithm),
-            "torque_tolerance": parse_optional_text_f64(&stage.torque_tolerance),
-            "energy_tolerance": parse_optional_text_f64(&stage.energy_tolerance),
-            "max_steps": parse_optional_text_u64(&stage.max_steps),
-            "eigen_count": parse_optional_text_u64(&stage.eigen_count),
-            "eigen_target_frequency": parse_optional_text_f64(&stage.eigen_target_frequency),
-            "eigen_k_vector": parse_optional_text_vec3(&stage.eigen_k_vector),
-            "eigen_target": string_or_null(&stage.eigen_target),
-            "eigen_include_demag": stage.eigen_include_demag,
-            "eigen_equilibrium_source": if stage.eigen_equilibrium_source.is_empty() {
-                stage.extra.get("equilibrium_source").cloned().unwrap_or(Value::Null)
-            } else {
-                string_or_null(&stage.eigen_equilibrium_source)
-            },
-            "eigen_equilibrium_artifact": stage.extra.get("eigen_equilibrium_artifact")
-                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
-                .or_else(|| stage.extra.get("equilibrium_artifact")),
-            "frequency_equilibrium_source": stage.extra.get("frequency_equilibrium_source")
-                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
-                .or_else(|| stage.extra.get("equilibrium_source")),
-            "frequency_equilibrium_artifact": stage.extra.get("frequency_equilibrium_artifact")
-                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
-                .or_else(|| stage.extra.get("equilibrium_artifact")),
-            "eigen_normalization": string_or_null(&stage.eigen_normalization),
-        })).collect::<Vec<_>>(),
+        "stages": builder.stages.iter().map(|stage| {
+            let mut stage_override = serde_json::json!({
+                "kind": stage.kind,
+                "entrypoint_kind": stage.entrypoint_kind,
+                "integrator": string_or_null(&stage.integrator),
+                "fixed_timestep": parse_optional_text_f64(&stage.fixed_timestep),
+                "adaptive_timestep": stage.adaptive_timestep.as_ref().map(adaptive_timestep_override_value).unwrap_or(Value::Null),
+                "until_seconds": parse_optional_text_f64(&stage.until_seconds),
+                "relax_algorithm": string_or_null(&stage.relax_algorithm),
+                "torque_tolerance": parse_optional_text_f64(&stage.torque_tolerance),
+                "energy_tolerance": parse_optional_text_f64(&stage.energy_tolerance),
+                "max_steps": parse_optional_text_u64(&stage.max_steps),
+                "eigen_count": parse_optional_text_u64(&stage.eigen_count),
+                "eigen_target_frequency": parse_optional_text_f64(&stage.eigen_target_frequency),
+                "eigen_k_vector": parse_optional_text_vec3(&stage.eigen_k_vector),
+                "eigen_target": string_or_null(&stage.eigen_target),
+                "eigen_include_demag": stage.eigen_include_demag,
+                "eigen_equilibrium_source": if stage.eigen_equilibrium_source.is_empty() {
+                    stage.extra.get("equilibrium_source").cloned().unwrap_or(Value::Null)
+                } else {
+                    string_or_null(&stage.eigen_equilibrium_source)
+                },
+                "eigen_equilibrium_artifact": stage.extra.get("eigen_equilibrium_artifact")
+                    .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                    .or_else(|| stage.extra.get("equilibrium_artifact")),
+                "frequency_equilibrium_source": stage.extra.get("frequency_equilibrium_source")
+                    .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                    .or_else(|| stage.extra.get("equilibrium_source")),
+                "frequency_equilibrium_artifact": stage.extra.get("frequency_equilibrium_artifact")
+                    .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                    .or_else(|| stage.extra.get("equilibrium_artifact")),
+                "eigen_normalization": string_or_null(&stage.eigen_normalization),
+            });
+            let stage_fields = stage_override
+                .as_object_mut()
+                .expect("script builder stage overrides are an object");
+            for key in [
+                "eigen_solver_rtol",
+                "eigen_solver_max_outer_iterations",
+                "eigen_solver_max_linear_iterations",
+            ] {
+                if let Some(value) = stage.extra.get(key) {
+                    stage_fields.insert(key.to_string(), value.clone());
+                }
+            }
+            stage_override
+        }).collect::<Vec<_>>(),
         "study_pipeline": builder.study_pipeline.as_ref().map(|document| {
             serde_json::to_value(document).unwrap_or(Value::Null)
         }).unwrap_or(Value::Null),
@@ -542,11 +621,7 @@ pub fn scene_document_to_script_builder_overrides(
             "dataset": initial_state.dataset,
             "sample_index": initial_state.sample_index,
         })).unwrap_or(Value::Null),
-        "geometries": builder
-            .geometries
-            .iter()
-            .map(geometry_override_value)
-            .collect::<Vec<_>>(),
+        "geometries": geometries,
         "couplings": scene
             .couplings
             .iter()
@@ -581,6 +656,21 @@ pub fn scene_document_to_script_builder_overrides(
         "oersted_terms": builder.oersted_terms.iter()
             .map(oersted_override_value)
             .collect::<Vec<_>>(),
+        "antenna_port_modes": builder.antenna_port_modes.iter()
+            .map(|mode| serde_json::to_value(mode).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        "antenna_field_solve_stages": builder.antenna_field_solve_stages.iter()
+            .map(|stage| serde_json::to_value(stage).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        "antenna_target_projections": builder.antenna_target_projections.iter()
+            .map(|projection| serde_json::to_value(projection).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        "solved_antenna_drives": builder.solved_antenna_drives.iter()
+            .map(|drive| serde_json::to_value(drive).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        "antenna_spectrum_requests": builder.antenna_spectrum_requests.iter()
+            .map(|request| serde_json::to_value(request).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
         "excitation_analysis": builder.excitation_analysis.as_ref().map(|analysis| serde_json::json!({
             "source": analysis.source,
             "method": analysis.method,
@@ -589,6 +679,12 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     });
+    if scene.study.pbc.is_none() {
+        overrides
+            .as_object_mut()
+            .expect("script builder overrides are an object")
+            .remove("pbc");
+    }
     if let Some(profile) = builder.execution_profile.as_ref() {
         overrides["execution_profile"] =
             serde_json::to_value(profile).expect("execution profile is serializable");
@@ -1454,11 +1550,11 @@ fn upsert_interaction(
     }
 }
 
-fn builder_geometry_name_for_object(object: &SceneObject) -> String {
+pub(crate) fn builder_geometry_name_for_object(object: &SceneObject) -> String {
     if object.name.trim().is_empty() {
         object.id.clone()
     } else {
-        object.name.clone()
+        object.name.trim().to_string()
     }
 }
 
@@ -2340,12 +2436,102 @@ mod tests {
         );
     }
 
+    #[test]
+    fn adaptive_scene_builder_roundtrip_preserves_requested_runtime() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.study.backend = None;
+        scene.study.requested_backend = "fem".into();
+        scene.study.requested_device = "cpu".into();
+        scene.study.requested_precision = "single".into();
+        scene.study.parallel_execution.mode = fullmag_ir::ParallelExecutionModeIR::Adaptive;
+        let builder = scene_document_to_script_builder(&scene).expect("valid adaptive scene");
+        let restored = scene_document_from_script_builder(&builder);
+        assert_eq!(restored.study.backend, None);
+        assert_eq!(restored.study.requested_backend, scene.study.requested_backend);
+        assert_eq!(restored.study.requested_device, scene.study.requested_device);
+        assert_eq!(restored.study.requested_precision, scene.study.requested_precision);
+        assert_eq!(restored.study.parallel_execution, scene.study.parallel_execution);
+        crate::validate_scene_document_for_authoring(&restored)
+            .expect("round-trip must preserve the legal lane");
+    }
+
+    #[test]
+    fn legacy_builder_keeps_runtime_defaults_without_policy_inference() {
+        let scene = scene_document_from_script_builder(&sample_builder());
+        assert_eq!(scene.study.requested_backend, "fem");
+        assert_eq!(scene.study.requested_device, "auto");
+        assert_eq!(scene.study.requested_precision, "double");
+    }
+
+    #[test]
+    fn scene_pbc_roundtrip_preserves_axes_demag_images_and_null_override() {
+        let mut builder = sample_builder();
+        builder.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [fullmag_ir::AxisBoundary::Periodic, fullmag_ir::AxisBoundary::Open,
+                   fullmag_ir::AxisBoundary::Periodic],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([4, 0, 7]),
+        });
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.study.pbc, Some(builder.pbc.clone()));
+        let restored = scene_document_to_script_builder(&scene).expect("valid PBC scene");
+        assert_eq!(restored.pbc, builder.pbc);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["pbc"], serde_json::to_value(&builder.pbc).unwrap());
+        let encoded = serde_json::to_value(&scene).unwrap();
+        let decoded: SceneDocument = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.study.pbc, Some(builder.pbc.clone()));
+
+        let mut cleared = decoded;
+        cleared.study.pbc = Some(None);
+        assert!(scene_document_to_script_builder(&cleared).unwrap().pbc.is_none());
+        assert!(scene_document_to_script_builder_overrides(&cleared).unwrap()["pbc"].is_null());
+        let mut legacy = serde_json::to_value(&cleared).unwrap();
+        // Keep an explicit reset through serde; absence is not a clear override.
+        assert_eq!(legacy["study"].get("pbc"), Some(&serde_json::Value::Null));
+        legacy["study"].as_object_mut().unwrap().remove("pbc");
+        let legacy: SceneDocument = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.study.pbc.is_none());
+        let legacy_overrides = scene_document_to_script_builder_overrides(&legacy).unwrap();
+        assert!(legacy_overrides.get("pbc").is_none());
+        assert!(serde_json::to_value(&legacy).unwrap()["study"].get("pbc").is_none());
+
+        let explicit_clear: SceneDocument =
+            serde_json::from_value(serde_json::to_value(&cleared).unwrap()).unwrap();
+        assert_eq!(explicit_clear.study.pbc, Some(None));
+        assert_eq!(
+            scene_document_to_script_builder_overrides(&explicit_clear).unwrap().get("pbc"),
+            Some(&serde_json::Value::Null),
+        );
+    }
+
+    #[test]
+    fn scene_pbc_rejects_inconsistent_demag_policy() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.study.pbc = Some(Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [fullmag_ir::AxisBoundary::Periodic, fullmag_ir::AxisBoundary::Open,
+                   fullmag_ir::AxisBoundary::Open],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+            image_counts: None,
+        }));
+        assert!(scene_document_to_script_builder(&scene).is_err());
+        let pbc = scene.study.pbc.as_mut().unwrap().as_mut().unwrap();
+        pbc.demag = fullmag_ir::FdmDemagPeriodicityIR::Open;
+        pbc.image_counts = Some([1, 0, 0]);
+        assert!(scene_document_to_script_builder(&scene).is_err());
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 7,
             backend: Some("fem".to_string()),
+            requested_backend: None,
+            requested_device: None,
+            requested_precision: None,
             requested_mode: Some("strict".to_string()),
             cpu_threads: Some(8),
+            parallel_execution: None,
+            pbc: None,
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
             exchange_enabled: true,
             demag_enabled: true,
@@ -2706,6 +2892,11 @@ mod tests {
             spin_transports: Vec::new(),
             spin_torques: Vec::new(),
             oersted_terms: Vec::new(),
+            antenna_port_modes: Vec::new(),
+            antenna_field_solve_stages: Vec::new(),
+            antenna_target_projections: Vec::new(),
+            solved_antenna_drives: Vec::new(),
+            antenna_spectrum_requests: Vec::new(),
             excitation_analysis: Some(crate::ScriptBuilderExcitationAnalysisState {
                 source: "cpw_1".to_string(),
                 method: "dispersion".to_string(),
@@ -3242,7 +3433,90 @@ mod tests {
 
     #[test]
     fn scene_document_round_trips_script_builder_state() {
-        let builder = sample_builder();
+        let mut builder = sample_builder();
+        builder.antenna_port_modes = vec![serde_json::from_value(serde_json::json!({
+            "schema_version": "antenna_port_mode.v2",
+            "id": "port_1",
+            "source_object_id": "antenna_1",
+            "current_transport_id": "transport_1",
+            "branches": [{
+                "id": "signal",
+                "inlet_terminal_ref": "signal_in",
+                "outlet_terminal_ref": "signal_out",
+                "signed_weight": 1.0
+            }, {
+                "id": "return",
+                "inlet_terminal_ref": "return_in",
+                "outlet_terminal_ref": "return_out",
+                "signed_weight": -1.0
+            }]
+        }))
+        .expect("port fixture")];
+        builder.antenna_field_solve_stages = vec![serde_json::from_value(serde_json::json!({
+            "id": "solve_1",
+            "source_object_id": "antenna_1",
+            "current_transport_id": "transport_1",
+            "port_mode_ids": ["port_1"],
+            "conservative_current_view_ref": "transport_1:rt0",
+            "model": "quasistatic_conduction_biot_savart3d",
+            "oersted_realization": "direct_tetra_quadrature",
+            "conductor_mesh_policy": "authored_shared_domain",
+            "field_sampling_domain": {"kind": "global"},
+            "target_refs": [{"kind": "global"}],
+            "solver_policy": "production_default",
+            "outputs": [{"id": "basis", "quantity": "H_ant_basis"}]
+        }))
+        .expect("field solve fixture")];
+        builder.antenna_target_projections = vec![serde_json::from_value(serde_json::json!({
+            "id": "projection_1",
+            "solution": {
+                "stage_id": "solve_1",
+                "output_id": "basis",
+                "asset_id": "asset_1",
+                "content_digest": "sha256:asset"
+            },
+            "target": {"kind": "global"},
+            "output_id": "projected"
+        }))
+        .expect("projection fixture")];
+        builder.solved_antenna_drives = vec![serde_json::from_value(serde_json::json!({
+            "id": "drive_1",
+            "name": "Drive 1",
+            "projection_ref": "projection_1",
+            "port_mode_id": "port_1",
+            "peak_current_a": 0.01,
+            "waveform": {"kind": "constant"},
+            "time_origin": "stage_local",
+            "activation": {"kind": "all_time_evolution"}
+        }))
+        .expect("drive fixture")];
+        builder.antenna_spectrum_requests = vec![serde_json::from_value(serde_json::json!({
+            "id": "spectrum_1",
+            "solution_ref": {
+                "stage_id": "solve_1",
+                "output_id": "basis",
+                "asset_id": "asset_1",
+                "content_digest": "sha256:asset"
+            },
+            "target": {"kind": "global"},
+            "transform": "spatial_fft",
+            "sampling_plane": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 2,
+                "sample_count_v": 2,
+                "interpolation": "fem_element",
+                "outside_policy": "error"
+            },
+            "window": "rectangular",
+            "normalization": "integral_si",
+            "component": "x",
+            "output_id": "spectrum_out"
+        }))
+        .expect("spectrum fixture")];
         let scene = scene_document_from_script_builder(&builder);
         let round_trip = scene_document_to_script_builder(&scene).expect("scene should validate");
 
@@ -3259,6 +3533,36 @@ mod tests {
         assert_eq!(round_trip.initial_state, builder.initial_state);
         assert_eq!(round_trip.current_modules, builder.current_modules);
         assert_eq!(round_trip.excitation_analysis, builder.excitation_analysis);
+        assert_eq!(round_trip.antenna_port_modes, builder.antenna_port_modes);
+        assert_eq!(
+            round_trip.antenna_field_solve_stages,
+            builder.antenna_field_solve_stages
+        );
+        assert_eq!(
+            round_trip.antenna_target_projections,
+            builder.antenna_target_projections
+        );
+        assert_eq!(round_trip.solved_antenna_drives, builder.solved_antenna_drives);
+        assert_eq!(
+            round_trip.antenna_spectrum_requests,
+            builder.antenna_spectrum_requests
+        );
+        let overrides = scene_document_to_script_builder_overrides(&scene)
+            .expect("antenna collections should survive rewrite overrides");
+        assert_eq!(overrides["antenna_port_modes"][0]["id"], "port_1");
+        assert_eq!(
+            overrides["antenna_field_solve_stages"][0]["id"],
+            "solve_1"
+        );
+        assert_eq!(
+            overrides["antenna_target_projections"][0]["id"],
+            "projection_1"
+        );
+        assert_eq!(overrides["solved_antenna_drives"][0]["id"], "drive_1");
+        assert_eq!(
+            overrides["antenna_spectrum_requests"][0]["id"],
+            "spectrum_1"
+        );
         assert_eq!(
             round_trip.geometries[0].physics_stack,
             builder.geometries[0].physics_stack
@@ -3539,6 +3843,45 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(projected_names, vec![hidden_magnet_name.as_str()]);
+        let exported = projection.rewrite_overrides["geometries"].as_array().unwrap();
+        assert_eq!(exported.len(), 2);
+        assert_eq!(exported[0]["object_id"], scene.objects[0].id);
+        assert_eq!(exported[1]["object_id"], "carrier");
+        assert_eq!(exported[1]["role"], "carrier");
+        assert!(exported[1].get("material").is_none());
+        assert!(exported[1].get("magnetization").is_none());
+        assert!(exported[1].get("physics_stack").is_none());
+    }
+
+    #[test]
+    fn antenna_export_preserves_owner_identity_and_translation_without_magnetism() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        let mut antenna = scene.objects[0].clone();
+        antenna.id = "immutable-conductor-owner".to_string();
+        antenna.name = "Renamed antenna".to_string();
+        antenna.role = "antenna".to_string();
+        antenna.material_ref.clear();
+        antenna.magnetization_ref = None;
+        antenna.physics_stack.clear();
+        antenna.regions.clear();
+        antenna.allocated_region_ids.clear();
+        antenna.material_parameter_fields.clear();
+        antenna.absorbing_boundary = None;
+        antenna.transform.translation = [0.0, 0.0, 50e-9];
+        scene.objects.insert(0, antenna);
+
+        let overrides = scene_document_to_script_builder_overrides(&scene).expect("export");
+        let exported = &overrides["geometries"][1];
+        assert_eq!(exported["object_id"], "immutable-conductor-owner");
+        assert_eq!(exported["name"], "Renamed antenna");
+        assert_eq!(exported["role"], "antenna");
+        assert_eq!(exported["geometry_params"]["translation"], serde_json::json!([0.0, 0.0, 50e-9]));
+        assert!(exported.get("material").is_none());
+        assert!(exported.get("magnetization").is_none());
+
+        scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
+        let error = scene_document_to_script_builder_overrides(&scene).expect_err("unsupported scale");
+        assert!(error.message.contains("owner_transform_rotation_scale_unsupported"));
     }
 
     #[test]
@@ -3857,6 +4200,76 @@ mod tests {
                 "storage/preserved.json"
             );
         }
+    }
+
+    #[test]
+    fn scene_override_preserves_explicit_eigen_solver_policy() {
+        let mut encoded = serde_json::to_value(sample_builder()).unwrap();
+        encoded["stages"][0]["kind"] = serde_json::json!("eigenmodes");
+        encoded["stages"][0]["eigen_solver_rtol"] = serde_json::json!(2.5e-8);
+        encoded["stages"][0]["eigen_solver_max_outer_iterations"] = serde_json::json!(145);
+        encoded["stages"][0]["eigen_solver_max_linear_iterations"] = serde_json::json!(245);
+        let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
+        let scene = scene_document_from_script_builder(&builder);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+
+        assert_eq!(
+            overrides["stages"][0]["eigen_solver_rtol"],
+            serde_json::json!(2.5e-8)
+        );
+        assert_eq!(
+            overrides["stages"][0]["eigen_solver_max_outer_iterations"],
+            serde_json::json!(145)
+        );
+        assert_eq!(
+            overrides["stages"][0]["eigen_solver_max_linear_iterations"],
+            serde_json::json!(245)
+        );
+    }
+
+    #[test]
+    fn scene_override_omits_unset_eigen_solver_policy_for_legacy_stage() {
+        let mut encoded = serde_json::to_value(sample_builder()).unwrap();
+        encoded["stages"][0]["kind"] = serde_json::json!("eigenmodes");
+        let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
+        let scene = scene_document_from_script_builder(&builder);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        let stage_overrides = overrides["stages"][0]
+            .as_object()
+            .expect("stage override should be an object");
+
+        for key in [
+            "eigen_solver_rtol",
+            "eigen_solver_max_outer_iterations",
+            "eigen_solver_max_linear_iterations",
+        ] {
+            assert!(
+                !stage_overrides.contains_key(key),
+                "legacy stage must not emit absent solver key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn scene_override_preserves_explicit_eigen_solver_policy_clears_and_mixed_values() {
+        let mut encoded = serde_json::to_value(sample_builder()).unwrap();
+        encoded["stages"][0]["kind"] = serde_json::json!("eigenmodes");
+        encoded["stages"][0]["eigen_solver_rtol"] = Value::Null;
+        encoded["stages"][0]["eigen_solver_max_outer_iterations"] = serde_json::json!("");
+        encoded["stages"][0]["eigen_solver_max_linear_iterations"] = serde_json::json!(57);
+        let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
+        let scene = scene_document_from_script_builder(&builder);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+
+        assert_eq!(overrides["stages"][0]["eigen_solver_rtol"], Value::Null);
+        assert_eq!(
+            overrides["stages"][0]["eigen_solver_max_outer_iterations"],
+            serde_json::json!("")
+        );
+        assert_eq!(
+            overrides["stages"][0]["eigen_solver_max_linear_iterations"],
+            serde_json::json!(57)
+        );
     }
 
     #[test]

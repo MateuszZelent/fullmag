@@ -112,23 +112,23 @@ async function main() {
       "Project document handoff did not pass every check.",
     );
     await page.locator("[data-new-problem-open]").click();
-    const dialog = page.getByRole("dialog", { name: "New Problem", exact: true });
+    const dialog = page.getByRole("dialog", { name: "New simulation", exact: true });
     await dialog.waitFor({ state: "visible" });
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
     assert.deepEqual(await page.evaluate(() => window.__newProblemFixture.read()),
       { apiCalls: 0, historyClears: 0, dirty: true }, "Cancelling New Problem changed draft/history");
     await page.locator("[data-new-problem-open]").click();
-    await dialog.getByRole("checkbox").check();
-    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await dialog.getByRole("checkbox", { name: "Replace the active simulation and its unsaved project changes.", exact: true }).check();
+    await dialog.getByRole("button", { name: "Create simulation", exact: true }).click();
     await dialog.getByRole("alert").waitFor({ state: "visible" });
     assert.deepEqual(await page.evaluate(() => window.__newProblemFixture.read()),
       { apiCalls: 0, historyClears: 0, dirty: true }, "Dirty draft reached session replacement");
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.locator("[data-new-problem-clean]").click();
     await page.locator("[data-new-problem-open]").click();
-    await dialog.getByRole("checkbox").check();
-    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await dialog.getByRole("checkbox", { name: "Replace the active simulation and its unsaved project changes.", exact: true }).check();
+    await dialog.getByRole("button", { name: "Create simulation", exact: true }).click();
     await page.waitForFunction(() => window.__newProblemFixture.read().apiCalls === 1);
     await page.keyboard.press("Escape");
     assertCondition(await dialog.isVisible(), "Pending session create allowed the modal to close");

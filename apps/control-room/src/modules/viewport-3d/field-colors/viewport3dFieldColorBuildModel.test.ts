@@ -114,6 +114,32 @@ describe("viewport3dFieldColorBuildModel", () => {
     expectColorBufferToMatch(result!, expected!);
   });
 
+  it("keeps scalar palette values linear and converts sampled fallback gray once", async () => {
+    const result = await buildViewport3DFieldColorBuffer({
+      colorMode: "z",
+      colorPalette: "viridis",
+      fieldVector: scalarComponentFieldVectorFixture(),
+      target: {
+        kind: "sampled",
+        pointIndices: new Uint32Array([0, 99]),
+      },
+    });
+
+    expect(result).not.toBeNull();
+    if (!result) throw new Error("expected sampled field color buffer");
+
+    // The first scalar value is viridis t=0 in linear-sRGB. The invalid
+    // sample uses the 0.5 sRGB fallback, converted exactly once.
+    expect(Array.from(result.colors)).toEqual([
+      expect.closeTo(0.05780543, 7),
+      expect.closeTo(0.00030352699, 7),
+      expect.closeTo(0.08865558, 7),
+      expect.closeTo(0.21404114, 7),
+      expect.closeTo(0.21404114, 7),
+      expect.closeTo(0.21404114, 7),
+    ]);
+  });
+
   it("colors scalar component payloads as the selected component value", async () => {
     const fieldVector = scalarComponentFieldVectorFixture();
     const pointIndices = new Uint32Array([0, 1, 2]);

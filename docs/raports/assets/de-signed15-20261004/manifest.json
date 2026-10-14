@@ -1,0 +1,37 @@
+{
+  "schema": "fullmag.scientific-report-integrity.v1",
+  "observed_at_utc": "2026-10-04T11:09:28.814828+00:00",
+  "integrity_status": "pass; output and bound input hashes only",
+  "scientific_qualification": "NOT VERIFIED",
+  "numeric_unique_k": 15,
+  "actual_nonzero_k": 14,
+  "numeric_values_interpolated_or_symmetrized": false,
+  "original_plot_receipt_sha256": "11b6af2df94592bf9778e3e239f274f56a6635f44289743b82f27846bc04898b",
+  "plot_script_sha256": "ebee68ac83f2ad602de8adb30ebf314417143f9738b870efb5bc291a9551acd4",
+  "input_files_sha256": {
+    "C:\\Users\\Mateusz\\.codex\\visualizations\\2026\\09\\14\\01a09ee1-29e6-7d51-98f0-082c5539a0d6\\preview-state-checkpoint\\signed12-fgmres-window-postsolve-inspection-selected-final.json": "7cb8773a03b678191f0041332e0e8dd4525a753261d60a170905ea6ae5b2adfe",
+    "C:\\Users\\Mateusz\\.codex\\visualizations\\2026\\09\\14\\01a09ee1-29e6-7d51-98f0-082c5539a0d6\\preview-state-checkpoint\\signed10-fgmres-window-postsolve-inspection.json": "b680d18a6a36fa3853870960062256c1a3cf6527431ae5b7ea3c2b530b7a031e",
+    "C:\\Users\\Mateusz\\.codex\\visualizations\\2026\\09\\14\\01a09ee1-29e6-7d51-98f0-082c5539a0d6\\preview-state-checkpoint\\gamma227-selected-result-inspection-v2.json": "414baa52b4e3fad1a07f29488adb12c99296a285d66d8d1b7b4a097adec825a1",
+    "C:\\Users\\Mateusz\\.codex\\visualizations\\2026\\09\\14\\01a09ee1-29e6-7d51-98f0-082c5539a0d6\\preview-state-checkpoint\\signed15-thickness-reference-inspection.json": "d34a46e87e6109ef1c8acfffd5c9e71c8e0484be7a8b4abe1d2136f0c3aae95c",
+    "C:\\Users\\Mateusz\\.codex\\visualizations\\2026\\09\\14\\01a09ee1-29e6-7d51-98f0-082c5539a0d6\\preview-state-checkpoint\\signed15-profiles-reciprocity-inspection.json": "7895829684c7b726d3d4b977d5eb587eb4541d90df653a5b01780d0cc755503b",
+    "C:\\git\\fullmag\\worktrees\\eigensolve-dispersion-plan-20260912\\scripts\\finite_dirichlet_thin_film_oracle.py": "79392843e9bfb446be533ef61ef0553884ca46ad94649e6d23fe1e66e682f51f",
+    "C:\\git\\fullmag\\worktrees\\eigensolve-dispersion-plan-20260912\\scripts\\thin_film_thickness_oracle.py": "5035c78a30286dd9c4014a50d459c7d48ca56dca722fbd00bd924fddf3fd2cf7"
+  },
+  "outputs": {
+    "de-dispersion-signed15-job228.png": {
+      "sha256": "2320f3db55afeec763b38dd97cd4bccf897bae9ff9e7b02292b937fd5d95729a",
+      "bytes": 410489
+    },
+    "de-dispersion-signed15-job228.pdf": {
+      "sha256": "d8d04528903d179b8c7bddfff15b63c4884a37d70bf86bba946801b0dc43c25f",
+      "bytes": 45838
+    }
+  },
+  "numeric_csv_sha256": "9561fed8d0c7812b78fc97a713f509c52d52f2fda9635c149ffa1fddc974adbf",
+  "scope": "Separate nonzero-k runs from build228 plus Gamma selected-only from227; +15 restart30 retry supersedes failed restart8 attempt. Convergence, shared sweep/parity, GUI, complete Gamma window and A1 remain open.",
+  "numeric_csv_hash_representation": "Git blob LF; normalize CRLF to LF when verifying Windows checkout",
+  "separate_refinement_evidence_sha256": {
+    "C:\\Users\\Mateusz\\.codex\\visualizations\\2026\\09\\14\\01a09ee1-29e6-7d51-98f0-082c5539a0d6\\preview-state-checkpoint\\k10-mesh-refinement-postsolve-inspection-20261004T111359142967Z.json": "ae0035c9b7f37951f15129beef1d403d1202ccaabc704e788b63f986d3619212",
+    "C:\\Users\\Mateusz\\.codex\\visualizations\\2026\\09\\14\\01a09ee1-29e6-7d51-98f0-082c5539a0d6\\preview-state-checkpoint\\k10-refinement-mesh-geometry-inspection.json": "7661aa1c754b118ded88b7db913e2e4c6ff482617d5e57be8adbeaebe3f8a9f9"
+  }
+}

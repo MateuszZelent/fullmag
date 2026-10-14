@@ -108,3 +108,26 @@ Udział może być celem osobnej, sprawdzanej kopii gotowych artefaktów,
 eksportów i zakończonych wyników. Aktywny build/runtime na tym udziale
 pozostaje `NOT VERIFIED` i wymaga obsługi resolvera oraz kwalifikacji
 blokad, trwałości i odzyskania po utracie połączenia.
+
+## Dodatkowe granice techniczne — HEAD 48d3893c
+
+Kontrola na `master`, pełny HEAD
+`48d3893cca7d7f7fdd0b7408051d3955039318ac`, nie zmieniła `.env` ani
+danych udziału. Katalog jest dostępny, mapowanie prowadzi do tego samego
+udziału, a bieżący `Win32_LogicalDisk` potwierdza `Z: DriveType=4`
+oraz `R: DriveType=3`. Dostęp klienta przez SMB pozostaje sieciowy również
+przy raportowanym `FileSystem=NTFS`.
+
+Oprócz opisanej odmowy resolvera istnieją niezależne bramki:
+
+| Obszar | Obecne zachowanie kodu | Znaczenie dla Z: |
+|---|---|---|
+| Aktywna sesja, CAS i writer runtime | `crates/fullmag-session/src/writer.rs::classify_local_filesystem` na Windows akceptuje `GetDriveTypeW` tylko 2, 3 lub 6; pozostałe typy odrzuca jako niekwalifikowane do session writes. `cas.rs::CasStore::open`, `repository_path.rs` i `runtime_service_startup.rs` konsumują `require_local_filesystem`. | Samo dopuszczenie rootu przez resolver nie dopuści aktywnej sesji na sieciowym wolumenie typu 4. Nie wyłączano tej bramki. |
+| Bezpośrednia publikacja archiwum FMS | `crates/fullmag-session/src/fms.rs` sprawdza lokalny filesystem katalogu nadrzędnego przed publikacją. | Kopia zakończonego lokalnego archiwum na udział jest odrębnym przypadkiem od bezpośredniego eksportu na Z:. Nie wykonano żadnego z nich w tej kontroli. |
+| Odtwarzalna kopia kompilatora i TEMP | `scripts/windows/volatile_build_storage.py::_validate_root` wymaga na Windows lokalnego dysku fixed/RAM, typ 3 lub 6. | Z: nie może zastąpić R: w `FULLMAG_WINDOWS_VOLATILE_ROOT`. |
+
+To ustalenia ze źródeł i odczytu rodzaju wolumenu; nie są nowym wykonaniem
+writerów, pozytywnym preflight udziału ani pomiarem wydajności. Dla następnego
+buildu zachować istniejący trwały root na C: oraz TEMP na R:. Aktywne
+użycie Z: wymaga osobnego kontraktu i kwalifikacji, obejmujących wszystkie
+powyższe bramki, a nie tylko zmiany jednej zmiennej konfiguracji.

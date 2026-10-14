@@ -5,6 +5,8 @@ const SCENE_DOCUMENT_FIELDS = [
   "materials", "magnetization_assets", "field_drives", "monitors", "selections",
   "magnetization_constraints", "current_modules", "current_transports",
   "spin_transports", "spin_torques", "oersted_fields", "study", "outputs", "editor",
+  "antenna_port_modes", "antenna_field_solve_stages", "antenna_target_projections",
+  "solved_antenna_drives", "antenna_spectrum_requests",
 ] as const;
 
 /** Canonical SceneResource -> SceneDocument projection shared by history/save.

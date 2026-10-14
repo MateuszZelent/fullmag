@@ -26,7 +26,9 @@ import {
   useSessionResourceIdentity,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import {
+  findInteractionSpec,
   interactionAvailabilityForDiscretization,
   interactionSpecsForDiscretization,
   normalizeInteractionDiscretization,
@@ -175,12 +177,12 @@ export async function commitObjectInteractionMutation({
 
 export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;
-  const selectedRegionId =
+  const regionId =
     selection.ref?.type === "scene-object" ? selection.ref.regionId ?? null : null;
   const { api, authoringHistory, resources } = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const sessionDiscretization = useSessionStatusSelector(
-    (status) => status.data?.domain.discretization ?? null,
+    (status) => resolveSessionDiscretization(status.data),
   );
   const sessionId = useSessionStatusSelector(
     (status) => status.data?.session.session_id ?? "current",
@@ -191,7 +193,9 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   );
   const interactionOptions = interactionSpecsForDiscretization(
     interactionDiscretization,
-  );
+  ).map((option) => option.id === "exchange"
+    ? findInteractionSpec(option.id, objectId) ?? option
+    : option);
   const selectedInteractionId =
     interactionIdFromSelection(selection.nodeId) ?? "exchange";
   const [state, dispatch] = useReducer(physicsInteractionPanelReducer, {
@@ -206,6 +210,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     state.interactionSelection.nodeId === selection.nodeId
       ? state.interactionSelection.interactionId
       : selectedInteractionId;
+  const selectedRegionId = interactionId === "exchange" && objectId ? null : regionId;
   const mutationKey = interactionMutationKey({
     interactionId,
     objectId,
@@ -228,7 +233,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   );
   const objectInteractionKind =
     interactionAvailability.status === "supported" &&
-    isWritableObjectInteraction(interactionId)
+    isWritableObjectInteraction(interactionId, objectId)
     ? interactionId
     : "exchange";
   const objectInteraction = useObjectInteractionResource(
@@ -239,7 +244,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         objectId &&
           interactionAvailability.status === "supported" &&
           activeLaneOperation.enabled &&
-          isWritableObjectInteraction(interactionId),
+          isWritableObjectInteraction(interactionId, objectId),
       ),
     },
   );
@@ -248,14 +253,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       interactionAvailability.status === "supported" &&
       activeLaneOperation.enabled &&
       (isWritableStudyInteraction(interactionId) ||
-        isWritableObjectInteraction(interactionId)),
+        isWritableObjectInteraction(interactionId, objectId)),
   });
   const resource =
     objectInteraction.data ??
     defaultObjectInteractionResource(objectId ?? "", objectInteractionKind);
   const baseDraft = useMemo(() => {
     let nextDraft: PhysicsInteractionDraft;
-    if (isWritableObjectInteraction(interactionId)) {
+    if (isWritableObjectInteraction(interactionId, objectId)) {
       nextDraft = draftFromInteractionResource(interactionId, resource);
     } else if (isWritableStudyInteraction(interactionId)) {
       nextDraft = draftFromStudyScene(interactionId, scene.data ?? null);
@@ -281,7 +286,9 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       return {
         ...nextDraft,
         enabled: state.interactionSelection.active,
-        present: state.interactionSelection.active,
+        present: interactionId === "exchange" && objectId
+          ? nextDraft.present || state.interactionSelection.active
+          : state.interactionSelection.active,
       };
     }
     return nextDraft;
@@ -290,6 +297,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     // resource snapshot; preserve this explicit memoization boundary.
     // eslint-disable-next-line react-hooks/preserve-manual-memoization
     interactionId,
+    objectId,
     resource,
     scene.data,
     selectedRegionId,
@@ -312,7 +320,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     !laneIssue &&
     !isDeferredInteraction(interactionId) &&
     (isWritableStudyInteraction(interactionId) ||
-      (Boolean(objectId) && isWritableObjectInteraction(interactionId)));
+      (Boolean(objectId) && isWritableObjectInteraction(interactionId, objectId)));
 
   function updateDraft(patch: Partial<PhysicsInteractionDraft>): void {
     setDraftState((current) => ({
@@ -354,7 +362,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       });
       return false;
     }
-    if (isWritableObjectInteraction(interactionId) && !objectId) {
+    if (isWritableObjectInteraction(interactionId, objectId) && !objectId) {
       dispatch({
         type: "setMutation",
         key: mutationKey,
@@ -363,7 +371,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       return false;
     }
 
-    const result = buildInteractionApplyPatch(draft, scene.data ?? null);
+    const result = buildInteractionApplyPatch(draft, scene.data ?? null, objectId);
     if ("error" in result) {
       dispatch({
         type: "setMutation",
@@ -533,7 +541,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       !laneIssue &&
       !isDeferredInteraction(interactionId) &&
       (isWritableStudyInteraction(interactionId) ||
-        (Boolean(objectId) && isWritableObjectInteraction(interactionId))),
+        (Boolean(objectId) && isWritableObjectInteraction(interactionId, objectId))),
   );
   const editSessionLockReason = !activeLaneOperation.enabled
     ? activeLaneOperation.reason
@@ -624,7 +632,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         />
       ) : null}
       {spec ? <PhysicsInteractionContractSection spec={spec} /> : null}
-      {isWritableObjectInteraction(interactionId) ? (
+      {isWritableObjectInteraction(interactionId, objectId) ? (
         <PhysicsInteractionBackendSection
           enabled={resource.enabled}
           interactionKind={resource.interaction_kind}
@@ -789,15 +797,16 @@ function PhysicsInteractionChecklistRow({
   option: PhysicsInteractionSpec;
   sceneData: Parameters<typeof draftFromStudyScene>[1];
 }) {
-  const objectInteractionKind = isWritableObjectInteraction(option.id)
+  const selected = option.id === interactionId;
+  const objectScoped = isWritableObjectInteraction(option.id, objectId);
+  const objectInteractionKind = isWritableObjectInteraction(option.id, objectId)
     ? option.id
     : "exchange";
   const objectInteraction = useObjectInteractionResource(
     objectId,
     objectInteractionKind,
-    { enabled: Boolean(objectId && isWritableObjectInteraction(option.id)) },
+    { enabled: Boolean(objectId && objectScoped && !selected) },
   );
-  const selected = option.id === interactionId;
   const operation = resolveActiveLaneOperation(
     activeLane,
     `interaction.${option.id}`,
@@ -805,7 +814,7 @@ function PhysicsInteractionChecklistRow({
   const objectActive = Boolean(
     objectInteraction.data?.present && objectInteraction.data?.enabled,
   );
-  const studyDraft = isWritableStudyInteraction(option.id)
+  const studyDraft = !objectScoped && isWritableStudyInteraction(option.id)
     ? draftFromStudyScene(option.id, sceneData)
     : null;
   const checked = selected

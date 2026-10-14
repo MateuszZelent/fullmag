@@ -5,6 +5,7 @@ import type {
   FrequencyDomainFieldResource,
 } from "../api/apiTypes";
 import type { DecodedFieldVector } from "../api/codecs";
+import { fieldVectorResourceKey } from "../api/fieldQueryIdentity";
 import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import {
@@ -80,7 +81,11 @@ const resultFieldRef: AnalysisResultFieldRef = {
   },
   quantity_id: "m",
   representation: "complex-vector-xyz",
-  resource_key: "data/fields/analysis-result-mode",
+  resource_key: fieldVectorResourceKey("analysis:eigen:sample-result:mode-result", {
+    component: "full",
+    scope_kind: "full",
+    view: "complex",
+  }),
   status: "ready",
 };
 

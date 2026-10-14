@@ -79,3 +79,35 @@ export function updateInspectorDraftState<TDraft>({
     identityKey,
   };
 }
+
+export function updateResolvedInspectorDraftState<TDraft>({
+  baseDraft,
+  baseKey,
+  currentState,
+  identityKey,
+  isDirty,
+  patch,
+}: {
+  baseDraft: TDraft;
+  baseKey: string;
+  currentState: InspectorDraftState<TDraft>;
+  identityKey: string;
+  isDirty: (draft: TDraft, baseDraft: TDraft) => boolean;
+  patch: Partial<TDraft>;
+}): InspectorDraftState<TDraft> {
+  const { draft: currentDraft } = resolveInspectorDraftState({
+    baseDraft,
+    baseKey,
+    identityKey,
+    isDirty,
+    state: currentState,
+  });
+  return updateInspectorDraftState({
+    baseDraft,
+    baseKey,
+    currentDraft,
+    identityKey,
+    isDirty,
+    patch,
+  });
+}

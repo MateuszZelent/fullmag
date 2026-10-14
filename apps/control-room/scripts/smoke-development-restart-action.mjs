@@ -177,6 +177,31 @@ async function main() {
 
     await page.evaluate(() => window.__developmentRestartActionFixture.setMode("ready", 3));
     await restartButton.waitFor({ state: "visible" });
+    await page.evaluate(() => window.__developmentRestartActionFixture.armPreIntentCandidateChange());
+    await restartButton.click();
+    await page.waitForFunction(() => {
+      const current = window.__developmentRestartActionFixture.read();
+      return current.action?.state === "failed" && !current.action.busy;
+    });
+    const candidateRefused = await page.evaluate(() => window.__developmentRestartActionFixture.read());
+    await page.evaluate(() => window.__developmentRestartActionFixture.remountBanner());
+    await restartButton.waitFor({ state: "visible" });
+    const candidateStillRefused = await page.evaluate(() => window.__developmentRestartActionFixture.read());
+    evidence.candidateRefusal = { before: candidateRefused, afterRemount: candidateStillRefused };
+    check("changed candidate reports its safe capture boundary without submitting or retrying on remount", () => {
+      assert.equal(candidateRefused.action.message,
+        "The ready build and protected workspace could not be confirmed together. No restart was submitted.");
+      assert.equal(candidateRefused.action.requestId, null);
+      assert.equal(candidateRefused.action.captureCleanup, "confirmed");
+      assert.equal(candidateRefused.guardedCaptureReads, 3);
+      assert.equal(candidateRefused.paused, false);
+      assert.equal(candidateRefused.publicationError, null);
+      assert.equal(candidateRefused.generation, 2);
+      assert.equal(candidateRefused.posts.length, 2);
+      assert.equal(candidateStillRefused.posts.length, 2);
+      assert.equal(candidateStillRefused.action.state, "failed");
+    });
+    await page.evaluate(() => window.__developmentRestartActionFixture.clearPreIntentCandidateChange());
     await page.evaluate(() => window.__developmentRestartActionFixture.armPreIntentCleanupFault());
     await restartButton.click();
     await page.waitForFunction(() => {

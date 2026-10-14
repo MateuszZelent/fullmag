@@ -189,6 +189,7 @@ describe("frequency-domain resource keys", () => {
 
   it("uses every source identity for an object-scoped complex mode field", () => {
     const base = {
+      artifactGenerationId: "publication-12",
       artifactRevision: "artifact-7",
       binaryEncoding: "FMVP;version=3",
       fieldId: "mode-field",
@@ -208,11 +209,21 @@ describe("frequency-domain resource keys", () => {
     expect(objectA).toContain("mode-field");
     expect(objectA).toContain("field-9");
     expect(objectA).toContain("generation-5");
+    expect(objectA).toContain("publication-12");
     expect(objectA).toContain("mesh-6");
+
+    expect(
+      modeFieldComplexBinaryResourceKey({
+        ...base,
+        artifactGenerationId: "publication-13",
+        scopeId: "a",
+      }),
+    ).not.toBe(objectA);
   });
 
   it("keeps display-only choices out of the complex field cache identity", () => {
     const identity = {
+      artifactGenerationId: "publication-12",
       artifactRevision: "artifact-7",
       binaryEncoding: "FMVP;version=3",
       fieldId: "mode-field",

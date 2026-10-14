@@ -81,9 +81,21 @@ describe("ProjectBatchesSection", () => {
                 case_id: "case-a",
                 parameter_tuple: { B_ext: 0.01 },
                 planned_run_id: "run-a",
-                state: "pending_materialization",
+                state: "pending_expansion",
+                published_run: null,
+              }, {
+                case_id: "case-b",
+                parameter_tuple: { B_ext: 0.02 },
+                planned_run_id: "run-b",
+                state: "materialized",
+                published_run: {
+                  run_id: "run-b",
+                  catalog_state: "materialized",
+                  catalog_revision: 7,
+                  tasks: [{ task_id: "task-b", lifecycle: "running" }],
+                },
               }],
-              next_cursor: "case-a",
+              next_cursor: "case-b",
             },
             error: null,
             refetch: vi.fn(),
@@ -101,11 +113,11 @@ describe("ProjectBatchesSection", () => {
         catalog_revision: 7,
         catalog_state: "materialized",
         project_id: "project-a",
-        run_id: "run-a",
+        run_id: "run-b",
         tasks: [{
           lifecycle: "running",
           readiness: { state: "ready" },
-          task_id: "task-a",
+          task_id: "task-b",
         }],
       },
       error: null,
@@ -120,7 +132,7 @@ describe("ProjectBatchesSection", () => {
           solution_set_id: "solution-a",
         }],
         project_id: "project-a",
-        run_id: "run-a",
+        run_id: "run-b",
         schema_version: "fullmag.analysis.solution_set_discovery.v1",
         next_cursor: null,
       },
@@ -159,8 +171,15 @@ describe("ProjectBatchesSection", () => {
     await act(async () => toggle.click());
 
     expect(container.textContent).toContain("B_ext=0.01 T");
-    expect(container.textContent).toContain("Run: run-a");
-    expect(container.textContent).toContain("Pending task materialization");
+    expect(container.textContent).toContain("B_ext=0.02 T");
+    expect(container.textContent).toContain("Planned run: run-a");
+    expect(container.textContent).toContain("Child run has not been published.");
+    expect(container.textContent).toContain("Published child run: run-b");
+    expect(container.textContent).toContain("Task catalog revision 7 · 1 task(s)");
+    expect(container.textContent).toContain("running · task-b");
+    expect(Array.from(container.querySelectorAll("button")).filter((button) =>
+      button.textContent?.trim() === "View run details",
+    )).toHaveLength(1);
     const viewRun = findElement(
       container as unknown as TestElement,
       (element) => element.tagName === "BUTTON" && element.textContent?.trim() === "View run details",
@@ -169,7 +188,7 @@ describe("ProjectBatchesSection", () => {
     await act(async () => viewRun.click());
     expect(container.textContent).toContain("Task catalog revision 7");
     expect(container.textContent).toContain("running · ready");
-    expect(container.textContent).toContain("task-a");
+    expect(container.textContent).toContain("task-b");
     expect(container.textContent).toContain("Available results");
     expect(container.textContent).toContain("solution-a · revision 4");
     expect(fakes.listBatchCases).toHaveBeenLastCalledWith("project-a", "batch-a", {
@@ -184,7 +203,7 @@ describe("ProjectBatchesSection", () => {
     );
     await act(async () => nextCases.click());
     expect(fakes.listBatchCases).toHaveBeenLastCalledWith("project-a", "batch-a", {
-      cursor: "case-a",
+      cursor: "case-b",
       limit: 20,
     });
   });

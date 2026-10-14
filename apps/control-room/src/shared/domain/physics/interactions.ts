@@ -673,8 +673,18 @@ export function validateInteractionDraftForDiscretization(
 
 export function findInteractionSpec(
   id: PhysicsInteractionId,
+  objectId?: string | null,
 ): InteractionSpec | undefined {
-  return INTERACTION_SPECS.find((spec) => spec.id === id);
+  const spec = INTERACTION_SPECS.find((spec) => spec.id === id);
+  return spec && id === "exchange" && objectId
+    ? {
+        ...spec,
+        availability: "object",
+        description: "Exchange module of the selected magnetic object. The assigned material owns A; the global Study Exchange switch remains separate.",
+        scope: "object_or_region",
+        storage: "object_interaction",
+      }
+    : spec;
 }
 
 export function writableObjectInteractionIds(): ObjectInteractionKind[] {
@@ -722,8 +732,9 @@ export function draftFromObjectInteractionResource(
 export function buildObjectInteractionPatchFromDraft(
   draft: PhysicsInteractionDraft,
   scene?: SceneResource | null,
+  objectId?: string | null,
 ): ObjectInteractionPatchResult {
-  const spec = requireInteractionSpec(draft.id);
+  const spec = findInteractionSpec(draft.id, objectId) ?? requireInteractionSpec(draft.id);
   if (
     (draft.id === "interfacial_dmi" || draft.id === "bulk_dmi") &&
     draft.enabled &&

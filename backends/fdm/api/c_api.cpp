@@ -2081,7 +2081,9 @@ int fullmag_fdm_backend_set_stats_policy_v1(
     fullmag_fdm_set_operator_device_requirement(
         *ctx->execution_receipt,
         FULLMAG_FDM_OPERATOR_REDUCTION,
-        ctx->adaptive_enabled || ctx->stats_mode == FULLMAG_FDM_STATS_FULL);
+        ctx->adaptive_enabled ||
+            ctx->stats_mode == FULLMAG_FDM_STATS_FULL ||
+            ctx->stats_mode == FULLMAG_FDM_STATS_CONTROL);
     ctx->endpoint_field_cache.stats_valid = false;
     ctx->endpoint_field_cache.stats_quantity_mask = 0;
     ctx->last_error.clear();
@@ -3579,9 +3581,10 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 #endif
 }
 
-int fullmag_fdm_backend_set_regional_field_drives_v1(
+template <typename Descriptor>
+static int set_regional_field_drives_impl(
     fullmag_fdm_backend *handle,
-    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    const Descriptor *drives,
     uint32_t drive_count)
 {
 #if FULLMAG_HAS_CUDA
@@ -3682,6 +3685,22 @@ int fullmag_fdm_backend_set_regional_field_drives_v1(
     (void)drive_count;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
+}
+
+int fullmag_fdm_backend_set_regional_field_drives_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count)
+{
+    return set_regional_field_drives_impl(handle, drives, drive_count);
+}
+
+int fullmag_fdm_backend_set_regional_field_drives_v2(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
+    uint32_t drive_count)
+{
+    return set_regional_field_drives_impl(handle, drives, drive_count);
 }
 
 /* ── Error ── */

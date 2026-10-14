@@ -145,6 +145,7 @@ export function StudyPipelineSection({
   drafts,
   model,
   showDraftEditor = true,
+  readOnlyReason = null,
   onAddStage,
   onCommit,
   onDuplicateStage,
@@ -169,6 +170,7 @@ export function StudyPipelineSection({
   drafts: readonly StudyStageDraft[];
   model: StudyInspectorModel;
   showDraftEditor?: boolean;
+  readOnlyReason?: string | null;
   onAddStage: (kind: StudyStageDraft["kind"]) => void;
   onCommit?: () => void;
   onDuplicateStage?: (index: number) => void;
@@ -216,7 +218,8 @@ export function StudyPipelineSection({
           />
         ))}
       </div>
-      {showDraftEditor && draft ? (
+      {readOnlyReason ? <FeedbackBanner kind="warning" message={readOnlyReason} /> : null}
+      {showDraftEditor && draft && !readOnlyReason ? (
         <>
           <StudyStageDraftEditor
             draft={draft}
@@ -232,7 +235,7 @@ export function StudyPipelineSection({
           />
           <div className="fm-inspector-toolbar">
             {onDuplicateStage ? (
-              <Button disabled={authoringBusy} size="sm" type="button" variant="ghost" onClick={() => onDuplicateStage(draftIndex)}>
+              <Button disabled={authoringBusy || draft.kind === "antenna_field_solve"} size="sm" type="button" variant="ghost" onClick={() => onDuplicateStage(draftIndex)}>
                 Duplicate
               </Button>
             ) : null}
@@ -289,7 +292,7 @@ export function StudyPipelineSection({
           message={authoringFeedback.message}
         />
       ) : null}
-      {showDraftEditor ? (
+      {showDraftEditor && !readOnlyReason ? (
         <div
           className="fm-inspector-toolbar"
           data-testid="study-stage-authoring-toolbar"
@@ -310,7 +313,7 @@ export function StudyPipelineSection({
           onClick={() => onAddStage("add_field_drive")}
         >
           <Radio size={13} aria-hidden="true" />
-          Antenna
+          Field Drive
         </Button>
         <Button
           size="sm"

@@ -387,7 +387,9 @@ pub(super) fn modal_shared_domain_equivalence_classes(
         let root_a = find(&mut parent, a);
         let root_b = find(&mut parent, b);
         if root_a != root_b {
-            parent[root_b] = root_a;
+            // Certificate v6 orders classes by their minimum global node.
+            // Keep that representative independent of pair direction/order.
+            parent[root_a.max(root_b)] = root_a.min(root_b);
         }
     }
     let mut scalar_roots = std::collections::BTreeMap::<usize, u32>::new();
@@ -506,4 +508,77 @@ pub(super) fn build_modal_certificate_map_binding(
     let binding_digest =
         shared_domain_content_digest("periodic_modal_equivalence_map_binding", &binding)?;
     Ok((binding, binding_digest))
+}
+
+#[cfg(test)]
+mod canonical_periodic_map_tests {
+    use super::*;
+
+    fn topology() -> MeshTopology {
+        let mesh = fullmag_ir::MeshIR {
+            mesh_name: "canonical_periodic_map_fixture".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            element_markers: vec![1],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        MeshTopology::from_ir(&mesh).expect("valid tet4 fixture")
+    }
+
+    #[test]
+    fn canonical_periodic_maps_are_pair_order_and_direction_invariant() {
+        let mut topology = topology();
+        for pairs in [
+            vec![(3, 0), (2, 1)],
+            vec![(1, 2), (0, 3)],
+            vec![(2, 1), (3, 0), (0, 3)],
+        ] {
+            topology.periodic_node_pairs = pairs
+                .into_iter()
+                .map(|(a, b)| ("x".to_string(), a, b))
+                .collect();
+            let (scalar, ns, magnetic, nm) =
+                modal_shared_domain_equivalence_classes(&topology).unwrap();
+            assert_eq!(scalar, vec![0, 1, 1, 0]);
+            assert_eq!(magnetic, vec![0, 1, 1, 0]);
+            assert_eq!((ns, nm), (2, 2));
+        }
+    }
+
+    #[test]
+    fn canonical_periodic_maps_preserve_air_sentinel_and_reject_mixed_classes() {
+        let mut topology = topology();
+        topology.magnetic_node_volumes[1] = 0.0;
+        topology.magnetic_node_volumes[2] = 0.0;
+        topology.periodic_node_pairs = vec![("x".into(), 3, 0), ("x".into(), 2, 1)];
+        let (scalar, ns, magnetic, nm) =
+            modal_shared_domain_equivalence_classes(&topology).unwrap();
+        assert_eq!(scalar, vec![0, 1, 1, 0]);
+        assert_eq!(magnetic, vec![0, u32::MAX, u32::MAX, 0]);
+        assert_eq!((ns, nm), (2, 1));
+        topology.periodic_node_pairs.push(("x".into(), 0, 1));
+        assert!(modal_shared_domain_equivalence_classes(&topology)
+            .unwrap_err()
+            .message
+            .contains("mixes magnetic and air"));
+    }
+
+    #[test]
+    fn canonical_periodic_maps_reject_out_of_mesh_pairs() {
+        let mut topology = topology();
+        topology.periodic_node_pairs = vec![("x".into(), 0, 4)];
+        assert!(modal_shared_domain_equivalence_classes(&topology)
+            .unwrap_err()
+            .message
+            .contains("outside the mesh"));
+    }
 }

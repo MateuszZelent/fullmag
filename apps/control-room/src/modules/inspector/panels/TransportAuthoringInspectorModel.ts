@@ -13,6 +13,7 @@ import {
 const ELEMENTARY_CHARGE_C = 1.602176634e-19;
 
 export interface StructuredCurrentSourceCutDraft {
+  rowId: string;
   axis: SceneStructuredCutPlane["axis"];
   circuitId: string;
   driveId: string;
@@ -36,7 +37,7 @@ export interface CurrentTransportDraft {
   coupling: "one_way" | "bidirectional";
   currentDensity: string;
   domain: string;
-  gauge: "dirichlet_reference" | "zero_mean";
+  gauge: "dirichlet_reference" | "zero_mean" | "terminal_reference";
   materials: string;
   model: "prescribed_density" | "ohmic_poisson" | "magnetoresistive_poisson";
   name: string;
@@ -78,6 +79,30 @@ export interface SpinTransportDraft {
   solverPhysicalResidualVersion: string;
   solverRelativeTolerance: string;
   reciprocalNonlinear: string;
+}
+
+export type TransportDraft = CurrentTransportDraft | SpinTransportDraft;
+
+/** Local row keys are presentation state, never a transport parameter. */
+export function transportDraftValuesEqual(left: unknown, right: unknown): boolean {
+  const withoutRowIds = (key: string, value: unknown) => key === "rowId" ? undefined : value;
+  return JSON.stringify(left, withoutRowIds) === JSON.stringify(right, withoutRowIds);
+}
+
+/** Adopt untouched server fields, retain edits, and report overlapping changes. */
+export function reconcileTransportDraft<T extends TransportDraft>(server: T, local: T, baseline: T): {
+  draft: T;
+  conflicts: Array<keyof T>;
+} {
+  const draft = { ...server };
+  const conflicts: Array<keyof T> = [];
+  for (const key of Object.keys(server) as Array<keyof T>) {
+    if (transportDraftValuesEqual(local[key], baseline[key])) continue;
+    draft[key] = local[key];
+    if (!transportDraftValuesEqual(server[key], baseline[key])
+      && !transportDraftValuesEqual(server[key], local[key])) conflicts.push(key);
+  }
+  return { draft, conflicts };
 }
 
 /**
@@ -190,6 +215,7 @@ export {
 export function currentTransportDraft(
   value?: KnownSceneCurrentTransport | null,
   initialScope?: TransportAuthoringInitialScope | null,
+  previous?: CurrentTransportDraft | null,
 ): CurrentTransportDraft {
   const initialDomain = initialScope
     ? [{
@@ -198,6 +224,10 @@ export function currentTransportDraft(
       }]
     : [];
   const scopedRegionSolve = initialScope?.regionId ? null : initialScope?.objectId;
+  const previousCuts = previous?.structuredCurrentClosure?.sourceCuts ?? [];
+  const previousIds = new Map(previousCuts.map((cut) => [cut.sourceCutId.trim(), cut.rowId]));
+  const reservedIds = new Set(previousCuts.map((cut) => cut.rowId));
+  const assignedIds = new Set<string>();
   return {
     boundaries: pretty(value?.boundaries ?? []),
     conductivity: value?.conductivity_s_per_m?.toString() ?? "",
@@ -219,17 +249,26 @@ export function currentTransportDraft(
     structuredCurrentClosure: value?.structured_current_closure
       ? {
           closureId: value.structured_current_closure.closure_id,
-          sourceCuts: value.structured_current_closure.source_cuts.map((cut) => ({
-            axis: cut.plane.axis,
-            circuitId: cut.circuit_id,
-            driveId: cut.drive.drive_id,
-            normal: cut.plane.normal,
-            objectId: cut.region.object_id,
-            offsetM: cut.plane.offset_m.toString(),
-            potentialJumpV: cut.drive.potential_jump_V.toString(),
-            regionId: cut.region.region_id ?? "",
-            sourceCutId: cut.source_cut_id,
-          })),
+          sourceCuts: value.structured_current_closure.source_cuts.map((cut, index) => {
+            let rowId = previousIds.get(cut.source_cut_id);
+            if (!rowId || assignedIds.has(rowId)) {
+              rowId = `source:${index}:${cut.source_cut_id}`;
+              while (reservedIds.has(rowId) || assignedIds.has(rowId)) rowId += ":new";
+            }
+            assignedIds.add(rowId);
+            return {
+              rowId,
+              axis: cut.plane.axis,
+              circuitId: cut.circuit_id,
+              driveId: cut.drive.drive_id,
+              normal: cut.plane.normal,
+              objectId: cut.region.object_id,
+              offsetM: cut.plane.offset_m.toString(),
+              potentialJumpV: cut.drive.potential_jump_V.toString(),
+              regionId: cut.region.region_id ?? "",
+              sourceCutId: cut.source_cut_id,
+            };
+          }),
         }
       : null,
     timeEnvelope: pretty(value?.time_envelope ?? {}),
@@ -288,6 +327,7 @@ function defaultStructuredCurrentSourceCut(
     // The existing domain validation reports malformed JSON when the draft is saved.
   }
   return {
+    rowId: "source:0:source-cut-1",
     axis: "x",
     circuitId: "circuit-1",
     driveId: "drive-1",

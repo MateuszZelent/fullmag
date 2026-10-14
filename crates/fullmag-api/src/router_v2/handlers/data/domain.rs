@@ -23,6 +23,7 @@ use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_id, domain_generation_revision, fdm_grid_geometry, fdm_grid_shape,
+    is_fem_snapshot,
 };
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
@@ -70,7 +71,7 @@ pub async fn get_domain_meta(
 /// resolve against this exact geometry rather than reconstructing bounds from
 /// a client payload or from a monitor.
 pub(crate) fn domain_meta_for_snapshot(snapshot: &SessionStateResponse) -> DomainMeta {
-    let is_fem = snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot);
+    let is_fem = is_fem_snapshot(snapshot);
     let latest = snapshot.live_state.as_ref().map(|l| &l.latest_step);
 
     let grid_shape = if is_fem {
@@ -80,13 +81,16 @@ pub(crate) fn domain_meta_for_snapshot(snapshot: &SessionStateResponse) -> Domai
     };
 
     let (cells, nodes, elements, boundary_faces) = if is_fem {
-        let m = snapshot.fem_mesh.as_ref().unwrap();
-        (
-            None,
-            Some(m.nodes.len() as u64),
-            Some(m.cell_count() as u64),
-            Some(m.facet_count() as u64),
-        )
+        if let Some(m) = snapshot.fem_mesh.as_ref() {
+            (
+                None,
+                Some(m.nodes.len() as u64),
+                Some(m.cell_count() as u64),
+                Some(m.facet_count() as u64),
+            )
+        } else {
+            (None, None, None, None)
+        }
     } else {
         (
             Some(grid_shape[0] as u64 * grid_shape[1] as u64 * grid_shape[2] as u64),
@@ -110,37 +114,44 @@ pub(crate) fn domain_meta_for_snapshot(snapshot: &SessionStateResponse) -> Domai
         spacing: layout.spacing,
     });
 
-    let bounds = if is_fem {
-        let m = snapshot.fem_mesh.as_ref().unwrap();
-        let (mut bmin, mut bmax) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for node in &m.nodes {
-            for i in 0..3 {
-                if node[i] < bmin[i] {
-                    bmin[i] = node[i];
-                }
-                if node[i] > bmax[i] {
-                    bmax[i] = node[i];
+    let bounds = match (is_fem, snapshot.fem_mesh.as_ref(), fdm_grid.as_ref()) {
+        (true, Some(mesh), _) if mesh.nodes.is_empty() => Bounds3 {
+            min: [0.0, 0.0, 0.0],
+            max: [0.0, 0.0, 0.0],
+        },
+        (true, Some(mesh), _) => {
+            let (mut bmin, mut bmax) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for node in &mesh.nodes {
+                for i in 0..3 {
+                    if node[i] < bmin[i] {
+                        bmin[i] = node[i];
+                    }
+                    if node[i] > bmax[i] {
+                        bmax[i] = node[i];
+                    }
                 }
             }
+            Bounds3 {
+                min: bmin,
+                max: bmax,
+            }
         }
-        Bounds3 {
-            min: bmin,
-            max: bmax,
-        }
-    } else if let Some(layout) = fdm_grid.as_ref() {
-        Bounds3 {
+        (true, None, _) => Bounds3 {
+            min: [0.0, 0.0, 0.0],
+            max: [0.0, 0.0, 0.0],
+        },
+        (false, _, Some(layout)) => Bounds3 {
             min: layout.origin,
             max: [
                 layout.origin[0] + grid_shape[0] as f64 * layout.spacing[0],
                 layout.origin[1] + grid_shape[1] as f64 * layout.spacing[1],
                 layout.origin[2] + grid_shape[2] as f64 * layout.spacing[2],
             ],
-        }
-    } else {
-        Bounds3 {
+        },
+        (false, _, None) => Bounds3 {
             min: [0.0, 0.0, 0.0],
             max: [0.0, 0.0, 0.0],
-        }
+        },
     };
 
     DomainMeta {

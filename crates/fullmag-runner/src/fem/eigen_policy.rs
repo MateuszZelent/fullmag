@@ -1,3 +1,4 @@
+use super::eigen_constants::GAMMA_K_TOLERANCE_RAD_PER_M;
 use super::eigen_reduction::is_gamma_k_sampling;
 use crate::native_fem;
 use crate::types::RunError;
@@ -6,6 +7,34 @@ use fullmag_ir::{
     EigenDampingPolicyIR, EquilibriumSourceIR, FemEigenPlanIR, KSamplingIR,
     SpinWaveBoundaryConditionIR, SpinWaveBoundaryKindIR,
 };
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct NativeModalSolverPolicy {
+    pub(super) residual_tolerance: f64,
+    pub(super) max_outer_iterations: i32,
+    pub(super) max_linear_iterations: i32,
+}
+
+/// Resolve the requested modal policy at the Rust/native boundary.
+///
+/// Zero is the native ABI sentinel for PETSc/SLEPc defaults.  The runner must
+/// not replace an omitted policy with an undocumented iteration cap.
+pub(super) fn native_modal_solver_policy(plan: &FemEigenPlanIR) -> NativeModalSolverPolicy {
+    let requested = plan.solver_policy.as_ref();
+    NativeModalSolverPolicy {
+        residual_tolerance: requested
+            .and_then(|policy| policy.residual_tolerance)
+            .unwrap_or(0.0),
+        max_outer_iterations: requested
+            .and_then(|policy| policy.max_outer_iterations)
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(0),
+        max_linear_iterations: requested
+            .and_then(|policy| policy.max_linear_iterations)
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(0),
+    }
+}
 
 pub(super) fn native_modal_equilibrium_source_kind(
     equilibrium: &EquilibriumSourceIR,
@@ -141,6 +170,24 @@ pub(super) fn shared_domain_k0_modal_requested(plan: &FemEigenPlanIR) -> bool {
         && (plan.air_box_config.is_some() || k0_kittel_periodic_airbox_validation_requested(plan))
 }
 
+fn selected_floquet_pairs_have_finite_payload<'a>(
+    requested_pair_ids: impl IntoIterator<Item = &'a str>,
+    has_node_pair: impl Fn(&str) -> bool,
+    translation_for: impl Fn(&str) -> Option<[f64; 3]>,
+) -> bool {
+    let mut found_selected_pair = false;
+    for pair_id in requested_pair_ids {
+        found_selected_pair = true;
+        if !has_node_pair(pair_id)
+            || translation_for(pair_id)
+                .is_none_or(|translation| !translation.iter().all(|value| value.is_finite()))
+        {
+            return false;
+        }
+    }
+    found_selected_pair
+}
+
 pub(super) fn native_cpu_modal_window_has_bloch_floquet_payload_path(
     plan: &FemEigenPlanIR,
 ) -> bool {
@@ -158,22 +205,108 @@ pub(super) fn native_cpu_modal_window_has_bloch_floquet_payload_path(
         return false;
     }
     let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
-    if requested_pair_ids.is_empty() {
-        return false;
+    selected_floquet_pairs_have_finite_payload(
+        requested_pair_ids.iter().copied(),
+        |pair_id| {
+            plan.mesh
+                .periodic_node_pairs
+                .iter()
+                .any(|pair| pair.pair_id == pair_id)
+        },
+        |pair_id| {
+            plan.mesh
+                .periodic_boundary_pairs
+                .iter()
+                .find(|pair| pair.pair_id == pair_id)
+                .and_then(|pair| pair.translation)
+        },
+    )
+}
+
+#[cfg(test)]
+mod floquet_payload_tests {
+    use super::selected_floquet_pairs_have_finite_payload;
+
+    fn payload_is_complete(
+        translations: &[(&str, Option<[f64; 3]>)],
+        node_pair_ids: &[&str],
+    ) -> bool {
+        selected_floquet_pairs_have_finite_payload(
+            ["left", "right"],
+            |pair_id| node_pair_ids.contains(&pair_id),
+            |pair_id| {
+                translations
+                    .iter()
+                    .find(|(candidate, _)| *candidate == pair_id)
+                    .and_then(|(_, translation)| *translation)
+            },
+        )
     }
-    requested_pair_ids.iter().any(|pair_id| {
-        let has_nodes = plan
-            .mesh
-            .periodic_node_pairs
-            .iter()
-            .any(|pair| pair.pair_id == *pair_id);
-        let has_translation = plan
-            .mesh
-            .periodic_boundary_pairs
-            .iter()
-            .any(|pair| pair.pair_id == *pair_id && pair.translation.is_some());
-        has_nodes && has_translation
-    })
+
+    #[test]
+    fn native_floquet_payload_requires_finite_translation_for_every_selected_pair() {
+        let node_pair_ids = ["left", "right"];
+        assert!(payload_is_complete(
+            &[
+                ("left", Some([1.0, 0.0, 0.0])),
+                ("right", Some([0.0, 1.0, 0.0])),
+            ],
+            &node_pair_ids,
+        ));
+        assert!(!payload_is_complete(
+            &[
+                ("left", Some([1.0, 0.0, 0.0])),
+                ("right", Some([0.0, 1.0, 0.0])),
+            ],
+            &["left"],
+        ));
+        assert!(!payload_is_complete(
+            &[("left", Some([1.0, 0.0, 0.0])), ("right", None)],
+            &node_pair_ids,
+        ));
+        assert!(!payload_is_complete(
+            &[
+                ("left", Some([1.0, 0.0, 0.0])),
+                ("right", Some([f64::NAN, 0.0, 0.0])),
+            ],
+            &node_pair_ids,
+        ));
+        assert!(!payload_is_complete(
+            &[
+                ("left", Some([1.0, 0.0, 0.0])),
+                ("right", Some([f64::INFINITY, 0.0, 0.0])),
+            ],
+            &node_pair_ids,
+        ));
+        assert!(!selected_floquet_pairs_have_finite_payload(
+            std::iter::empty(),
+            |_| true,
+            |_| Some([0.0; 3]),
+        ));
+    }
+}
+
+/// Return whether the periodic, no-demag Gamma lane can use the native
+/// shift-invert modal adapter with the explicit runner-side tangent operator.
+///
+/// A real full-2x2 operator has a broad spectrum, so the legacy sparse
+/// lowest-mode LOBPCG path cannot satisfy a finite frequency window reliably:
+/// it may spend a long time producing low candidates and still return no mode
+/// in the requested band.  This bounded lane has no dynamic demag payload and
+/// therefore can transport the assembled runner operator to the native
+/// shift-invert solver without claiming the shared-domain airbox contract.
+pub(super) fn native_cpu_modal_window_has_periodic_k0_runner_operator_path(
+    plan: &FemEigenPlanIR,
+) -> bool {
+    matches!(
+        plan.target,
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+    ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(plan.damping_policy, EigenDampingPolicyIR::Ignore)
+        && !plan.enable_demag
+        && !plan.operator.include_demag
+        && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Periodic)
+        && k_sampling_is_single_k0(plan.k_sampling.as_ref())
 }
 
 pub(super) fn k0_kittel_periodic_airbox_validation_requested(plan: &FemEigenPlanIR) -> bool {
@@ -192,7 +325,7 @@ pub(super) fn k_sampling_is_single_k0(k_sampling: Option<&KSamplingIR>) -> bool 
     };
     k_vector
         .iter()
-        .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+        .all(|component| component.is_finite() && component.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M)
 }
 
 pub(super) fn resolved_demag_realization(

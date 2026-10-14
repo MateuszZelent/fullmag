@@ -32,6 +32,7 @@ import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan"
 import {
   buildPrimitiveTransformGizmoSegments,
   releasePrimitiveObjectGeometry,
+  primitiveObjectSurfaceColor,
   resolvePrimitiveObjectRenderSettings,
   shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
@@ -187,14 +188,7 @@ function RenderablePrimitiveObject({
   // FDM/FEM surface is available.  The inspector's Solid surface control
   // edits `shaderMonoColor`, so prefer that value for the preview whenever
   // Solid is selected instead of retaining the stale primitive preference.
-  const primitiveColor =
-    renderSettings.surfaceColorSource === "solid"
-      ? renderSettings.shaderMonoColor
-      : renderSettings.primitiveMonoColor;
-  const shaderColor =
-    primitiveColor && !primitiveColor.startsWith("var(")
-      ? primitiveColor
-      : colors.mesh;
+  const shaderColor = primitiveObjectSurfaceColor(object, renderSettings, colors);
 
   return (
     <group

@@ -7,7 +7,8 @@ import { Button } from "@/shared/ui/Button";
 import { cn } from "@/shared/utils/className";
 
 import { formatTelemetrySampleTime } from "../model/computeTelemetry";
-import type { ComputeEnvironment, ComputeProbeState, GpuInfo } from "../model/types";
+import { ComputeNodeInventoryStatus } from "../ComputeNodeInventoryStatus";
+import type { ComputeEnvironment, ComputeNodeInventorySummary, ComputeProbeState, GpuInfo } from "../model/types";
 
 type EnvironmentTone = "busy" | "degraded" | "idle" | "observed";
 
@@ -87,6 +88,7 @@ export function resolveEnvironmentTone(
 export interface ComputeEnvironmentWidgetProps {
   readonly className?: string;
   readonly compute: ComputeProbeState;
+  readonly nodeInventory?: ComputeNodeInventorySummary;
   readonly onConfigure: () => void;
   readonly refreshing?: boolean;
   readonly stale?: boolean;
@@ -98,6 +100,7 @@ export interface ComputeEnvironmentWidgetProps {
 export function ComputeEnvironmentWidget({
   className,
   compute,
+  nodeInventory,
   onConfigure,
   refreshing = false,
   stale = false,
@@ -136,6 +139,12 @@ export function ComputeEnvironmentWidget({
 
       <div className="fm-start-env__body">
         <ProbeStatus compute={compute} error={error} refreshing={refreshing} stale={stale} />
+        {nodeInventory ? (
+          <ComputeNodeInventoryStatus
+            className="fm-start-env__note"
+            summary={nodeInventory}
+          />
+        ) : null}
         {sampleTime ? (
           <p className="fm-start-env__note">
             Latest available telemetry sample: <time dateTime={sampleTime.dateTime}>{sampleTime.label}</time>

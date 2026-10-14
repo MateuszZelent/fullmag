@@ -1207,16 +1207,62 @@ pub(crate) fn script_cli_execution_layers(
             Value::String(value.to_possible_value().unwrap().get_name().into()),
         );
     }
-    if values.is_empty() {
-        return Ok(vec![]);
+    let mut layers = Vec::new();
+    if !values.is_empty() {
+        layers.push(fullmag_ir::ExecutionRequestLayerIR {
+            origin: fullmag_ir::ExecutionFieldOriginIR {
+                kind: fullmag_ir::ExecutionOriginKindIR::Cli,
+                location: "cli.backend/mode/precision".into(),
+            },
+            request: serde_json::from_value(Value::Object(values))?,
+        });
     }
-    Ok(vec![fullmag_ir::ExecutionRequestLayerIR {
+
+    Ok(layers)
+}
+
+fn script_legacy_environment_execution_layers(
+) -> Result<Vec<fullmag_ir::ExecutionRequestLayerIR>> {
+    // This allow-list imports a Fullmag-owned request. Library pool sizes and
+    // device visibility remain runtime/operator constraints, not user intent.
+    let raw_threads = match std::env::var("FULLMAG_CPU_THREADS") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(Vec::new()),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("FULLMAG_CPU_THREADS must be valid Unicode")
+        }
+    };
+    Ok(vec![legacy_cpu_threads_execution_layer(&raw_threads)?])
+}
+
+fn legacy_cpu_threads_execution_layer(
+    raw: &str,
+) -> Result<fullmag_ir::ExecutionRequestLayerIR> {
+    let value = raw.trim();
+    let threads = if value.eq_ignore_ascii_case("auto") {
+        Value::String("auto".into())
+    } else {
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("FULLMAG_CPU_THREADS must be 'auto' or a positive u32")
+        }
+        let count = value
+            .parse::<u32>()
+            .context("FULLMAG_CPU_THREADS must be 'auto' or a positive u32")?;
+        if count == 0 {
+            bail!("FULLMAG_CPU_THREADS must be 'auto' or a positive u32")
+        }
+        Value::from(count)
+    };
+    let request = serde_json::from_value(serde_json::json!({
+        "resources": {"cpu": {"threads": threads}}
+    }))?;
+    Ok(fullmag_ir::ExecutionRequestLayerIR {
         origin: fullmag_ir::ExecutionFieldOriginIR {
-            kind: fullmag_ir::ExecutionOriginKindIR::Cli,
-            location: "cli.backend/mode/precision".into(),
+            kind: fullmag_ir::ExecutionOriginKindIR::LegacyEnv,
+            location: "env:FULLMAG_CPU_THREADS".into(),
         },
-        request: serde_json::from_value(Value::Object(values))?,
-    }])
+        request,
+    })
 }
 
 pub(crate) fn bind_script_execution_profiles(
@@ -1224,15 +1270,32 @@ pub(crate) fn bind_script_execution_profiles(
     layers: &[fullmag_ir::ExecutionRequestLayerIR],
     managed_device: Option<&str>,
 ) -> Result<()> {
+    let should_import_environment = std::iter::once(&config.ir)
+        .chain(config.stages.iter().map(|stage| &stage.ir))
+        .any(|problem| has_execution_profile(problem) && !has_legacy_environment_layer(problem));
+    // Keep ordinary legacy scripts on their byte-compatible path, and do not
+    // append the same environment origin again when a pinned materialization is
+    // validated later in the CLI pipeline.
+    let legacy_environment_layers = if should_import_environment {
+        script_legacy_environment_execution_layers()?
+    } else {
+        Vec::new()
+    };
     for problem in
         std::iter::once(&mut config.ir).chain(config.stages.iter_mut().map(|stage| &mut stage.ir))
     {
-        let metadata = &problem.problem_meta.runtime_metadata;
-        let has_profile = metadata.contains_key("execution_profile")
-            || metadata.contains_key("execution_materialization");
+        let has_profile = has_execution_profile(problem);
+        let mut request_layers = layers.to_vec();
+        if has_profile && !has_legacy_environment_layer(problem) {
+            request_layers.extend(legacy_environment_layers.clone());
+        }
         let bound = fullmag_application::bind_declared_execution(
             problem,
-            if has_profile { layers.to_vec() } else { vec![] },
+            if has_profile {
+                request_layers.clone()
+            } else {
+                vec![]
+            },
         )
         .map_err(anyhow::Error::msg)?;
         if has_profile {
@@ -1253,6 +1316,29 @@ pub(crate) fn bind_script_execution_profiles(
         *problem = bound;
     }
     Ok(())
+}
+
+fn has_execution_profile(problem: &fullmag_ir::ProblemIR) -> bool {
+    let metadata = &problem.problem_meta.runtime_metadata;
+    metadata.contains_key("execution_profile")
+        || metadata.contains_key("execution_materialization")
+}
+
+fn has_legacy_environment_layer(problem: &fullmag_ir::ProblemIR) -> bool {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("execution_materialization")
+        .and_then(|materialization| materialization.get("layers"))
+        .and_then(Value::as_array)
+        .is_some_and(|layers| {
+            layers.iter().any(|layer| {
+                layer
+                    .pointer("/origin/kind")
+                    .and_then(Value::as_str)
+                    == Some("legacy_env")
+            })
+        })
 }
 
 pub(crate) fn managed_fem_execution_device(value: Option<&str>) -> Option<&'static str> {
@@ -1606,6 +1692,29 @@ mod tests {
     use super::*;
     use crate::args::BackendArg;
     use crate::simulation_preparation::PreparationStageId;
+
+    #[test]
+    fn legacy_cpu_threads_environment_is_normalized_as_resource_intent() {
+        let auto = legacy_cpu_threads_execution_layer(" AUTO ").unwrap();
+        assert_eq!(
+            auto.origin.kind,
+            fullmag_ir::ExecutionOriginKindIR::LegacyEnv
+        );
+        assert_eq!(auto.origin.location, "env:FULLMAG_CPU_THREADS");
+        let auto_request = serde_json::to_value(auto.request).unwrap();
+        assert_eq!(auto_request["resources"]["cpu"]["threads"], "auto");
+
+        let count = legacy_cpu_threads_execution_layer("12").unwrap();
+        let count_request = serde_json::to_value(count.request).unwrap();
+        assert_eq!(count_request["resources"]["cpu"]["threads"], 12);
+    }
+
+    #[test]
+    fn legacy_cpu_threads_environment_rejects_invalid_values() {
+        for value in ["", "0", "-1", "1.5", "twelve", "4294967296"] {
+            assert!(legacy_cpu_threads_execution_layer(value).is_err(), "{value}");
+        }
+    }
 
     #[test]
     fn managed_execution_device_selects_the_backend_specific_override() {

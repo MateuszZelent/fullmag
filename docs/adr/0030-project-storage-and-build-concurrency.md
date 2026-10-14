@@ -40,7 +40,7 @@ nazwa brancha. Domyślne project storage roots to:
 
 | Host | Project storage root | Trasa wykonania |
 | --- | --- | --- |
-| Windows | `C:\git\fullmag\storage` | native FDM/Rust/Python/Control Room; Docker Desktop dla FEM |
+| Windows | `D:\git\fullmag\storage` | native FDM/Rust/Python/Control Room; Docker Desktop dla FEM |
 | dedykowany Linux runner | `/zfn2/mateuszz/git/fullmag/storage` | managed, container-backed `just` dla FEM/MFEM/CUDA |
 
 `FULLMAG_PROJECT_STORAGE_ROOT` jest kanonicznym override’em całego rootu.

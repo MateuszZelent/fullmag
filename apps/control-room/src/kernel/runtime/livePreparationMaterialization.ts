@@ -9,6 +9,10 @@ import {
   obsoleteSessionResult,
 } from "../commands/commandSessionScope";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import {
+  hasSessionActiveLaneDeclaration,
+  resolveSessionAuthoringDiscretization,
+} from "../resources/sessionDiscretization";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -141,11 +145,13 @@ export function requiresSharedDomainMeshForLivePreparation(
   context: CommandContext,
 ): boolean {
   const status = asRecord(context.resourceData?.[SESSION_STATUS_RESOURCE_KEY]);
-  const capabilities = asRecord(status?.capabilities);
-  const domain = asRecord(status?.domain);
-  return (
-    capabilities?.explicit_topology === true ||
-    (typeof domain?.discretization === "string" &&
-      domain.discretization.toLowerCase() === "fem")
-  );
+  const laneStatus = asRecord(status?.data ?? status);
+  const capabilities = asRecord(laneStatus?.capabilities);
+  const typedStatus =
+    laneStatus as Parameters<typeof hasSessionActiveLaneDeclaration>[0];
+  const laneDeclared = hasSessionActiveLaneDeclaration(typedStatus);
+  const lane = resolveSessionAuthoringDiscretization(typedStatus);
+  return laneDeclared
+    ? lane === "fem"
+    : capabilities?.explicit_topology === true || lane === "fem";
 }

@@ -2,6 +2,7 @@ import type { ResourceRevision } from "../api/apiTypes";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
@@ -18,6 +19,9 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
@@ -85,6 +89,19 @@ const FDM_REGION_MEMBERSHIP_SCOPED_PREFIX =
     0,
     DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH.indexOf("{region_id}"),
   );
+const ANTENNA_FIELD_SOLUTION_PREFIX = DATA_ANTENNA_FIELD_SOLUTION_PATH.slice(
+  0,
+  DATA_ANTENNA_FIELD_SOLUTION_PATH.indexOf("{solution_id}"),
+);
+const ANTENNA_STAGE_OUTPUT_CATALOG_PREFIX =
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH.slice(
+    0,
+    DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH.indexOf("{stage_id}"),
+  );
+const ANTENNA_SOURCE_SPECTRUM_PREFIX = DATA_ANTENNA_SOURCE_SPECTRUM_PATH.slice(
+  0,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PATH.indexOf("{output_id}"),
+);
 
 interface RealtimeResourceEvent {
   artifact_path?: string;
@@ -585,6 +602,22 @@ export class RealtimeInvalidationBridge {
               );
             }
           }
+        } else if (change.resource === "artifacts") {
+          if (recommendedFetch) {
+            this.queueResourceInvalidation(recommendedFetch, change.revision);
+          }
+          this.queuePrefixInvalidation(
+            ANTENNA_FIELD_SOLUTION_PREFIX,
+            change.revision,
+          );
+          this.queuePrefixInvalidation(
+            ANTENNA_STAGE_OUTPUT_CATALOG_PREFIX,
+            change.revision,
+          );
+          this.queuePrefixInvalidation(
+            ANTENNA_SOURCE_SPECTRUM_PREFIX,
+            change.revision,
+          );
         } else if (recommendedFetch) {
           if (
             recommendedFetch === DATA_FIELDS_PATH &&
@@ -953,6 +986,8 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
+    // User-created Results nodes are stored in the scene document (ADR 0054).
+    this.resources.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, dependentRevision);
     this.resources.invalidateMatching(
       (resourceKey) =>
         matchesStageScopedResource(
@@ -1011,6 +1046,8 @@ export class RealtimeInvalidationBridge {
     if (recommendedFetch === SIMULATION_STAGES_EXECUTION_PATH) {
       this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, dependentRevision);
       this.resources.invalidate(SIMULATION_COMMANDS_PATH, dependentRevision);
+      // Catalog, inspection metadata and payloads share the canonical stage prefix.
+      this.resources.invalidatePrefix(ANTENNA_STAGE_OUTPUT_CATALOG_PREFIX, dependentRevision);
       this.resources.invalidateMatching(
         (resourceKey) =>
           matchesStageScopedResource(

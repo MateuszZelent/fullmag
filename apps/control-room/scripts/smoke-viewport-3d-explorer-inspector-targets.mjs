@@ -897,6 +897,73 @@ async function assertHealthyCanvas(page, label) {
   }
 }
 
+// ADR 0054 stage 3b: Analysis has no surface tabs. The surface follows the
+// selected Explorer Results family node (results:run:<id>:<suffix>). Fixtures
+// without a current run expose no family nodes; then the surface is reached
+// through the persisted analysis-view preference and a reload, and the proof
+// records which route was used.
+const ANALYSIS_SURFACE_RESULTS_NODE_SUFFIX = Object.freeze({
+  comparison: "comparison",
+  dispersion: "k-resolved",
+  dynamics: "dynamics",
+  hysteresis: "hysteresis",
+  "resonance-fmr": "resonance",
+});
+
+async function analysisSurfaceTitle(page) {
+  return page.evaluate(() =>
+    document
+      .querySelector(".fm-analysis-plots__surface-title")
+      ?.getAttribute("data-analysis-surface-title") ?? null,
+  );
+}
+
+async function selectAnalysisSurfaceFromExplorer(page, surfaceId) {
+  const suffix = ANALYSIS_SURFACE_RESULTS_NODE_SUFFIX[surfaceId];
+  if (!suffix) throw new Error(`Unknown Analysis surface: ${surfaceId}`);
+  if ((await page.locator(".fm-analysis-plots [role='tablist']").count()) !== 0) {
+    throw new Error("Analysis must not render surface tabs; Explorer selection owns the surface.");
+  }
+  await page.locator(".fm-analysis-plots__surface-title").waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await analysisSurfaceTitle(page)) === surfaceId) return "already-active";
+  const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger").filter({ hasText: /^Results$/ }).first();
+  let route = "stored-preference-reload";
+  if (await resultsTab.count()) {
+    if ((await resultsTab.getAttribute("aria-selected")) !== "true") await resultsTab.click({ timeout: timeoutMs });
+    const resultsRoot = page.locator('.fm-explorer [role="treeitem"][data-node-id^="results:run:"]').first();
+    if (await resultsRoot.count()) {
+      const rootId = await resultsRoot.getAttribute("data-node-id");
+      if ((await resultsRoot.getAttribute("aria-expanded")) === "false") {
+        const branch = resultsRoot.locator(".fm-explorer-tree-row__branch");
+        if (await branch.count()) await branch.click({ timeout: timeoutMs });
+        else await resultsRoot.dblclick({ timeout: timeoutMs });
+      }
+      const familyNode = page.locator(`.fm-explorer [data-node-id="${rootId}:${suffix}"]`);
+      if (await familyNode.count()) {
+        await familyNode.click({ timeout: timeoutMs });
+        route = "explorer";
+      }
+    }
+  }
+  if (route !== "explorer") {
+    await page.evaluate(({ key, activeSurface }) => {
+      window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 2, activeSurface }));
+    }, { key: "fm:analysis-view-preferences:v2", activeSurface: surfaceId });
+    await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+    const analysis = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^Analysis$/ }).first();
+    await analysis.click({ timeout: timeoutMs });
+  }
+  await page.waitForFunction(
+    (expected) =>
+      document
+        .querySelector(".fm-analysis-plots__surface-title")
+        ?.getAttribute("data-analysis-surface-title") === expected,
+    surfaceId,
+    { timeout: timeoutMs },
+  );
+  return route;
+}
+
 async function verifyAnalysisViewportHandoff(page, lane) {
   const analysis = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^Analysis$/ }).first();
   await analysis.click({ timeout: timeoutMs });
@@ -905,24 +972,22 @@ async function verifyAnalysisViewportHandoff(page, lane) {
     timeout: timeoutMs,
   });
   const workflows = [
-    { surface: "Resonance & FMR", subview: "Frequency Response" },
-    { surface: "Resonance & FMR", subview: "Eigenmodes" },
-    { surface: "Dispersion", subview: "Modal fₙ(k)" },
+    { surfaceId: "resonance-fmr", surface: "Resonance & FMR", subview: "Frequency Response" },
+    { surfaceId: "resonance-fmr", surface: "Resonance & FMR", subview: "Eigenmodes" },
+    { surfaceId: "dispersion", surface: "Dispersion", subview: "Modal fₙ(k)" },
   ];
   for (const workflow of workflows) {
-    const tab = page.locator(".fm-analysis-plots__tab").filter({ hasText: new RegExp(`^${escapeRegExp(workflow.surface)}$`) }).first();
-    await tab.click({ timeout: timeoutMs });
+    await selectAnalysisSurfaceFromExplorer(page, workflow.surfaceId);
     const subview = page.getByRole("combobox", { name: `${workflow.surface} subview` });
     await subview.click({ timeout: timeoutMs });
     await page.getByRole("option", { name: workflow.subview, exact: true }).click({ timeout: timeoutMs });
     await page.waitForFunction(
-      ({ surface, subview }) => {
-        const tabs = Array.from(document.querySelectorAll(".fm-analysis-plots__tab"));
-        const activeTab = tabs.find((candidate) => candidate.textContent?.trim() === surface);
+      ({ surfaceId, subview }) => {
+        const title = document.querySelector(".fm-analysis-plots__surface-title");
         const subviewTrigger = document.querySelector("[data-slot='select-trigger'][data-analysis-subview]");
         const panel = document.querySelector(".fm-analysis-plots__panel--primary");
         return (
-          activeTab?.getAttribute("data-state") === "active" &&
+          title?.getAttribute("data-analysis-surface-title") === surfaceId &&
           subviewTrigger?.textContent?.includes(subview) &&
           panel instanceof HTMLElement &&
           panel.offsetWidth > 0 &&
@@ -942,10 +1007,6 @@ async function verifyAnalysisViewportHandoff(page, lane) {
   });
   await assertHealthyCanvas(page, `${lane} Analysis to 3D handoff`);
   return { surfaces: workflows.map(({ surface, subview }) => `${surface} / ${subview}`) };
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function sampleViewportPixels(page, explicitStride = null) {

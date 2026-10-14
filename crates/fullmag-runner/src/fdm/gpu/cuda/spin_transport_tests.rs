@@ -1032,6 +1032,7 @@ fn from_plan_preserves_frozen_payload_features_and_solver_policies() {
             | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
             | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN
             | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2
+            | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1
             | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK
     );
 

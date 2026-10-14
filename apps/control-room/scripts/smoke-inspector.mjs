@@ -1,6 +1,13 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { PerspectiveCamera, Vector3 } from "three";
 import { resolve } from "node:path";
+import { installInspectorCommitTrace } from "./lib/inspector-commit-trace.mjs";
+
+import {
+  createInspectorRequestBudgetState,
+  recordInspectorRequestBudget,
+  resetInspectorDocumentBudget,
+} from "./lib/inspector-request-budget.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const outputDir = resolve(
@@ -12,6 +19,42 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 // Per-path request budget of one page lifecycle: counts restart at every
 // load so the budget detects request storms, not the number of loads in a run.
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
+const INSPECTOR_SCENE_TRACE_LIMIT = 20;
+const INSPECTOR_MODAL_FIELD_ID = "analysis:eigen:sample-0001:mode-0002";
+const INSPECTOR_MODAL_FIELD_ARRAY_PATH =
+  "eigen/mode_fields.zarr/sample_0001/mode_0002/vector_xyz_complex";
+const INSPECTOR_MODAL_FIELD_PAYLOAD_PATH =
+  `${INSPECTOR_MODAL_FIELD_ARRAY_PATH}/0.0.0`;
+const INSPECTOR_DRIVEN_RESPONSE_FIELD_ID =
+  "analysis:frequency-response:frequency-0007";
+const INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX = 7;
+const INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH =
+  "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1";
+const INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_MESSAGE =
+  "frequency-domain response cancel-requested progress artifact is missing";
+const INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY = Object.freeze({
+  capability_reason: null,
+  code: "not_found",
+  diagnostics: null,
+  error: INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_MESSAGE,
+  message: INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_MESSAGE,
+  request_id: null,
+  revision_context: null,
+});
+const INSPECTOR_BROWSER_RESOURCE_404_ERROR =
+  "Failed to load resource: the server responded with a status of 404 (Not Found)";
+const INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER = {
+  artifact_set_id: "inspector-driven-response-artifact-set-run-7",
+  mesh_generation_id: "1",
+  run_id: "inspector-run",
+  session_id: "inspector-routing-smoke",
+  stage_id: "frequency-response",
+};
+const INSPECTOR_MODAL_DOMAIN_GENERATION_ID = "1";
+const INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION = 7;
+const INSPECTOR_MODAL_TOPOLOGY_HASH = "0123456789abcdef".repeat(4);
+const INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH =
+  `sha256:${INSPECTOR_MODAL_TOPOLOGY_HASH}`;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
     "GET /v2/sessions/current/model/regions",
@@ -42,6 +85,50 @@ const INSPECTOR_REQUEST_LIMITS = new Map([
     32,
   ],
 ]);
+const INSPECTOR_MODAL_BRANCH_OWNER = {
+  generation_id: `sha256:${"e".repeat(64)}`,
+  generation_status: "member_verified_owner_bound",
+  artifact_set_id: "inspector-modal-artifact-set-run-b",
+  content_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-branches-run-b-rev-4",
+  run_id: "inspector-run",
+  session_id: "inspector-routing-smoke",
+  stage_id: "eigen-dispersion",
+};
+const INSPECTOR_MODAL_RESULT_OWNER = {
+  generation_id: INSPECTOR_MODAL_BRANCH_OWNER.generation_id,
+  generation_status: INSPECTOR_MODAL_BRANCH_OWNER.generation_status,
+  artifact_set_id: INSPECTOR_MODAL_BRANCH_OWNER.artifact_set_id,
+  content_digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-result-manifest-run-b-rev-2",
+  run_id: INSPECTOR_MODAL_BRANCH_OWNER.run_id,
+  session_id: INSPECTOR_MODAL_BRANCH_OWNER.session_id,
+  stage_id: INSPECTOR_MODAL_BRANCH_OWNER.stage_id,
+};
+const INSPECTOR_MODAL_DISPERSION_OWNER_A = {
+  generation_id: `sha256:${"f".repeat(64)}`,
+  generation_status: "member_verified_owner_bound",
+  artifact_set_id: "inspector-modal-artifact-set-run-a",
+  content_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-dispersion-run-a-rev-8",
+  run_id: "inspector-run-a",
+  session_id: "inspector-routing-smoke",
+  stage_id: "eigen-dispersion",
+};
+const INSPECTOR_MODAL_DISPERSION_OWNER_B = {
+  generation_id: INSPECTOR_MODAL_BRANCH_OWNER.generation_id,
+  generation_status: INSPECTOR_MODAL_BRANCH_OWNER.generation_status,
+  artifact_set_id: "inspector-modal-artifact-set-run-b",
+  content_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-dispersion-run-b-rev-11",
+  run_id: "inspector-run",
+  session_id: "inspector-routing-smoke",
+  stage_id: "eigen-dispersion",
+};
 const fixture = createInspectorFixture();
 
 async function loadPlaywright() {
@@ -60,6 +147,87 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function isExactOptionalResponseAbsence(response) {
+  const body = response.body;
+  if (
+    response.method !== "GET" ||
+    response.path !== INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH ||
+    response.search !== "" ||
+    response.status !== 404 ||
+    response.bodyError !== null ||
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body)
+  ) {
+    return false;
+  }
+
+  const actualKeys = Object.keys(body).sort();
+  const expectedKeys = Object.keys(
+    INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY,
+  ).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every(
+      (key, index) =>
+        key === expectedKeys[index] &&
+        body[key] === INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY[key],
+    )
+  );
+}
+
+async function classifyInspectorBrowserErrors() {
+  await Promise.all(notFoundResponseEvidenceTasks);
+  const optional404Responses = notFoundResponseEvidence.filter(
+    isExactOptionalResponseAbsence,
+  );
+  const unexpected404Responses = notFoundResponseEvidence.filter(
+    (response) => !isExactOptionalResponseAbsence(response),
+  );
+  const optional404ConsoleErrors = consoleErrorEvents.filter(
+    (event) =>
+      event.source === "console" &&
+      event.text === INSPECTOR_BROWSER_RESOURCE_404_ERROR,
+  );
+  const expectedConflictErrors = consoleErrorEvents.filter(
+    (event) =>
+      event.source === "console" &&
+      event.text.includes("the server responded with a status of 409 (Conflict)"),
+  );
+  const unexpectedBrowserErrors = consoleErrorEvents
+    .filter((event) => {
+      if (event.source === "pageerror") return true;
+      if (event.text === INSPECTOR_BROWSER_RESOURCE_404_ERROR) return false;
+      if (event.text.includes("the server responded with a status of 409 (Conflict)")) {
+        return false;
+      }
+      return true;
+    })
+    .map((event) => event.text);
+
+  return {
+    expectedConflictErrors: expectedConflictErrors.map((event) => event.text),
+    optional404ConsoleErrors: optional404ConsoleErrors.map((event) => event.text),
+    optional404Responses,
+    unexpected404Responses,
+    unexpectedBrowserErrors,
+  };
+}
+
+function optionalResponseAbsenceSummary(classification) {
+  return {
+    matchedConsoleErrorCount: classification.optional404ConsoleErrors.length,
+    responses: classification.optional404Responses.map((response) => ({
+      bodyKeys: Object.keys(response.body).sort(),
+      code: response.body.code,
+      message: response.body.message,
+      method: response.method,
+      path: response.path,
+      status: response.status,
+    })),
+  };
+}
+
 const playwright = await loadPlaywright();
 if (!playwright?.chromium) {
   console.error("Inspector smoke requires Playwright or @playwright/test.");
@@ -67,19 +235,60 @@ if (!playwright?.chromium) {
 }
 
 await mkdir(outputDir, { recursive: true });
-const browser = await playwright.chromium.launch({ headless: true });
+const browser = await playwright.chromium.launch({
+  headless: true,
+  ...(process.env.CONTROL_ROOM_INSPECTOR_BROWSER_CHANNEL
+    ? { channel: process.env.CONTROL_ROOM_INSPECTOR_BROWSER_CHANNEL }
+    : {}),
+});
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+if (process.env.CONTROL_ROOM_INSPECTOR_COMMIT_TRACE === "1") {
+  await installInspectorCommitTrace(page);
+}
 const consoleErrors = [];
+const consoleErrorEvents = [];
 const notFoundResponses = [];
+const notFoundResponseEvidence = [];
+const notFoundResponseEvidenceTasks = [];
+const optionalResponseAbsenceProof = [];
 const previewRequests = [];
 
 page.on("console", (message) => {
-  if (message.type() === "error") consoleErrors.push(message.text());
+  if (message.type() === "error") {
+    const text = message.text();
+    consoleErrors.push(text);
+    consoleErrorEvents.push({ source: "console", text });
+  }
 });
-page.on("pageerror", (error) => consoleErrors.push(error.stack ?? error.message));
+page.on("pageerror", (error) => {
+  const text = error.stack ?? error.message;
+  consoleErrors.push(text);
+  consoleErrorEvents.push({ source: "pageerror", text });
+});
 page.on("response", (response) => {
   if (response.status() === 404) {
-    notFoundResponses.push(`${response.request().method()} ${response.url()}`);
+    const request = response.request();
+    const url = new URL(response.url());
+    notFoundResponses.push(`${request.method()} ${response.url()}`);
+    const evidence = {
+      body: null,
+      bodyError: null,
+      method: request.method(),
+      path: url.pathname,
+      search: url.search,
+      status: response.status(),
+    };
+    notFoundResponseEvidence.push(evidence);
+    notFoundResponseEvidenceTasks.push(
+      response
+        .json()
+        .then((body) => {
+          evidence.body = body;
+        })
+        .catch((error) => {
+          evidence.bodyError = String(error?.stack ?? error);
+        }),
+    );
   }
 });
 page.on("request", (request) => {
@@ -95,9 +304,61 @@ await page.addInitScript((baseUrl) => {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
     allowMissingSessionSmoke: true,
     controlRoomApiBase: baseUrl,
-    disableRealtime: true,
+    disableRealtime:
+      new URL(window.location.href).searchParams.get("inspectorRealtimeFixture") !== "1",
+    enableDiagnosticRecorder: true,
   };
 }, new URL(workspaceUrl).origin);
+await page.addInitScript(() => {
+  const wavevectorUniforms = [];
+  const uniformNames = new WeakMap();
+  window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__ = wavevectorUniforms;
+  const capture = (location, values, sourceOffset = 0, sourceLength = undefined) => {
+    if (!location || uniformNames.get(location) !== "fmWavevectorKf") return;
+    const source = Array.from(values);
+    const end = sourceLength === undefined ? undefined : sourceOffset + sourceLength;
+    wavevectorUniforms.push(source.slice(sourceOffset, end));
+    if (wavevectorUniforms.length > 1024) wavevectorUniforms.shift();
+  };
+  const prototypes = new Set([
+    globalThis.WebGLRenderingContext?.prototype,
+    globalThis.WebGL2RenderingContext?.prototype,
+  ]);
+  for (const prototype of prototypes) {
+    if (!prototype) continue;
+    const getUniformLocation = prototype.getUniformLocation;
+    if (typeof getUniformLocation === "function" &&
+        Object.prototype.hasOwnProperty.call(prototype, "getUniformLocation")) {
+      prototype.getUniformLocation = function (...args) {
+        const location = Reflect.apply(getUniformLocation, this, args);
+        const name = args[1];
+        if (location && (name === "fmWavevectorKf" || name === "fmWavevectorKf[0]")) {
+          uniformNames.set(location, "fmWavevectorKf");
+        }
+        return location;
+      };
+    }
+    const uniform3fv = prototype.uniform3fv;
+    if (typeof uniform3fv === "function" &&
+        Object.prototype.hasOwnProperty.call(prototype, "uniform3fv")) {
+      prototype.uniform3fv = function (...args) {
+        capture(args[0], args[1], args[2] ?? 0, args[3]);
+        return Reflect.apply(uniform3fv, this, args);
+      };
+    }
+    const uniform3f = prototype.uniform3f;
+    if (typeof uniform3f === "function" &&
+        Object.prototype.hasOwnProperty.call(prototype, "uniform3f")) {
+      prototype.uniform3f = function (...args) {
+        capture(args[0], args.slice(1, 4));
+        return Reflect.apply(uniform3f, this, args);
+      };
+    }
+  }
+});
+await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+  origin: new URL(workspaceUrl).origin,
+});
 await installInspectorFixtureApi(page, fixture);
 
 if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
@@ -119,6 +380,7 @@ if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
 
 if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
   try {
+    resetInspectorDocumentBudget(fixture.requestBudget, "mesh-policy-workspace");
     const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
     await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
   } finally {
@@ -128,7 +390,10 @@ if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
 }
 
 try {
-  await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await gotoInspectorDocument(page, fixture, workspaceUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "initial-workspace");
   const inspector = page.locator(".fm-inspector");
   try {
     await inspector.waitFor({ state: "visible", timeout: 30_000 });
@@ -139,8 +404,31 @@ try {
     );
   }
   const screenshotFiles = [];
+  const simulationMethod = page.getByLabel("Simulation method", { exact: true });
+  await simulationMethod.waitFor({ state: "visible", timeout: 30_000 });
+  await page.waitForFunction(() =>
+    document.querySelector('[aria-label="Simulation method"]')?.getAttribute("data-method") === "fem",
+  );
+  assert((await simulationMethod.innerText()).trim() === "FEM", "The bottom-right method indicator must identify the FEM session.");
+  const methodScreenshot = "simulation-method-status-bar.png";
+  await page.locator(".fm-status-bar").screenshot({ path: resolve(outputDir, methodScreenshot) });
+  screenshotFiles.push(methodScreenshot);
+  await writeFile(resolve(outputDir, "simulation-method-status-bar-proof.json"), JSON.stringify({
+    schema: "fullmag_simulation_method_browser_proof_v1",
+    method: await simulationMethod.getAttribute("data-method"),
+    visibleLabel: await simulationMethod.innerText(),
+    qualification: "production_status_bar_with_mock_api_legacy_fem_status",
+    real_backend_verified: false,
+  }, null, 2));
+  await qualifyFirstRunGuideRouting(page, inspector, screenshotFiles, fixture);
   await qualifyExplorerKeyboardNavigation(page);
   await qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture);
+  const resonanceLeafRoutingProof = await qualifyInspectorResonanceLeafRouting(
+    browser,
+    workspaceUrl,
+    outputDir,
+  );
+  screenshotFiles.push(...resonanceLeafRoutingProof.screenshots);
   await qualifyMagneticTextureMutationStability(page, inspector, fixture);
   const objectMoveProof = await qualifyObjectMoveGestureAndSharedApply(
     page,
@@ -622,9 +910,10 @@ try {
 
   await qualifyVisualizationMutationStability(page, inspector, fixture);
 
-  fixture.requestCounts.clear();
-
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "mesh-policy-reset");
   await inspector.waitFor({ state: "visible" });
   const objectNode = page
     .locator('[role="treeitem"]')
@@ -690,7 +979,7 @@ try {
   await waitForInspectorRequestQuiet(page, fixture);
   assert(
     fixture.requestBudgetViolation === null,
-    `Inspector request budget exceeded: ${JSON.stringify(fixture.requestBudgetViolation)}; counts: ${JSON.stringify(Object.fromEntries(fixture.requestCounts))}`,
+    `Inspector request budget exceeded: ${JSON.stringify(inspectorRequestBudgetDiagnostics(fixture))}`,
   );
   assert(
     fixture.unknownGetPaths.length === 0,
@@ -701,12 +990,20 @@ try {
     `Inspector fixture received unknown mutations: ${JSON.stringify(fixture.unknownMutationPaths)}`,
   );
   assert(previewRequests.length === 0, `Inspector caused preview requests: ${previewRequests.join(", ")}`);
-  const unexpectedConsoleErrors = consoleErrors.filter(
-    (message) => !message.includes("the server responded with a status of 409 (Conflict)"),
+  const finalBrowserErrors = await classifyInspectorBrowserErrors();
+  assert(
+    finalBrowserErrors.unexpected404Responses.length === 0 &&
+      finalBrowserErrors.optional404ConsoleErrors.length ===
+        finalBrowserErrors.optional404Responses.length,
+    `Unexpected optional 404 response/console evidence: ${JSON.stringify({
+      console404Errors: finalBrowserErrors.optional404ConsoleErrors,
+      expectedResponses: finalBrowserErrors.optional404Responses,
+      unexpectedResponses: finalBrowserErrors.unexpected404Responses,
+      all404Responses: notFoundResponses,
+    })}`,
   );
-  const expectedConflictErrors = consoleErrors.filter(
-    (message) => message.includes("the server responded with a status of 409 (Conflict)"),
-  );
+  const unexpectedConsoleErrors = finalBrowserErrors.unexpectedBrowserErrors;
+  const expectedConflictErrors = finalBrowserErrors.expectedConflictErrors;
   assert(
     unexpectedConsoleErrors.length === 0,
     `Browser errors:\n${unexpectedConsoleErrors.join("\n")}`,
@@ -714,6 +1011,9 @@ try {
   assert(
     expectedConflictErrors.length <= 1,
     `Unexpected repeated 409 responses:\n${expectedConflictErrors.join("\n")}`,
+  );
+  optionalResponseAbsenceProof.push(
+    optionalResponseAbsenceSummary(finalBrowserErrors),
   );
 
   const viewportCanvas = page.locator('[data-testid="panel-viewport-main"] canvas, [data-testid="viewport-3d-canvas"], canvas').first();
@@ -744,11 +1044,16 @@ try {
     JSON.stringify(
       {
         consoleErrors: consoleErrors.length,
+        optionalResponseAbsenceProof,
         objectMoveGesture: objectMoveProof,
         dirtySelectionGuard: "verified",
         inspectorPanelToggle: "verified; header icon and ribbon restore",
         previewRequests: previewRequests.length,
         physicsScopeExclusivity: "verified; both directions blocked before mutation",
+        resonanceLeafRouting: {
+          proofFile: resonanceLeafRoutingProof.proofFile,
+          cases: resonanceLeafRoutingProof.cases.length,
+        },
         screenshots: screenshotFiles,
         tabs: expectedTabs,
         themes: ["light", "dark"],
@@ -981,7 +1286,9 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
   // The inner half overlaps the primitive, whose pointer handler stops propagation.
   // Hit the exposed outer shaft with native input, then drag from the captured handle.
   startWorld[0] += axisLength * 0.9;
-  endWorld[0] += axisLength * 1.15;
+  // Use a longer native drag so the readiness header cannot reduce the
+  // projected movement below the unchanged production 3 px threshold.
+  endWorld[0] += axisLength * 1.5;
   const startPoint = projectViewportWorldPoint(initialDiagnostics, startWorld);
   const endPoint = projectViewportWorldPoint(initialDiagnostics, endWorld);
   assertProjectedPointInCanvas(initialDiagnostics, startPoint, "X-axis drag start");
@@ -1432,9 +1739,14 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     }
     return {
       opacity: getComputedStyle(element).opacity,
+      measuredAt: performance.now(),
       scrollTop: scroller?.scrollTop ?? 0,
     };
   }, identity);
+  await page.evaluate(() => {
+    const trace = window.__FULLMAG_INSPECTOR_COMMIT_TRACE__;
+    if (trace) { trace.commits = []; trace.dropped = 0; trace.errors = 0; }
+  });
   await page.waitForTimeout(1_100);
   const requestStart = fixture.requests.length;
   fixture.texturePatchDelayMs = 180;
@@ -1514,9 +1826,19 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
       renderCount: performance
         .getEntriesByType("measure")
         .filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule")).length,
+      renderMeasures: performance
+        .getEntriesByType("measure")
+        .filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule"))
+        .slice(-32)
+        .map((entry) => ({ name: entry.name, startTime: entry.startTime, duration: entry.duration })),
+      measuredAt: performance.now(),
+      commitTrace: window.__FULLMAG_INSPECTOR_COMMIT_TRACE__ ?? null,
       scrollTop: scroller?.scrollTop ?? 0,
     };
   });
+  await writeFile(resolve(outputDir, "magnetic-texture-mutation-evidence.json"),
+    JSON.stringify({ baseline, duringMutation, evidence,
+      requests: fixture.requests.slice(requestStart, requestStart + 32) }, null, 2));
   assert(evidence.opacity === baseline.opacity && evidence.opacityAnimations === 0,
     "Magnetic Texture mutation changed Inspector opacity after ACK.");
   assert(Math.abs(evidence.scrollTop - baseline.scrollTop) <= 1,
@@ -1543,23 +1865,42 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   fixture.revision = fixtureSnapshot.revision;
   fixture.scene = fixtureSnapshot.scene;
   fixture.visualization = fixtureSnapshot.visualization;
-  fixture.requestCounts.clear();
-  await page.reload({ waitUntil: "domcontentloaded" });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+  }, "texture-mutation-reset");
   await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 30_000 });
-  const unexpectedResetErrors = consoleErrors.filter(
-    (message) => !message.includes("the server responded with a status of 409 (Conflict)"),
+  const resetBrowserErrors = await classifyInspectorBrowserErrors();
+  assert(
+    resetBrowserErrors.unexpected404Responses.length === 0 &&
+      resetBrowserErrors.optional404ConsoleErrors.length ===
+        resetBrowserErrors.optional404Responses.length,
+    `Unexpected optional 404 response/console evidence before fixture reset: ${JSON.stringify({
+      console404Errors: resetBrowserErrors.optional404ConsoleErrors,
+      expectedResponses: resetBrowserErrors.optional404Responses,
+      unexpectedResponses: resetBrowserErrors.unexpected404Responses,
+      all404Responses: notFoundResponses,
+    })}`,
   );
   assert(
-    unexpectedResetErrors.length === 0,
-    `Unexpected browser errors before fixture reset: ${unexpectedResetErrors.join("\n")}\n404 responses: ${notFoundResponses.join("\n")}`,
+    resetBrowserErrors.unexpectedBrowserErrors.length === 0,
+    `Unexpected browser errors before fixture reset: ${resetBrowserErrors.unexpectedBrowserErrors.join("\n")}`,
+  );
+  optionalResponseAbsenceProof.push(
+    optionalResponseAbsenceSummary(resetBrowserErrors),
   );
   consoleErrors.length = 0;
+  consoleErrorEvents.length = 0;
+  notFoundResponses.length = 0;
+  notFoundResponseEvidence.length = 0;
+  notFoundResponseEvidenceTasks.length = 0;
 }
 
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   fixture.physicsGuardEnabled = true;
-  fixture.requestCounts.clear();
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "physics-guard-entry");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
 
   const objectDmiNodeId = "model:object:film:magnetic-parameters:interfacial_dmi";
@@ -1614,9 +1955,12 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     )
     .waitFor({ state: "visible", timeout: 5_000 });
   await page.waitForTimeout(200);
+  // A delayed viewport client ACK records display observation; it does not
+  // mutate authored physics. Keep every other mutation in this guard assertion.
   const guardRequests = fixture.requests
     .slice(requestStart)
-    .filter((request) => /^(PATCH|POST|PUT|DELETE) /.test(request));
+    .filter((request) => /^(PATCH|POST|PUT|DELETE) /.test(request) &&
+      request !== "POST /v2/sessions/current/visualization/client-acks");
   assert(
     guardRequests.length === 0,
     `Rotated DMI guard emitted a mutation: ${JSON.stringify(guardRequests)}.`,
@@ -1634,9 +1978,10 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   objectDmi.enabled = false;
   fixture.scene.study.rotated_interfacial_dmi = -0.003;
 
-  fixture.requestCounts.clear();
-
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "physics-guard-recovery");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   await expandInspectorNode(page, "model:objects");
   await expandInspectorNode(page, "model:object:film");
@@ -1664,7 +2009,8 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   await page.waitForTimeout(200);
   const inverseRequests = fixture.requests
     .slice(inverseRequestStart)
-    .filter((request) => /^(PATCH|POST|PUT|DELETE) /.test(request));
+    .filter((request) => /^(PATCH|POST|PUT|DELETE) /.test(request) &&
+      request !== "POST /v2/sessions/current/visualization/client-acks");
   assert(
     inverseRequests.length === 0,
     `Object DMI inverse guard emitted a mutation: ${JSON.stringify(inverseRequests)}.`,
@@ -1822,15 +2168,495 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
   await qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture);
 }
 
+async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outputDir) {
+  const proofFile = "analysis-resonance-leaf-routing-proof.json";
+  const cases = [
+    {
+      id: "modal-mode-field",
+      analysisProduct: "modal_eigen",
+      modalResonanceQualification: true,
+      studyProduct: "modal_eigen",
+      stageId: "eigen-dispersion",
+      kind: "results.resonance.modal.mode",
+      suffix: "modes",
+      childGroup: "modes",
+      fieldSource: "eigen-mode",
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      owner: "frequency-domain-results-resonance-modal-mode",
+      heading: "Eigenmode Field",
+      label: "Modal eigenmode field",
+    },
+    {
+      id: "modal-rf-coupling",
+      analysisProduct: "modal_eigen",
+      modalResonanceQualification: true,
+      studyProduct: "modal_eigen",
+      stageId: "eigen-dispersion",
+      kind: "results.resonance.modal.coupling",
+      suffix: "rf-coupling",
+      owner: "frequency-domain-results-resonance-modal-coupling",
+      heading: "RF Coupling / FMR Activity",
+      label: "Modal RF coupling",
+    },
+    {
+      id: "driven-response-field",
+      analysisProduct: "driven_response",
+      studyProduct: "driven_response",
+      stageId: "frequency-response",
+      kind: "results.resonance.driven.field",
+      suffix: "response-fields",
+      childGroup: "response-fields",
+      fieldSource: "frequency-response",
+      fieldId: INSPECTOR_DRIVEN_RESPONSE_FIELD_ID,
+      owner: "frequency-domain-results-resonance-driven-field",
+      heading: "Response Field",
+      label: "Driven response field",
+    },
+    {
+      id: "driven-frequency-points",
+      analysisProduct: "driven_response",
+      studyProduct: "driven_response",
+      stageId: "frequency-response",
+      kind: "results.resonance.driven.frequency_points",
+      suffix: "frequency-points",
+      owner: "frequency-domain-results-resonance-driven-frequency_points",
+      heading: "Response Frequency Points",
+      label: "Driven response frequency points",
+    },
+    {
+      id: "driven-peaks",
+      analysisProduct: "driven_response",
+      studyProduct: "driven_response",
+      stageId: "frequency-response",
+      kind: "results.resonance.driven.peaks",
+      suffix: "peaks",
+      owner: "frequency-domain-results-resonance-driven-peaks",
+      heading: "Resonance Peaks",
+      label: "Driven resonance peaks",
+    },
+  ];
+  const proof = {
+    schema_version: "analysis_resonance_leaf_routing_browser_proof.v1",
+    cases: [],
+  };
+  const screenshots = [];
+  const proofPath = resolve(outputDir, proofFile);
+
+  for (const resultCase of cases) {
+    const fixture = createInspectorFixture();
+    fixture.analysisProduct = resultCase.analysisProduct;
+    fixture.modalResonanceQualification =
+      resultCase.modalResonanceQualification === true;
+    const manifestPayload = inspectorFrequencyManifest(fixture).result_manifest.payload;
+    const spectrumMode = inspectorFrequencySpectrum().payload.modes[0] ?? null;
+    const responseSweep = inspectorFrequencyResponseSweep(fixture);
+    const responsePoint = responseSweep.payload?.points?.[0] ?? null;
+    const fixtureEvidence = {
+      boundaryContext: manifestPayload.requested_execution.boundary_context,
+      calculationMode: manifestPayload.requested_execution.calculation_mode,
+      observables: manifestPayload.observables,
+      modeFieldId: spectrumMode?.mode_field_id ?? null,
+      responseFieldId: responsePoint?.field_id ?? null,
+      responseFrequencyIndex: responsePoint?.frequency_index ?? null,
+    };
+    if (resultCase.analysisProduct === "modal_eigen") {
+      assert(
+        fixtureEvidence.boundaryContext === "finite_open" &&
+          fixtureEvidence.calculationMode === "fmr_modal" &&
+          fixtureEvidence.observables.some((observable) => observable.kind === "rf_coupling") &&
+          Boolean(fixtureEvidence.modeFieldId),
+        `Modal resonance case is missing finite-FMR, rf_coupling, or mode-field evidence: ${JSON.stringify(fixtureEvidence)}`,
+      );
+    } else {
+      assert(
+        fixtureEvidence.boundaryContext === "finite_open" &&
+          fixtureEvidence.calculationMode === "fmr_response" &&
+          Boolean(fixtureEvidence.responseFieldId),
+        `Driven resonance case is missing finite response-sweep field evidence: ${JSON.stringify(fixtureEvidence)}`,
+      );
+    }
+    const context = await browser.newContext({
+      viewport: { width: 1600, height: 900 },
+    });
+    const page = await context.newPage();
+    const pageErrors = [];
+    const consoleErrors = [];
+    const missingApiResponses = [];
+    const expectedMissingApiResponses = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => {
+      pageErrors.push(error.stack ?? error.message);
+    });
+    page.on("response", (response) => {
+      if (
+        response.status() === 404 &&
+        new URL(response.url()).pathname.startsWith("/v2/")
+      ) {
+        const path = new URL(response.url()).pathname;
+        const request = `${response.request().method()} ${path}`;
+        if (
+          response.request().method() === "GET" &&
+          path === INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH
+        ) {
+          expectedMissingApiResponses.push(request);
+        } else {
+          missingApiResponses.push(request);
+        }
+      }
+    });
+
+    let expectedNodeId = null;
+    try {
+      await page.addInitScript((baseUrl) => {
+        window.__FULLMAG_CONFIG__ = {
+          ...(window.__FULLMAG_CONFIG__ ?? {}),
+          allowMissingSessionSmoke: true,
+          controlRoomApiBase: baseUrl,
+          disableRealtime: true,
+        };
+        // Analysis has no surface tabs (ADR 0054 stage 3b): start from a stored
+        // Dispersion preference so the Results leaf selection must reroute it.
+        try {
+          window.localStorage.setItem(
+            "fm:analysis-view-preferences:v2",
+            JSON.stringify({ schemaVersion: 2, activeSurface: "dispersion" }),
+          );
+        } catch {
+          // Storage unavailable: the "before" assertion below reports it.
+        }
+      }, new URL(workspaceUrl).origin);
+      await installInspectorFixtureApi(page, fixture);
+      await gotoInspectorDocument(
+        page,
+        fixture,
+        workspaceUrl,
+        { waitUntil: "domcontentloaded", timeout: 60_000 },
+        `resonance-leaf-${resultCase.id}`,
+      );
+      const inspector = page.locator(".fm-inspector");
+      await inspector.waitFor({ state: "visible", timeout: 30_000 });
+      await openAnalysisPlotsForResonanceLeafProof(page);
+
+      assert(
+        (await page.locator(".fm-analysis-plots [role='tablist']").count()) === 0,
+        `${resultCase.label}: Analysis must not render surface tabs; Explorer selection owns the surface`,
+      );
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector(".fm-analysis-plots__surface-title")
+            ?.getAttribute("data-analysis-surface-title") === "dispersion" &&
+          document
+            .querySelector(".fm-analysis-plots [data-analysis-surface]")
+            ?.getAttribute("data-analysis-surface") === "dispersion",
+        undefined,
+        { timeout: 60_000 },
+      );
+      const before = await inspectorResonanceLeafRoutingState(page);
+      assert(
+        before.activeViewportModule === "analysis-plots" &&
+          before.analysisSurface === "dispersion" &&
+          before.dispersionSelected === true &&
+          before.resonanceSelected === false,
+        `${resultCase.label}: Analysis did not start on the selected Dispersion surface: ${JSON.stringify(before)}`,
+      );
+
+      const resultsTab = page
+        .locator(".fm-explorer .fm-tabs-trigger")
+        .filter({ hasText: /^Results$/ });
+      await resultsTab.waitFor({ state: "visible", timeout: 60_000 });
+      await resultsTab.click();
+      const resultRootId = "results:run:inspector-run";
+      const resonanceRootId = `${resultRootId}:resonance`;
+      const stageId =
+        `${resonanceRootId}:stage:${resultCase.stageId}:${resultCase.studyProduct}`;
+      await expandInspectorNode(page, resultRootId, fixture);
+      await expandInspectorNode(page, resonanceRootId, fixture);
+      await expandInspectorNode(page, stageId, fixture);
+
+      const nodeId = resultCase.fieldSource
+        ? `${stageId}:${resultCase.childGroup}:${resultCase.fieldSource}:${encodeURIComponent(resultCase.fieldId)}`
+        : `${stageId}:${resultCase.suffix}`;
+      expectedNodeId = nodeId;
+      if (resultCase.childGroup) {
+        await expandInspectorNode(
+          page,
+          `${stageId}:${resultCase.childGroup}`,
+          fixture,
+        );
+      }
+      await selectResultInspectorNode(page, inspector, nodeId, {
+        owner: resultCase.owner,
+        heading: resultCase.heading,
+        label: resultCase.label,
+      });
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector(".fm-analysis-plots [data-analysis-surface]")
+            ?.getAttribute("data-analysis-surface") === "resonance-fmr",
+        undefined,
+        { timeout: 60_000 },
+      );
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector("#fm-ribbon-tab-analysis-context")
+            ?.getAttribute("aria-selected") === "true",
+        undefined,
+        { timeout: 60_000 },
+      );
+      await waitForInspectorRequestQuiet(page, fixture);
+
+      const requiredAnalysisPath =
+        resultCase.analysisProduct === "modal_eigen"
+          ? "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2"
+          : "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep";
+      assert(
+        fixture.requests.some((request) => request.startsWith(`GET ${requiredAnalysisPath}`)),
+        `${resultCase.label}: required frequency artifact was not requested: ${requiredAnalysisPath}`,
+      );
+      assert(
+        fixture.requestBudgetViolation === null && fixture.unknownMutationPaths.length === 0,
+        `${resultCase.label}: fixture request/mutation budget was violated: ${JSON.stringify({ budget: fixture.requestBudgetViolation, mutations: fixture.unknownMutationPaths })}`,
+      );
+
+      const after = await inspectorResonanceLeafRoutingState(page, nodeId);
+      assert(
+        after.analysisSurface === "resonance-fmr" &&
+          after.resonanceSelected === true &&
+          after.dispersionSelected === false,
+        `${resultCase.label}: selected Results leaf did not route Analysis to Resonance & FMR: ${JSON.stringify(after)}`,
+      );
+      assert(
+        after.ribbonContextual === "true" &&
+          after.ribbonSelected === "true" &&
+          after.ribbonLabel === "Resonance & FMR",
+        `${resultCase.label}: Analysis Ribbon context is incorrect: ${JSON.stringify(after)}`,
+      );
+      assert(
+        after.selectedNodeId === nodeId && after.selectedNodeAriaSelected === "true",
+        `${resultCase.label}: the clicked Results leaf is not the selected tree node: ${JSON.stringify(after)}`,
+      );
+      assert(
+        after.inspectorOwner === resultCase.owner,
+        `${resultCase.label}: wrong Inspector owner ${after.inspectorOwner ?? "none"}`,
+      );
+      assert(
+        after.visibleErrorNotifications === 0,
+        `${resultCase.label}: browser displayed an error notification toast: ${JSON.stringify(
+          after.notifications,
+        )}`,
+      );
+      assert(
+        pageErrors.length === 0,
+        `${resultCase.label}: browser page errors: ${pageErrors.join("\n")}`,
+      );
+      const expectedCancelAbsenceCount =
+        resultCase.id === "driven-frequency-points" ? 1 : 0;
+      assert(
+        expectedMissingApiResponses.length === expectedCancelAbsenceCount &&
+          expectedMissingApiResponses.every(
+            (request) => request === `GET ${INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH}`,
+          ),
+        `${resultCase.label}: unexpected optional cancellation-resource absence: ${JSON.stringify(expectedMissingApiResponses)}`,
+      );
+      assert(
+        missingApiResponses.length === 0 && fixture.unknownGetPaths.length === 0,
+        `${resultCase.label}: missing/unknown API resources: ${JSON.stringify({ missingApiResponses, unknownGetPaths: fixture.unknownGetPaths })}`,
+      );
+
+      const screenshot = `analysis-resonance-leaf-${resultCase.id}.png`;
+      await page.screenshot({ path: resolve(outputDir, screenshot) });
+      screenshots.push(screenshot);
+      proof.cases.push({
+        id: resultCase.id,
+        kind: resultCase.kind,
+        fieldId: resultCase.fieldId ?? null,
+        fieldSource: resultCase.fieldSource ?? null,
+        fixtureEvidence,
+        frequencyResourceRequests: fixture.requests.filter((request) =>
+          request.includes("/analysis/frequency-domain/"),
+        ),
+        expectedNodeId: nodeId,
+        before: {
+          ...before,
+          resultKind: null,
+          resultNodeId: null,
+        },
+        after: {
+          ...after,
+          resultKind: resultCase.kind,
+          resultNodeId: after.selectedNodeId,
+        },
+        screenshot,
+        pageErrors,
+        consoleErrors,
+        expectedMissingApiResponses,
+        missingApiResponses,
+        unknownGetPaths: [...fixture.unknownGetPaths],
+      });
+      await writeFile(proofPath, `${JSON.stringify(proof, null, 2)}\n`, "utf8");
+    } catch (error) {
+      // Retain the failed mounted-UI state before closing this isolated context.
+      try {
+        const failure = {
+          id: resultCase.id,
+          kind: resultCase.kind,
+          expectedNodeId,
+          fixtureEvidence,
+          error: String(error?.stack ?? error),
+          state: await inspectorResonanceLeafRoutingState(page, expectedNodeId),
+          ribbonTabs: await page.locator(".fm-ribbon__tab").evaluateAll((tabs) =>
+            tabs.map((tab) => ({
+              id: tab.id,
+              label: tab.textContent?.trim(),
+              selected: tab.getAttribute("aria-selected"),
+              contextual: tab.getAttribute("data-contextual"),
+              visible: tab.getBoundingClientRect().width > 0 && tab.getBoundingClientRect().height > 0,
+            })),
+          ),
+          requests: [...fixture.requests],
+          pageErrors,
+          consoleErrors,
+          missingApiResponses,
+          expectedMissingApiResponses,
+          unknownGetPaths: [...fixture.unknownGetPaths],
+        };
+        await writeFile(
+          resolve(outputDir, `analysis-resonance-leaf-${resultCase.id}-failure.json`),
+          `${JSON.stringify(failure, null, 2)}\n`,
+          "utf8",
+        );
+        await page.screenshot({
+          path: resolve(outputDir, `analysis-resonance-leaf-${resultCase.id}-failure.png`),
+        });
+      } catch (captureError) {
+        console.error("Resonance leaf failure capture failed:", captureError);
+      }
+      throw error;
+    } finally {
+      await context.close();
+    }
+  }
+
+  assert(proof.cases.length === 5, `Expected five resonance leaf cases, got ${proof.cases.length}.`);
+  return { cases: proof.cases, proofFile, screenshots };
+}
+
+async function openAnalysisPlotsForResonanceLeafProof(page) {
+  const analysisTab = page
+    .locator(".fm-viewport-tabs__trigger")
+    .filter({ hasText: /^Analysis$/ });
+  await analysisTab
+    .first()
+    .waitFor({ state: "visible", timeout: 60_000 });
+  await analysisTab.first().click({ timeout: 60_000 });
+  await page
+    .locator("[data-slot-id='viewport-main'][data-active-module-id='analysis-plots']")
+    .waitFor({ state: "attached", timeout: 60_000 });
+  await page.locator(".fm-analysis-plots").waitFor({
+    state: "visible",
+    timeout: 60_000,
+  });
+}
+
+async function inspectorResonanceLeafRoutingState(page, expectedNodeId = null) {
+  return page.evaluate((expectedNodeId) => {
+    const surface = document.querySelector(
+      ".fm-analysis-plots [data-analysis-surface]",
+    );
+    const surfaceTitle = document
+      .querySelector(".fm-analysis-plots__surface-title")
+      ?.getAttribute("data-analysis-surface-title") ?? null;
+    const ribbon = document.querySelector("#fm-ribbon-tab-analysis-context");
+    const selectedNode = expectedNodeId
+      ? document.querySelector(`[data-node-id="${expectedNodeId}"]`)
+      : document.querySelector(
+          '.fm-explorer [role="treeitem"][aria-selected="true"]',
+        );
+    const inspector = document.querySelector(".fm-inspector");
+    const viewport = document.querySelector('[data-slot-id="viewport-main"]');
+    return {
+      activeViewportModule: viewport?.getAttribute("data-active-module-id") ?? null,
+      analysisSurface: surface?.getAttribute("data-analysis-surface") ?? null,
+      surfaceTitle,
+      resonanceSelected: surfaceTitle === "resonance-fmr",
+      dispersionSelected: surfaceTitle === "dispersion",
+      ribbonContextual: ribbon?.getAttribute("data-contextual") ?? null,
+      ribbonSelected: ribbon?.getAttribute("aria-selected") ?? null,
+      ribbonLabel: ribbon?.textContent?.trim() ?? null,
+      selectedNodeId: selectedNode?.getAttribute("data-node-id") ?? null,
+      selectedNodeAriaSelected: selectedNode?.getAttribute("aria-selected") ?? null,
+      selectedNodeLabel: selectedNode?.textContent?.trim() ?? null,
+      inspectorOwner: inspector?.getAttribute("data-inspector-owner") ?? null,
+      inspectorTitle:
+        inspector?.querySelector(".fm-inspector__title")?.textContent?.trim() ?? null,
+      notifications: [...document.querySelectorAll(".fm-notifications__toast")].map(
+        (toast) => ({
+          kind: toast.getAttribute("data-kind"),
+          title:
+            toast
+              .querySelector(".fm-notifications__toast-header strong")
+              ?.textContent?.trim() ?? null,
+        }),
+      ),
+      visibleErrorNotifications: document.querySelectorAll(
+        '.fm-notifications__toast[data-kind="error"]',
+      ).length,
+      visibleNotifications: document.querySelectorAll(".fm-notifications__toast").length,
+      visibleSuccessNotifications: document.querySelectorAll(
+        '.fm-notifications__toast[data-kind="success"]',
+      ).length,
+    };
+  }, expectedNodeId);
+}
+
 async function qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture) {
   fixture.analysisProduct = "modal_eigen";
-  fixture.requestCounts.clear();
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  fixture.modalDispersionOwnershipRegression = true;
+  fixture.modalBranchPlotRealtime = { connectionCount: 0, socket: null };
+  await page.routeWebSocket(
+    (url) => new URL(url).pathname === "/v2/sessions/current/events/ws",
+    (websocket) => {
+      assert(
+        websocket.protocols().includes("fullmag.live.v1"),
+        "The stale branch Plot 3D fixture websocket omitted fullmag.live.v1.",
+      );
+      fixture.modalBranchPlotRealtime.connectionCount += 1;
+      fixture.modalBranchPlotRealtime.socket = websocket;
+    },
+  );
+  let releaseOldCsv;
+  const oldCsvGate = new Promise((resolve) => {
+    releaseOldCsv = resolve;
+  });
+  fixture.modalDispersionRace = {
+    oldCsvGate,
+    phase: "run-a-delayed",
+    runARequestCount: 0,
+    runAResponseCount: 0,
+  };
+  const realtimeWorkspaceUrl = new URL(page.url());
+  realtimeWorkspaceUrl.searchParams.set("inspectorRealtimeFixture", "1");
+  await gotoInspectorDocument(page, fixture, realtimeWorkspaceUrl.toString(), {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "modal-eigen-realtime");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
+  await waitForInspectorRealtimeConnection(fixture, 1);
+  sendInspectorRealtimeHello(fixture, 1);
 
   const resultsTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Results$/ });
+  const runADispersionRequest = page.waitForRequest((request) =>
+    new URL(request.url()).pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+    { timeout: 60_000 },
+  );
   await resultsTab.click();
   const resultRootId = "results:run:inspector-run";
   const dispersionRootId = `${resultRootId}:k-resolved`;
@@ -1838,6 +2664,19 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   await expandInspectorNode(page, resultRootId);
   await expandInspectorNode(page, dispersionRootId);
   await expandInspectorNode(page, modalStageId);
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
+  await runADispersionRequest;
+  assert(
+    fixture.modalDispersionRace.runARequestCount > 0,
+    "The old run A dispersion CSV request did not enter the delayed fixture route.",
+  );
+
+  await qualifyModalArtifactOwnershipRace(page, inspector, fixture, {
+    dispersionRootId,
+    modalStageId,
+    releaseOldCsv,
+    resultRootId,
+  });
 
   await selectResultInspectorNode(page, inspector, `${modalStageId}:dispersion`, {
     owner: "frequency-domain-results-dispersion-modal-relation",
@@ -1871,8 +2710,10 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   }
 
   fixture.analysisProduct = "driven_response";
-  fixture.requestCounts.clear();
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "modal-driven-response");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   const modelTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
@@ -1884,6 +2725,791 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
     state: "visible",
     timeout: 60_000,
   });
+}
+
+async function waitForInspectorRealtimeConnection(fixture, minimumConnectionCount) {
+  const deadline = Date.now() + 60_000;
+  while (
+    fixture.modalBranchPlotRealtime.connectionCount < minimumConnectionCount &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert(
+    fixture.modalBranchPlotRealtime.connectionCount >= minimumConnectionCount,
+    `Realtime fixture did not connect ${minimumConnectionCount} time(s).`,
+  );
+}
+
+function sendInspectorRealtimeHello(fixture, sequence) {
+  const socket = fixture.modalBranchPlotRealtime.socket;
+  assert(socket, "Realtime fixture socket is not connected.");
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: { request_scope_epoch: "inspector-request-scope-1" },
+    run_id: "inspector-run",
+    seq: sequence,
+    session_id: "inspector-routing-smoke",
+    type: "hello",
+  }));
+}
+
+function sendInspectorBranchPlotInvalidation(fixture, sequence) {
+  const socket = fixture.modalBranchPlotRealtime.socket;
+  assert(socket, "Realtime fixture socket is not connected.");
+  const revision = fixture.revision + sequence;
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: {
+      changes: [
+        {
+          recommended_fetch: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+          resource: "analysis",
+          resource_id: "frequency_domain_manifest",
+          revision,
+        },
+        {
+          recommended_fetch: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+          resource: "analysis",
+          resource_id: "eigen_branches",
+          revision,
+        },
+      ],
+    },
+    run_id: "inspector-run",
+    seq: sequence,
+    session_id: "inspector-routing-smoke",
+    type: "resource.batch_changed",
+  }));
+}
+
+function createInspectorBranchPlotRefreshGate() {
+  const expectedPaths = new Set([
+    "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+    "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+  ]);
+  let resolveBothHeld;
+  const bothHeld = new Promise((resolve) => {
+    resolveBothHeld = resolve;
+  });
+  const gate = {
+    bothHeld,
+    expectedPaths,
+    heldPaths: new Set(),
+    phase: "holding",
+    pendingResponses: [],
+    releaseBothHeld: resolveBothHeld,
+    async release() {
+      if (gate.phase === "released") return;
+      gate.phase = "released";
+      await Promise.all(gate.pendingResponses.splice(0).map((release) => release()));
+    },
+  };
+  return gate;
+}
+
+async function fulfillOrHoldModalBranchPlotRefresh(route, fixture, path, payload) {
+  const gate = fixture.modalBranchPlotRefreshGate;
+  if (!gate || gate.phase !== "holding" || !gate.expectedPaths.has(path)) {
+    await fulfillJson(route, payload);
+    return;
+  }
+
+  gate.heldPaths.add(path);
+  const response = new Promise((resolve, reject) => {
+    gate.pendingResponses.push(async () => {
+      try {
+        await fulfillJson(route, payload);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+  if ([...gate.expectedPaths].every((expectedPath) => gate.heldPaths.has(expectedPath))) {
+    gate.releaseBothHeld();
+  }
+  await response;
+}
+
+async function waitForInspectorBranchPlotRefreshesHeld(gate) {
+  let timeout;
+  try {
+    await Promise.race([
+      gate.bothHeld,
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(
+            `Branch/manifest refreshes did not both enter the stale hold: ${JSON.stringify([...gate.heldPaths])}`,
+          )),
+          60_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function qualifyModalArtifactOwnershipRace(
+  page,
+  inspector,
+  fixture,
+  { dispersionRootId, modalStageId, releaseOldCsv, resultRootId },
+) {
+  const oldRunPlotButton = inspector.getByRole("button", {
+    name: "Plot sample 1 mode 2 in 3D",
+  });
+  await oldRunPlotButton.waitFor({ state: "visible", timeout: 60_000 });
+  assert(
+    !(await oldRunPlotButton.isEnabled()),
+    "A run A dispersion artifact must not enable the run B branch's 3D action.",
+  );
+  const staleCaptureStart = await page.evaluate(
+    () => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.length ?? 0,
+  );
+  const staleModeFieldRequestCount = inspectorModeFieldVectorRequestCount(fixture);
+
+  const modelTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Model$/ });
+  await modelTab.click();
+  await selectInspectorNode(page, inspector, "model:object:film:visualization", {
+    owner: "object-visualization",
+    label: "Object viewport with unmatched run A artifact",
+  });
+  await assertHealthyViewportCanvas(page, "unmatched run A modal artifacts");
+  const staleUniforms = await page.evaluate(
+    (start) => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.slice(start) ?? [],
+    staleCaptureStart,
+  );
+  assert(
+    !staleUniforms.some((vector) => closeVector(vector, [-2e7, 0, 0])),
+    `A run A wavevector reached the 3D shader while run B branches were selected: ${JSON.stringify(staleUniforms)}`,
+  );
+  assert(
+    inspectorModeFieldVectorRequestCount(fixture) === staleModeFieldRequestCount,
+    "A disabled stale branch action must not hand off or request the candidate modal field.",
+  );
+
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
+  const pendingCsv = await exportBranchSampleCsv(page, inspector, 1, 2);
+  assertBranchCsvHasNoK(pendingCsv, "A delayed run A CSV must not enrich run B branch rows while pending.");
+
+  const runAResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion" &&
+    response.status() === 200,
+    { timeout: 60_000 },
+  );
+  releaseOldCsv();
+  await runAResponse;
+  await waitForInspectorRequestQuiet(page, fixture);
+  assert(
+    fixture.modalDispersionRace.runAResponseCount > 0,
+    "The delayed run A CSV fixture response was not served.",
+  );
+  const mismatchedCsv = await exportBranchSampleCsv(page, inspector, 1, 2);
+  assertBranchCsvHasNoK(mismatchedCsv, "A completed run A CSV must not enrich run B branch rows.");
+
+  fixture.modalDispersionRace.phase = "run-b-matched";
+  const matchedModalFieldNetworkTrace = captureInspectorModalFieldNetwork(page);
+  const matchedModalFieldDiagnostic = { phase: "run-b-reload" };
+  try {
+    await qualifyMatchedRunBModalArtifact(
+      page,
+      inspector,
+      fixture,
+      { dispersionRootId, modalStageId, resultRootId },
+      matchedModalFieldDiagnostic,
+    );
+  } catch (error) {
+    const details = await inspectorModalFieldFailureDetails(
+      page,
+      fixture,
+      matchedModalFieldNetworkTrace.events,
+      error,
+      matchedModalFieldDiagnostic.phase,
+    );
+    throw new Error(
+      `Matched run B modal-field handoff failed. Diagnostics: ${JSON.stringify(details)}`,
+    );
+  } finally {
+    matchedModalFieldNetworkTrace.dispose();
+  }
+}
+
+async function qualifyMatchedRunBModalArtifact(
+  page,
+  inspector,
+  fixture,
+  { dispersionRootId, modalStageId, resultRootId },
+  diagnostic,
+) {
+  const realtimeConnectionsBeforeReload =
+    fixture.modalBranchPlotRealtime.connectionCount;
+  const runBResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion" &&
+    response.status() === 200,
+    { timeout: 60_000 },
+  );
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "modal-eigen-run-b-artifacts");
+  await waitForInspectorRealtimeConnection(
+    fixture,
+    realtimeConnectionsBeforeReload + 1,
+  );
+  sendInspectorRealtimeHello(
+    fixture,
+    realtimeConnectionsBeforeReload + 1,
+  );
+  const resultsTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Results$/ });
+  const modelTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Model$/ });
+  diagnostic.phase = "select-results-tab";
+  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
+    await resultsTab.click();
+  }
+  diagnostic.phase = "wait-run-b-dispersion-response";
+  await runBResponse;
+  diagnostic.phase = "wait-run-b-request-quiet";
+  await waitForInspectorRequestQuiet(page, fixture);
+  diagnostic.phase = "select-run-b-results-branch";
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
+  diagnostic.phase = "export-run-b-branch-csv";
+  const matchedCsv = await exportBranchSampleCsv(page, inspector, 1, 2);
+  const matchedRow = branchCsvSampleRow(matchedCsv, 1, 2);
+  assert(
+    matchedRow?.[5] === "30000000" &&
+      matchedRow.slice(6, 9).join(",") === "0,0,30000000",
+    `Matched run B CSV did not supply its own nonzero path/k identity: ${JSON.stringify(matchedRow)}`,
+  );
+
+  const plotModeButton = inspector.getByRole("button", {
+    name: "Plot sample 1 mode 2 in 3D",
+  });
+  assert(
+    await plotModeButton.isEnabled(),
+    "The matching ready run B branch must enable its 3D mode handoff.",
+  );
+  diagnostic.phase = "settle-ready-branch-resources";
+  await waitForInspectorRequestQuiet(page, fixture);
+  const modeFieldRequestCountBeforeStaleHandoff =
+    inspectorModeFieldVectorRequestCount(fixture);
+  const staleRefreshGate = createInspectorBranchPlotRefreshGate();
+  fixture.modalBranchPlotRefreshGate = staleRefreshGate;
+  try {
+    diagnostic.phase = "invalidate-branch-and-manifest";
+    sendInspectorBranchPlotInvalidation(
+      fixture,
+      fixture.modalBranchPlotRealtime.connectionCount + 1,
+    );
+    diagnostic.phase = "hold-both-stale-resource-refreshes";
+    await waitForInspectorBranchPlotRefreshesHeld(staleRefreshGate);
+    assert(
+      staleRefreshGate.heldPaths.size === 2,
+      `Both stale owner resources must be refreshing before Plot 3D: ${JSON.stringify([...staleRefreshGate.heldPaths])}`,
+    );
+    assert(
+      await plotModeButton.isEnabled(),
+      "The matched branch Plot 3D action must remain enabled while its branch and manifest hooks retain stale snapshots.",
+    );
+    assert(
+      inspectorModeFieldVectorRequestCount(fixture) ===
+        modeFieldRequestCountBeforeStaleHandoff,
+      "The stale Plot 3D proof must observe a real click, not a prior field request.",
+    );
+
+    diagnostic.phase = "capture-stale-mode-field-observers";
+    const matchedCaptureStart = await page.evaluate(
+      () => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.length ?? 0,
+    );
+    const matchedModeFieldMetadataResponse = observeInspectorResponse(
+      page.waitForResponse((response) =>
+        new URL(response.url()).pathname ===
+          "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta" &&
+        response.status() === 200,
+        { timeout: 60_000 },
+      ),
+    );
+    const matchedModeFieldVectorResponse = observeInspectorResponse(
+      page.waitForResponse((response) =>
+        new URL(response.url()).pathname ===
+          `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector` &&
+        response.status() === 200,
+        { timeout: 60_000 },
+      ),
+    );
+    diagnostic.phase = "click-plot-mode-field-while-stale";
+    await plotModeButton.click();
+    diagnostic.phase = "switch-to-model-tab";
+    await modelTab.click();
+    diagnostic.phase = "select-mode-visualization-node";
+    await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
+      owner: "object-mode-visualization-overview",
+      label: "Matched run B mode field from retained branch snapshot",
+    });
+    diagnostic.phase = "assert-viewport-canvas";
+    await assertHealthyViewportCanvas(page, "matched run B nonzero-k stale modal handoff");
+    diagnostic.phase = "wait-mode-field-metadata";
+    const modeFieldMetadataResponse = await requireInspectorResponse(
+      matchedModeFieldMetadataResponse,
+      "matched run B stale mode-field metadata",
+    );
+    diagnostic.phase = "validate-mode-field-metadata";
+    const modeFieldMetadata = await modeFieldMetadataResponse.json();
+    assertInspectorModalModeFieldMetadata(modeFieldMetadata);
+    diagnostic.phase = "wait-wavevector-uniform";
+    await page.waitForFunction(
+      ({ start, expected }) =>
+        (window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__ ?? [])
+          .slice(start)
+          .some((vector) => Array.isArray(vector) && vector.length === 3 &&
+            expected.every((value, index) =>
+              Math.abs(vector[index] - value) <= Math.max(1e-3, Math.abs(value) * 1e-6),
+            )),
+      { start: matchedCaptureStart, expected: [0, 0, 3e7] },
+      { timeout: 30_000 },
+    );
+    diagnostic.phase = "wait-mode-field-vector";
+    await assertInspectorModalModeFieldVectorResponse(
+      await requireInspectorResponse(
+        matchedModeFieldVectorResponse,
+        "matched run B stale mode-field vector",
+      ),
+      fixture,
+    );
+    assert(
+      inspectorModeFieldVectorRequestCount(fixture) >
+        modeFieldRequestCountBeforeStaleHandoff,
+      "The stale branch handoff did not request its matching run B mode-field vector.",
+    );
+    diagnostic.phase = "assert-valid-result-context";
+    assert(
+      await inspector.getByRole("alert", {
+        name: "Active Analysis Overlay context warning",
+      }).count() === 0,
+      "Matched run B stale branch handoff is outside its valid 3D result context.",
+    );
+  } finally {
+    diagnostic.phase = "release-stale-resource-refreshes";
+    await staleRefreshGate.release();
+    if (fixture.modalBranchPlotRefreshGate === staleRefreshGate) {
+      fixture.modalBranchPlotRefreshGate = null;
+    }
+  }
+  diagnostic.phase = "wait-stale-refresh-completion";
+  await waitForInspectorRequestQuiet(page, fixture);
+
+  diagnostic.phase = "restore-results-branch";
+  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
+    await resultsTab.click();
+  }
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
+}
+
+async function selectInspectorResultBranch(
+  page,
+  inspector,
+  resultRootId,
+  dispersionRootId,
+  modalStageId,
+) {
+  let phase = "select-dispersion-result";
+  try {
+    const resultsTab = page
+      .locator(".fm-explorer .fm-tabs-trigger")
+      .filter({ hasText: /^Results$/ });
+    if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
+      await resultsTab.click();
+    }
+    await expandInspectorNode(page, resultRootId);
+    await expandInspectorNode(page, dispersionRootId);
+    await expandInspectorNode(page, modalStageId);
+    await selectResultInspectorNode(page, inspector, `${modalStageId}:dispersion`, {
+      owner: "frequency-domain-results-dispersion-modal-relation",
+      heading: "Dispersion Relation",
+      label: "Modal dispersion relation before branch selection",
+    });
+
+    phase = "expand-branch-table-section";
+    const branchTableSection = inspector.getByRole("button", {
+      name: /^Dispersion Branch Table/,
+    });
+    assert(
+      await branchTableSection.count() === 1,
+      "Dispersion Inspector must expose its branch-table navigation section.",
+    );
+    if ((await branchTableSection.getAttribute("aria-expanded")) !== "true") {
+      await branchTableSection.click();
+    }
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('.fm-inspector [data-slot="inspector-group"]')]
+        .some((section) => {
+          const trigger = section.querySelector('[data-slot="inspector-group-trigger"]');
+          const content = section.querySelector('[data-slot="inspector-group-content"]');
+          return trigger?.textContent?.includes("Dispersion Branch Table") &&
+            trigger.getAttribute("aria-expanded") === "true" &&
+            content instanceof HTMLElement && !content.hidden;
+        }),
+      undefined,
+      { timeout: 60_000 },
+    );
+
+    phase = "assert-rendered-branch-row";
+    const branchTable = inspector.getByRole("table", {
+      name: "Frequency-domain branch table",
+      exact: true,
+    });
+    await branchTable.waitFor({ state: "visible", timeout: 60_000 });
+    const branchRow = branchTable.getByRole("row").filter({ hasText: "branch-0" });
+    assert(
+      await branchRow.count() === 1,
+      "The visible dispersion branch table must contain the fixture-owned branch-0 row.",
+    );
+
+    phase = "select-rendered-branch-row";
+    await branchRow.getByRole("button", {
+      name: "Select branch branch-0 for inspector controls",
+      exact: true,
+    }).click();
+    const branchInspector = inspector.locator(
+      '[data-inspector-owner="frequency-domain.eigen-branch"][data-inspector-surface="eigen-branch-detail"]',
+    );
+    await branchInspector.waitFor({ state: "visible", timeout: 60_000 });
+    await branchInspector.getByRole("heading", {
+      exact: true,
+      level: 3,
+      name: "Eigen Branch Detail",
+    }).waitFor();
+    await branchInspector.getByText("branch-0; Acoustic branch", {
+      exact: true,
+    }).waitFor();
+    assert(
+      (await branchInspector.getAttribute("data-inspector-owner")) ===
+        "frequency-domain.eigen-branch" &&
+        (await branchInspector.getAttribute("data-inspector-surface")) ===
+          "eigen-branch-detail",
+      "The branch-table action did not select the owned branch detail Inspector.",
+    );
+  } catch (error) {
+    try {
+      const failure = {
+        phase,
+        error: String(error?.stack ?? error),
+        inspectorOwner: await inspector.getAttribute("data-inspector-owner"),
+        inspectorHtml: (await inspector.evaluate((element) => element.outerHTML)).slice(0, 30_000),
+        branchGroups: await inspector.evaluate((element) =>
+          [...element.querySelectorAll('[data-slot="inspector-group"]')].map((section) => {
+            const trigger = section.querySelector('[data-slot="inspector-group-trigger"]');
+            const content = section.querySelector('[data-slot="inspector-group-content"]');
+            return {
+              expanded: trigger?.getAttribute("aria-expanded") ?? null,
+              hidden: content?.hasAttribute("hidden") ?? null,
+              title: trigger?.textContent?.trim() ?? null,
+            };
+          }),
+        ),
+        branchActions: await inspector.locator('button[aria-label^="Select branch "]')
+          .evaluateAll((buttons) => buttons.map((button) => {
+            const rect = button.getBoundingClientRect();
+            const content = button.closest('[data-slot="inspector-group-content"]');
+            return {
+              label: button.getAttribute("aria-label"),
+              visible: rect.width > 0 && rect.height > 0 && !content?.hasAttribute("hidden"),
+            };
+          })),
+      };
+      await writeFile(
+        resolve(outputDir, "modal-branch-selection-failure.json"),
+        `${JSON.stringify(failure, null, 2)}\n`,
+        "utf8",
+      );
+      await page.screenshot({
+        path: resolve(outputDir, "modal-branch-selection-failure.png"),
+      });
+    } catch (captureError) {
+      console.error("Modal branch selection failure capture failed:", captureError);
+    }
+    throw error;
+  }
+}
+
+async function exportBranchSampleCsv(page, inspector, sampleIndex, rawModeIndex) {
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await inspector.getByRole("button", { name: "Export branch CSV" }).click();
+  await page.waitForFunction(
+    async ({ sampleIndex: expectedSampleIndex, rawModeIndex: expectedModeIndex }) =>
+      (await navigator.clipboard.readText()).includes(
+        `branch-0,${expectedSampleIndex},sample-${String(expectedSampleIndex).padStart(4, "0")},${expectedModeIndex},`,
+      ),
+    { sampleIndex, rawModeIndex },
+    { timeout: 10_000 },
+  );
+  return page.evaluate(() => navigator.clipboard.readText());
+}
+
+function inspectorModeFieldVectorRequestCount(fixture) {
+  const path = `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector`;
+  return fixture.requests.filter((request) => request.includes(path)).length;
+}
+
+function inspectorModalFieldPath(urlValue) {
+  try {
+    const path = new URL(urlValue, "http://fullmag.invalid").pathname;
+    const modeFieldMatch = path.match(
+      /^\/v2\/sessions\/current\/analysis\/frequency-domain\/eigen\/mode-field\/([^/]+)\/([^/]+)\/meta$/,
+    );
+    if (modeFieldMatch) {
+      return {
+        endpoint: "mode-field-meta",
+        modeIndex: modeFieldMatch[2],
+        path,
+        sampleIndex: modeFieldMatch[1],
+      };
+    }
+    const fieldMatch = path.match(
+      /^\/v2\/sessions\/current\/data\/fields\/([^/]+)\/(meta|samples\/vector)$/,
+    );
+    if (!fieldMatch) return null;
+    const encodedFieldId = fieldMatch[1];
+    const fieldId = decodeURIComponent(encodedFieldId);
+    if (!fieldId.startsWith("analysis:eigen:")) return null;
+    return {
+      encodedPrefix: encodedFieldId.slice(0, 96),
+      endpoint: fieldMatch[2] === "meta" ? "field-meta" : "field-vector",
+      fieldId: fieldId.slice(0, 192),
+      path,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function captureInspectorModalFieldNetwork(page) {
+  const events = [];
+  const record = (event) => {
+    events.push(event);
+    if (events.length > 32) events.splice(0, events.length - 32);
+  };
+  const onRequest = (request) => {
+    const endpoint = inspectorModalFieldPath(request.url());
+    if (endpoint) {
+      record({
+        ...endpoint,
+        kind: "request",
+        method: request.method(),
+      });
+    }
+  };
+  const onResponse = (response) => {
+    const endpoint = inspectorModalFieldPath(response.url());
+    if (endpoint) {
+      record({
+        ...endpoint,
+        kind: "response",
+        method: response.request().method(),
+        status: response.status(),
+      });
+    }
+  };
+  const onRequestFailed = (request) => {
+    const endpoint = inspectorModalFieldPath(request.url());
+    if (!endpoint) return;
+    const failure = request.failure();
+    record({
+      ...endpoint,
+      failure:
+        typeof failure === "string"
+          ? failure.slice(0, 160)
+          : failure?.errorText?.slice(0, 160) ?? null,
+      kind: "requestfailed",
+      method: request.method(),
+    });
+  };
+  page.on("request", onRequest);
+  page.on("response", onResponse);
+  page.on("requestfailed", onRequestFailed);
+  return {
+    dispose() {
+      page.off("request", onRequest);
+      page.off("response", onResponse);
+      page.off("requestfailed", onRequestFailed);
+    },
+    events,
+  };
+}
+
+async function inspectorModalFieldFailureDetails(page, fixture, networkEvents, error, phase) {
+  const fixturePaths = fixture.requests
+    .map((entry) => entry.split(/\s+/, 2)[1])
+    .filter((path) => path && inspectorModalFieldPath(path))
+    .map((path) => inspectorModalFieldPath(path))
+    .slice(-32);
+  let ui = null;
+  try {
+    ui = await page.evaluate(() => {
+      const artifact = window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.();
+      const relevantNames = new Set([
+        "viewport-3d.mode-field-overlay.owner-gate",
+        "viewport-3d.mode-field-overlay.resource-state",
+      ]);
+      const modeFieldEvents = Object.values(artifact?.streams ?? {})
+        .flat()
+        .filter((event) => relevantNames.has(event?.name))
+        .slice(-16)
+        .map((event) => {
+          const detail = event?.detail ?? {};
+          return {
+            timestampMs: Number.isFinite(event?.timestampMs)
+              ? event.timestampMs
+              : null,
+            name: event?.name ?? null,
+            detail: {
+              controllerHasError:
+                typeof detail.controllerHasError === "boolean"
+                  ? detail.controllerHasError
+                  : null,
+              controllerErrorName:
+                typeof detail.controllerErrorName === "string"
+                  ? detail.controllerErrorName.slice(0, 80)
+                  : null,
+              controllerErrorMessage:
+                typeof detail.controllerErrorMessage === "string"
+                  ? detail.controllerErrorMessage.slice(0, 160)
+                  : null,
+              controllerStatus:
+                typeof detail.controllerStatus === "string"
+                  ? detail.controllerStatus.slice(0, 24)
+                  : null,
+              enabled:
+                typeof detail.enabled === "boolean" ? detail.enabled : null,
+              hasIntent:
+                typeof detail.hasIntent === "boolean" ? detail.hasIntent : null,
+              hasSession:
+                typeof detail.hasSession === "boolean" ? detail.hasSession : null,
+              hasTopology:
+                typeof detail.hasTopology === "boolean" ? detail.hasTopology : null,
+              ownerReason:
+                typeof detail.ownerReason === "string"
+                  ? detail.ownerReason.slice(0, 160)
+                  : null,
+              ownerResultRunId:
+                typeof detail.ownerResultRunId === "string"
+                  ? detail.ownerResultRunId.slice(0, 120)
+                  : null,
+              ownerStatus:
+                typeof detail.ownerStatus === "string"
+                  ? detail.ownerStatus.slice(0, 24)
+                  : null,
+              topologyCurrent:
+                typeof detail.topologyCurrent === "boolean"
+                  ? detail.topologyCurrent
+                  : null,
+              topologyIdentityComplete:
+                typeof detail.topologyIdentityComplete === "boolean"
+                  ? detail.topologyIdentityComplete
+                  : null,
+            },
+          };
+        });
+      const analysisOverlayOwnership = Array.from(
+        document.querySelectorAll(".fm-analysis-overlay-context-notice"),
+      )
+        .slice(-4)
+        .map((element) => ({
+          reason:
+            element
+              .querySelector(".fm-analysis-overlay-context-notice__reason")
+              ?.textContent?.trim()
+              .slice(0, 240) ?? null,
+          rebindReason:
+            element
+              .querySelector(".fm-analysis-overlay-context-notice__rebind-reason")
+              ?.textContent?.trim()
+              .slice(0, 240) ?? null,
+          text: element.textContent?.trim().slice(0, 400) ?? "",
+        }));
+      return {
+        alerts: Array.from(document.querySelectorAll('[role="alert"]'))
+          .map((element) => element.textContent?.trim() ?? "")
+          .filter(Boolean)
+          .map((text) => text.slice(0, 400))
+          .slice(-8),
+        statuses: Array.from(document.querySelectorAll('[role="status"]'))
+          .map((element) => element.textContent?.trim() ?? "")
+          .filter(Boolean)
+          .map((text) => text.slice(0, 400))
+          .slice(-8),
+        selectedExplorerNodeIds: Array.from(
+          document.querySelectorAll('[role="treeitem"][aria-selected="true"][data-node-id]'),
+        )
+          .map((element) => element.getAttribute("data-node-id"))
+          .filter((nodeId) => typeof nodeId === "string")
+          .slice(-16),
+        wavevectorUniforms:
+          window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.slice(-8) ?? [],
+        analysisOverlayOwnership,
+        modeFieldEvents,
+      };
+    });
+  } catch {
+    ui = null;
+  }
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorStack = error instanceof Error && typeof error.stack === "string"
+    ? error.stack.slice(0, 2_000).replace(/\?[^\s"'`]+/g, "?[redacted]")
+    : null;
+  return {
+    error: `${error instanceof Error ? error.name : "Error"}: ${errorMessage.split("?")[0].slice(0, 400)}`,
+    errorStack,
+    fixturePaths,
+    networkEvents: networkEvents.slice(-32),
+    phase,
+    ui,
+  };
+}
+
+function observeInspectorResponse(promise) {
+  return promise.then(
+    (response) => ({ response }),
+    (error) => ({ error }),
+  );
+}
+
+async function requireInspectorResponse(outcomePromise, label) {
+  const outcome = await outcomePromise;
+  if (outcome.error) {
+    throw new Error(`${label} response was not observed: ${outcome.error}`);
+  }
+  return outcome.response;
+}
+
+function branchCsvSampleRow(csv, sampleIndex, rawModeIndex) {
+  return csv.split(/\r?\n/)
+    .find((line) => line.startsWith(`branch-0,${sampleIndex},sample-${String(sampleIndex).padStart(4, "0")},${rawModeIndex},`))
+    ?.split(",");
+}
+
+function assertBranchCsvHasNoK(csv, message) {
+  const row = branchCsvSampleRow(csv, 1, 2);
+  assert(
+    row?.[5] === "" && row.slice(6, 9).every((value) => value === ""),
+    `${message} Exported row: ${JSON.stringify(row)}`,
+  );
+}
+
+function closeVector(actual, expected) {
+  return Array.isArray(actual) && actual.length === 3 &&
+    expected.every((value, index) =>
+      Math.abs(actual[index] - value) <= Math.max(1e-3, Math.abs(value) * 1e-6),
+    );
 }
 
 async function selectResultInspectorNode(page, inspector, nodeId, { owner, heading, label }) {
@@ -1965,6 +3591,8 @@ async function ensureModelNodeVisible(page, nodeId) {
     ? ["model:universe", "model:airbox"]
     : nodeId.startsWith("model:object:film:magnetic-texture:")
       ? ["model:objects", "model:object:film", "model:object:film:magnetic-texture"]
+      : nodeId.startsWith("model:object:film:visualization:")
+        ? ["model:objects", "model:object:film", "model:object:film:visualization"]
       : nodeId.startsWith("model:object:film:")
         ? ["model:objects", "model:object:film"]
       : nodeId.startsWith("model:mesh:unassigned:")
@@ -1979,7 +3607,7 @@ async function ensureModelNodeVisible(page, nodeId) {
   await node.scrollIntoViewIfNeeded();
 }
 
-async function expandInspectorNode(page, nodeId) {
+async function expandInspectorNode(page, nodeId, fixtureState = fixture) {
   const node = page.locator(`[data-node-id="${nodeId}"]`);
   try {
     await node.waitFor({ state: "visible", timeout: 60_000 });
@@ -1992,21 +3620,85 @@ async function expandInspectorNode(page, nodeId) {
       })),
     );
     throw new Error(
-      `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ${error}`,
+      `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ` +
+        `Fixture diagnostics: ${JSON.stringify(inspectorRequestBudgetDiagnostics(fixtureState))}. ${error}`,
     );
   }
   if ((await node.getAttribute("aria-expanded")) !== "false") return;
-  const branch = node.locator(".fm-explorer-tree-row__branch");
-  if (await branch.count()) {
-    await branch.click();
-  } else {
-    await node.dblclick();
+  // Expansion can change while model defaults/selection reveal settle. The
+  // keyboard contract expands a collapsed row without closing an open one.
+  await node.focus();
+  await node.press("ArrowRight");
+  try {
+    await page.waitForFunction(
+      (id) => document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-expanded") === "true",
+      nodeId,
+      { timeout: 60_000 },
+    );
+  } catch (error) {
+    const state = await node.evaluate((row) => ({
+      expanded: row.getAttribute("aria-expanded"),
+      focused: document.activeElement === row,
+      label: row.textContent?.trim(),
+    }));
+    throw new Error(`Explorer node ${nodeId} did not expand: ${JSON.stringify(state)}. ${error}`);
   }
-  await page.waitForFunction(
-    (id) => document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-expanded") === "true",
-    nodeId,
-    { timeout: 60_000 },
-  );
+}
+
+function recordInspectorSceneResponse(
+  fixture,
+  { count, cumulativeCount, documentId, limit, status },
+) {
+  const scene = fixture.scene;
+  const objectIds = Array.isArray(scene?.objects)
+    ? scene.objects
+      .map((object) => (
+        object && typeof object === "object" && typeof object.id === "string"
+          ? object.id
+          : null
+      ))
+      .filter((objectId) => objectId !== null)
+      .slice(0, 32)
+    : [];
+  fixture.sceneResponseTrace.push({
+    count,
+    cumulativeCount,
+    documentId,
+    limit,
+    objectIds,
+    revision: scene?.revision ?? fixture.revision ?? null,
+    status,
+  });
+  if (fixture.sceneResponseTrace.length > INSPECTOR_SCENE_TRACE_LIMIT) {
+    fixture.sceneResponseTrace.splice(
+      0,
+      fixture.sceneResponseTrace.length - INSPECTOR_SCENE_TRACE_LIMIT,
+    );
+  }
+}
+
+function inspectorRequestBudgetDiagnostics(fixture) {
+  return {
+    documentId: fixture.requestBudget.documentId,
+    documentLabel: fixture.requestBudget.documentLabel,
+    documentRequestCounts: Object.fromEntries(fixture.requestBudget.documentCounts),
+    requestBudgetViolation: fixture.requestBudgetViolation,
+    requestCounts: Object.fromEntries(fixture.requestCounts),
+    sceneResponseTrace: fixture.sceneResponseTrace,
+  };
+}
+
+// Only explicit page.goto/page.reload calls reset the document GET budget.
+// Same-document history/hash navigation cannot mask request growth. The
+// cumulative counters and mutation caps remain scenario-scoped.
+async function gotoInspectorDocument(page, fixture, url, options, label) {
+  resetInspectorDocumentBudget(fixture.requestBudget, label);
+  return page.goto(url, options);
+}
+
+async function reloadInspectorDocument(page, fixture, options, label) {
+  resetInspectorDocumentBudget(fixture.requestBudget, label);
+  return page.reload(options);
 }
 
 async function assertHealthyViewportCanvas(page, label) {
@@ -2111,11 +3803,12 @@ function createInspectorFixture() {
       size: [1e-6, 1e-6, 1e-6],
     },
   };
+  const requestBudget = createInspectorRequestBudgetState();
   return {
     fdmBuildGridMode,
     gridCommandBodies: [],
     manifest: {
-      generation_id: "1",
+      generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
       mesh_name: "Inspector fixture mesh",
       mesh_parts: [
         inspectorMeshPart("airbox", "airbox", null, 0),
@@ -2136,13 +3829,18 @@ function createInspectorFixture() {
       regions: [],
       revision: 7,
       source_scene_revision: revision,
-      topology_fingerprint: "inspector-routing-topology",
+      topology_fingerprint: INSPECTOR_MODAL_TOPOLOGY_HASH,
     },
     requests: [],
     visualizationMutationBodies: [],
-    requestCounts: new Map(),
+    requestBudget,
+    requestCounts: requestBudget.cumulativeCounts,
     requestBudgetViolation: null,
+    sceneResponseTrace: [],
     analysisProduct: "driven_response",
+    modalResonanceQualification: false,
+    modalDispersionOwnershipRegression: false,
+    modalDispersionRace: null,
     unknownMutationPaths: [],
     unknownGetPaths: [],
     revision,
@@ -2252,18 +3950,34 @@ async function installInspectorFixtureApi(page, fixture) {
     const path = url.pathname;
     fixture.requests.push(`${request.method()} ${path}${url.search}`);
     const requestKey = `${request.method()} ${path}`;
-    const requestCount = (fixture.requestCounts.get(requestKey) ?? 0) + 1;
-    fixture.requestCounts.set(requestKey, requestCount);
     const requestLimit =
       INSPECTOR_REQUEST_LIMITS.get(requestKey) ??
       INSPECTOR_MAX_REQUESTS_PER_PATH;
-    if (requestCount > requestLimit) {
+    const budget = recordInspectorRequestBudget(fixture.requestBudget, {
+      method: request.method(),
+      requestKey,
+      requestLimit,
+    });
+    if (budget.exceeded) {
       fixture.requestBudgetViolation ??= {
-        count: requestCount,
+        count: budget.count,
+        cumulativeCount: budget.cumulativeCount,
+        documentId: budget.documentId,
+        documentLabel: fixture.requestBudget.documentLabel,
         key: requestKey,
         limit: requestLimit,
         recent: fixture.requests.slice(-20),
+        scope: budget.scope,
       };
+      if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
+        recordInspectorSceneResponse(fixture, {
+          count: budget.count,
+          cumulativeCount: budget.cumulativeCount,
+          documentId: budget.documentId,
+          limit: requestLimit,
+          status: 508,
+        });
+      }
       return fulfillJson(
         route,
         { error: { code: "inspector_fixture_request_budget_exceeded" } },
@@ -2528,7 +4242,16 @@ async function installInspectorFixtureApi(page, fixture) {
         target_id: url.searchParams.get("target_id") ?? "object:film",
       });
     }
-    if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
+    if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
+      recordInspectorSceneResponse(fixture, {
+        count: budget.count,
+        cumulativeCount: budget.cumulativeCount,
+        documentId: budget.documentId,
+        limit: requestLimit,
+        status: 200,
+      });
+      return fulfillJson(route, fixture.scene);
+    }
     if (path === "/v2/sessions/current/model/readiness") return fulfillJson(route, {
       blockers: [],
       capabilities: {
@@ -2536,7 +4259,17 @@ async function installInspectorFixtureApi(page, fixture) {
         rotate: { available: true, reason: null },
         scale: { available: true, reason: null },
       },
-      checks: [],
+      checks: [
+        { id: "method", label: "Simulation method", state: "complete", target_resource: "model/study" },
+        { id: "domain", label: "Domain policy", state: "complete", target_resource: "meshing/policies/universe", reason: "Automatic domain follows authored geometry." },
+        { id: "geometry", label: "Geometry", state: "complete", target_resource: "model/scene" },
+        { id: "material", label: "Material", state: "blocked", target_resource: "model/objects/film", reason: "Assign a material to Film." },
+        { id: "texture", label: "Initial magnetization", state: "complete", target_resource: "model/objects/film" },
+        { id: "interactions", label: "Interactions", state: "complete", target_resource: "model/objects/film" },
+        { id: "discretization", label: "Discretization", state: "complete", target_resource: fixture.fdmBuildGridMode ? "model/study" : "meshing/builds/current" },
+        { id: "study", label: "Study", state: "blocked", target_resource: "model/study", reason: "Add a study stage." },
+        { id: "execution", label: "Execution request", state: "complete", target_resource: "model/study", reason: "Device support is checked during preparation for each run." },
+      ],
       ready_to_export: true,
       ready_to_run: false,
       scene_revision: fixture.revision,
@@ -2692,7 +4425,33 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
-    if (path === "/v2/sessions/current/simulation/stages/execution") return fulfillJson(route, { stages: [], stage_statuses: [], total_stages: 0, revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/stages/execution") {
+      const modal = fixture.analysisProduct === "modal_eigen";
+      const stageId = modal ? "eigen-dispersion" : "frequency-response";
+      const stageKind = modal ? "eigenmodes" : "frequency_response";
+      return fulfillJson(route, {
+        active_stage_index: null,
+        active_stage_kind: null,
+        completed_stage_indexes: [0],
+        revision: fixture.revision,
+        run_id: "inspector-run",
+        runtime_state: "completed",
+        session_epoch: "inspector-session-epoch-1",
+        session_id: "inspector-routing-smoke",
+        stage_statuses: ["completed"],
+        stages: [
+          {
+            converged: true,
+            index: 0,
+            kind: stageKind,
+            label: modal ? "Finite FMR Modes" : "Frequency Response",
+            stage_id: stageId,
+            status: "completed",
+          },
+        ],
+        total_stages: 1,
+      });
+    }
     if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
     if (
       path === "/v2/sessions/current/simulation/commands/fixture-fdm-grid-command" &&
@@ -2767,28 +4526,118 @@ async function installInspectorFixtureApi(page, fixture) {
       requested_precision: "double",
       revision: fixture.revision,
       run_id: "inspector-run",
-      session_id: "inspector-session",
+      session_id: "inspector-routing-smoke",
       started_at: "2026-08-11T12:00:00Z",
       status: "completed",
       total_steps: 1,
     });
     if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest(fixture));
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum(fixture));
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") return fulfillJson(route, inspectorFrequencyBranches(fixture));
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") return fulfillJson(route, inspectorFrequencyDispersion(fixture));
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") return fulfillJson(route, inspectorFrequencyDiagnostics());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep());
-    if (
-      path === "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1" ||
-      path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1"
-    ) return fulfillEmpty(route, 204);
-    if (path.includes("/analysis/frequency-domain/") && path.endsWith("/meta")) {
-      return fulfillJson(route, inspectorFieldMeta(path));
+    if (/^\/v2\/sessions\/current\/analysis\/results\/runs\/[^/]+\/datasets$/.test(path)) {
+      return fulfillJson(route, {
+        items: [],
+        next_cursor: null,
+        revision: "inspector-fixture",
+        run_id: path.split("/")[6],
+        schema_version: "analysis-result-index.v1",
+        status: "ready",
+        total_count: 0,
+      });
     }
-    if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path));
-    if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) return fulfillBinary(route, inspectorFieldVector(path));
-    if (path === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
+    if (path === "/v2/sessions/current/analysis/references/analytic-models") {
+      return fulfillJson(route, { models: [], schema_version: "analytic-reference-models.v1" });
+    }
+    if (path === "/v2/sessions/current/analysis/postprocessing/definitions") {
+      return fulfillJson(route, {
+        count: 0,
+        definitions: [],
+        scene_revision: fixture.scene.revision,
+      });
+    }
+    if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") {
+      await fulfillOrHoldModalBranchPlotRefresh(
+        route,
+        fixture,
+        path,
+        inspectorFrequencyManifest(fixture),
+      );
+      return;
+    }
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum(fixture));
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") {
+      await fulfillOrHoldModalBranchPlotRefresh(
+        route,
+        fixture,
+        path,
+        inspectorFrequencyBranches(fixture),
+      );
+      return;
+    }
+    const eigenModeMatch = /^\/v2\/sessions\/current\/analysis\/frequency-domain\/eigen\/modes\/(\d+)\/(\d+)$/.exec(path);
+    if (eigenModeMatch) {
+      return fulfillJson(route, inspectorFrequencyMode(
+        fixture,
+        Number(eigenModeMatch[1]),
+        Number(eigenModeMatch[2]),
+      ));
+    }
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") {
+      const race = fixture.modalDispersionRace;
+      if (fixture.analysisProduct === "modal_eigen" && race?.phase === "run-a-delayed") {
+        race.runARequestCount += 1;
+        const runAResponse = inspectorFrequencyDispersion(
+          fixture,
+          INSPECTOR_MODAL_DISPERSION_OWNER_A,
+        );
+        await race.oldCsvGate;
+        race.runAResponseCount += 1;
+        return fulfillJson(route, runAResponse);
+      }
+      return fulfillJson(
+        route,
+        inspectorFrequencyDispersion(
+          fixture,
+          fixture.analysisProduct === "modal_eigen"
+            ? INSPECTOR_MODAL_DISPERSION_OWNER_B
+            : null,
+        ),
+      );
+    }
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") return fulfillJson(route, inspectorFrequencyDiagnostics());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep(fixture));
+    const responsePointMatch = /^\/v2\/sessions\/current\/analysis\/frequency-domain\/response\/frequency-points\/(\d+)$/.exec(path);
+    if (
+      fixture.analysisProduct === "driven_response" &&
+      responsePointMatch &&
+      String(Number(responsePointMatch[1])) === responsePointMatch[1]
+    ) {
+      const responsePoint = inspectorFrequencyResponsePointResource(
+        fixture,
+        Number(responsePointMatch[1]),
+      );
+      if (responsePoint) return fulfillJson(route, responsePoint);
+    }
+    if (
+      request.method() === "GET" &&
+      path === INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH
+    ) {
+      return fulfillJson(route, {
+        ...INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY,
+      }, 404);
+    }
+    if (path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1") {
+      return fulfillJson(route, inspectorFrequencyResponseProgress(fixture));
+    }
+    if (path.includes("/analysis/frequency-domain/") && path.endsWith("/meta")) {
+      return fulfillJson(route, inspectorFieldMeta(path, fixture));
+    }
+    if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path, fixture));
+    if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) {
+      const fieldVector = inspectorFieldVector(path, fixture);
+      return fulfillBinary(route, fieldVector.buffer, 200, fieldVector.headers);
+    }
+    if (path === "/v2/sessions/current/data/domain/topology") {
+      return fulfillTopology(route, fixture.topology, fixture.manifest);
+    }
     fixture.unknownGetPaths.push(`${request.method()} ${path}${url.search}`);
     return fulfillJson(
       route,
@@ -2955,7 +4804,8 @@ function inspectorPhysicsGuardLane() {
       capability_profile_version: "inspector-smoke",
       effective_request: "session.runtime_resolution",
       engine_id: "fem_cpu_reference",
-      kind: "fixture",
+      // Simulate the planner-owned API resource; this is not a scientific solve.
+      kind: "planner",
     },
   };
 }
@@ -3043,26 +4893,78 @@ function inspectorFieldCatalog(fixture) {
   };
 }
 
-function inspectorFieldMeta(path) {
+function inspectorFieldMeta(path, fixture = {}) {
   const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
   const eigenMatch = /\/eigen\/mode-field\/(\d+)\/(\d+)\/meta$/.exec(path);
   const responseMatch = /\/response\/field\/(\d+)\/meta$/.exec(path);
+  const responseField = responseMatch !== null;
+  const responseIndex = responseField ? Number(responseMatch[1]) : null;
+  const responseArrayPath = responseIndex == null
+    ? null
+    : `response/field_payloads.zarr/frequency_${String(responseIndex).padStart(4, "0")}/vector_xyz_complex`;
   const fieldId = eigenMatch
     ? `analysis:eigen:sample-${eigenMatch[1].padStart(4, "0")}:mode-${eigenMatch[2].padStart(4, "0")}`
     : responseMatch
       ? `analysis:frequency-response:frequency-${responseMatch[1].padStart(4, "0")}`
       : decodeURIComponent(encoded);
-  const resourceKey = `/v2/sessions/current/data/fields/${encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`;
+  if (fixture.modalDispersionOwnershipRegression && eigenMatch) {
+    return {
+      artifact_path: INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+      available_views: [
+        "complex",
+        "real",
+        "imag",
+        "abs",
+        "amplitude",
+        "phase",
+        "phase_rotated_real",
+      ],
+      binary_layout: "complex_f64_pairs_little_endian",
+      component_basis: "global_xyz",
+      component_count: 3,
+      components: ["x", "y", "z"],
+      complex_pair_count: 36,
+      default_phase_rad: 0,
+      default_view: "phase_rotated_real",
+      field_id: fieldId,
+      missing_reason: null,
+      payload_encoding: "f64_interleaved_real_imag_xyz",
+      payload_value_count: 72,
+      quantity: "delta_m",
+      resource_key: `/v2/sessions/current/data/fields/${encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`,
+      schema_version: "frequency_domain_mode_field.v1",
+      source_family: "analysis/eigen",
+      status: "ready",
+      storage_format: "zarr",
+      value_kind: "complex_spatial_vector",
+      zarr_array_path: INSPECTOR_MODAL_FIELD_ARRAY_PATH,
+      zarr_chunk_path: INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+      zarr_chunk_shape: [12, 3, 2],
+      zarr_compressor: null,
+      zarr_dtype: "<f8",
+      zarr_shape: [12, 3, 2],
+      zarr_store_path: "eigen/mode_fields.zarr",
+    };
+  }
+  const resourceKey = `/v2/sessions/current/data/fields/${responseField ? fieldId : encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`;
   return {
-    artifact_path: `${fieldId}.field.v2.bin`,
-    available_views: ["complex", "real", "imag", "abs", "phase_rotated_real"],
+    artifact_path: responseIndex != null
+      ? inspectorFrequencyResponseFieldPayloadPath(responseIndex)
+      : `${fieldId}.field.v2.bin`,
+    available_views: responseField
+      ? ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"]
+      : ["complex", "real", "imag", "abs", "phase_rotated_real"],
+    binary_layout: responseField ? "complex_f64_pairs_little_endian" : undefined,
     component_basis: "global_xyz",
     component_count: 3,
     components: ["x", "y", "z"],
+    complex_pair_count: responseField ? 96 : undefined,
     default_phase_rad: 0,
     default_view: "phase_rotated_real",
     field_id: fieldId,
     missing_reason: null,
+    payload_encoding: responseField ? "f64_interleaved_real_imag_xyz" : undefined,
+    payload_value_count: responseField ? 192 : undefined,
     quantity: "delta_m",
     resource_key: resourceKey,
     schema_version: eigenMatch
@@ -3073,14 +4975,46 @@ function inspectorFieldMeta(path) {
       : "analysis/frequency-response",
     stats: { max: 1, min: 0 },
     status: "ready",
+    storage_format: responseField ? "zarr" : undefined,
     unit: "1",
-    value_kind: "complex_vector",
+    value_kind: responseField ? "complex_spatial_vector" : "complex_vector",
+    zarr_array_path: responseArrayPath ?? undefined,
+    zarr_chunk_path: responseIndex == null
+      ? undefined
+      : inspectorFrequencyResponseFieldPayloadPath(responseIndex),
+    zarr_chunk_shape: responseField ? [32, 3, 2] : undefined,
+    zarr_compressor: responseField ? null : undefined,
+    zarr_dtype: responseField ? "<f8" : undefined,
+    zarr_shape: responseField ? [32, 3, 2] : undefined,
+    zarr_store_path: responseField ? "response/field_payloads.zarr" : undefined,
   };
 }
 
-function inspectorFieldVector(path) {
+function inspectorFieldVector(path, fixture = {}) {
   const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
   const quantityId = decodeURIComponent(encoded);
+  if (
+    fixture.modalDispersionOwnershipRegression &&
+    quantityId === INSPECTOR_MODAL_FIELD_ID
+  ) {
+    const modeField = makeInspectorModalModeFieldVector(quantityId);
+    return {
+      buffer: modeField.buffer,
+      headers: {
+        "x-fullmag-component": "full",
+        "x-fullmag-domain-generation-id": INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+        "x-fullmag-encoding": "FMVP;version=5",
+        "x-fullmag-field-indexing": "full_domain",
+        "x-fullmag-field-revision": modeField.fieldRevision,
+        "x-fullmag-mesh-topology-hash": INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH,
+        "x-fullmag-n-comp": "6",
+        "x-fullmag-payload-state": "current",
+        "x-fullmag-point-count": "12",
+        "x-fullmag-quantity-id": quantityId,
+        "x-fullmag-value-count": "72",
+      },
+    };
+  }
   const grid = [8, 4, 1];
   const valueCount = grid[0] * grid[1] * grid[2] * 3;
   const buffer = new ArrayBuffer(48 + valueCount * Float64Array.BYTES_PER_ELEMENT);
@@ -3100,7 +5034,281 @@ function inspectorFieldVector(path) {
     values[index + 1] = 0.2;
     values[index + 2] = 0.1;
   }
-  return buffer;
+  return { buffer, headers: {} };
+}
+
+function makeInspectorModalModeFieldVector(quantityId) {
+  const encoder = new TextEncoder();
+  const scopeKindBytes = encoder.encode("full");
+  const domainGenerationIdBytes = encoder.encode(
+    INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  );
+  const quantityIdBytes = encoder.encode(quantityId);
+  const metadataLength =
+    (88 + scopeKindBytes.byteLength + domainGenerationIdBytes.byteLength + quantityIdBytes.byteLength + 7) &
+    ~7;
+  const grid = [12, 1, 1];
+  const valueCount = 72;
+  const valuesOffset = 48 + metadataLength;
+  const buffer = new ArrayBuffer(
+    valuesOffset + valueCount * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const header = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    header.setUint8(index, code.charCodeAt(0));
+  }
+  header.setUint8(4, 5);
+  header.setUint8(5, 1);
+  header.setUint8(6, 6);
+  header.setUint32(8, metadataLength, true);
+  header.setUint32(12, valueCount, true);
+  header.setUint32(16, grid[0], true);
+  header.setUint32(20, grid[1], true);
+  header.setUint32(24, grid[2], true);
+  new Uint8Array(buffer, 28, 16).set(quantityIdBytes.subarray(0, 16));
+
+  const metadata = new DataView(buffer, 48, metadataLength);
+  for (const [index, code] of [..."FMMI"].entries()) {
+    metadata.setUint8(index, code.charCodeAt(0));
+  }
+  metadata.setUint16(4, 4, true);
+  metadata.setUint16(8, domainGenerationIdBytes.byteLength, true);
+  metadata.setBigUint64(16, BigInt(INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION), true);
+  const topologyHashBytes = new Uint8Array(32);
+  for (let index = 0; index < topologyHashBytes.length; index += 1) {
+    topologyHashBytes[index] = Number.parseInt(
+      INSPECTOR_MODAL_TOPOLOGY_HASH.slice(index * 2, index * 2 + 2),
+      16,
+    );
+  }
+  new Uint8Array(buffer, 48 + 24, 32).set(topologyHashBytes);
+  metadata.setUint32(56, 0, true);
+  metadata.setUint32(60, 0, true);
+  metadata.setUint16(64, scopeKindBytes.byteLength, true);
+  metadata.setBigUint64(68, BigInt(0), true);
+  metadata.setUint16(80, quantityIdBytes.byteLength, true);
+
+  let stringOffset = 48 + 88;
+  new Uint8Array(buffer, stringOffset, scopeKindBytes.byteLength).set(scopeKindBytes);
+  stringOffset += scopeKindBytes.byteLength;
+  // scope_id is intentionally empty for this full-domain field.
+  new Uint8Array(buffer, stringOffset, domainGenerationIdBytes.byteLength).set(
+    domainGenerationIdBytes,
+  );
+  stringOffset += domainGenerationIdBytes.byteLength;
+  // The optional source metadata group is wholly absent.
+  new Uint8Array(buffer, stringOffset, quantityIdBytes.byteLength).set(
+    quantityIdBytes,
+  );
+
+  const payloadView = new DataView(buffer, valuesOffset);
+  for (let point = 0; point < grid[0]; point += 1) {
+    const phase = (point / grid[0]) * Math.PI * 2;
+    const amplitude = 0.35 + point * 0.01;
+    for (let component = 0; component < 3; component += 1) {
+      const componentPhase = phase + component * 0.4;
+      const valueOffset = (point * 6 + component * 2) * Float64Array.BYTES_PER_ELEMENT;
+      payloadView.setFloat64(valueOffset, amplitude * Math.cos(componentPhase), true);
+      payloadView.setFloat64(
+        valueOffset + Float64Array.BYTES_PER_ELEMENT,
+        amplitude * Math.sin(componentPhase),
+        true,
+      );
+    }
+  }
+
+  return {
+    buffer,
+    fieldRevision: inspectorAnalysisPayloadRevision(
+      INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+      valueCount * Float64Array.BYTES_PER_ELEMENT,
+    ),
+  };
+}
+
+function inspectorAnalysisPayloadRevision(relativePath, byteLength) {
+  const hashPrime = BigInt("1099511628211");
+  let domainRevision = BigInt("1469598103934665603");
+  for (const byte of new TextEncoder().encode(INSPECTOR_MODAL_DOMAIN_GENERATION_ID)) {
+    domainRevision ^= BigInt(byte);
+    domainRevision = BigInt.asUintN(64, domainRevision * hashPrime);
+  }
+  if (domainRevision === BigInt(0)) domainRevision = BigInt(1);
+
+  let hash = domainRevision ^ BigInt(byteLength);
+  for (const byte of new TextEncoder().encode(relativePath)) {
+    hash = BigInt.asUintN(64, hash * hashPrime + BigInt(byte));
+  }
+  return hash.toString();
+}
+
+function assertInspectorModalModeFieldMetadata(metadata) {
+  const requiredViews = [
+    "complex",
+    "real",
+    "imag",
+    "abs",
+    "amplitude",
+    "phase",
+    "phase_rotated_real",
+  ];
+  assert(
+    metadata.schema_version === "frequency_domain_mode_field.v1" &&
+      metadata.status === "ready" &&
+      metadata.field_id === INSPECTOR_MODAL_FIELD_ID &&
+      metadata.value_kind === "complex_spatial_vector" &&
+      metadata.component_basis === "global_xyz" &&
+      metadata.component_count === 3 &&
+      Array.isArray(metadata.components) &&
+      metadata.components.join(",") === "x,y,z" &&
+      metadata.payload_encoding === "f64_interleaved_real_imag_xyz" &&
+      metadata.binary_layout === "complex_f64_pairs_little_endian" &&
+      metadata.complex_pair_count === 36 &&
+      metadata.payload_value_count === 72 &&
+      Array.isArray(metadata.available_views) &&
+      requiredViews.every((view) => metadata.available_views.includes(view)),
+    `Matched mode-field metadata does not satisfy the canonical complex XYZ contract: ${JSON.stringify(metadata)}`,
+  );
+}
+
+async function assertInspectorModalModeFieldVectorResponse(response, fixture) {
+  assert(response.status() === 200, "Matched modal field vector response was not successful.");
+  const headers = response.headers();
+  const body = await response.body();
+  const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const expectedFieldRevision = inspectorAnalysisPayloadRevision(
+    INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+    72 * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const expectedHeaders = {
+    "x-fullmag-component": "full",
+    "x-fullmag-domain-generation-id": INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+    "x-fullmag-encoding": "FMVP;version=5",
+    "x-fullmag-field-indexing": "full_domain",
+    "x-fullmag-field-revision": expectedFieldRevision,
+    "x-fullmag-mesh-topology-hash": INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH,
+    "x-fullmag-n-comp": "6",
+    "x-fullmag-payload-state": "current",
+    "x-fullmag-point-count": "12",
+    "x-fullmag-quantity-id": INSPECTOR_MODAL_FIELD_ID,
+    "x-fullmag-value-count": "72",
+  };
+  for (const [name, expected] of Object.entries(expectedHeaders)) {
+    assert(
+      headers[name] === expected,
+      `Matched modal field response header ${name} did not match ${expected}: ${headers[name]}`,
+    );
+  }
+
+  assert(body.byteLength >= 48, "Matched mode field must include the FMVP header.");
+  assert(
+    new TextDecoder().decode(body.subarray(0, 4)) === "FMVP" &&
+      view.getUint8(4) === 5 &&
+      view.getUint8(5) === 1 &&
+      view.getUint8(6) === 6 &&
+      view.getUint8(7) === 0,
+    "Matched mode field must be an FMVP v5 float64 six-component vector.",
+  );
+  const metadataLength = view.getUint32(8, true);
+  const valueCount = view.getUint32(12, true);
+  const grid = [view.getUint32(16, true), view.getUint32(20, true), view.getUint32(24, true)];
+  const valuesOffset = 48 + metadataLength;
+  assert(
+    grid.join(",") === "12,1,1" &&
+      valueCount === 72 &&
+      valueCount === grid[0] * grid[1] * grid[2] * 6 &&
+      valuesOffset + valueCount * Float64Array.BYTES_PER_ELEMENT === body.byteLength,
+    `Matched mode field dimensions/counts are inconsistent: ${JSON.stringify({ grid, valueCount, metadataLength, bytes: body.byteLength })}`,
+  );
+
+  const fullQuantityIdBytes = new TextEncoder().encode(INSPECTOR_MODAL_FIELD_ID);
+  assert(
+    body.subarray(28, 44).equals(Buffer.from(fullQuantityIdBytes.subarray(0, 16))),
+    "FMVP header’s legacy prefix must contain the first 16 bytes of the full quantity ID.",
+  );
+  const metadataStart = 48;
+  const metadataEnd = metadataStart + metadataLength;
+  assert(metadataEnd <= body.byteLength && metadataLength >= 88 && metadataLength % 8 === 0);
+  const metadata = new DataView(body.buffer, body.byteOffset + metadataStart, metadataLength);
+  assert(
+    new TextDecoder().decode(body.subarray(metadataStart, metadataStart + 4)) === "FMMI" &&
+      metadata.getUint16(4, true) === 4 &&
+      metadata.getUint16(6, true) === 0 &&
+      metadata.getBigUint64(16, true) === BigInt(INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION) &&
+      metadata.getUint32(56, true) === 0 &&
+      metadata.getUint32(60, true) === 0 &&
+      metadata.getUint16(80, true) === fullQuantityIdBytes.byteLength,
+    "FMVP v5 metadata version, topology, indexing, or full quantity length is inconsistent.",
+  );
+  assert(
+    metadata.getUint16(10, true) === 0 &&
+      metadata.getUint16(12, true) === 0 &&
+      metadata.getUint16(14, true) === 0 &&
+      metadata.getBigUint64(68, true) === BigInt(0),
+    "The v5 source identity group must be wholly absent with revision zero.",
+  );
+  assert(
+    metadata.getUint16(64, true) === 4 &&
+      metadata.getUint16(66, true) === 0 &&
+      metadata.getUint16(8, true) === 1,
+    "Matched mode field scope/domain string lengths are inconsistent.",
+  );
+  const actualTopologyHash = Array.from(
+    new Uint8Array(body.buffer, body.byteOffset + metadataStart + 24, 32),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  assert(
+    actualTopologyHash === INSPECTOR_MODAL_TOPOLOGY_HASH,
+    "FMVP metadata topology hash does not match the manifest hash.",
+  );
+
+  let stringOffset = 88;
+  const readMetadataString = (length) => {
+    const start = metadataStart + stringOffset;
+    stringOffset += length;
+    return new TextDecoder("utf-8", { fatal: true }).decode(body.subarray(start, start + length));
+  };
+  const scopeKind = readMetadataString(metadata.getUint16(64, true));
+  const scopeId = readMetadataString(metadata.getUint16(66, true));
+  const domainGenerationId = readMetadataString(metadata.getUint16(8, true));
+  const sourceKind = readMetadataString(metadata.getUint16(10, true));
+  const sourceId = readMetadataString(metadata.getUint16(12, true));
+  const fieldGenerationId = readMetadataString(metadata.getUint16(14, true));
+  const fullQuantityId = readMetadataString(metadata.getUint16(80, true));
+  assert(
+    scopeKind === "full" &&
+      scopeId === "" &&
+      domainGenerationId === INSPECTOR_MODAL_DOMAIN_GENERATION_ID &&
+      sourceKind === "" &&
+      sourceId === "" &&
+      fieldGenerationId === "" &&
+      fullQuantityId === INSPECTOR_MODAL_FIELD_ID,
+    "FMVP v5 variable strings do not match the field and topology identities.",
+  );
+  assert(
+    body.subarray(metadataStart + 76, metadataStart + 80).every((byte) => byte === 0) &&
+      body.subarray(metadataStart + 82, metadataStart + 88).every((byte) => byte === 0) &&
+      body.subarray(metadataStart + stringOffset, metadataEnd).every((byte) => byte === 0),
+    "FMVP v5 reserved bytes and alignment padding must be zero.",
+  );
+  const fieldValues = new DataView(body.buffer, body.byteOffset + valuesOffset, valueCount * 8);
+  let nonzeroValueFound = false;
+  for (let index = 0; index < valueCount; index += 1) {
+    const value = fieldValues.getFloat64(index * 8, true);
+    assert(Number.isFinite(value), `FMVP mode field value ${index} is not finite.`);
+    if (value !== 0) nonzeroValueFound = true;
+  }
+  assert(nonzeroValueFound, "Matched FMVP mode field should contain a nonzero complex XYZ vector.");
+
+  const topology = new DataView(fixture.topology);
+  assert(
+    new TextDecoder().decode(new Uint8Array(fixture.topology, 0, 4)) === "FMMT" &&
+      topology.getUint32(8, true) === 12 &&
+      fixture.manifest.generation_id === INSPECTOR_MODAL_DOMAIN_GENERATION_ID &&
+      fixture.manifest.revision === INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION &&
+      fixture.manifest.topology_fingerprint === INSPECTOR_MODAL_TOPOLOGY_HASH,
+    "The active mesh fixture must contain 12 nodes and declare the same generation, revision, and 64-hex topology hash.",
+  );
 }
 
 async function fulfillJson(route, body, status = 200) {
@@ -3112,11 +5320,15 @@ async function fulfillJson(route, body, status = 200) {
   });
 }
 
-async function fulfillBinary(route, body, status = 200) {
+async function fulfillBinary(route, body, status = 200, extraHeaders = {}) {
   await route.fulfill({
     body: Buffer.from(body),
     contentType: "application/octet-stream",
-    headers: { "access-control-allow-origin": "*", "x-api-contract-version": "1.0.0" },
+    headers: {
+      "access-control-allow-origin": "*",
+      "x-api-contract-version": "1.0.0",
+      ...extraHeaders,
+    },
     status,
   });
 }
@@ -3125,9 +5337,10 @@ async function fulfillEmpty(route, status) {
   await route.fulfill({ body: "", headers: { "access-control-allow-origin": "*" }, status });
 }
 
-async function fulfillTopology(route, topology) {
+async function fulfillTopology(route, topology, manifest) {
+  const etag = `"fullmag:${manifest.generation_id}:${manifest.revision}:${manifest.topology_fingerprint}"`;
   const range = route.request().headers().range;
-  if (!range) return fulfillBinary(route, topology);
+  if (!range) return fulfillBinary(route, topology, 200, { etag });
   const match = /^bytes=(\d+)-(\d+)$/.exec(range);
   if (!match) return fulfillEmpty(route, 416);
   const start = Number(match[1]);
@@ -3139,6 +5352,7 @@ async function fulfillTopology(route, topology) {
       "access-control-allow-origin": "*",
       "accept-ranges": "bytes",
       "content-range": `bytes ${start}-${end}/${topology.byteLength}`,
+      etag,
       "x-api-contract-version": "1.0.0",
     },
     status: 206,
@@ -3188,26 +5402,55 @@ function inspectorFrequencyCapability(status) {
 
 function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_response" }) {
   const modal = fixture.analysisProduct === "modal_eigen";
+  const modalResonance = modal && fixture.modalResonanceQualification === true;
   const resultPayload = modal
     ? {
         equilibrium_identity: "equilibrium-1",
-        observables: [],
-        requested_execution: {
-          boundary_context: "floquet_periodic",
-          calculation_mode: "eigenmodes",
-          k_sampling: { kind: "path" },
+        observables: modalResonance
+          ? [{ identity: "rf-coupling", kind: "rf_coupling", unit: "1" }]
+          : [],
+        requested_execution: modalResonance
+          ? { boundary_context: "finite_open", calculation_mode: "fmr_modal" }
+          : {
+              boundary_context: "floquet_periodic",
+              calculation_mode: "eigenmodes",
+              k_sampling: { kind: "path", sample_count: 2 },
+            },
+        analysis_family: "magnetic_frequency_domain",
+        artifacts: { spectrum_v2_path: "eigen/spectrum.v2.json" },
+        physics: {
+          analysis_family: "magnetic_frequency_domain",
+          field_units: "dimensionless_delta_m",
+          frequency_units: "Hz",
+          normalization: "unit_l2",
+          phase_convention: "exp_minus_i_omega_t",
         },
         revision: "result-modal-7",
+        run_id: INSPECTOR_MODAL_BRANCH_OWNER.run_id,
+        schema_version: "frequency_domain_manifest.v1",
         stage_id: "eigen-dispersion",
-        stage_label: "Dispersion Eigenmodes",
+        stage_kind: "eigenmodes",
+        stage_label: modalResonance ? "Finite FMR Modes" : "Dispersion Eigenmodes",
         study_product: "modal_eigen",
       }
     : {
         equilibrium_identity: "equilibrium-1",
         observables: [{ identity: "absorbed-power", kind: "absorbed_power", unit: "W" }],
         requested_execution: { boundary_context: "finite_open", calculation_mode: "fmr_response" },
+        analysis_family: "magnetic_frequency_domain",
+        artifacts: { response_sweep_v2_path: "response/magnetic_response_sweep.v2.json" },
+        physics: {
+          analysis_family: "magnetic_frequency_domain",
+          field_units: "dimensionless_delta_m",
+          frequency_units: "Hz",
+          normalization: "unit_l2",
+          phase_convention: "exp_minus_i_omega_t",
+        },
         revision: "result-7",
+        run_id: "inspector-run",
+        schema_version: "frequency_domain_manifest.v1",
         stage_id: "frequency-response",
+        stage_kind: "frequency_response",
         stage_label: "Frequency Response",
         study_product: "driven_response",
       };
@@ -3227,24 +5470,39 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
     eigenmodes: { modal_solver_available: true, reason: "", status: "ok", study_kind: "eigenmodes" },
     response: { driven_response_available: true, reason: "", status: "ok", study_kind: "frequency_response" },
     result_manifest: {
-      artifact_path: "result-manifest.json",
+      ...(modal
+        ? INSPECTOR_MODAL_RESULT_OWNER
+        : {
+            ...INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER,
+            content_digest: `sha256:${"a".repeat(64)}`,
+            revision: `sha256:${"a".repeat(64)}`,
+          }),
+      artifact_path: "frequency_domain/manifest.v1.json",
       missing_reason: null,
       payload: resultPayload,
       resource_key: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
-      schema_version: "frequency_domain_result_manifest.v1",
+      schema_version: "frequency_domain_manifest.v1",
       status: "ready",
     },
     requested_execution: resultPayload.requested_execution,
     response_cancel_requested: null,
-    response_progress: null,
+    response_progress: inspectorFrequencyResponseProgress(fixture),
     resources: { response_field_resources: [] },
-    artifacts: {
-      branches_v2_path: "eigen/branches.v2.json",
-      dispersion_csv_path: "eigen/dispersion.csv",
-      eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
-      response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
-      spectrum_v2_path: "eigen/spectrum.v2.json",
-    },
+    artifacts: modal
+      ? {
+          branches_v2_path: "eigen/branches.v2.json",
+          dispersion_csv_path: "eigen/dispersion.csv",
+          eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
+          response_sweep_v2_path: null,
+          spectrum_v2_path: "eigen/spectrum.v2.json",
+        }
+      : {
+          branches_v2_path: null,
+          dispersion_csv_path: null,
+          eigen_diagnostics_v2_path: null,
+          response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
+          spectrum_v2_path: null,
+        },
     schema_version: "frequency_domain_manifest.v1",
   };
 }
@@ -3268,30 +5526,239 @@ function inspectorFrequencySpectrum() {
       schema_version: "eigen_spectrum.v2",
     },
     resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
-    schema_version: "frequency_domain_eigen_spectrum.v2",
+    schema_version: "frequency_domain_eigen_spectrum.v1",
     status: "ready",
   };
 }
 
-function inspectorFrequencyBranches() {
+function inspectorFrequencyResponsePointArtifactPath(frequencyIndex) {
+  return `response/frequency_points/frequency_${String(frequencyIndex).padStart(4, "0")}.json`;
+}
+
+function inspectorFrequencyResponseFieldPayloadPath(frequencyIndex) {
+  return `response/field_payloads.zarr/frequency_${String(frequencyIndex).padStart(4, "0")}/vector_xyz_complex/0.0.0`;
+}
+
+function inspectorFrequencyResponseFieldId(frequencyIndex) {
+  return frequencyIndex === INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX
+    ? INSPECTOR_DRIVEN_RESPONSE_FIELD_ID
+    : `analysis:frequency-response:frequency-${String(frequencyIndex).padStart(4, "0")}`;
+}
+
+function inspectorAvailableResponseFrequencyPoints(fixture) {
+  if (fixture.analysisProduct !== "driven_response") return [];
+  const sweep = inspectorFrequencyResponseSweep(fixture);
+  return (sweep.payload?.points ?? []).filter((point) => {
+    const frequencyIndex = point.frequency_index;
+    return Number.isSafeInteger(frequencyIndex) &&
+      frequencyIndex >= 0 &&
+      point.frequency_point_artifact_path ===
+        inspectorFrequencyResponsePointArtifactPath(frequencyIndex) &&
+      point.field_id === inspectorFrequencyResponseFieldId(frequencyIndex) &&
+      point.response_field_payload_path ===
+        inspectorFrequencyResponseFieldPayloadPath(frequencyIndex);
+  });
+}
+
+function inspectorFrequencyResponsePointResource(fixture, frequencyIndex) {
+  const point = inspectorAvailableResponseFrequencyPoints(fixture).find(
+    (candidate) => candidate.frequency_index === frequencyIndex,
+  );
+  if (!point) return null;
+
+  const artifactPath = point.frequency_point_artifact_path;
+  const fieldMetadata = inspectorFieldMeta(
+    `/v2/sessions/current/analysis/frequency-domain/response/field/${frequencyIndex}/meta`,
+    fixture,
+  );
+  const contentDigest = `sha256:${"e".repeat(64)}`;
   return {
+    ...INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER,
+    artifact_path: artifactPath,
+    content_digest: contentDigest,
+    missing_reason: null,
+    payload: {
+      angular_frequency_rad_per_s: 2 * Math.PI * point.frequency_hz,
+      available_views: fieldMetadata.available_views,
+      binary_layout: fieldMetadata.binary_layout,
+      component_basis: fieldMetadata.component_basis,
+      component_count: fieldMetadata.component_count,
+      components: fieldMetadata.components,
+      complex_pair_count: fieldMetadata.complex_pair_count,
+      default_phase_rad: fieldMetadata.default_phase_rad,
+      default_view: fieldMetadata.default_view,
+      field_id: point.field_id,
+      field_payload_path: fieldMetadata.artifact_path,
+      frequency_hz: point.frequency_hz,
+      frequency_index: point.frequency_index,
+      payload_encoding: fieldMetadata.payload_encoding,
+      payload_value_count: fieldMetadata.payload_value_count,
+      point: {
+        absorbed_power_density: point.absorbed_power_density,
+        frequency_hz: point.frequency_hz,
+        angular_frequency_rad_per_s: 2 * Math.PI * point.frequency_hz,
+        point_id: point.point_id,
+        relative_residual_l2_norm: point.relative_residual_l2_norm,
+        residual_l2_norm: point.residual_l2_norm,
+        response_amplitude: [point.amplitude],
+        response_phase: [point.phase_rad],
+        susceptibility_tensor: point.susceptibility_tensor,
+        tangent_leakage: { kind: "not_evaluated_dense_validation", l2_norm: null },
+      },
+      point_id: point.point_id,
+      response_field_binary_layout: "complex_f64_pairs_little_endian",
+      response_field_payload_path: point.response_field_payload_path,
+      schema_version: "frequency_response_point.v1",
+      source_sweep_artifact: "response/magnetic_response_sweep.v1.json",
+      storage_format: fieldMetadata.storage_format,
+      value_kind: fieldMetadata.value_kind,
+      zarr_array_path: fieldMetadata.zarr_array_path,
+      zarr_chunk_path: fieldMetadata.zarr_chunk_path,
+      zarr_chunk_shape: fieldMetadata.zarr_chunk_shape,
+      zarr_compressor: fieldMetadata.zarr_compressor,
+      zarr_dtype: fieldMetadata.zarr_dtype,
+      zarr_shape: fieldMetadata.zarr_shape,
+      zarr_store_path: fieldMetadata.zarr_store_path,
+    },
+    resource_key: `/v2/sessions/current/analysis/frequency-domain/response/frequency-points/${frequencyIndex}`,
+    revision: contentDigest,
+    schema_version: "frequency_domain_response_frequency_point.v1",
+    status: "ready",
+  };
+}
+
+function inspectorFrequencyResponseProgress(
+  fixture = { analysisProduct: "driven_response" },
+) {
+  const sweep = inspectorFrequencyResponseSweep(fixture);
+  const sweepPayload = sweep.status === "ready" ? sweep.payload : null;
+  const totalFrequencyPoints = sweepPayload?.points?.length ?? 0;
+  const availableFrequencyPoints = inspectorAvailableResponseFrequencyPoints(fixture);
+  const completedFrequencyPoints = availableFrequencyPoints.length;
+  const writtenFrequencyPointArtifacts = availableFrequencyPoints.filter(
+    (point) => Boolean(point.frequency_point_artifact_path),
+  ).length;
+  const complete = totalFrequencyPoints > 0 &&
+    completedFrequencyPoints === totalFrequencyPoints;
+  const partialArtifactsAvailable = writtenFrequencyPointArtifacts > 0 ||
+    sweep.status === "ready";
+  const frequencies = (sweepPayload?.points ?? [])
+    .map((point) => point.frequency_hz)
+    .filter((frequency) => Number.isFinite(frequency) && frequency > 0);
+  const frequencyMinHz = frequencies.length > 0 ? Math.min(...frequencies) : null;
+  const frequencyMaxHz = frequencies.length > 0 ? Math.max(...frequencies) : null;
+  const currentFrequencyHz =
+    availableFrequencyPoints.at(-1)?.frequency_hz ?? null;
+  const state = complete
+    ? "completed"
+    : partialArtifactsAvailable
+      ? "running"
+      : "not_started";
+  const status = partialArtifactsAvailable ? "ready" : "missing";
+  const resource = {
+    schema_version: "frequency_domain_sweep_progress.v1",
+    status,
+    state,
+    complete,
+    total_frequency_points: totalFrequencyPoints,
+    completed_frequency_points: completedFrequencyPoints,
+    written_frequency_point_artifacts: writtenFrequencyPointArtifacts,
+    current_frequency_hz: currentFrequencyHz,
+    frequency_min_hz: frequencyMinHz,
+    frequency_max_hz: frequencyMaxHz,
+    demag_mode: null,
+    partial_artifacts_available: partialArtifactsAvailable,
+    latest_artifact_manifest_path: "frequency_domain/manifest.v1.json",
+    missing_reason: partialArtifactsAvailable
+      ? null
+      : "response sweep progress artifacts are not present",
+  };
+  return {
+    ...resource,
+    progress_json: JSON.stringify({
+      schema_version: resource.schema_version,
+      status,
+      complete,
+      state,
+      total_frequency_points: totalFrequencyPoints,
+      completed_frequency_points: completedFrequencyPoints,
+      written_frequency_point_artifacts: writtenFrequencyPointArtifacts,
+      current_frequency_hz: currentFrequencyHz,
+      frequency_min_hz: frequencyMinHz,
+      frequency_max_hz: frequencyMaxHz,
+      partial_artifacts_available: partialArtifactsAvailable,
+      latest_artifact_manifest_path: resource.latest_artifact_manifest_path,
+    }),
+  };
+}
+
+function inspectorFrequencyMode(fixture, sampleIndex, modeIndex) {
+  const branches = inspectorFrequencyBranches(fixture);
+  const branch = branches.payload.branches.find((candidate) =>
+    candidate.points.some((point) =>
+      point.sample_index === sampleIndex && point.raw_mode_index === modeIndex,
+    ),
+  );
+  const mode = branch?.points.find((point) =>
+    point.sample_index === sampleIndex && point.raw_mode_index === modeIndex,
+  );
+  return {
+    ...branches,
+    artifact_path: `eigen/modes/sample_${String(sampleIndex).padStart(4, "0")}/mode_${String(modeIndex).padStart(4, "0")}.json`,
+    missing_reason: mode ? null : "fixture_mode_not_present",
+    payload: mode ? {
+      ...mode,
+      branch_id: branch.branch_id,
+      frequency_hz: mode.frequency_real_hz,
+      schema_version: "eigen_mode.v2",
+      solver_model: branches.payload.solver_model,
+    } : null,
+    resource_key: `/v2/sessions/current/analysis/frequency-domain/eigen/modes/${sampleIndex}/${modeIndex}`,
+    schema_version: "frequency_domain_eigen_mode_resource.v1",
+    status: mode ? "ready" : "missing",
+  };
+}
+
+function inspectorFrequencyBranches(fixture = {}) {
+  const owner = fixture.analysisProduct === "modal_eigen"
+    ? INSPECTOR_MODAL_BRANCH_OWNER
+    : null;
+  const point = fixture.modalDispersionOwnershipRegression
+    ? {
+        frequency_imag_hz: -13e6,
+        frequency_real_hz: 13e9,
+        mode_field_id: "analysis:eigen:sample-0001:mode-0002",
+        mode_id: "inspector-mode-1-2",
+        sample_id: "sample-0001",
+        mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+        overlap_prev: 0.98,
+        raw_mode_index: 2,
+        residual_norm: 1e-8,
+        sample_index: 1,
+        tracking_confidence: 0.994,
+      }
+    : {
+        frequency_imag_hz: -12e6,
+        frequency_real_hz: 12.5e9,
+        mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+        mode_id: "inspector-mode-0-2",
+        sample_id: "sample-0000",
+        mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+        overlap_prev: 0.99,
+        raw_mode_index: 2,
+        residual_norm: 1e-8,
+        sample_index: 0,
+        tracking_confidence: 0.995,
+      };
+  return {
+    ...(owner ?? {}),
     artifact_path: "eigen/branches.v2.json",
     missing_reason: null,
     payload: {
       branches: [{
         branch_id: "branch-0",
         label: "Acoustic branch",
-        points: [{
-          frequency_imag_hz: -12e6,
-          frequency_real_hz: 12.5e9,
-          mode_field_id: "analysis:eigen:sample-0000:mode-0002",
-          mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
-          overlap_prev: 0.99,
-          raw_mode_index: 2,
-          residual_norm: 1e-8,
-          sample_index: 0,
-          tracking_confidence: 0.995,
-        }],
+        points: [point],
       }],
       schema_version: "eigen_branches.v2",
       solver_model: "linearized_llg_reference",
@@ -3302,19 +5769,29 @@ function inspectorFrequencyBranches() {
   };
 }
 
-function inspectorFrequencyDispersion(fixture = { analysisProduct: "driven_response" }) {
+function inspectorFrequencyDispersion(
+  fixture = { analysisProduct: "driven_response" },
+  ownerOverride = null,
+) {
   const modal = fixture.analysisProduct === "modal_eigen";
+  const modalResonance = modal && fixture.modalResonanceQualification === true;
+  const owner = modal
+    ? ownerOverride ?? INSPECTOR_MODAL_DISPERSION_OWNER_B
+    : null;
+  const regression = fixture.modalDispersionOwnershipRegression === true;
+  const isRunA = owner?.run_id === INSPECTOR_MODAL_DISPERSION_OWNER_A.run_id;
   return {
+    ...(owner ?? {}),
     artifact_path: "eigen/dispersion.csv",
     content_type: "text/csv",
     missing_reason: null,
-    path_metadata: modal
+    path_metadata: modal && !modalResonance
       ? {
           sampling: {
             kind: "path",
             points: [
               { k_vector: [0, 0, 0], label: "Γ" },
-              { k_vector: [1e7, 0, 0], label: "X" },
+              { k_vector: isRunA ? [-2e7, 0, 0] : [0, 0, 3e7], label: "X" },
             ],
             samples_per_segment: [1],
           },
@@ -3323,9 +5800,15 @@ function inspectorFrequencyDispersion(fixture = { analysisProduct: "driven_respo
     resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
     schema_version: "frequency_domain_eigen_dispersion.csv",
     status: "ready",
-    text: modal
-      ? "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key\n0,2,branch-0,0,12.5e9,analysis:eigen:sample-0000:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0\n1,2,branch-0,1e7,13e9,analysis:eigen:sample-0001:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0"
-      : "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
+    text: modal && !modalResonance
+      ? [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key",
+          "0,2,branch-0,0,12.5e9,analysis:eigen:sample-0000:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+          `1,2,branch-0,${regression && isRunA ? "2e7" : "3e7"},13e9,analysis:eigen:sample-0001:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0`,
+        ].join("\n")
+      : modal
+        ? ""
+        : "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
   };
 }
 
@@ -3340,26 +5823,82 @@ function inspectorFrequencyDiagnostics() {
   };
 }
 
-function inspectorFrequencyResponseSweep() {
+function inspectorFrequencyResponseSweep(
+  fixture = { analysisProduct: "driven_response" },
+) {
+  const modal = fixture.analysisProduct === "modal_eigen";
+  const frequencyIndex = INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX;
+  const pointArtifactPath = inspectorFrequencyResponsePointArtifactPath(frequencyIndex);
+  const fieldPayloadPath = inspectorFrequencyResponseFieldPayloadPath(frequencyIndex);
+  const fieldId = inspectorFrequencyResponseFieldId(frequencyIndex);
+  const pointId = `frequency-point-${String(frequencyIndex).padStart(4, "0")}`;
+  const sweepDigest = `sha256:${"b".repeat(64)}`;
   return {
+    ...(!modal ? INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER : {}),
     artifact_path: "response/magnetic_response_sweep.v2.json",
-    missing_reason: null,
-    payload: {
-      points: [{
-        absorbed_power_density: 4.5,
-        amplitude: 0.75,
-        field_id: "response-field-7",
-        frequency_hz: 12.5e9,
-        frequency_index: 7,
-        observable_id: "mx",
-        phase_rad: 1.25,
-        residual_norm: 1e-5,
-        susceptibility_tensor: [[1, 2], [3, 4]],
-      }],
-      schema_version: "magnetic_response_sweep.v2",
-    },
+    content_digest: modal ? null : sweepDigest,
+    missing_reason: modal ? "artifact is not present in the active workspace" : null,
+    payload: modal
+      ? null
+      : {
+          complete: true,
+          completed_frequency_point_count: 1,
+          frequency_point_artifact_paths: [pointArtifactPath],
+          interrupted: false,
+          points: [{
+            absorbed_power_density: 4.5,
+            amplitude: 0.75,
+            angular_frequency_rad_per_s: 2 * Math.PI * 12.5e9,
+            field_id: fieldId,
+            frequency_hz: 12.5e9,
+            frequency_index: frequencyIndex,
+            frequency_point_artifact_path: pointArtifactPath,
+            max_response_amplitude: 0.75,
+            observable_id: "mx",
+            phase_rad: 1.25,
+            point_id: pointId,
+            relative_residual_l2_norm: 1e-5,
+            residual_l2_norm: 1e-5,
+            residual_norm: 1e-5,
+            response_field_binary_layout: "complex_f64_pairs_little_endian",
+            response_field_payload_path: fieldPayloadPath,
+            susceptibility_tensor: [[1, 2], [3, 4]],
+          }],
+          requested_frequency_point_count: 1,
+          response_field_payload_paths: [fieldPayloadPath],
+          schema_version: "magnetic_response_sweep.v2",
+          status: "completed",
+        },
     resource_key: "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
-    schema_version: "frequency_domain_response_sweep.v2",
-    status: "ready",
+    revision: modal ? null : sweepDigest,
+    schema_version: "frequency_domain_response_sweep_resource.v1",
+    status: modal ? "missing" : "ready",
   };
+}
+
+
+async function qualifyFirstRunGuideRouting(page, inspector, screenshotFiles, fixture) {
+  const guide = page.getByTestId("scratch-authoring-guide");
+  await guide.waitFor({ state: "visible", timeout: 30_000 });
+  const material = guide.locator('[data-check-id="material"]');
+  await material.getByRole("button", { name: "Material", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".fm-inspector__title")?.textContent === "Material Assignment");
+  assert(await inspector.locator(".fm-inspector-panel").count(), "Guide material action must mount the existing Inspector.");
+  await guide.locator('[data-check-id="domain"]').getByRole("button", { name: "Configure domain", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".fm-inspector__title")?.textContent === "Universe");
+  assert(!(await inspector.innerText()).includes("Session discretization is unresolved"), "Known FEM must not require engine resolution to edit Universe.");
+  const webgl = await assertHealthyViewportCanvas(page, "First-run guide navigation");
+  const screenshot = "first-run-guide-domain.png";
+  await page.screenshot({ path: resolve(outputDir, screenshot) });
+  screenshotFiles.push(screenshot);
+  await writeFile(resolve(outputDir, "first-run-guide-proof.json"), JSON.stringify({
+    schema: "fullmag_first_run_guide_browser_proof_v1", scene_revision: fixture.revision,
+    guide_revision: await guide.getAttribute("data-readiness-revision"),
+    actions: ["material -> existing Film Material Assignment", "complete domain -> existing Universe"],
+    check_ids: await guide.locator("[data-check-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-check-id"))),
+    webgl, screenshot, qualification: "production_workspace_with_mock_api", real_backend_verified: false,
+  }, null, 2));
+  await guide.getByRole("button", { name: "Hide steps", exact: true }).click();
+  assert(!(await guide.getByRole("list", { name: "Model readiness checklist" }).count()), "Hide steps must release workspace space for expert navigation.");
+  await assertHealthyViewportCanvas(page, "Collapsed first-run guide");
 }

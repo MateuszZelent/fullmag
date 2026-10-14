@@ -13,6 +13,7 @@ import type { FieldCatalogResource, FieldVectorResponseMetadata } from "@/kernel
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { ResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
 
 import {
   cachedBinaryResourceMatchesRevision,
@@ -40,6 +41,7 @@ import {
   resolveViewport3DFieldVectorIdentityMatch,
   viewport3DFieldVectorMatchesRequestIdentity,
   viewport3DFieldMetaResourceMatchesQuantity,
+  VIEWPORT_3D_TOPOLOGY_RETRY_POLICY,
   type Viewport3DFieldVectorEnvelope,
 } from "./viewport3dResources";
 import { Viewport3DResourceTracker } from "./viewport3dDiagnostics";
@@ -88,6 +90,53 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("uses the bounded topology policy only for the chunked topology hook", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+    const hookStart = source.indexOf("export function useViewport3DDomainTopology");
+    const hookEnd = source.indexOf("export function useViewport3DAnalysisFieldVector", hookStart);
+    const hookSource = source.slice(hookStart, hookEnd);
+
+    expect(hookSource).toContain(
+      "retryPolicy: VIEWPORT_3D_TOPOLOGY_RETRY_POLICY",
+    );
+    expect(source).toContain("deadlineMs: 15_000");
+    expect(source).toContain("The live 1.4 MiB");
+  });
+
+  it("keeps the measured sequential topology read alive beyond the generic deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      let release!: (value: string) => void;
+      let requestSignal!: AbortSignal;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        requestSignal = signal;
+        return new Promise<string>((resolve) => {
+          release = resolve;
+        });
+      });
+
+      const result = store.ensureLoad({
+        externalRevision: null,
+        load,
+        resourceKey: "data/domain/topology",
+        retryPolicy: VIEWPORT_3D_TOPOLOGY_RETRY_POLICY,
+      });
+
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(requestSignal.aborted).toBe(false);
+      expect(VIEWPORT_3D_TOPOLOGY_RETRY_POLICY.deadlineMs).toBe(15_000);
+
+      release("decoded topology");
+      await expect(result).resolves.toMatchObject({
+        data: "decoded topology",
+        status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("accepts only magnetization payloads from the exact observation frame", () => {
     const field: DecodedFieldVector = {
       dtype: "float64",
@@ -769,6 +818,65 @@ describe("viewport3dResources", () => {
         },
       }),
     ).toEqual({ matches: false, reason: "snapshot" });
+  });
+
+  it("requires an exact committed artifact-generation response header when requested", () => {
+    const envelope: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "gen-1",
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: null,
+        scopeKind: "full",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"field-1"',
+      resourceKey: fieldVectorResourceKey("component=full"),
+      responseMetadata: fieldResponseMetadata({
+        artifactGenerationId: "publication-14",
+        domainGenerationId: "gen-1",
+        meshTopologyHash: "top-1",
+        quantityId: "m",
+        scopeId: null,
+        scopeKind: "full",
+      }),
+    };
+    const request = {
+      quantityId: "m",
+      query: { expected_artifact_generation_id: "publication-14" },
+    };
+
+    expect(resolveViewport3DFieldVectorIdentityMatch(envelope, request)).toEqual({
+      matches: true,
+    });
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(envelope, {
+        ...request,
+        query: { expected_artifact_generation_id: "publication-stale" },
+      }),
+    ).toEqual({ matches: false, reason: "artifact_generation" });
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(
+        {
+          ...envelope,
+          responseMetadata: fieldResponseMetadata({
+            domainGenerationId: "gen-1",
+            meshTopologyHash: "top-1",
+            quantityId: "m",
+            scopeId: null,
+            scopeKind: "full",
+          }),
+        },
+        request,
+      ),
+    ).toEqual({ matches: false, reason: "artifact_generation" });
   });
 
   it("retains last good frame with retained: true across mismatched ready response (LR-03)", () => {

@@ -56,6 +56,13 @@ pub(crate) enum ArchiveDocuments<'a> {
         snapshots: &'a HashMap<String, ArchiveFileSnapshot>,
         root: &'a Path,
     },
+    /// Lazy inventory-backed documents with an in-memory overlay for explicit
+    /// project documents (such as the live snapshot that export already read).
+    FilesWithInline {
+        snapshots: &'a HashMap<String, ArchiveFileSnapshot>,
+        root: &'a Path,
+        inline: &'a HashMap<String, Vec<u8>>,
+    },
 }
 
 impl<'a> ArchiveDocuments<'a> {
@@ -63,6 +70,9 @@ impl<'a> ArchiveDocuments<'a> {
         match self {
             Self::Memory(documents) => Box::new(documents.keys()),
             Self::Files { snapshots, .. } => Box::new(snapshots.keys()),
+            Self::FilesWithInline { snapshots, inline, .. } => {
+                Box::new(snapshots.keys().chain(inline.keys()))
+            }
         }
     }
 
@@ -70,6 +80,9 @@ impl<'a> ArchiveDocuments<'a> {
         match self {
             Self::Memory(documents) => documents.contains_key(path),
             Self::Files { snapshots, .. } => snapshots.contains_key(path),
+            Self::FilesWithInline { snapshots, inline, .. } => {
+                snapshots.contains_key(path) || inline.contains_key(path)
+            }
         }
     }
 
@@ -89,6 +102,20 @@ impl<'a> ArchiveDocuments<'a> {
                         .with_context(|| format!("reading planned export document `{path}`"))
                 })
                 .transpose(),
+            Self::FilesWithInline { snapshots, root, inline } => {
+                if let Some(data) = inline.get(path) {
+                    return Ok(Some(Cow::Borrowed(data.as_slice())));
+                }
+                snapshots
+                    .get(path)
+                    .map(|snapshot| {
+                        snapshot
+                            .read_control(root, path)
+                            .map(Cow::Owned)
+                            .with_context(|| format!("reading planned export document `{path}`"))
+                    })
+                    .transpose()
+            }
         }
     }
 }
@@ -125,4 +152,41 @@ mod tests {
             .read_control(directory.path(), "control.json")
             .is_err());
     }
+    #[test]
+    fn lazy_file_inventory_supports_inline_project_document_overlay() {
+        let directory = tempfile::tempdir().unwrap();
+        let relative = "runs/run-1/artifacts/eigen/spectrum.v2.json";
+        let path = directory.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"spectrum").unwrap();
+        let snapshots = HashMap::from([(
+            relative.to_string(),
+            ArchiveFileSnapshot::capture(&path).unwrap(),
+        )]);
+        let inline = HashMap::from([(
+            "project/current_live_snapshot.json".to_string(),
+            b"snapshot".to_vec(),
+        )]);
+        let documents = ArchiveDocuments::FilesWithInline {
+            snapshots: &snapshots,
+            root: directory.path(),
+            inline: &inline,
+        };
+
+        assert_eq!(documents.keys().count(), 2);
+        assert!(documents.contains_key("project/current_live_snapshot.json"));
+        assert_eq!(
+            documents
+                .read("project/current_live_snapshot.json")
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            b"snapshot"
+        );
+        assert_eq!(
+            documents.read(relative).unwrap().unwrap().as_ref(),
+            b"spectrum"
+        );
+    }
+
 }

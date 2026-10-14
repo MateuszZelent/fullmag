@@ -60,11 +60,11 @@ const topology = {
   pointCount: 2,
 };
 
-function validBinary(): DecodedFieldVector {
+function validBinary(formatVersion: 3 | 5 = 3): DecodedFieldVector {
   return {
     dtype: "float64",
     domainGenerationId: "domain-v7",
-    formatVersion: 3,
+    formatVersion,
     grid: [1, 1, 2],
     indexing: "full_domain",
     meshTopologyHash: "topology-hash-v4",
@@ -114,7 +114,7 @@ describe("ModeFieldOverlayIntent", () => {
     ).toBeNull();
   });
 
-  it("admits a binary field only when its complex XYZ shape and topology binding match metadata", () => {
+  it("admits FMVP v3 and v5 binary fields only when complex XYZ shape and topology match", () => {
     const intent = createModeFieldOverlayIntent(selection)!;
     const resolved = resolveModeFieldOverlayMetadata(
       intent,
@@ -131,10 +131,13 @@ describe("ModeFieldOverlayIntent", () => {
       phasorAmplitudeMax: expect.any(Number),
     });
     expect(
+      validateModeFieldOverlayBinary(resolved, validBinary(5), topology),
+    ).toMatchObject({ complex: { componentCount: 3, pointCount: 2 } });
+    expect(
       validateModeFieldOverlayBinary(
         resolved,
         {
-          ...validBinary(),
+          ...validBinary(5),
           nComp: 4,
           valueCount: 8,
           values: new Float64Array(8),
@@ -168,5 +171,17 @@ describe("ModeFieldOverlayIntent", () => {
     const nonFinite = validBinary();
     nonFinite.values[5] = Number.NaN;
     expect(validateModeFieldOverlayBinary(resolved, nonFinite, topology)).toBeNull();
+    expect(
+      validateModeFieldOverlayBinary(
+        resolved,
+        {
+          ...validBinary(5),
+          indexing: "legacy_count_only",
+          meshTopologyHash: null,
+          meshTopologyRevision: null,
+        },
+        topology,
+      ),
+    ).toBeNull();
   });
 });

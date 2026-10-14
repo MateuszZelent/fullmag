@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ComputeEnvironment, ComputeProbeState } from "../model/types";
+import type { ComputeEnvironment, ComputeNodeInventorySummary, ComputeProbeState } from "../model/types";
 
 import { ComputeEnvironmentWidget } from "./ComputeEnvironmentWidget";
 
@@ -12,9 +12,18 @@ const baseCompute: ComputeEnvironment = {
   warnings: [],
 };
 
-function render(compute: ComputeProbeState, refreshing = false) {
+function render(
+  compute: ComputeProbeState,
+  refreshing = false,
+  nodeInventory?: ComputeNodeInventorySummary,
+) {
   return renderToStaticMarkup(
-    <ComputeEnvironmentWidget compute={compute} onConfigure={vi.fn()} refreshing={refreshing} />,
+    <ComputeEnvironmentWidget
+      compute={compute}
+      nodeInventory={nodeInventory}
+      onConfigure={vi.fn()}
+      refreshing={refreshing}
+    />,
   );
 }
 
@@ -72,5 +81,20 @@ describe("ComputeEnvironmentWidget solver routes", () => {
     expect(html).toContain("Latest available telemetry sample");
     expect(html).toContain(new Date(sampledAt).toLocaleString());
     expect(html).toContain(`dateTime="${new Date(sampledAt).toISOString()}"`);
+  });
+
+  it("shows host inventory freshness separately from telemetry and solver lanes", () => {
+    const html = render(baseCompute, false, {
+      hasSnapshot: true,
+      nodeCount: 1,
+      nodes: [],
+      refreshFailed: false,
+      resourceStatus: "ready",
+      staleAfterSeconds: 30,
+      state: "current",
+    });
+
+    expect(html).toContain("Host inventory · Current · 1 node");
+    expect(html).toContain("Samples become stale after 30 seconds.");
   });
 });

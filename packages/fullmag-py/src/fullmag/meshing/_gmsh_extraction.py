@@ -1180,6 +1180,11 @@ def _extract_mesh_data(
     )
     return MeshData(
         nodes=nodes,
+        vertex_identity={
+            "schema_version": "mesh_vertex_identity.v1",
+            "issuer": "gmsh_node_tags.v1",
+            "vertex_ids": list(node_tags),
+        },
         cell_types=cell_types,
         cell_offsets=cell_offsets_array,
         cell_nodes=cell_nodes_array,

@@ -42,3 +42,59 @@ fn lookup_failure_and_wrong_version_never_fall_back() {
     .unwrap_err();
     assert!(error.starts_with("execution_profile_reference_mismatch"));
 }
+
+#[test]
+fn legacy_environment_fills_missing_resources_and_preserves_its_origin() {
+    let layer = ExecutionRequestLayerIR {
+        origin: ExecutionFieldOriginIR {
+            kind: ExecutionOriginKindIR::LegacyEnv,
+            location: "env:FULLMAG_CPU_THREADS".into(),
+        },
+        request: serde_json::from_value(serde_json::json!({
+            "resources": {"cpu": {"threads": 12}}
+        }))
+        .unwrap(),
+    };
+
+    let materialized = materialize_execution_request(None, vec![layer]).unwrap();
+    assert_eq!(
+        materialized.requested.resources.cpu.threads.count(),
+        Some(12)
+    );
+    assert_eq!(
+        materialized.origins["resources.cpu.threads"].kind,
+        ExecutionOriginKindIR::LegacyEnv
+    );
+}
+
+#[test]
+fn explicit_auto_conflicts_with_a_different_legacy_environment_value() {
+    let profile = ExecutionProfileIR {
+        defaults: ExecutionRequestPatchIR {
+            resources: FieldPatch::Value(fullmag_ir::ComputeResourcePatchIR {
+                cpu: FieldPatch::Value(fullmag_ir::CpuResourcePatchIR {
+                    threads: FieldPatch::Value(fullmag_ir::RequestedThreads::Auto(
+                        fullmag_ir::AutoThreads::Auto,
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..ExecutionProfileIR::default()
+    };
+    let layer = ExecutionRequestLayerIR {
+        origin: ExecutionFieldOriginIR {
+            kind: ExecutionOriginKindIR::LegacyEnv,
+            location: "env:FULLMAG_CPU_THREADS".into(),
+        },
+        request: serde_json::from_value(serde_json::json!({
+            "resources": {"cpu": {"threads": 12}}
+        }))
+        .unwrap(),
+    };
+
+    let error = materialize_execution_request(Some(profile), vec![layer]).unwrap_err();
+    assert!(error.starts_with("execution_intent_conflict"));
+}

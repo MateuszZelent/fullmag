@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -24,8 +25,12 @@ describe("FrequencyDomainTables", () => {
               displayModeIndex: 1,
               frequencyHz: 750e6,
               imaginaryFrequencyHz: 20e6,
+              modeFieldAvailable: true,
               modeFieldId: "analysis:eigen:sample-0000:mode-0001",
-              modeFieldResourceKey: null,
+              modeFieldResourceKey: fieldVectorResourceKey(
+                "analysis:eigen:sample-0000:mode-0001",
+                { phase_rad: 0, view: "phase_rotated_real" },
+              ),
               modeId: null,
               rawModeIndex: 1,
               residualNorm: null,
@@ -110,6 +115,7 @@ describe("FrequencyDomainTables", () => {
       'aria-label="Plot this eigen mode with phase-rotated real display for sample 0 mode 1"',
     );
     expect(html).toContain('title="Plot this eigen mode with phase-rotated real display"');
+    expect(html).not.toContain('title="Mode field artifact is missing"');
     expect(html).toContain('title="Plot the real part of this eigen mode"');
     expect(html).toContain(
       'title="Plot this response field with phase-rotated real display"',

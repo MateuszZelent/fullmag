@@ -16,6 +16,38 @@ import verify_development_backend_api as native_gate
 
 
 class BrowserProofChecks(unittest.TestCase):
+    def test_after_grid_document_pins_hashes_but_never_relaxes_archive_metadata(self):
+        before = {"archive_base64_sha256": "a" * 64, "revision": 2, "dirty": True,
+                  "project_id": "project", "scene_resource_sha256": "b" * 64,
+                  "scene_document_sha256": "c" * 64}
+        expected = {**before, "scene_resource_sha256": "d" * 64, "scene_document_sha256": "e" * 64}
+        proof.validate_after_grid_document(before, expected)
+        for key, value in (("archive_base64_sha256", "f" * 64), ("revision", 3),
+                           ("dirty", False), ("project_id", "other"),
+                           ("scene_resource_sha256", "bad"), ("scene_document_sha256", None)):
+            with self.subTest(key=key), self.assertRaises(proof.storage.StorageError):
+                proof.validate_after_grid_document(before, {**expected, key: value})
+        with self.assertRaises(proof.storage.StorageError):
+            proof.validate_after_grid_document(before, {**expected, "extra": True})
+
+    def test_successful_grid_only_clears_mesh_dirty_and_preserves_source(self):
+        scene = {"revision": 3, "objects": [
+            {"id": "a", "tags": ["mesh:dirty", "user-tag"], "material_ref": "m"},
+            {"id": "b", "tags": ["mesh:dirty"]},
+            {"id": "c", "tags": ["user-tag"]}],
+            "materials": [{"id": "m", "properties": {"alpha": 0.02}}]}
+        expected = proof.scene_after_successful_grid(scene)
+        self.assertEqual(expected["objects"][0]["tags"], ["user-tag"])
+        self.assertNotIn("tags", expected["objects"][1])
+        self.assertEqual(expected["objects"][2]["tags"], ["user-tag"])
+        self.assertEqual(expected["materials"], scene["materials"])
+        self.assertEqual(expected["revision"], 3)
+        self.assertEqual(scene["objects"][0]["tags"], ["mesh:dirty", "user-tag"])
+        for field, value in (("material_ref", "other"), ("id", "other")):
+            changed = json.loads(json.dumps(expected))
+            changed["objects"][0][field] = value
+            self.assertNotEqual(proof.canonical(expected), proof.canonical(changed))
+
     def test_terminal_scope_requires_exact_owner_start_and_completed_lifecycle(self):
         restored = dict(api_instance_id="api", session_id="session", backend_session_epoch=1,
                         request_scope_epoch="api:1", session_resource_epoch="session@100")

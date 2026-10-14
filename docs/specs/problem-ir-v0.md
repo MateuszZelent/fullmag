@@ -230,11 +230,12 @@ stagnation is failed/non-converged. Artifact sampling never infers completion.
 Physics note 0950 and ADR 0017 define the canonical extension for a
 variable-width three-dimensional microstrip/CPW. It adds these semantic types:
 
-- `AntennaLayoutIR`: straight local current axis, rigid 3D transform,
-  conductor thickness/conductivity, ordered width stations, named conductor
-  parts, and explicit port modes;
-- `AntennaPortModeIR`: terminal selectors and signed current weights whose sum
-  is zero, normalized to 1 A;
+- existing `PhysicsObjectIR`, `GeometryIR`, material assignment and
+  `CurrentModuleIR::CurrentTransport` remain the sole owners of conductor
+  identity, geometry, conductivity and charge solve;
+- `AntennaPortModeIR`: references to a source object, charge-only current
+  transport and its terminal selectors, plus signed branch weights whose sum
+  is zero and a 1 A normalization contract;
 - `StudyIR::AntennaFieldSolve`: field model, conductor-mesh policy,
   field-sampling domain, magnetic target references, solver policy, and named
   outputs;
@@ -258,12 +259,14 @@ the `stage_id` used by downstream `StageOutputRefIR`. Before a downstream
 `ProblemIR` reaches backend planning, orchestration resolves that reference to
 a concrete `antenna_field_solution.v1` manifest id and content hash.
 
-Validation requires monotone complete width stations, positive dimensions and
-conductivity, explicit return conductors, terminal selectors that resolve to
-nonempty faces, zero-sum current weights, unique ids, and an acyclic stage
-reference to an earlier compatible field-solve output. Normalization may expand
-symmetric CPW shorthand and constant-width layouts; it may not invent a missing
-return path.
+Validation requires valid source-object/current-transport references, positive
+conductivity in the referenced material/transport owner, explicit return
+conductors, referenced terminal selectors that resolve to nonempty faces,
+zero-sum current weights, unique ids, and an acyclic stage reference to an
+earlier compatible field-solve output. Migration normalization may expand
+symmetric CPW shorthand into shared geometry plus references; it may not create
+a second antenna geometry/material/current model or invent a missing return
+path.
 
 Every primitive study node has a stable unique `stage_id`. Regional-drive
 activation is either `all_time_evolution` or an explicit nonempty set of

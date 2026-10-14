@@ -12,6 +12,7 @@ describe("mesh build confirmation", () => {
   it("recognizes only mesh build commands as confirmation-gated", () => {
     expect(isMeshBuildConfirmCommandId("mesh.build-selected")).toBe(true);
     expect(isMeshBuildConfirmCommandId("mesh.build-shared-domain")).toBe(true);
+    expect(isMeshBuildConfirmCommandId("grid.build-fdm")).toBe(true);
     expect(isMeshBuildConfirmCommandId("mesh.open-builds")).toBe(false);
   });
 

@@ -1,11 +1,14 @@
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "context.hpp"
+#include "fem_common.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -173,6 +176,23 @@ double matrix_value(const fd::PoissonAirboxSharedDomainCsrMatrix &matrix,
     return 0.0;
 }
 
+std::complex<double> complex_matrix_value(
+    const fd::PoissonAirboxSharedDomainComplexCsrMatrix &matrix,
+    std::uint64_t row,
+    std::uint64_t column)
+{
+    check(row < matrix.row_count && column < matrix.column_count,
+          "complex matrix lookup is in range");
+    for (std::uint32_t entry = matrix.row_offsets[static_cast<std::size_t>(row)];
+         entry < matrix.row_offsets[static_cast<std::size_t>(row + 1u)];
+         ++entry) {
+        if (matrix.column_indices[entry] == column) {
+            return matrix.values[entry];
+        }
+    }
+    return std::complex<double>(0.0, 0.0);
+}
+
 double max_matrix_difference(const fd::PoissonAirboxSharedDomainCsrMatrix &left,
                              const fd::PoissonAirboxSharedDomainCsrMatrix &right)
 {
@@ -187,6 +207,46 @@ double max_matrix_difference(const fd::PoissonAirboxSharedDomainCsrMatrix &left,
         }
     }
     return maximum;
+}
+
+std::size_t numerical_rank(std::vector<double> matrix, std::size_t dimension)
+{
+    check(matrix.size() == dimension * dimension,
+          "numerical rank requires a square dense matrix");
+    double scale = 0.0;
+    for (const double value : matrix) {
+        scale = std::max(scale, std::abs(value));
+    }
+    const double tolerance = 1.0e-10 * std::max(1.0, scale);
+    std::size_t rank = 0u;
+    for (std::size_t column = 0u; column < dimension && rank < dimension; ++column) {
+        std::size_t pivot = rank;
+        for (std::size_t row = rank + 1u; row < dimension; ++row) {
+            if (std::abs(matrix[row * dimension + column]) >
+                std::abs(matrix[pivot * dimension + column])) {
+                pivot = row;
+            }
+        }
+        if (std::abs(matrix[pivot * dimension + column]) <= tolerance) {
+            continue;
+        }
+        if (pivot != rank) {
+            for (std::size_t entry = 0u; entry < dimension; ++entry) {
+                std::swap(matrix[rank * dimension + entry],
+                           matrix[pivot * dimension + entry]);
+            }
+        }
+        const double pivot_value = matrix[rank * dimension + column];
+        for (std::size_t row = rank + 1u; row < dimension; ++row) {
+            const double factor = matrix[row * dimension + column] / pivot_value;
+            for (std::size_t entry = column; entry < dimension; ++entry) {
+                matrix[row * dimension + entry] -=
+                    factor * matrix[rank * dimension + entry];
+            }
+        }
+        ++rank;
+    }
+    return rank;
 }
 
 double tetra_volume_from_vertices(const mfem::Mesh &mesh, int element)
@@ -395,7 +455,7 @@ void invert_3x3(const double matrix[3][3], double inverse[3][3], double *determi
     *determinant = det;
 }
 
-std::vector<double> independent_prism_exchange_oracle(
+std::vector<double> independent_prism_exchange_exact_affine_oracle(
     mfem::FiniteElementSpace &scalar_space,
     const std::vector<std::uint8_t> &magnetic_elements,
     const std::vector<double> &tangent_frames,
@@ -408,12 +468,23 @@ std::vector<double> independent_prism_exchange_oracle(
     check(mesh != nullptr, "independent prism exchange oracle requires an MFEM mesh");
     check(magnetic_elements.size() == static_cast<std::size_t>(mesh->GetNE()),
           "independent prism exchange oracle requires one mask entry per element");
-    // This is the explicit geometry/math form of the native order-one prism
-    // quadrature: triangle centroid times interval midpoint, with reference
-    // prism measure 1/2.  It intentionally tracks the producer's declared
-    // MFEM quadrature without reading MFEM integration data.
-    constexpr double kReferencePoint[3] = {1.0 / 3.0, 1.0 / 3.0, 0.5};
-    constexpr double kReferenceWeight = 0.5;
+    check(tangent_frames.size() == static_cast<std::size_t>(6u * node_count),
+          "independent prism exchange oracle requires two three-vector frames per node");
+    // Independent affine prism rule: three degree-two triangle points and two
+    // degree-two Gauss points on the interval.  This is not read from MFEM and
+    // exactly integrates the quadratic grad(N_i).grad(N_j) form on an affine
+    // prism.  It therefore cannot reproduce the producer's old centroid rule.
+    constexpr double kTrianglePoints[3][2] = {
+        {1.0 / 6.0, 1.0 / 6.0},
+        {2.0 / 3.0, 1.0 / 6.0},
+        {1.0 / 6.0, 2.0 / 3.0},
+    };
+    constexpr double kTriangleWeight = 1.0 / 6.0;
+    const double kSegmentPoints[2] = {
+        0.5 - 1.0 / (2.0 * std::sqrt(3.0)),
+        0.5 + 1.0 / (2.0 * std::sqrt(3.0)),
+    };
+    constexpr double kSegmentWeight = 0.5;
     for (int element = 0; element < mesh->GetNE(); ++element) {
         if (magnetic_elements[static_cast<std::size_t>(element)] == 0u) {
             continue;
@@ -438,58 +509,68 @@ std::vector<double> independent_prism_exchange_oracle(
         double inverse_jacobian[3][3]{};
         double determinant = 0.0;
         invert_3x3(jacobian, inverse_jacobian, &determinant);
-        const double reference_gradients[6][3] = {
-            {kReferencePoint[2] - 1.0, kReferencePoint[2] - 1.0,
-             kReferencePoint[0] + kReferencePoint[1] - 1.0},
-            {1.0 - kReferencePoint[2], 0.0, -kReferencePoint[0]},
-            {0.0, 1.0 - kReferencePoint[2], -kReferencePoint[1]},
-            {-kReferencePoint[2], -kReferencePoint[2],
-             1.0 - kReferencePoint[0] - kReferencePoint[1]},
-            {kReferencePoint[2], 0.0, kReferencePoint[0]},
-            {0.0, kReferencePoint[2], kReferencePoint[1]},
-        };
-        double physical_gradients[6][3]{};
-        for (int local = 0; local < 6; ++local) {
-            for (int axis = 0; axis < 3; ++axis) {
-                for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
-                    physical_gradients[local][axis] +=
-                        reference_gradients[local][reference_axis] *
-                        inverse_jacobian[reference_axis][axis];
+        for (const auto &triangle_point : kTrianglePoints) {
+            for (const double segment_point : kSegmentPoints) {
+                const double reference_point[3] = {
+                    triangle_point[0], triangle_point[1], segment_point};
+                const double reference_gradients[6][3] = {
+                    {reference_point[2] - 1.0, reference_point[2] - 1.0,
+                     reference_point[0] + reference_point[1] - 1.0},
+                    {1.0 - reference_point[2], 0.0, -reference_point[0]},
+                    {0.0, 1.0 - reference_point[2], -reference_point[1]},
+                    {-reference_point[2], -reference_point[2],
+                     1.0 - reference_point[0] - reference_point[1]},
+                    {reference_point[2], 0.0, reference_point[0]},
+                    {0.0, reference_point[2], reference_point[1]},
+                };
+                double physical_gradients[6][3]{};
+                for (int local = 0; local < 6; ++local) {
+                    for (int axis = 0; axis < 3; ++axis) {
+                        for (int reference_axis = 0; reference_axis < 3;
+                             ++reference_axis) {
+                            physical_gradients[local][axis] +=
+                                reference_gradients[local][reference_axis] *
+                                inverse_jacobian[reference_axis][axis];
+                        }
+                    }
                 }
-            }
-        }
-        const double weight = std::abs(determinant) * kReferenceWeight;
-        for (int local_row = 0; local_row < 6; ++local_row) {
-            const std::uint64_t row_node = static_cast<std::uint64_t>(
-                dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
-            const double row_sign = dofs[local_row] >= 0 ? 1.0 : -1.0;
-            for (int local_column = 0; local_column < 6; ++local_column) {
-                const std::uint64_t column_node = static_cast<std::uint64_t>(
-                    dofs[local_column] >= 0 ? dofs[local_column] : -1 - dofs[local_column]);
-                const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
-                double gradient_dot = 0.0;
-                for (int axis = 0; axis < 3; ++axis) {
-                    gradient_dot += physical_gradients[local_row][axis] *
-                        physical_gradients[local_column][axis];
-                }
-                const double coefficient = row_sign * column_sign * 2.0 *
-                    exchange_stiffness * gradient_dot * weight;
-                for (std::uint32_t row_component = 0; row_component < 2u;
-                     ++row_component) {
-                    const double *row_frame = &tangent_frames[
-                        static_cast<std::size_t>(6u * row_node + 3u * row_component)];
-                    for (std::uint32_t column_component = 0; column_component < 2u;
-                         ++column_component) {
-                        const double *column_frame = &tangent_frames[
-                            static_cast<std::size_t>(
-                                6u * column_node + 3u * column_component)];
-                        const double frame_dot = row_frame[0] * column_frame[0] +
-                            row_frame[1] * column_frame[1] +
-                            row_frame[2] * column_frame[2];
-                        oracle[static_cast<std::size_t>(
-                            (2u * row_node + row_component) * q_count +
-                            2u * column_node + column_component)] +=
-                            coefficient * frame_dot;
+                const double weight = std::abs(determinant) *
+                    kTriangleWeight * kSegmentWeight;
+                for (int local_row = 0; local_row < 6; ++local_row) {
+                    const std::uint64_t row_node = static_cast<std::uint64_t>(
+                        dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
+                    const double row_sign = dofs[local_row] >= 0 ? 1.0 : -1.0;
+                    for (int local_column = 0; local_column < 6; ++local_column) {
+                        const std::uint64_t column_node = static_cast<std::uint64_t>(
+                            dofs[local_column] >= 0 ? dofs[local_column] :
+                                                       -1 - dofs[local_column]);
+                        const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
+                        double gradient_dot = 0.0;
+                        for (int axis = 0; axis < 3; ++axis) {
+                            gradient_dot += physical_gradients[local_row][axis] *
+                                physical_gradients[local_column][axis];
+                        }
+                        const double coefficient = row_sign * column_sign * 2.0 *
+                            exchange_stiffness * gradient_dot * weight;
+                        for (std::uint32_t row_component = 0; row_component < 2u;
+                             ++row_component) {
+                            const double *row_frame = &tangent_frames[
+                                static_cast<std::size_t>(
+                                    6u * row_node + 3u * row_component)];
+                            for (std::uint32_t column_component = 0; column_component < 2u;
+                                 ++column_component) {
+                                const double *column_frame = &tangent_frames[
+                                    static_cast<std::size_t>(
+                                        6u * column_node + 3u * column_component)];
+                                const double frame_dot = row_frame[0] * column_frame[0] +
+                                    row_frame[1] * column_frame[1] +
+                                    row_frame[2] * column_frame[2];
+                                oracle[static_cast<std::size_t>(
+                                    (2u * row_node + row_component) * q_count +
+                                    2u * column_node + column_component)] +=
+                                    coefficient * frame_dot;
+                            }
+                        }
                     }
                 }
             }
@@ -498,11 +579,1181 @@ std::vector<double> independent_prism_exchange_oracle(
     return oracle;
 }
 
+struct IndependentPrismQuadraturePoint {
+    double xi;
+    double eta;
+    double zeta;
+    double weight;
+};
+
+std::vector<IndependentPrismQuadraturePoint> independent_prism_gauss_rule(
+    int point_count_per_axis)
+{
+    // Duffy map of a tensor-product Gauss-Legendre rule onto the reference
+    // triangle, then a second independent Gauss-Legendre rule on zeta.  The
+    // switch values are point counts per axis (GL4/GL5/GL7), not MFEM
+    // integration orders.  This deliberately does not consume mfem::IntRules
+    // or CalcPhysDShape.
+    static constexpr double kNodes4[] = {
+        0.06943184420297371, 0.33000947820757187,
+        0.66999052179242813, 0.93056815579702629};
+    static constexpr double kWeights4[] = {
+        0.17392742256872693, 0.32607257743127307,
+        0.32607257743127307, 0.17392742256872693};
+    static constexpr double kNodes5[] = {
+        0.04691007703066802, 0.23076534494715845, 0.5,
+        0.76923465505284155, 0.95308992296933198};
+    static constexpr double kWeights5[] = {
+        0.11846344252809454, 0.23931433524968324, 0.28444444444444444,
+        0.23931433524968324, 0.11846344252809454};
+    static constexpr double kNodes7[] = {
+        0.02544604382862074, 0.12923440720030277, 0.29707742431130138,
+        0.5, 0.70292257568869862, 0.87076559279969723,
+        0.97455395617137926};
+    static constexpr double kWeights7[] = {
+        0.06474248308443485, 0.13985269574463834, 0.19091502525255947,
+        0.20897959183673469, 0.19091502525255947, 0.13985269574463834,
+        0.06474248308443485};
+
+    const double *nodes = nullptr;
+    const double *weights = nullptr;
+    int point_count = 0;
+    switch (point_count_per_axis) {
+    case 4:
+        nodes = kNodes4;
+        weights = kWeights4;
+        point_count = 4;
+        break;
+    case 5:
+        nodes = kNodes5;
+        weights = kWeights5;
+        point_count = 5;
+        break;
+    case 7:
+        nodes = kNodes7;
+        weights = kWeights7;
+        point_count = 7;
+        break;
+    default:
+        check(false,
+              "independent prism GL reference supports only 4, 5, and 7 points per axis");
+    }
+
+    std::vector<IndependentPrismQuadraturePoint> points;
+    points.reserve(static_cast<std::size_t>(point_count * point_count * point_count));
+    for (int xi_index = 0; xi_index < point_count; ++xi_index) {
+        const double xi = nodes[xi_index];
+        for (int eta_index = 0; eta_index < point_count; ++eta_index) {
+            const double eta = (1.0 - xi) * nodes[eta_index];
+            for (int zeta_index = 0; zeta_index < point_count; ++zeta_index) {
+                points.push_back({
+                    xi,
+                    eta,
+                    nodes[zeta_index],
+                    weights[xi_index] * weights[eta_index] *
+                        weights[zeta_index] * (1.0 - xi)});
+            }
+        }
+    }
+    return points;
+}
+
+void prism_reference_shape_gradients(
+    double xi,
+    double eta,
+    double zeta,
+    double gradients[6][3])
+{
+    gradients[0][0] = -(1.0 - zeta);
+    gradients[0][1] = -(1.0 - zeta);
+    gradients[0][2] = -(1.0 - xi - eta);
+    gradients[1][0] = 1.0 - zeta;
+    gradients[1][1] = 0.0;
+    gradients[1][2] = -xi;
+    gradients[2][0] = 0.0;
+    gradients[2][1] = 1.0 - zeta;
+    gradients[2][2] = -eta;
+    gradients[3][0] = -zeta;
+    gradients[3][1] = -zeta;
+    gradients[3][2] = 1.0 - xi - eta;
+    gradients[4][0] = zeta;
+    gradients[4][1] = 0.0;
+    gradients[4][2] = xi;
+    gradients[5][0] = 0.0;
+    gradients[5][1] = zeta;
+    gradients[5][2] = eta;
+}
+
+void deformed_prism_jacobian(
+    const mfem::Mesh &mesh,
+    const mfem::Array<int> &vertices,
+    const double shape_gradients[6][3],
+    double jacobian[3][3])
+{
+    check(vertices.Size() == 6,
+          "deformed prism oracle requires six ordered wedge vertices");
+    for (int axis = 0; axis < 3; ++axis) {
+        for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
+            jacobian[axis][reference_axis] = 0.0;
+        }
+    }
+    for (int local = 0; local < 6; ++local) {
+        const double *vertex = mesh.GetVertex(vertices[local]);
+        for (int axis = 0; axis < 3; ++axis) {
+            for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
+                jacobian[axis][reference_axis] +=
+                    vertex[axis] * shape_gradients[local][reference_axis];
+            }
+        }
+    }
+}
+
+std::vector<double> independent_deformed_prism_exchange_oracle(
+    mfem::FiniteElementSpace &scalar_space,
+    const std::vector<std::uint8_t> &magnetic_elements,
+    const std::vector<double> &tangent_frames,
+    double exchange_stiffness,
+    std::uint64_t node_count,
+    int gauss_points_per_axis)
+{
+    const std::uint64_t q_count = 2u * node_count;
+    std::vector<double> oracle(static_cast<std::size_t>(q_count * q_count), 0.0);
+    mfem::Mesh *mesh = scalar_space.GetMesh();
+    check(mesh != nullptr, "deformed prism oracle requires an MFEM mesh");
+    check(magnetic_elements.size() == static_cast<std::size_t>(mesh->GetNE()),
+          "deformed prism oracle requires one mask entry per element");
+    check(tangent_frames.size() == static_cast<std::size_t>(6u * node_count),
+          "deformed prism oracle requires two three-vector frames per node");
+
+    const std::vector<IndependentPrismQuadraturePoint> quadrature =
+        independent_prism_gauss_rule(gauss_points_per_axis);
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        if (magnetic_elements[static_cast<std::size_t>(element)] == 0u) {
+            continue;
+        }
+        mfem::Array<int> dofs;
+        mfem::Array<int> vertices;
+        scalar_space.GetElementDofs(element, dofs);
+        mesh->GetElementVertices(element, vertices);
+        const mfem::FiniteElement *finite_element = scalar_space.GetFE(element);
+        check(dofs.Size() == 6 && vertices.Size() == 6 && finite_element != nullptr &&
+                  finite_element->GetGeomType() == mfem::Geometry::PRISM &&
+                  finite_element->GetOrder() == 1,
+              "deformed prism oracle requires P1 prism6 elements");
+
+        for (const IndependentPrismQuadraturePoint &point : quadrature) {
+            double reference_gradients[6][3]{};
+            prism_reference_shape_gradients(
+                point.xi, point.eta, point.zeta, reference_gradients);
+            double jacobian[3][3]{};
+            deformed_prism_jacobian(*mesh, vertices, reference_gradients, jacobian);
+            double inverse_jacobian[3][3]{};
+            double determinant = 0.0;
+            invert_3x3(jacobian, inverse_jacobian, &determinant);
+            check(std::isfinite(determinant) && determinant > 0.0,
+                  "deformed prism oracle requires positive Jacobian orientation");
+            const double physical_weight = determinant * point.weight;
+            check(std::isfinite(physical_weight) && physical_weight > 0.0,
+                  "deformed prism oracle requires a finite positive physical weight");
+
+            double physical_gradients[6][3]{};
+            for (int local = 0; local < 6; ++local) {
+                for (int axis = 0; axis < 3; ++axis) {
+                    for (int reference_axis = 0; reference_axis < 3;
+                         ++reference_axis) {
+                        physical_gradients[local][axis] +=
+                            reference_gradients[local][reference_axis] *
+                            inverse_jacobian[reference_axis][axis];
+                    }
+                }
+                for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
+                    double reconstructed = 0.0;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        reconstructed += physical_gradients[local][axis] *
+                            jacobian[axis][reference_axis];
+                    }
+                    check(std::abs(reconstructed -
+                                   reference_gradients[local][reference_axis]) <= 1.0e-11,
+                          "deformed prism oracle must satisfy J-transpose gradient transform");
+                }
+            }
+
+            for (int local_row = 0; local_row < 6; ++local_row) {
+                const std::uint64_t row_node = static_cast<std::uint64_t>(
+                    dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
+                const double row_sign = dofs[local_row] >= 0 ? 1.0 : -1.0;
+                check(row_node < node_count,
+                      "deformed prism oracle row dof must be in the node range");
+                for (int local_column = 0; local_column < 6; ++local_column) {
+                    const std::uint64_t column_node = static_cast<std::uint64_t>(
+                        dofs[local_column] >= 0 ? dofs[local_column] : -1 - dofs[local_column]);
+                    const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
+                    check(column_node < node_count,
+                          "deformed prism oracle column dof must be in the node range");
+                    double gradient_dot = 0.0;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        gradient_dot += physical_gradients[local_row][axis] *
+                            physical_gradients[local_column][axis];
+                    }
+                    const double coefficient = row_sign * column_sign * 2.0 *
+                        exchange_stiffness * gradient_dot * physical_weight;
+                    for (std::uint32_t row_component = 0; row_component < 2u;
+                         ++row_component) {
+                        const double *row_frame = &tangent_frames[
+                            static_cast<std::size_t>(
+                                6u * row_node + 3u * row_component)];
+                        for (std::uint32_t column_component = 0; column_component < 2u;
+                             ++column_component) {
+                            const double *column_frame = &tangent_frames[
+                                static_cast<std::size_t>(
+                                    6u * column_node + 3u * column_component)];
+                            const double frame_dot = row_frame[0] * column_frame[0] +
+                                row_frame[1] * column_frame[1] +
+                                row_frame[2] * column_frame[2];
+                            oracle[static_cast<std::size_t>(
+                                (2u * row_node + row_component) * q_count +
+                                2u * column_node + column_component)] +=
+                                coefficient * frame_dot;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return oracle;
+}
+
+double dense_matrix_max_difference(
+    const std::vector<double> &left,
+    const std::vector<double> &right)
+{
+    check(left.size() == right.size(), "dense matrix comparison requires equal sizes");
+    double maximum = 0.0;
+    for (std::size_t index = 0u; index < left.size(); ++index) {
+        maximum = std::max(maximum, std::abs(left[index] - right[index]));
+    }
+    return maximum;
+}
+
+#if FULLMAG_HAS_MFEM_STACK
+void floquet_positive_tangent_mass_matches_independent_phase_reduction()
+{
+    mfem::Mesh mesh(3, 10, 2, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0}, {1.0, 0.0, 1.0}, {0.0, 1.0, 1.0},
+        {3.0, 0.0, 0.0}, {4.0, 0.0, 0.0}, {3.0, 1.0, 0.0},
+        {3.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    const int prism6[] = {0, 1, 2, 3, 4, 5};
+    const int tet4[] = {6, 7, 8, 9};
+    mesh.AddWedge(prism6, 1);
+    mesh.AddTet(tet4, 2);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+
+    mfem::H1_FECollection collection(1, mesh.Dimension());
+    mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+    const std::uint64_t node_count =
+        static_cast<std::uint64_t>(scalar_space.GetVSize());
+    check(node_count == 10u, "tangent-mass oracle fixture has ten P1 nodes");
+    const std::uint64_t full_q_count = 2u * node_count;
+
+    std::vector<fd::TangentFrameNode> frames(static_cast<std::size_t>(node_count));
+    for (fd::TangentFrameNode &frame : frames) {
+        frame.m[2] = 1.0;
+        frame.e1[0] = 1.0;
+        frame.e2[1] = 1.0;
+    }
+    constexpr std::uint32_t master_node = 0u;
+    constexpr std::uint32_t member_node = 3u;
+    constexpr double tangent_rotation_rad = 0.37;
+    frames[member_node].e1[0] = std::cos(tangent_rotation_rad);
+    frames[member_node].e1[1] = std::sin(tangent_rotation_rad);
+    frames[member_node].e2[0] = -std::sin(tangent_rotation_rad);
+    frames[member_node].e2[1] = std::cos(tangent_rotation_rad);
+
+    const std::vector<std::uint8_t> magnetic_elements = {1u, 1u};
+    const std::vector<std::uint32_t> magnetic_classes = {
+        0u, 1u, 2u, 0u, 3u, 4u, 5u, 6u, 7u, 8u};
+    constexpr std::uint64_t reduced_node_count = 9u;
+    fd::FrequencyDomainFloquetPeriodicPair periodic_pair{};
+    periodic_pair.pair_id = "prism-z-copy";
+    periodic_pair.node_a = master_node;
+    periodic_pair.node_b = member_node;
+    periodic_pair.translation_m[2] = 1.0;
+    periodic_pair.has_translation = true;
+    periodic_pair.has_phase = true;
+    periodic_pair.phase_rad = -0.4;
+
+    mfem::Array<int> boundary_marker(mesh.bdr_attributes.Max());
+    boundary_marker = 1;
+    const std::array<double, 3> wavevector{{0.0, 0.0, 0.4}};
+    fd::FloquetAirboxSharedDomainBlockRequest block_request{};
+    block_request.scalar_space = &scalar_space;
+    block_request.tangent_frames = frames.data();
+    block_request.tangent_frame_count = node_count;
+    block_request.magnetic_element_mask = magnetic_elements.data();
+    block_request.magnetic_element_count = magnetic_elements.size();
+    block_request.uniform_saturation_magnetization_a_per_m = 2.0;
+    block_request.scalar_reduced_node = magnetic_classes.data();
+    block_request.scalar_reduced_node_count = reduced_node_count;
+    block_request.magnetic_reduced_node = magnetic_classes.data();
+    block_request.magnetic_reduced_node_count = reduced_node_count;
+    block_request.periodic_pairs = &periodic_pair;
+    block_request.periodic_pair_count = 1u;
+    block_request.k_rad_per_m = wavevector;
+    block_request.boundary_kind = fd::FloquetAirboxBoundaryKind::robin;
+    block_request.robin_beta = 1.0;
+    block_request.robin_boundary_marker = &boundary_marker;
+    fd::FloquetAirboxSharedDomainBlockResult floquet_blocks{};
+    check(fd::assemble_floquet_airbox_shared_domain_blocks(
+              block_request, &floquet_blocks) == fd::FrequencyDomainStatus::ok,
+          floquet_blocks.error_message);
+    check(floquet_blocks.tangent_constraint != nullptr,
+          "tangent-mass oracle obtains the actual phase/frame constraint");
+
+    std::vector<std::uint32_t> zero_row_offsets(
+        static_cast<std::size_t>(full_q_count + 1u), 0u);
+    const fd::CsrMatrixView zero_a_qq{
+        full_q_count,
+        full_q_count,
+        zero_row_offsets.data(),
+        zero_row_offsets.size(),
+        nullptr,
+        0u,
+        nullptr,
+        0u};
+    fd::PoissonAirboxSharedDomainAssemblyRequest request{};
+    request.scalar_space = &scalar_space;
+    request.tangent_frames = frames.data();
+    request.tangent_frame_count = node_count;
+    request.magnetic_element_mask = magnetic_elements.data();
+    request.magnetic_element_count = magnetic_elements.size();
+    request.uniform_saturation_magnetization_a_per_m = 2.0;
+    request.gamma0_m_per_a_s = 3.0;
+    request.mu0_T_m_A = 4.0;
+    request.magnetic_a_qq_csr = &zero_a_qq;
+    request.magnetic_phase_constraint = floquet_blocks.tangent_constraint.get();
+    request.scalar_reduced_node = magnetic_classes.data();
+    request.scalar_reduced_node_count = reduced_node_count;
+    request.magnetic_reduced_node = magnetic_classes.data();
+    request.magnetic_reduced_node_count = reduced_node_count;
+    request.equivalence_classes_complete = true;
+    request.boundary_kind = fd::PoissonAirboxBoundaryKind::robin;
+    request.robin_beta = 1.0;
+    request.robin_boundary_marker = &boundary_marker;
+    fd::PoissonAirboxSharedDomainAssemblyResult assembled{};
+    check(fd::assemble_poisson_airbox_shared_domain(request, &assembled) ==
+              fd::FrequencyDomainStatus::ok,
+          assembled.error_message);
+
+    const std::uint64_t reduced_q_count = 2u * reduced_node_count;
+    check(assembled.floquet_full_positive_tangent_mass.row_count == full_q_count &&
+              assembled.floquet_full_positive_tangent_mass.column_count == full_q_count,
+          "Floquet assembly retains the full physical tangent P1 mass");
+    check(assembled.floquet_positive_tangent_mass.row_count == reduced_q_count &&
+              assembled.floquet_positive_tangent_mass.column_count == reduced_q_count &&
+              !assembled.floquet_positive_tangent_mass.values.empty(),
+          "Floquet assembly retains the phase-reduced complex tangent P1 mass");
+
+    // Independent exact local mass formulas: tet4 uses V/20*(1+delta_ij);
+    // prism6 uses the tensor product of the triangle and segment P1 masses.
+    // Tangent-frame dot products lift each scalar entry into physical XYZ.
+    std::vector<double> full_mass(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    const auto dot3 = [](const double *left, const double *right) {
+        return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+    };
+    const auto tangent_component = [](const fd::TangentFrameNode &frame,
+                                      std::uint32_t component) -> const double * {
+        return component == 0u ? frame.e1 : frame.e2;
+    };
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> dofs;
+        scalar_space.GetElementDofs(element, dofs);
+        const mfem::Geometry::Type geometry = mesh.GetElementGeometry(element);
+        double volume = 0.0;
+        if (geometry == mfem::Geometry::TETRAHEDRON) {
+            volume = tetra_volume_from_vertices(mesh, element);
+        } else {
+            check(geometry == mfem::Geometry::PRISM && dofs.Size() == 6,
+                  "independent tangent-mass oracle accepts tet4 and prism6 only");
+            mfem::Array<int> element_vertices;
+            mesh.GetElementVertices(element, element_vertices);
+            check(element_vertices.Size() == 6,
+                  "independent prism mass has six ordered vertices");
+            const double *x0 = mesh.GetVertex(element_vertices[0]);
+            const double *x1 = mesh.GetVertex(element_vertices[1]);
+            const double *x2 = mesh.GetVertex(element_vertices[2]);
+            const double *x3 = mesh.GetVertex(element_vertices[3]);
+            const double edge_a[3] = {x1[0] - x0[0], x1[1] - x0[1], x1[2] - x0[2]};
+            const double edge_b[3] = {x2[0] - x0[0], x2[1] - x0[1], x2[2] - x0[2]};
+            const double extrusion[3] = {x3[0] - x0[0], x3[1] - x0[1], x3[2] - x0[2]};
+            const double base_normal[3] = {
+                edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
+                edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
+                edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0]};
+            volume = 0.5 * std::abs(dot3(base_normal, extrusion));
+        }
+        check(std::isfinite(volume) && volume > 0.0,
+              "independent tangent-mass element volume is positive");
+        for (int local_row = 0; local_row < dofs.Size(); ++local_row) {
+            const int raw_row = dofs[local_row];
+            const std::uint64_t row_node = static_cast<std::uint64_t>(
+                raw_row >= 0 ? raw_row : -1 - raw_row);
+            const double row_sign = raw_row >= 0 ? 1.0 : -1.0;
+            for (int local_column = 0; local_column < dofs.Size(); ++local_column) {
+                const int raw_column = dofs[local_column];
+                const std::uint64_t column_node = static_cast<std::uint64_t>(
+                    raw_column >= 0 ? raw_column : -1 - raw_column);
+                const double column_sign = raw_column >= 0 ? 1.0 : -1.0;
+                double scalar_mass = 0.0;
+                if (geometry == mfem::Geometry::TETRAHEDRON) {
+                    scalar_mass = volume / 20.0 * (local_row == local_column ? 2.0 : 1.0);
+                } else {
+                    const int triangle_factor = local_row % 3 == local_column % 3 ? 2 : 1;
+                    const int segment_factor = local_row / 3 == local_column / 3 ? 2 : 1;
+                    scalar_mass = volume / 72.0 * triangle_factor * segment_factor;
+                }
+                scalar_mass *= row_sign * column_sign;
+                for (std::uint32_t row_component = 0u; row_component < 2u; ++row_component) {
+                    for (std::uint32_t column_component = 0u; column_component < 2u;
+                         ++column_component) {
+                        const double frame_dot = dot3(
+                            tangent_component(frames[row_node], row_component),
+                            tangent_component(frames[column_node], column_component));
+                        full_mass[static_cast<std::size_t>(
+                            (2u * row_node + row_component) * full_q_count +
+                            2u * column_node + column_component)] += scalar_mass * frame_dot;
+                    }
+                }
+            }
+        }
+    }
+
+    double full_error = 0.0;
+    double full_scale = 0.0;
+    bool full_mass_exactly_symmetric = true;
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const double expected = full_mass[static_cast<std::size_t>(
+                row * full_q_count + column)];
+            const double actual = matrix_value(
+                assembled.floquet_full_positive_tangent_mass, row, column);
+            full_error = std::max(full_error, std::abs(actual - expected));
+            full_scale = std::max(full_scale, std::max(std::abs(actual), std::abs(expected)));
+            if (actual != matrix_value(
+                              assembled.floquet_full_positive_tangent_mass,
+                              column,
+                              row)) {
+                full_mass_exactly_symmetric = false;
+            }
+        }
+    }
+    check(full_error <= 1.0e-12 * std::max(1.0, full_scale),
+          "full tangent P1 CSR matches independent tet4/prism6 mass formulas");
+    check(full_mass_exactly_symmetric,
+          "full real tangent P1 mass is exactly symmetric before phase projection");
+    check(std::abs(full_mass[0] - full_mass[static_cast<std::size_t>(
+              (2u * 6u) * full_q_count + 2u * 6u)]) > 1.0e-6,
+          "full P1 mass retains nonuniform nodal diagonal weights");
+    check(std::abs(matrix_value(
+              assembled.floquet_full_positive_tangent_mass,
+              2u * master_node,
+              2u * member_node + 1u)) > 1.0e-6,
+          "full tangent mass uses the nonuniform local tangent basis");
+
+    const auto build_independent_constraint = [&](bool include_phase, bool include_member) {
+        std::vector<std::complex<double>> constraint(
+            static_cast<std::size_t>(full_q_count * reduced_q_count),
+            std::complex<double>{});
+        for (std::uint64_t node = 0u; node < node_count; ++node) {
+            if (node == member_node && !include_member) {
+                continue;
+            }
+            const std::uint32_t class_id = magnetic_classes[static_cast<std::size_t>(node)];
+            const std::complex<double> phase = node == member_node && include_phase
+                ? std::complex<double>(std::cos(0.4), -std::sin(0.4))
+                : std::complex<double>(1.0, 0.0);
+            for (std::uint32_t row_component = 0u; row_component < 2u; ++row_component) {
+                for (std::uint32_t column_component = 0u; column_component < 2u;
+                     ++column_component) {
+                    const double tangent_rotation = node == member_node
+                        ? dot3(
+                              tangent_component(frames[node], row_component),
+                              tangent_component(frames[master_node], column_component))
+                        : (row_component == column_component ? 1.0 : 0.0);
+                    constraint[static_cast<std::size_t>(
+                        (2u * node + row_component) * reduced_q_count +
+                        2u * class_id + column_component)] = phase * tangent_rotation;
+                }
+            }
+        }
+        return constraint;
+    };
+    const auto reduce_independently = [&](const std::vector<std::complex<double>> &constraint) {
+        std::vector<std::complex<double>> reduced_mass(
+            static_cast<std::size_t>(reduced_q_count * reduced_q_count),
+            std::complex<double>{});
+        for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+            for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+                std::complex<double> value{};
+                for (std::uint64_t full_row = 0u; full_row < full_q_count; ++full_row) {
+                    const auto row_map = std::conj(constraint[
+                        static_cast<std::size_t>(full_row * reduced_q_count + row)]);
+                    if (row_map == std::complex<double>{}) continue;
+                    for (std::uint64_t full_column = 0u; full_column < full_q_count;
+                         ++full_column) {
+                        const double mass = full_mass[static_cast<std::size_t>(
+                            full_row * full_q_count + full_column)];
+                        if (mass == 0.0) continue;
+                        value += row_map * mass * constraint[static_cast<std::size_t>(
+                            full_column * reduced_q_count + column)];
+                    }
+                }
+                reduced_mass[static_cast<std::size_t>(row * reduced_q_count + column)] = value;
+            }
+        }
+        return reduced_mass;
+    };
+    const auto expected_reduced = reduce_independently(
+        build_independent_constraint(true, true));
+    const auto no_phase_reduced = reduce_independently(
+        build_independent_constraint(false, true));
+    const auto master_only_reduced = reduce_independently(
+        build_independent_constraint(true, false));
+
+    double reduced_error = 0.0;
+    double reduced_scale = 0.0;
+    double phase_effect = 0.0;
+    bool reduced_mass_exactly_hermitian = true;
+    bool reduced_mass_has_positive_real_diagonal = true;
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            const std::size_t offset = static_cast<std::size_t>(row * reduced_q_count + column);
+            const std::complex<double> expected = expected_reduced[offset];
+            const std::complex<double> actual = complex_matrix_value(
+                assembled.floquet_positive_tangent_mass, row, column);
+            reduced_error = std::max(reduced_error, std::abs(actual - expected));
+            reduced_scale = std::max(
+                reduced_scale, std::max(std::abs(actual), std::abs(expected)));
+            phase_effect = std::max(
+                phase_effect, std::abs(expected - no_phase_reduced[offset]));
+            const std::complex<double> adjoint = std::conj(complex_matrix_value(
+                assembled.floquet_positive_tangent_mass, column, row));
+            if (actual != adjoint) {
+                reduced_mass_exactly_hermitian = false;
+            }
+            if (row == column &&
+                (!(actual.real() > 0.0) || actual.imag() != 0.0)) {
+                reduced_mass_has_positive_real_diagonal = false;
+            }
+        }
+    }
+    check(reduced_mass_exactly_hermitian,
+          "phase-reduced tangent P1 mass is exactly Hermitian");
+    check(reduced_mass_has_positive_real_diagonal,
+          "phase-reduced tangent P1 mass has a positive exactly-real diagonal");
+    check(reduced_error <= 1.0e-12 * std::max(1.0, reduced_scale),
+          "reduced tangent mass equals independent C^H M_full C");
+    check(phase_effect > 1.0e-5,
+          "Floquet phase changes the mass contribution of periodic physical copies");
+    check(std::abs(expected_reduced[0] - master_only_reduced[0]) > 1.0e-5,
+          "both master and periodic member contribute to the reduced physical mass");
+
+    const std::uint64_t real_split_dimension = 2u * reduced_q_count;
+    const auto real_split_mass_value = [&](std::uint64_t row, std::uint64_t column) {
+        if (row < reduced_q_count) {
+            if (column < reduced_q_count) {
+                return complex_matrix_value(
+                           assembled.floquet_positive_tangent_mass, row, column)
+                    .real();
+            }
+            return -complex_matrix_value(
+                        assembled.floquet_positive_tangent_mass,
+                        row,
+                        column - reduced_q_count)
+                        .imag();
+        }
+        if (column < reduced_q_count) {
+            return complex_matrix_value(
+                       assembled.floquet_positive_tangent_mass,
+                       row - reduced_q_count,
+                       column)
+                .imag();
+        }
+        return complex_matrix_value(
+                   assembled.floquet_positive_tangent_mass,
+                   row - reduced_q_count,
+                   column - reduced_q_count)
+            .real();
+    };
+    bool real_split_mass_exactly_symmetric = true;
+    for (std::uint64_t row = 0u; row < real_split_dimension; ++row) {
+        for (std::uint64_t column = row + 1u;
+             column < real_split_dimension;
+             ++column) {
+            if (real_split_mass_value(row, column) !=
+                real_split_mass_value(column, row)) {
+                real_split_mass_exactly_symmetric = false;
+            }
+        }
+    }
+    check(real_split_mass_exactly_symmetric,
+          "real-split tangent mass is exactly symmetric for the dense SLEPc contract");
+
+    std::complex<double> quadratic{};
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        const std::complex<double> left(
+            0.1 * static_cast<double>(row + 1u),
+            -0.03 * static_cast<double>(row + 2u));
+        std::complex<double> action{};
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            const std::complex<double> right(
+                0.1 * static_cast<double>(column + 1u),
+                -0.03 * static_cast<double>(column + 2u));
+            action += complex_matrix_value(
+                assembled.floquet_positive_tangent_mass, row, column) * right;
+        }
+        quadratic += std::conj(left) * action;
+    }
+    check(quadratic.real() > 0.0 &&
+              std::abs(quadratic.imag()) <= 1.0e-12 * std::max(1.0, quadratic.real()),
+          "phase-reduced tangent mass has a positive real quadratic form");
+
+    // P3 private Gilbert-mass contract.  Keep descriptor-like alpha data on
+    // the request while disabled and verify it leaves both B and its digest
+    // unchanged.  The enabled path is checked against an independent
+    // quadrature traversal on both tet4 and prism6.
+    std::vector<double> nonuniform_ms(static_cast<std::size_t>(node_count));
+    std::vector<double> nonuniform_alpha(static_cast<std::size_t>(node_count));
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        nonuniform_ms[static_cast<std::size_t>(node)] =
+            1.3 + 0.17 * static_cast<double>(node);
+        nonuniform_alpha[static_cast<std::size_t>(node)] =
+            0.013 + 0.004 * static_cast<double>(node % 4u);
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest material_request = request;
+    material_request.saturation_magnetization_a_per_m = nonuniform_ms.data();
+    material_request.saturation_magnetization_count = nonuniform_ms.size();
+    material_request.uniform_saturation_magnetization_a_per_m = 8.0;
+    material_request.alpha_per_node = nonuniform_alpha.data();
+    material_request.alpha_per_node_count = nonuniform_alpha.size();
+    material_request.uniform_alpha = 0.031;
+    material_request.include_gilbert_damping = false;
+
+    fd::PoissonAirboxSharedDomainAssemblyResult disabled_with_alpha{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              material_request, &disabled_with_alpha) == fd::FrequencyDomainStatus::ok,
+          disabled_with_alpha.error_message);
+    fd::PoissonAirboxSharedDomainAssemblyRequest material_without_alpha =
+        material_request;
+    material_without_alpha.alpha_per_node = nullptr;
+    material_without_alpha.alpha_per_node_count = 0u;
+    material_without_alpha.uniform_alpha = 0.0;
+    fd::PoissonAirboxSharedDomainAssemblyResult disabled_without_alpha{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              material_without_alpha, &disabled_without_alpha) ==
+              fd::FrequencyDomainStatus::ok,
+          disabled_without_alpha.error_message);
+    check(disabled_with_alpha.floquet_full_b_qq.values ==
+              disabled_without_alpha.floquet_full_b_qq.values &&
+              std::strcmp(
+                  disabled_with_alpha.operator_digest,
+                  disabled_without_alpha.operator_digest) == 0,
+          "forwarded descriptor alpha must leave Ignore B and the undamped digest unchanged");
+
+    std::vector<double> zero_alpha(static_cast<std::size_t>(node_count), 0.0);
+    fd::PoissonAirboxSharedDomainAssemblyRequest zero_damping_request =
+        material_request;
+    zero_damping_request.include_gilbert_damping = true;
+    zero_damping_request.alpha_per_node = zero_alpha.data();
+    zero_damping_request.alpha_per_node_count = zero_alpha.size();
+    fd::PoissonAirboxSharedDomainAssemblyResult zero_damping_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              zero_damping_request, &zero_damping_result) == fd::FrequencyDomainStatus::ok,
+          zero_damping_result.error_message);
+    check(zero_damping_result.floquet_full_b_qq.row_offsets ==
+              disabled_with_alpha.floquet_full_b_qq.row_offsets &&
+              zero_damping_result.floquet_full_b_qq.column_indices ==
+                  disabled_with_alpha.floquet_full_b_qq.column_indices &&
+              zero_damping_result.floquet_full_b_qq.values ==
+                  disabled_with_alpha.floquet_full_b_qq.values &&
+              std::strcmp(
+                  zero_damping_result.operator_digest,
+                  disabled_with_alpha.operator_digest) != 0,
+          "alpha=0 preserves B while the explicit opt-in remains provenance-visible");
+
+    fd::PoissonAirboxSharedDomainAssemblyRequest damped_request = material_request;
+    damped_request.include_gilbert_damping = true;
+    fd::PoissonAirboxSharedDomainAssemblyResult damped_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              damped_request, &damped_result) == fd::FrequencyDomainStatus::ok,
+          damped_result.error_message);
+    fd::PoissonAirboxSharedDomainAssemblyRequest unused_fallback_variant =
+        damped_request;
+    unused_fallback_variant.uniform_alpha = 0.071;
+    fd::PoissonAirboxSharedDomainAssemblyResult unused_fallback_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              unused_fallback_variant, &unused_fallback_result) ==
+              fd::FrequencyDomainStatus::ok,
+          unused_fallback_result.error_message);
+    check(std::strcmp(
+              damped_result.operator_digest,
+              unused_fallback_result.operator_digest) == 0,
+          "nodal alpha provenance must not redundantly hash its unused uniform fallback");
+
+    std::vector<double> changed_active_alpha = nonuniform_alpha;
+    changed_active_alpha[0] += 0.002;
+    fd::PoissonAirboxSharedDomainAssemblyRequest changed_alpha_request = damped_request;
+    changed_alpha_request.alpha_per_node = changed_active_alpha.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult changed_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              changed_alpha_request, &changed_alpha_result) == fd::FrequencyDomainStatus::ok,
+          changed_alpha_result.error_message);
+    check(std::strcmp(damped_result.operator_digest,
+                      changed_alpha_result.operator_digest) != 0 &&
+              damped_result.floquet_full_b_qq.values !=
+                  changed_alpha_result.floquet_full_b_qq.values,
+          "changing only an active nodal alpha updates both B and its immutable operator digest");
+
+    std::vector<double> expected_damping(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    std::vector<double> nodal_product_damping(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> dofs;
+        scalar_space.GetElementDofs(element, dofs);
+        const mfem::Geometry::Type geometry = mesh.GetElementGeometry(element);
+        check(geometry == mfem::Geometry::TETRAHEDRON ||
+                  geometry == mfem::Geometry::PRISM,
+              "Gilbert oracle fixture uses only tet4 and prism6");
+        const int quadrature_order =
+            geometry == mfem::Geometry::TETRAHEDRON ? 5 : 4;
+        const mfem::IntegrationRule &rule =
+            mfem::IntRules.Get(geometry, quadrature_order);
+        const mfem::FiniteElement *finite_element = scalar_space.GetFE(element);
+        mfem::ElementTransformation *transformation =
+            mesh.GetElementTransformation(element);
+        for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
+            const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
+            transformation->SetIntPoint(&point);
+            mfem::Vector shape(dofs.Size());
+            finite_element->CalcShape(point, shape);
+            const double weight = transformation->Weight() * point.weight;
+            double ms_q = 0.0;
+            double alpha_q = 0.0;
+            double interpolated_nodal_product = 0.0;
+            for (int local = 0; local < dofs.Size(); ++local) {
+                const std::uint64_t node = static_cast<std::uint64_t>(
+                    dofs[local] >= 0 ? dofs[local] : -1 - dofs[local]);
+                const double node_ms_value =
+                    nonuniform_ms[static_cast<std::size_t>(node)];
+                const double node_alpha_value =
+                    nonuniform_alpha[static_cast<std::size_t>(node)];
+                ms_q += shape[local] * node_ms_value;
+                alpha_q += shape[local] * node_alpha_value;
+                interpolated_nodal_product +=
+                    shape[local] * node_ms_value * node_alpha_value;
+            }
+            const double coefficient =
+                request.mu0_T_m_A * ms_q * alpha_q /
+                request.gamma0_m_per_a_s;
+            const double wrong_product_coefficient =
+                request.mu0_T_m_A * interpolated_nodal_product /
+                request.gamma0_m_per_a_s;
+            for (int local_row = 0; local_row < dofs.Size(); ++local_row) {
+                const int raw_row = dofs[local_row];
+                const std::uint64_t row_node = static_cast<std::uint64_t>(
+                    raw_row >= 0 ? raw_row : -1 - raw_row);
+                const double row_sign = raw_row >= 0 ? 1.0 : -1.0;
+                for (int local_column = 0; local_column < dofs.Size(); ++local_column) {
+                    const int raw_column = dofs[local_column];
+                    const std::uint64_t column_node = static_cast<std::uint64_t>(
+                        raw_column >= 0 ? raw_column : -1 - raw_column);
+                    const double column_sign = raw_column >= 0 ? 1.0 : -1.0;
+                    const double scalar_weight =
+                        row_sign * column_sign *
+                        shape[local_row] * shape[local_column] * weight;
+                    for (std::uint32_t row_component = 0u;
+                         row_component < 2u; ++row_component) {
+                        for (std::uint32_t column_component = 0u;
+                             column_component < 2u; ++column_component) {
+                            const double frame_dot = dot3(
+                                tangent_component(frames[row_node], row_component),
+                                tangent_component(frames[column_node], column_component));
+                            const std::size_t offset = static_cast<std::size_t>(
+                                (2u * row_node + row_component) * full_q_count +
+                                2u * column_node + column_component);
+                            expected_damping[offset] +=
+                                scalar_weight * coefficient * frame_dot;
+                            nodal_product_damping[offset] +=
+                                scalar_weight * wrong_product_coefficient * frame_dot;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<double> expected_damped_b(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    double quadrature_scale = 0.0;
+    double damping_scale = 0.0;
+    double independent_product_difference = 0.0;
+    double full_operator_error = 0.0;
+    double symmetric_error = 0.0;
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const std::size_t offset = static_cast<std::size_t>(
+                row * full_q_count + column);
+            const double undamped = matrix_value(
+                disabled_with_alpha.floquet_full_b_qq, row, column);
+            expected_damped_b[offset] = undamped - expected_damping[offset];
+            const double actual = matrix_value(
+                damped_result.floquet_full_b_qq, row, column);
+            full_operator_error = std::max(
+                full_operator_error, std::abs(actual - expected_damped_b[offset]));
+            symmetric_error = std::max(
+                symmetric_error,
+                std::abs(
+                    actual +
+                    matrix_value(damped_result.floquet_full_b_qq, column, row) +
+                    expected_damping[offset] +
+                    expected_damping[static_cast<std::size_t>(
+                        column * full_q_count + row)]));
+            quadrature_scale = std::max(
+                quadrature_scale,
+                std::max(std::abs(actual), std::abs(expected_damped_b[offset])));
+            damping_scale = std::max(
+                damping_scale, std::abs(expected_damping[offset]));
+            independent_product_difference = std::max(
+                independent_product_difference,
+                std::abs(
+                    expected_damping[offset] -
+                    nodal_product_damping[offset]));
+        }
+    }
+    check(full_operator_error <=
+              1.0e-11 * std::max(1.0e-30, quadrature_scale),
+          "damped full B matches independent tet4/prism6 quadrature with separately interpolated Ms and alpha");
+    check(symmetric_error <=
+              1.0e-11 * std::max(1.0e-30, damping_scale),
+          "the symmetric part of B is the negative Gilbert Rayleigh mass");
+    check(independent_product_difference >
+              1.0e-6 * std::max(1.0e-30, damping_scale),
+          "independent oracle distinguishes Ms_q*alpha_q from interpolated nodal Ms*alpha");
+
+    long double rayleigh_damping = 0.0L;
+    long double pencil_quadratic = 0.0L;
+    std::vector<double> rayleigh_vector(static_cast<std::size_t>(full_q_count));
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        rayleigh_vector[static_cast<std::size_t>(row)] =
+            0.2 + 0.037 * static_cast<double>(row);
+    }
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const double product =
+                rayleigh_vector[static_cast<std::size_t>(row)] *
+                rayleigh_vector[static_cast<std::size_t>(column)];
+            const std::size_t offset = static_cast<std::size_t>(
+                row * full_q_count + column);
+            rayleigh_damping +=
+                static_cast<long double>(product) * expected_damping[offset];
+            pencil_quadratic +=
+                static_cast<long double>(product) *
+                matrix_value(damped_result.floquet_full_b_qq, row, column);
+        }
+    }
+    check(rayleigh_damping > 0.0L && pencil_quadratic < 0.0L &&
+              std::abs(static_cast<double>(pencil_quadratic + rayleigh_damping)) <=
+                  1.0e-11 * static_cast<double>(rayleigh_damping),
+          "positive Gilbert Rayleigh form gives non-positive symmetric B and decaying energy");
+
+    const std::vector<std::complex<double>> independent_constraint =
+        build_independent_constraint(true, true);
+
+    std::vector<std::complex<double>> expected_phase_damping(
+        static_cast<std::size_t>(reduced_q_count * reduced_q_count),
+        std::complex<double>{});
+    double phase_projection_error = 0.0;
+    double phase_scale = 0.0;
+    double phase_hermitian_error = 0.0;
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            std::complex<double> projected_b{};
+            std::complex<double> projected_damping{};
+            for (std::uint64_t full_row = 0u; full_row < full_q_count; ++full_row) {
+                const std::complex<double> left = std::conj(
+                    independent_constraint[static_cast<std::size_t>(
+                        full_row * reduced_q_count + row)]);
+                if (left == std::complex<double>{}) continue;
+                for (std::uint64_t full_column = 0u;
+                     full_column < full_q_count; ++full_column) {
+                    const std::complex<double> right =
+                        independent_constraint[static_cast<std::size_t>(
+                            full_column * reduced_q_count + column)];
+                    if (right == std::complex<double>{}) continue;
+                    const std::size_t full_offset = static_cast<std::size_t>(
+                        full_row * full_q_count + full_column);
+                    projected_b += left * expected_damped_b[full_offset] * right;
+                    projected_damping += left *
+                        expected_damping[full_offset] * right;
+                }
+            }
+            const std::size_t offset = static_cast<std::size_t>(
+                row * reduced_q_count + column);
+
+            expected_phase_damping[offset] = projected_damping;
+            const std::complex<double> actual_b = complex_matrix_value(
+                damped_result.floquet_b_qq, row, column);
+            phase_projection_error = std::max(
+                phase_projection_error, std::abs(actual_b - projected_b));
+            const std::complex<double> actual_damping = -0.5 *
+                (actual_b + std::conj(complex_matrix_value(
+                    damped_result.floquet_b_qq, column, row)));
+            phase_hermitian_error = std::max(
+                phase_hermitian_error,
+                std::abs(actual_damping - projected_damping));
+            phase_scale = std::max(
+                phase_scale,
+                std::max(std::abs(actual_b), std::abs(projected_b)));
+        }
+    }
+    check(phase_projection_error <=
+              1.0e-11 * std::max(1.0e-30, phase_scale),
+          "complex Floquet B is the Hermitian-congruence projection C^H B C");
+    check(phase_hermitian_error <=
+              1.0e-11 * std::max(1.0e-30, damping_scale),
+          "the projected dissipative mass remains Hermitian under complex phase constraints");
+
+    std::complex<double> phase_damping_quadratic{};
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        const std::complex<double> left(
+            0.1 * static_cast<double>(row + 1u),
+            -0.03 * static_cast<double>(row + 2u));
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            const std::complex<double> right(
+                0.1 * static_cast<double>(column + 1u),
+                -0.03 * static_cast<double>(column + 2u));
+            phase_damping_quadratic += std::conj(left) *
+                expected_phase_damping[static_cast<std::size_t>(
+                    row * reduced_q_count + column)] * right;
+        }
+    }
+    check(phase_damping_quadratic.real() > 0.0 &&
+              std::abs(phase_damping_quadratic.imag()) <=
+                  1.0e-11 * phase_damping_quadratic.real(),
+          "phase-reduced Gilbert mass has a positive real Hermitian quadratic form");
+
+    // A nodal Gilbert field and the scalar fallback produce the same operator
+    // when they represent the same coefficient.
+    std::vector<double> constant_alpha(static_cast<std::size_t>(node_count), 0.037);
+    fd::PoissonAirboxSharedDomainAssemblyRequest uniform_alpha_request =
+        material_request;
+    uniform_alpha_request.include_gilbert_damping = true;
+    uniform_alpha_request.alpha_per_node = nullptr;
+    uniform_alpha_request.alpha_per_node_count = 0u;
+    uniform_alpha_request.uniform_alpha = 0.037;
+    fd::PoissonAirboxSharedDomainAssemblyResult uniform_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              uniform_alpha_request, &uniform_alpha_result) == fd::FrequencyDomainStatus::ok,
+          uniform_alpha_result.error_message);
+    fd::PoissonAirboxSharedDomainAssemblyRequest constant_nodal_alpha_request =
+        material_request;
+    constant_nodal_alpha_request.include_gilbert_damping = true;
+    constant_nodal_alpha_request.alpha_per_node = constant_alpha.data();
+    constant_nodal_alpha_request.alpha_per_node_count = constant_alpha.size();
+    fd::PoissonAirboxSharedDomainAssemblyResult constant_nodal_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              constant_nodal_alpha_request, &constant_nodal_alpha_result) ==
+              fd::FrequencyDomainStatus::ok,
+          constant_nodal_alpha_result.error_message);
+    double fallback_difference = 0.0;
+    double fallback_scale = 0.0;
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const double fallback_value = matrix_value(
+                uniform_alpha_result.floquet_full_b_qq, row, column);
+            const double nodal_value = matrix_value(
+                constant_nodal_alpha_result.floquet_full_b_qq, row, column);
+            fallback_difference = std::max(
+                fallback_difference, std::abs(fallback_value - nodal_value));
+            fallback_scale = std::max(
+                fallback_scale, std::max(std::abs(fallback_value), std::abs(nodal_value)));
+        }
+    }
+    check(fallback_difference <=
+              1.0e-12 * std::max(1.0e-30, fallback_scale),
+          "uniform alpha fallback matches the equivalent constant nodal field");
+
+    // Local tangent-frame changes must act by the corresponding orthogonal
+    // congruence on the full real B block.
+    std::vector<std::uint32_t> identity_classes(static_cast<std::size_t>(node_count));
+    for (std::uint32_t node = 0u; node < node_count; ++node) {
+        identity_classes[static_cast<std::size_t>(node)] = node;
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest covariance_request = damped_request;
+    covariance_request.magnetic_phase_constraint = nullptr;
+    covariance_request.scalar_reduced_node = identity_classes.data();
+    covariance_request.scalar_reduced_node_count = node_count;
+    covariance_request.magnetic_reduced_node = identity_classes.data();
+    covariance_request.magnetic_reduced_node_count = node_count;
+    fd::PoissonAirboxSharedDomainAssemblyResult covariance_base{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              covariance_request, &covariance_base) == fd::FrequencyDomainStatus::ok,
+          covariance_base.error_message);
+    std::vector<fd::TangentFrameNode> rotated_frames = frames;
+    std::vector<double> frame_angles(static_cast<std::size_t>(node_count));
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        const double angle = 0.11 + 0.029 * static_cast<double>(node);
+        frame_angles[static_cast<std::size_t>(node)] = angle;
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        double old_e1[3]{};
+        double old_e2[3]{};
+        for (int axis = 0; axis < 3; ++axis) {
+            old_e1[axis] = rotated_frames[static_cast<std::size_t>(node)].e1[axis];
+            old_e2[axis] = rotated_frames[static_cast<std::size_t>(node)].e2[axis];
+        }
+        for (int axis = 0; axis < 3; ++axis) {
+            rotated_frames[static_cast<std::size_t>(node)].e1[axis] =
+                cosine * old_e1[axis] + sine * old_e2[axis];
+            rotated_frames[static_cast<std::size_t>(node)].e2[axis] =
+                -sine * old_e1[axis] + cosine * old_e2[axis];
+        }
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest rotated_covariance_request =
+        covariance_request;
+    rotated_covariance_request.tangent_frames = rotated_frames.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult covariance_rotated{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              rotated_covariance_request, &covariance_rotated) ==
+              fd::FrequencyDomainStatus::ok,
+          covariance_rotated.error_message);
+    const auto frame_change = [&](std::uint64_t node,
+                                  std::uint32_t old_component,
+                                  std::uint32_t new_component) {
+        const double angle = frame_angles[static_cast<std::size_t>(node)];
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        if (old_component == 0u && new_component == 0u) return cosine;
+        if (old_component == 0u && new_component == 1u) return -sine;
+        if (old_component == 1u && new_component == 0u) return sine;
+        return cosine;
+    };
+    double frame_covariance_error = 0.0;
+    double frame_covariance_scale = 0.0;
+    for (std::uint64_t row_node = 0u; row_node < node_count; ++row_node) {
+        for (std::uint64_t column_node = 0u; column_node < node_count; ++column_node) {
+            for (std::uint32_t row_component = 0u; row_component < 2u; ++row_component) {
+                for (std::uint32_t column_component = 0u;
+                     column_component < 2u; ++column_component) {
+                    double expected = 0.0;
+                    for (std::uint32_t old_row = 0u; old_row < 2u; ++old_row) {
+                        for (std::uint32_t old_column = 0u; old_column < 2u; ++old_column) {
+                            expected +=
+                                frame_change(row_node, old_row, row_component) *
+                                matrix_value(
+                                    covariance_base.b_qq,
+                                    2u * row_node + old_row,
+                                    2u * column_node + old_column) *
+                                frame_change(column_node, old_column, column_component);
+                        }
+                    }
+                    const double actual = matrix_value(
+                        covariance_rotated.b_qq,
+                        2u * row_node + row_component,
+                        2u * column_node + column_component);
+                    frame_covariance_error = std::max(
+                        frame_covariance_error, std::abs(actual - expected));
+                    frame_covariance_scale = std::max(
+                        frame_covariance_scale,
+                        std::max(std::abs(actual), std::abs(expected)));
+                }
+            }
+        }
+    }
+    check(frame_covariance_error <=
+              1.0e-11 * std::max(1.0e-30, frame_covariance_scale),
+          "Gilbert mass and gyrotropic B are covariant under independent local frame rotations");
+
+    const auto expect_alpha_validation_error = [&](
+        const fd::PoissonAirboxSharedDomainAssemblyRequest &candidate,
+        const char *message) {
+        fd::PoissonAirboxSharedDomainAssemblyResult candidate_result{};
+        check(fd::assemble_poisson_airbox_shared_domain(
+                  candidate, &candidate_result) == fd::FrequencyDomainStatus::validation_error,
+              message);
+        check(std::strstr(candidate_result.error_message, "alpha") != nullptr,
+              "invalid Gilbert input returns a clear alpha validation error");
+    };
+    fd::PoissonAirboxSharedDomainAssemblyRequest wrong_alpha_count =
+        damped_request;
+    wrong_alpha_count.alpha_per_node_count = node_count - 1u;
+    expect_alpha_validation_error(
+        wrong_alpha_count, "nodal alpha count mismatch must fail validation");
+    fd::PoissonAirboxSharedDomainAssemblyRequest missing_alpha_values =
+        damped_request;
+    missing_alpha_values.alpha_per_node = nullptr;
+    missing_alpha_values.alpha_per_node_count = 1u;
+    expect_alpha_validation_error(
+        missing_alpha_values, "alpha count without a pointer must fail validation");
+    std::vector<double> negative_alpha = nonuniform_alpha;
+    negative_alpha[0] = -0.01;
+    fd::PoissonAirboxSharedDomainAssemblyRequest negative_alpha_request =
+        damped_request;
+    negative_alpha_request.alpha_per_node = negative_alpha.data();
+    expect_alpha_validation_error(
+        negative_alpha_request, "negative nodal alpha must fail validation");
+    std::vector<double> nonfinite_alpha = nonuniform_alpha;
+    nonfinite_alpha[0] = std::numeric_limits<double>::infinity();
+    fd::PoissonAirboxSharedDomainAssemblyRequest nonfinite_alpha_request =
+        damped_request;
+    nonfinite_alpha_request.alpha_per_node = nonfinite_alpha.data();
+    expect_alpha_validation_error(
+        nonfinite_alpha_request, "non-finite nodal alpha must fail validation");
+    fd::PoissonAirboxSharedDomainAssemblyRequest negative_uniform_alpha_request =
+        material_request;
+    negative_uniform_alpha_request.uniform_alpha = -0.01;
+    expect_alpha_validation_error(
+        negative_uniform_alpha_request, "negative uniform alpha must fail validation");
+    fd::PoissonAirboxSharedDomainAssemblyRequest nonfinite_uniform_alpha_request =
+        material_request;
+    nonfinite_uniform_alpha_request.uniform_alpha =
+        std::numeric_limits<double>::quiet_NaN();
+    expect_alpha_validation_error(
+        nonfinite_uniform_alpha_request, "non-finite uniform alpha must fail validation");
+
+    std::vector<double> overflowing_ms(static_cast<std::size_t>(node_count), 1.0e308);
+    std::vector<double> overflowing_alpha(static_cast<std::size_t>(node_count), 1.0e308);
+    fd::PoissonAirboxSharedDomainAssemblyRequest overflow_request = damped_request;
+    overflow_request.saturation_magnetization_a_per_m = overflowing_ms.data();
+    overflow_request.saturation_magnetization_count = overflowing_ms.size();
+    overflow_request.gamma0_m_per_a_s = 1.0;
+    overflow_request.alpha_per_node = overflowing_alpha.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult overflow_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              overflow_request, &overflow_result) == fd::FrequencyDomainStatus::operator_error,
+          "finite coefficients whose Gilbert mass overflows must fail as an operator error");
+    check(std::strstr(overflow_result.error_message, "Gilbert damping mass coefficient") != nullptr,
+          "Gilbert overflow reports a specific operator error");
+
+    std::printf("PASS: shared_domain_gilbert_mass_contract\n");
+}
+#endif
+
 } // namespace
 
 int main()
 {
 #if FULLMAG_HAS_MFEM_STACK
+    floquet_positive_tangent_mass_matches_independent_phase_reduction();
+    std::printf("PASS: floquet_positive_tangent_mass_matches_independent_phase_reduction\n");
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
         1,
         1,
@@ -513,6 +1764,34 @@ int main()
         1.0);
     mfem::H1_FECollection collection(1, mesh.Dimension());
     mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+
+    // MFEM v4.7's tetrahedron order-4 rule was not admissible for the native
+    // exchange producer because it contained a negative weight.  Keep both
+    // the diagnostic rule and the selected positive order5 rule available
+    // beside the independent affine-tetrahedron gradient oracle below.  Do
+    // not hardcode point counts here: MFEM 4.10 changed simplex rules.
+    const mfem::IntegrationRule &tetra_order4 =
+        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+    check(tetra_order4.GetNPoints() > 0,
+          "MFEM tetrahedron order4 rule must remain available for diagnostics");
+    const mfem::IntegrationRule &tetra_order5 =
+        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 5);
+    check(tetra_order5.GetNPoints() > 0,
+          "native tet4 positive policy must provide an order5 rule");
+    for (int point = 0; point < tetra_order5.GetNPoints(); ++point) {
+        check(std::isfinite(tetra_order5.IntPoint(point).weight) &&
+                  tetra_order5.IntPoint(point).weight > 0.0,
+              "native tet4 order5 policy must have positive reference weights");
+    }
+    const mfem::IntegrationRule &prism_order4 =
+        mfem::IntRules.Get(mfem::Geometry::PRISM, 4);
+    check(prism_order4.GetNPoints() > 0,
+          "native prism6 positive policy must provide an order4 rule");
+    for (int point = 0; point < prism_order4.GetNPoints(); ++point) {
+        check(std::isfinite(prism_order4.IntPoint(point).weight) &&
+                  prism_order4.IntPoint(point).weight > 0.0,
+              "native prism6 order4 policy must have positive reference weights");
+    }
 
     const std::uint64_t node_count = static_cast<std::uint64_t>(scalar_space.GetVSize());
     check(node_count > 0, "manufactured mesh has scalar P1 nodes");
@@ -639,6 +1918,168 @@ int main()
               "native A_qq exchange coupling must use reciprocal frame transport");
     }
 
+    // Static-field energy must be invariant under independent nodal basis changes.
+    // Compare native assembly to a common-frame matrix transported in Cartesian space.
+    std::vector<double> static_h_eff = descriptor_h_eff;
+    std::vector<double> common_frame_values = descriptor_frames;
+    std::vector<fd::TangentFrameNode> common_frames = producer_frames;
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        static_h_eff[3u * node + 2u] = 7.0;
+        for (int axis = 0; axis < 3; ++axis) {
+            common_frames[node].e1[axis] = axis == 0 ? 1.0 : 0.0;
+            common_frames[node].e2[axis] = axis == 1 ? 1.0 : 0.0;
+            common_frame_values[6u * node + axis] = common_frames[node].e1[axis];
+            common_frame_values[6u * node + 3u + axis] = common_frames[node].e2[axis];
+        }
+    }
+    FullmagFemModalLinearizationDescriptor static_descriptor = producer_descriptor;
+    static_descriptor.term_presence_mask = FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    static_descriptor.field_term_digest = producer_descriptor.linearization_state_digest;
+    static_descriptor.exchange_term_digest = nullptr;
+    static_descriptor.exchange_edges = nullptr;
+    static_descriptor.exchange_edge_count = 0;
+    static_descriptor.effective_field_h_eff0_xyz = static_h_eff.data();
+    fd::PoissonAirboxSharedDomainCsrMatrix rotated_static{}, common_static{};
+    check(fd::assemble_native_magnetic_a_qq(
+              static_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &rotated_static, producer_error, nullptr,
+              producer_frames.data(), producer_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    static_descriptor.tangent_frame_xyz = common_frame_values.data();
+    check(fd::assemble_native_magnetic_a_qq(
+              static_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &common_static, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    double covariance_error = 0.0, covariance_scale = 0.0;
+    bool exercised_cross_frame_coupling = false;
+    for (std::uint64_t i = 0; i < node_count; ++i) {
+        for (std::uint64_t j = 0; j < node_count; ++j) {
+            const double scalar_entry = matrix_value(common_static, 2u * i, 2u * j);
+            for (std::uint64_t a = 0; a < 2; ++a) {
+                for (std::uint64_t b = 0; b < 2; ++b) {
+                    const double *left = a == 0 ? producer_frames[i].e1 : producer_frames[i].e2;
+                    const double *right = b == 0 ? producer_frames[j].e1 : producer_frames[j].e2;
+                    double projection = 0.0;
+                    for (int axis = 0; axis < 3; ++axis) projection += left[axis] * right[axis];
+                    const double expected = scalar_entry * projection;
+                    exercised_cross_frame_coupling |= i != j && a != b && expected != 0.0;
+                    covariance_error = std::max(covariance_error, std::abs(
+                        matrix_value(rotated_static, 2u * i + a, 2u * j + b) - expected));
+                    covariance_scale = std::max(covariance_scale, std::abs(expected));
+                }
+            }
+        }
+    }
+    check(exercised_cross_frame_coupling,
+          "static-field covariance fixture must couple nodes with different tangent frames");
+    check(covariance_scale > 0.0 && covariance_error <= 1.0e-12 * covariance_scale,
+          "static field Hessian must transform between independent nodal tangent bases");
+
+    // Signed uniaxial derivatives use both nodal frames and subtract the
+    // Cartesian field Jacobian from the total longitudinal curvature.
+    std::vector<double> uniaxial_axes(static_cast<std::size_t>(3u * node_count), 0.0);
+    for (std::uint64_t node = 0; node < node_count; ++node) uniaxial_axes[3u * node] = 2.0;
+    double uniaxial_field = 3.0;
+    FullmagFemModalLinearizationDescriptor uniaxial_descriptor = static_descriptor;
+    uniaxial_descriptor.term_presence_mask |= FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY;
+    uniaxial_descriptor.anisotropy_term_digest = producer_descriptor.linearization_state_digest;
+    uniaxial_descriptor.tangent_frame_xyz = descriptor_frames.data();
+    uniaxial_descriptor.uniaxial_axis_xyz = uniaxial_axes.data();
+    uniaxial_descriptor.uniaxial_axis_xyz_count = uniaxial_axes.size();
+    uniaxial_descriptor.uniaxial_anisotropy_field_a_per_m = &uniaxial_field;
+    uniaxial_descriptor.uniaxial_anisotropy_field_count = 1u;
+    fd::PoissonAirboxSharedDomainCsrMatrix uniaxial_a{};
+    for (const double signed_field : {3.0, -3.0}) {
+        uniaxial_field = signed_field;
+        check(fd::assemble_native_magnetic_a_qq(
+                  uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+                  magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+                  producer_frames.data(), producer_frames.size()) == fd::FrequencyDomainStatus::ok,
+              producer_error);
+        double error = 0.0, scale = 0.0;
+        for (std::uint64_t i = 0; i < node_count; ++i) {
+            for (std::uint64_t j = 0; j < node_count; ++j) {
+                const double integral = matrix_value(common_static, 2u * i, 2u * j) / 7.0;
+                for (std::uint64_t a = 0; a < 2; ++a) {
+                    for (std::uint64_t b = 0; b < 2; ++b) {
+                        const double *left = a == 0 ? producer_frames[i].e1 : producer_frames[i].e2;
+                        const double *right = b == 0 ? producer_frames[j].e1 : producer_frames[j].e2;
+                        double inner = 0.0;
+                        for (int axis = 0; axis < 3; ++axis) inner += left[axis] * right[axis];
+                        const double expected = integral * (7.0 * inner - signed_field * left[0] * right[0]);
+                        error = std::max(error, std::abs(matrix_value(uniaxial_a, 2u * i + a, 2u * j + b) - expected));
+                        scale = std::max(scale, std::abs(expected));
+                    }
+                }
+            }
+        }
+        check(scale > 0.0 && error <= 1.0e-12 * scale,
+              "signed uniaxial weak form subtracts its Cartesian derivative with frame transport");
+    }
+    // An easy axis parallel to m0 has zero tangent field derivative, but
+    // retains its positive constrained curvature even with no FIELD term.
+    uniaxial_field = 3.0;
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        uniaxial_axes[3u * node] = 0.0;
+        uniaxial_axes[3u * node + 2u] = 1.0;
+        static_h_eff[3u * node + 2u] = 3.0;
+    }
+    uniaxial_descriptor.term_presence_mask = FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY;
+    uniaxial_descriptor.field_term_digest = nullptr;
+    uniaxial_descriptor.tangent_frame_xyz = common_frame_values.data();
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    for (std::uint64_t row = 0; row < q_count; ++row) {
+        for (std::uint64_t column = 0; column < q_count; ++column) {
+            const double expected = matrix_value(common_static, row, column) * (3.0 / 7.0);
+            check(std::abs(matrix_value(uniaxial_a, row, column) - expected) <=
+                      1.0e-12 * covariance_scale,
+                  "anisotropy-only easy-axis request retains total static curvature");
+        }
+    }
+    std::fill(uniaxial_axes.begin(), uniaxial_axes.end(), 0.0);
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::validation_error,
+          "zero anisotropy axes must reject before assembly");
+    for (std::uint64_t node = 0; node < node_count; ++node) uniaxial_axes[3u * node + 2u] = 1.0;
+    uniaxial_axes[3u + 2u] = -1.0;
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::ok,
+          "opposite nodal axes define the same constant uniaxial energy");
+    std::vector<double> nodal_uniaxial_fields(static_cast<std::size_t>(node_count), 3.0);
+    auto unsupported_nodal_uniaxial = uniaxial_descriptor;
+    unsupported_nodal_uniaxial.uniaxial_anisotropy_field_a_per_m = nodal_uniaxial_fields.data();
+    unsupported_nodal_uniaxial.uniaxial_anisotropy_field_count = node_count;
+    check(fd::assemble_native_magnetic_a_qq(
+              unsupported_nodal_uniaxial, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::unavailable,
+          "nodal uniaxial field views remain unsupported in this increment");
+    auto unadvertised_uniaxial = uniaxial_descriptor;
+    unadvertised_uniaxial.term_presence_mask = FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    unadvertised_uniaxial.field_term_digest = producer_descriptor.linearization_state_digest;
+    unadvertised_uniaxial.anisotropy_term_digest = nullptr;
+    check(fd::assemble_native_magnetic_a_qq(
+              unadvertised_uniaxial, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::validation_error,
+          "uniaxial views without an advertised term must reject");
+    uniaxial_axes[3u] = 1.0;
+    uniaxial_axes[3u + 2u] = 0.0;
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::unavailable,
+          "spatial anisotropy axes remain unsupported in this increment");
+
     // The independent affine P1 oracle uses only the native MFEM gradients,
     // quadrature weight and the declared material scalar.  Every entry must
     // match 2 A_ex (e_c(i).e_d(j)) (grad N_i.grad N_j) w; no runner graph
@@ -699,8 +2140,8 @@ int main()
     // The N1a mixed-P1 contract contributes magnetic prism6 exchange exactly
     // once and must never leak an air tet4 into A_qq.  The prism oracle below
     // intentionally uses reference prism shape derivatives, an explicit
-    // affine Jacobian inverse, and direct order-one quadrature rather than
-    // MFEM CalcPhysDShape or the assembled CSR as its expected value.
+    // affine Jacobian inverse, and an independent exact order-two rule rather
+    // than MFEM CalcPhysDShape or the assembled CSR as its expected value.
     mfem::Mesh mixed_mesh(3, 10, 2, 0, 3);
     const double mixed_vertices[][3] = {
         {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
@@ -742,7 +2183,8 @@ int main()
     check(std::abs(matrix_value(mixed_a_qq, 0u, 0u)) > 0.0 &&
               std::abs(matrix_value(mixed_a_qq, 1u, 1u)) > 0.0,
           "mixed prism A_qq publishes nonzero tangent components");
-    const std::vector<double> prism_exchange_oracle = independent_prism_exchange_oracle(
+    const std::vector<double> prism_exchange_oracle =
+        independent_prism_exchange_exact_affine_oracle(
         mixed_scalar_space,
         mixed_magnetic_elements,
         mixed_descriptor.tangent_frame_xyz,
@@ -764,6 +2206,176 @@ int main()
           "independent prism exchange oracle exercises a nonzero tangent block");
     check(prism_oracle_error <= 1.0e-12 * std::max(1.0, prism_oracle_scale),
           "native mixed prism exchange matches the independent weak-form oracle");
+
+    std::vector<std::uint32_t> mixed_scalar_classes(
+        static_cast<std::size_t>(mixed_node_count));
+    std::vector<std::uint32_t> mixed_magnetic_classes(
+        static_cast<std::size_t>(mixed_node_count));
+    for (std::uint32_t node = 0u; node < mixed_node_count; ++node) {
+        mixed_scalar_classes[static_cast<std::size_t>(node)] = node;
+        mixed_magnetic_classes[static_cast<std::size_t>(node)] = node;
+    }
+    mfem::Array<int> mixed_boundary_marker(mixed_mesh.bdr_attributes.Max());
+    mixed_boundary_marker = 1;
+    fd::CsrMatrixView mixed_a_qq_view = mixed_a_qq.view();
+    fd::PoissonAirboxSharedDomainAssemblyRequest mixed_shared_request{};
+    mixed_shared_request.scalar_space = &mixed_scalar_space;
+    mixed_shared_request.tangent_frames = mixed_descriptor.tangent_frames.data();
+    mixed_shared_request.tangent_frame_count = mixed_descriptor.tangent_frames.size();
+    mixed_shared_request.magnetic_element_mask = mixed_magnetic_elements.data();
+    mixed_shared_request.magnetic_element_count = mixed_magnetic_elements.size();
+    mixed_shared_request.uniform_saturation_magnetization_a_per_m = 2.0;
+    mixed_shared_request.gamma0_m_per_a_s = 3.0;
+    mixed_shared_request.mu0_T_m_A = 4.0;
+    mixed_shared_request.magnetic_a_qq_csr = &mixed_a_qq_view;
+    mixed_shared_request.scalar_reduced_node = mixed_scalar_classes.data();
+    mixed_shared_request.scalar_reduced_node_count = mixed_scalar_classes.size();
+    mixed_shared_request.magnetic_reduced_node = mixed_magnetic_classes.data();
+    mixed_shared_request.magnetic_reduced_node_count = mixed_magnetic_classes.size();
+    mixed_shared_request.equivalence_classes_complete = true;
+    mixed_shared_request.boundary_kind = fd::PoissonAirboxBoundaryKind::robin;
+    mixed_shared_request.robin_beta = 1.0;
+    mixed_shared_request.robin_boundary_marker = &mixed_boundary_marker;
+    fd::PoissonAirboxSharedDomainAssemblyResult mixed_shared_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              mixed_shared_request, &mixed_shared_result) ==
+              fd::FrequencyDomainStatus::ok,
+          mixed_shared_result.error_message);
+    check(mixed_shared_result.operator_digest[0] != '\0',
+          "mixed prism shared-domain assembly publishes its digest");
+    check(!mixed_shared_result.quadrature_provenance_json.empty(),
+          "mixed prism shared-domain assembly publishes quadrature provenance");
+    check(mixed_shared_result.quadrature_provenance_json.find("\"geometry\":\"prism6\"") !=
+              std::string::npos,
+          "quadrature provenance identifies the prism6 geometry");
+    check(mixed_shared_result.quadrature_provenance_json.find(
+              "\"requested_quadrature_order\":4") != std::string::npos,
+          "quadrature provenance reports the requested prism order");
+    check(mixed_shared_result.quadrature_provenance_json.find(
+              "\"resolved_quadrature_order\":" +
+              std::to_string(prism_order4.GetOrder())) != std::string::npos,
+          "quadrature provenance reports MFEM's resolved prism order");
+    check(mixed_shared_result.quadrature_provenance_json.find(
+              "\"rule_npoints\":" +
+              std::to_string(prism_order4.GetNPoints())) != std::string::npos,
+          "quadrature provenance reports MFEM prism rule point count");
+    check(mixed_shared_result.quadrature_provenance_json.find("\"element_count\":1") !=
+              std::string::npos,
+          "quadrature provenance reports one magnetic prism element");
+
+    // The exact affine prism scalar block has one and only one null vector:
+    // the constant field.  The former centroid rule had rank at most three
+    // and therefore introduced hourglass modes.  Undo any MFEM local signs so
+    // this check remains about the reference prism rather than DOF orientation.
+    mfem::Array<int> mixed_prism_dofs;
+    mixed_scalar_space.GetElementDofs(0, mixed_prism_dofs);
+    check(mixed_prism_dofs.Size() == 6, "mixed prism rank check has six scalar P1 dofs");
+    std::vector<double> prism_scalar_matrix(36u, 0.0);
+    for (int local_row = 0; local_row < 6; ++local_row) {
+        const std::uint64_t row_node = static_cast<std::uint64_t>(
+            mixed_prism_dofs[local_row] >= 0 ? mixed_prism_dofs[local_row] :
+                                               -1 - mixed_prism_dofs[local_row]);
+        const double row_sign = mixed_prism_dofs[local_row] >= 0 ? 1.0 : -1.0;
+        for (int local_column = 0; local_column < 6; ++local_column) {
+            const std::uint64_t column_node = static_cast<std::uint64_t>(
+                mixed_prism_dofs[local_column] >= 0 ? mixed_prism_dofs[local_column] :
+                                                       -1 - mixed_prism_dofs[local_column]);
+            const double column_sign = mixed_prism_dofs[local_column] >= 0 ? 1.0 : -1.0;
+            prism_scalar_matrix[static_cast<std::size_t>(local_row * 6 + local_column)] =
+                row_sign * column_sign *
+                matrix_value(mixed_a_qq, 2u * row_node, 2u * column_node);
+        }
+    }
+    check(numerical_rank(prism_scalar_matrix, 6u) == 5u,
+          "exact prism6 exchange scalar block has rank five");
+    double constant_action = 0.0;
+    for (int row = 0; row < 6; ++row) {
+        double action = 0.0;
+        for (int column = 0; column < 6; ++column) {
+            action += prism_scalar_matrix[static_cast<std::size_t>(row * 6 + column)];
+        }
+        constant_action = std::max(constant_action, std::abs(action));
+    }
+    check(constant_action <= 1.0e-12,
+          "constant prism6 perturbation is the exchange nullspace");
+    constexpr double kHourglass[6] = {0.0, 1.0, -1.0, 0.0, -1.0, 1.0};
+    double hourglass_energy = 0.0;
+    for (int row = 0; row < 6; ++row) {
+        double action = 0.0;
+        for (int column = 0; column < 6; ++column) {
+            action += prism_scalar_matrix[static_cast<std::size_t>(row * 6 + column)] *
+                kHourglass[column];
+        }
+        hourglass_energy += kHourglass[row] * action;
+    }
+    check(std::abs(hourglass_energy - 8.0 / 3.0) <= 1.0e-11,
+          "prism6 hourglass field has the exact positive exchange energy");
+
+    // Repeat the same affine prism with independently rotated nodal tangent
+    // bases.  The result must agree with the Cartesian frame-dot oracle and
+    // must differ from the identity-frame matrix, proving the prism path uses
+    // the supplied local-to-Cartesian transport.
+    NativeExchangeDescriptorFixture rotated_mixed_descriptor(mixed_node_count);
+    std::vector<fd::TangentFrameNode> rotated_mixed_frames =
+        rotated_mixed_descriptor.tangent_frames;
+    std::vector<double> rotated_mixed_frame_xyz =
+        rotated_mixed_descriptor.tangent_frame_xyz;
+    for (std::uint64_t node = 0u; node < mixed_node_count; ++node) {
+        const double angle = 0.13 * static_cast<double>(node + 1u);
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e1[0] = cosine;
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e1[1] = sine;
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e2[0] = -sine;
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e2[1] = cosine;
+        for (int axis = 0; axis < 3; ++axis) {
+            rotated_mixed_frame_xyz[6u * node + static_cast<std::size_t>(axis)] =
+                rotated_mixed_frames[static_cast<std::size_t>(node)].e1[axis];
+            rotated_mixed_frame_xyz[
+                6u * node + 3u + static_cast<std::size_t>(axis)] =
+                rotated_mixed_frames[static_cast<std::size_t>(node)].e2[axis];
+        }
+    }
+    rotated_mixed_descriptor.descriptor.tangent_frame_xyz =
+        rotated_mixed_frame_xyz.data();
+    fd::PoissonAirboxSharedDomainCsrMatrix rotated_mixed_a_qq{};
+    check(fd::assemble_native_magnetic_a_qq(
+              rotated_mixed_descriptor.descriptor,
+              &mixed_scalar_space,
+              mixed_magnetic_elements.data(),
+              mixed_magnetic_elements.size(),
+              &rotated_mixed_a_qq,
+              producer_error,
+              nullptr,
+              rotated_mixed_frames.data(),
+              rotated_mixed_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    const std::vector<double> rotated_prism_exchange_oracle =
+        independent_prism_exchange_exact_affine_oracle(
+            mixed_scalar_space,
+            mixed_magnetic_elements,
+            rotated_mixed_frame_xyz,
+            rotated_mixed_descriptor.exchange_edge.stiffness,
+            mixed_node_count);
+    double rotated_oracle_error = 0.0;
+    double rotated_oracle_scale = 0.0;
+    for (std::uint64_t row = 0u; row < mixed_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < mixed_q_count; ++column) {
+            const double actual = matrix_value(rotated_mixed_a_qq, row, column);
+            const double expected = rotated_prism_exchange_oracle[
+                static_cast<std::size_t>(row * mixed_q_count + column)];
+            rotated_oracle_error = std::max(rotated_oracle_error,
+                                            std::abs(actual - expected));
+            rotated_oracle_scale = std::max(
+                rotated_oracle_scale, std::max(std::abs(actual), std::abs(expected)));
+        }
+    }
+    check(max_matrix_difference(mixed_a_qq, rotated_mixed_a_qq) > 1.0e-6,
+          "rotated prism tangent bases change the tangent-coordinate matrix");
+    check(rotated_oracle_scale > 0.0 &&
+              rotated_oracle_error <= 1.0e-12 * rotated_oracle_scale,
+          "prism exchange transports independently rotated tangent bases");
+
     std::vector<double> prism_random_vector(static_cast<std::size_t>(mixed_q_count), 0.0);
     for (std::uint64_t index = 0u; index < mixed_q_count; ++index) {
         prism_random_vector[static_cast<std::size_t>(index)] =
@@ -806,6 +2418,210 @@ int main()
                   "air tet4 nodes remain isolated from native magnetic A_qq");
         }
     }
+
+    // A warped prism exercises the variable Jacobian of the isoparametric
+    // wedge.  The independent oracle below uses analytic prism gradients and
+    // its own Duffy/Gauss GL4/GL5/GL7 rule (points per axis); it never consumes
+    // MFEM's integration rule or CalcPhysDShape.  The producer remains MFEM
+    // order4, while GL7 is used only as a high-order independent reference.
+    const double deformed_prism_vertices[][3] = {
+        {0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {0.2, 1.4, 0.0},
+        {0.15, 0.10, 1.0}, {2.4, 0.2, 1.15}, {0.0, 1.6, 0.85},
+    };
+    const auto make_deformed_prism_mesh = [&](bool cyclic_local_order) {
+        std::unique_ptr<mfem::Mesh> result(new mfem::Mesh(3, 6, 1, 0, 3));
+        for (const auto &vertex : deformed_prism_vertices) {
+            result->AddVertex(vertex);
+        }
+        const int standard_wedge[] = {0, 1, 2, 3, 4, 5};
+        const int cyclic_wedge[] = {1, 2, 0, 4, 5, 3};
+        result->AddWedge(cyclic_local_order ? cyclic_wedge : standard_wedge, 1);
+        result->FinalizeTopology();
+        result->Finalize(false, true);
+        return result;
+    };
+
+    std::unique_ptr<mfem::Mesh> deformed_prism_mesh = make_deformed_prism_mesh(false);
+    mfem::H1_FECollection deformed_prism_collection(1, deformed_prism_mesh->Dimension());
+    mfem::FiniteElementSpace deformed_prism_scalar_space(
+        deformed_prism_mesh.get(), &deformed_prism_collection);
+    const std::uint64_t deformed_prism_node_count =
+        static_cast<std::uint64_t>(deformed_prism_scalar_space.GetVSize());
+    check(deformed_prism_node_count == 6u,
+          "deformed prism fixture must contain six P1 scalar nodes");
+    const std::vector<std::uint8_t> deformed_prism_elements = {1u};
+    NativeExchangeDescriptorFixture deformed_prism_descriptor(
+        deformed_prism_node_count);
+    fd::PoissonAirboxSharedDomainCsrMatrix deformed_prism_a_qq{};
+    check(fd::assemble_native_magnetic_a_qq(
+              deformed_prism_descriptor.descriptor,
+              &deformed_prism_scalar_space,
+              deformed_prism_elements.data(),
+              deformed_prism_elements.size(),
+              &deformed_prism_a_qq,
+              producer_error,
+              nullptr,
+              deformed_prism_descriptor.tangent_frames.data(),
+              deformed_prism_descriptor.tangent_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    const std::uint64_t deformed_prism_q_count =
+        2u * deformed_prism_node_count;
+    std::vector<double> deformed_prism_native_dense(
+        static_cast<std::size_t>(deformed_prism_q_count * deformed_prism_q_count), 0.0);
+    for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+            deformed_prism_native_dense[static_cast<std::size_t>(
+                row * deformed_prism_q_count + column)] =
+                matrix_value(deformed_prism_a_qq, row, column);
+        }
+    }
+    const std::vector<double> deformed_prism_gl4 =
+        independent_deformed_prism_exchange_oracle(
+            deformed_prism_scalar_space,
+            deformed_prism_elements,
+            deformed_prism_descriptor.tangent_frame_xyz,
+            deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            4);
+    const std::vector<double> deformed_prism_gl5 =
+        independent_deformed_prism_exchange_oracle(
+            deformed_prism_scalar_space,
+            deformed_prism_elements,
+            deformed_prism_descriptor.tangent_frame_xyz,
+            deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            5);
+    const std::vector<double> deformed_prism_gl7 =
+        independent_deformed_prism_exchange_oracle(
+            deformed_prism_scalar_space,
+            deformed_prism_elements,
+            deformed_prism_descriptor.tangent_frame_xyz,
+            deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            7);
+
+    const auto check_deformed_prism_matrix = [&](const std::vector<double> &matrix,
+                                                 const char *label) {
+        check(matrix.size() == static_cast<std::size_t>(
+                                  deformed_prism_q_count * deformed_prism_q_count),
+              "deformed prism matrix has the expected dense dimensions");
+        double scale = 0.0;
+        double symmetry_error = 0.0;
+        for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+            for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+                const double value = matrix[static_cast<std::size_t>(
+                    row * deformed_prism_q_count + column)];
+                const double transpose = matrix[static_cast<std::size_t>(
+                    column * deformed_prism_q_count + row)];
+                check(std::isfinite(value), "deformed prism matrix must be finite");
+                scale = std::max(scale, std::abs(value));
+                symmetry_error = std::max(symmetry_error, std::abs(value - transpose));
+            }
+        }
+        check(scale > 0.0, "deformed prism matrix must be nonzero");
+        check(symmetry_error <= 1.0e-11 * scale,
+              "deformed prism exchange matrix must be symmetric");
+        check(numerical_rank(matrix, static_cast<std::size_t>(deformed_prism_q_count)) == 10u,
+              label);
+        double constant_residual = 0.0;
+        for (std::uint64_t component = 0u; component < 2u; ++component) {
+            for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+                double action = 0.0;
+                for (std::uint64_t node = 0u; node < deformed_prism_node_count; ++node) {
+                    action += matrix[static_cast<std::size_t>(
+                        row * deformed_prism_q_count + 2u * node + component)];
+                }
+                constant_residual = std::max(constant_residual, std::abs(action));
+            }
+        }
+        check(constant_residual <= 1.0e-10 * scale,
+              "deformed prism constant tangent perturbations must remain in the exchange nullspace");
+        double energy = 0.0;
+        for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+            const double row_value = std::sin(0.17 * static_cast<double>(row + 1u)) +
+                0.29 * std::cos(0.41 * static_cast<double>(row + 2u));
+            for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+                const double column_value = std::sin(0.17 * static_cast<double>(column + 1u)) +
+                    0.29 * std::cos(0.41 * static_cast<double>(column + 2u));
+                energy += row_value * matrix[static_cast<std::size_t>(
+                    row * deformed_prism_q_count + column)] * column_value;
+            }
+        }
+        check(energy >= -1.0e-10 * scale,
+              "deformed prism exchange matrix must be positive semidefinite");
+    };
+    check_deformed_prism_matrix(deformed_prism_native_dense,
+                                "native deformed prism exchange must have rank ten");
+    check_deformed_prism_matrix(deformed_prism_gl4,
+                                "independent deformed prism GL4 oracle must have rank ten");
+    check_deformed_prism_matrix(deformed_prism_gl5,
+                                "independent deformed prism GL5 oracle must have rank ten");
+    check_deformed_prism_matrix(deformed_prism_gl7,
+                                "independent deformed prism GL7 oracle must have rank ten");
+
+    const double gl4_gl5_error = dense_matrix_max_difference(
+        deformed_prism_gl4, deformed_prism_gl5);
+    const double gl5_gl7_error = dense_matrix_max_difference(
+        deformed_prism_gl5, deformed_prism_gl7);
+    const double gl7_scale = *std::max_element(
+        deformed_prism_gl7.begin(), deformed_prism_gl7.end(),
+        [](double left, double right) { return std::abs(left) < std::abs(right); });
+    check(gl4_gl5_error > 1.0e-10,
+          "deformed prism fixture must exercise non-affine quadrature sensitivity");
+    check(gl5_gl7_error < gl4_gl5_error,
+          "deformed prism reference GL quadrature must converge from GL4 through GL5 to GL7");
+    check(dense_matrix_max_difference(deformed_prism_native_dense, deformed_prism_gl7) <=
+              5.0e-5 * std::max(1.0, std::abs(gl7_scale)),
+          "native MFEM prism order4 must agree with the independent GL7 reference");
+
+    // A cyclic local permutation preserves the wedge orientation.  It must
+    // not change the global matrix because the global vertex IDs and physical
+    // coordinates are unchanged; a reversed permutation is deliberately not
+    // admitted because it would create a negative physical Jacobian.
+    std::unique_ptr<mfem::Mesh> permuted_deformed_prism_mesh =
+        make_deformed_prism_mesh(true);
+    mfem::H1_FECollection permuted_deformed_prism_collection(
+        1, permuted_deformed_prism_mesh->Dimension());
+    mfem::FiniteElementSpace permuted_deformed_prism_scalar_space(
+        permuted_deformed_prism_mesh.get(), &permuted_deformed_prism_collection);
+    NativeExchangeDescriptorFixture permuted_deformed_prism_descriptor(
+        deformed_prism_node_count);
+    fd::PoissonAirboxSharedDomainCsrMatrix permuted_deformed_prism_a_qq{};
+    check(fd::assemble_native_magnetic_a_qq(
+              permuted_deformed_prism_descriptor.descriptor,
+              &permuted_deformed_prism_scalar_space,
+              deformed_prism_elements.data(),
+              deformed_prism_elements.size(),
+              &permuted_deformed_prism_a_qq,
+              producer_error,
+              nullptr,
+              permuted_deformed_prism_descriptor.tangent_frames.data(),
+              permuted_deformed_prism_descriptor.tangent_frames.size()) ==
+              fd::FrequencyDomainStatus::ok,
+          producer_error);
+    std::vector<double> permuted_deformed_prism_dense(
+        static_cast<std::size_t>(deformed_prism_q_count * deformed_prism_q_count), 0.0);
+    for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+            permuted_deformed_prism_dense[static_cast<std::size_t>(
+                row * deformed_prism_q_count + column)] =
+                matrix_value(permuted_deformed_prism_a_qq, row, column);
+        }
+    }
+    check(dense_matrix_max_difference(
+              deformed_prism_native_dense, permuted_deformed_prism_dense) <= 1.0e-11,
+          "orientation-preserving prism vertex permutation must preserve the global exchange matrix");
+    const std::vector<double> permuted_deformed_prism_gl7 =
+        independent_deformed_prism_exchange_oracle(
+            permuted_deformed_prism_scalar_space,
+            deformed_prism_elements,
+            permuted_deformed_prism_descriptor.tangent_frame_xyz,
+            permuted_deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            7);
+    check(dense_matrix_max_difference(deformed_prism_gl7,
+                                      permuted_deformed_prism_gl7) <= 1.0e-11,
+          "independent GL7 oracle must preserve an orientation-safe prism permutation");
 
     // Magnetic P1 pyramid5 and every non-P1 magnetic geometry are outside
     // the bounded N1a exchange scope and must reject without conversion.
@@ -1081,6 +2897,73 @@ int main()
     check(matrix_value(result.p, 0, 0) > 0.0, "Robin P has positive diagonal");
     check(result.a_phiq.values.size() > 0, "shared-domain scalar coupling is nonzero");
     check(result.a_qphi.values.size() > 0, "shared-domain tangent feedback is nonzero");
+    check(result.k0_demag_probe.q_global_y.size() == q_count &&
+              result.k0_demag_probe.q_global_z.size() == q_count,
+          "K0 demag probe vectors use the assembled reduced tangent layout");
+    check(result.k0_demag_probe.global_y_observable &&
+              !result.k0_demag_probe.global_z_observable,
+          "K0 demag probe identifies transverse and longitudinal global directions");
+    check(result.k0_demag_probe.h_functional_global_y.size() == node_count &&
+              result.k0_demag_probe.h_functional_global_z.size() == node_count &&
+              result.k0_demag_probe.magnetic_volume_m3 > 0.0,
+          "K0 demag probe carries field functionals and magnetic measure");
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        check(result.k0_demag_probe.q_global_y[2u * node] == 0.0 &&
+                  result.k0_demag_probe.q_global_y[2u * node + 1u] == 1.0 &&
+                  result.k0_demag_probe.q_global_z[2u * node] == 0.0 &&
+                  result.k0_demag_probe.q_global_z[2u * node + 1u] == 0.0,
+              "K0 demag probe projects global directions into the local tangent frame");
+    }
+    long double field_integral_from_y = 0.0L;
+    long double field_integral_from_z = 0.0L;
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        const double *vertex = mesh.GetVertex(static_cast<int>(node));
+        field_integral_from_y +=
+            result.k0_demag_probe.h_functional_global_y[node] * vertex[1];
+        field_integral_from_z +=
+            result.k0_demag_probe.h_functional_global_z[node] * vertex[2];
+    }
+    check(std::abs(static_cast<double>(field_integral_from_y) /
+                        result.k0_demag_probe.magnetic_volume_m3 + 1.0) < 1.0e-12 &&
+              std::abs(static_cast<double>(field_integral_from_z) /
+                           result.k0_demag_probe.magnetic_volume_m3 + 1.0) < 1.0e-12,
+          "K0 demag field functionals reconstruct minus the exact P1 gradient");
+
+    std::vector<fd::TangentFrameNode> de_frames = frames;
+    for (fd::TangentFrameNode &frame : de_frames) {
+        frame.m[0] = 1.0;
+        frame.m[1] = 0.0;
+        frame.m[2] = 0.0;
+        frame.e1[0] = 0.0;
+        frame.e1[1] = 1.0;
+        frame.e1[2] = 0.0;
+        frame.e2[0] = 0.0;
+        frame.e2[1] = 0.0;
+        frame.e2[2] = 1.0;
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest de_request = request;
+    de_request.tangent_frames = de_frames.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult de_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(de_request, &de_result) ==
+              fd::FrequencyDomainStatus::ok,
+          de_result.error_message);
+    check(de_result.k0_demag_probe.global_y_observable &&
+              de_result.k0_demag_probe.global_z_observable,
+          "DE equilibrium makes both global transverse demag probes observable");
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        check(de_result.k0_demag_probe.q_global_y[2u * node] == 1.0 &&
+                  de_result.k0_demag_probe.q_global_y[2u * node + 1u] == 0.0 &&
+                  de_result.k0_demag_probe.q_global_z[2u * node] == 0.0 &&
+                  de_result.k0_demag_probe.q_global_z[2u * node + 1u] == 1.0,
+              "DE global y/z perturbations map to their expected tangent components");
+    }
+    check(std::abs(
+              de_result.k0_demag_probe.magnetization_integral_global_y_a_per_m_m3 /
+                  de_result.k0_demag_probe.magnetic_volume_m3 - 2.0) < 1.0e-12 &&
+              std::abs(
+                  de_result.k0_demag_probe.magnetization_integral_global_z_a_per_m_m3 /
+                      de_result.k0_demag_probe.magnetic_volume_m3 - 2.0) < 1.0e-12,
+          "DE probe integrates the applied perturbation magnetization with SI Ms");
 
     // Independent P1 tetrahedron oracle for A_phiq.  The production path
     // integrates this block with MFEM quadrature; this reference uses the
@@ -1271,6 +3154,46 @@ int main()
     check(gyrotropic_sign_flip_error > 1.0e-6 * gyrotropic_oracle_scale,
           "B_qq sign-flip negative control must be rejected by the independent oracle");
     check(result.operator_digest[0] != '\0', "shared-domain assembly publishes digest");
+    check(!result.quadrature_provenance_json.empty(),
+          "shared-domain assembly publishes readable quadrature provenance");
+    check(result.quadrature_provenance_json.find("\"geometry\":\"tet4\"") !=
+              std::string::npos,
+          "quadrature provenance identifies the tetrahedron geometry");
+    check(result.quadrature_provenance_json.find("\"finite_element_order\":1") !=
+              std::string::npos,
+          "quadrature provenance reports the P1 finite-element order");
+    check(result.quadrature_provenance_json.find("\"requested_quadrature_order\":5") !=
+              std::string::npos,
+          "quadrature provenance reports the requested tetrahedron order");
+    check(result.quadrature_provenance_json.find(
+              "\"resolved_quadrature_order\":" +
+              std::to_string(tetra_order5.GetOrder())) != std::string::npos,
+          "quadrature provenance reports MFEM's resolved tetrahedron order");
+    check(result.quadrature_provenance_json.find(
+              "\"rule_npoints\":" +
+              std::to_string(tetra_order5.GetNPoints())) != std::string::npos,
+          "quadrature provenance reports MFEM tetrahedron rule point count");
+    const auto expected_magnetic_element_count = std::count(
+        magnetic_elements.begin(), magnetic_elements.end(), std::uint8_t{1u});
+    const std::string expected_global_count =
+        "\"element_count\":" + std::to_string(expected_magnetic_element_count) +
+        ",\"entries\":[";
+    check(result.quadrature_provenance_json.find(expected_global_count) !=
+              std::string::npos,
+          "quadrature provenance reports the exact global magnetic-element count");
+    const std::size_t tet_entry_start = result.quadrature_provenance_json.find(
+        "{\"geometry\":\"tet4\"");
+    const std::size_t tet_entry_end = result.quadrature_provenance_json.find(
+        '}', tet_entry_start);
+    check(tet_entry_start != std::string::npos && tet_entry_end != std::string::npos,
+          "quadrature provenance contains a complete tet4 entry");
+    const std::string tet_entry = result.quadrature_provenance_json.substr(
+        tet_entry_start, tet_entry_end - tet_entry_start + 1u);
+    check(tet_entry.find(
+              "\"element_count\":" +
+              std::to_string(expected_magnetic_element_count) + "}") !=
+              std::string::npos,
+          "quadrature provenance reports the exact tet4 magnetic-element count");
 
     fd::PoissonAirboxSharedDomainAssemblyRequest pure_neumann = request;
     pure_neumann.boundary_kind = fd::PoissonAirboxBoundaryKind::pure_neumann;
@@ -1293,6 +3216,19 @@ int main()
           "pure-Neumann gauge vector is normalized to unit measure");
     check(std::strcmp(pure_neumann_result.gauge_policy, "mean_zero_augmented") == 0,
           "pure-Neumann assembly publishes the mean-zero gauge policy");
+
+    fd::PoissonAirboxSharedDomainAssemblyRequest floquet_gauge = pure_neumann;
+    floquet_gauge.pure_neumann_gauge_policy =
+        fd::PoissonAirboxPureNeumannGaugePolicy::require_invertible;
+    fd::PoissonAirboxSharedDomainAssemblyResult floquet_gauge_result{};
+    check(
+        fd::assemble_poisson_airbox_shared_domain(floquet_gauge, &floquet_gauge_result) ==
+            fd::FrequencyDomainStatus::ok,
+        floquet_gauge_result.error_message);
+    check(floquet_gauge_result.phi_mean_weights.empty(),
+          "require-invertible pure-Neumann assembly must not publish a k=0 gauge vector");
+    check(std::strcmp(floquet_gauge_result.gauge_policy, "require_invertible") == 0,
+          "require-invertible pure-Neumann assembly publishes its explicit policy");
 
     fd::PoissonAirboxSharedDomainAssemblyRequest dirichlet = request;
     dirichlet.boundary_kind = fd::PoissonAirboxBoundaryKind::dirichlet;
@@ -1925,10 +3861,51 @@ int main()
         fd::assemble_poisson_airbox_shared_domain_payload(
             film_air_payload, &film_air_result) == fd::FrequencyDomainStatus::ok,
         film_air_result.error_message);
+    check(film_air_result.k0_demag_probe.mu0_t_m_a == fullmag::fem::kMu0,
+          "native importer demag probe must use the canonical model permeability");
     check(film_air_result.p.row_count == 2u,
           "magnetic+airbox importer compacts scalar Poisson to declared classes");
     check(film_air_result.a_qq.row_count == 2u && film_air_result.a_qq.values.size() > 0u,
           "magnetic+airbox importer compacts native magnetic exchange to declared classes");
+
+    // The payload adapter forwards descriptor alpha into its private request,
+    // but the default false opt-in keeps the production Ignore operator intact.
+    FullmagFemModalLinearizationDescriptor film_air_without_alpha_descriptor =
+        film_air_descriptor;
+    film_air_without_alpha_descriptor.alpha_per_node = nullptr;
+    film_air_without_alpha_descriptor.alpha_per_node_count = 0u;
+    FullmagFemModalSharedDomainPayload film_air_without_alpha_payload =
+        film_air_payload;
+    film_air_without_alpha_payload.linearization_descriptor =
+        &film_air_without_alpha_descriptor;
+    fd::PoissonAirboxSharedDomainAssemblyResult film_air_without_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain_payload(
+              film_air_without_alpha_payload, &film_air_without_alpha_result) ==
+              fd::FrequencyDomainStatus::ok,
+          film_air_without_alpha_result.error_message);
+    check(film_air_result.b_qq.values == film_air_without_alpha_result.b_qq.values &&
+              std::strcmp(
+                  film_air_result.operator_digest,
+                  film_air_without_alpha_result.operator_digest) == 0,
+          "payload descriptor alpha is forwarded without changing disabled B or its digest");
+
+    std::vector<double> film_air_negative_alpha = film_air_descriptor_alpha;
+    film_air_negative_alpha[0] = -0.01;
+    FullmagFemModalLinearizationDescriptor film_air_negative_alpha_descriptor =
+        film_air_descriptor;
+    film_air_negative_alpha_descriptor.alpha_per_node =
+        film_air_negative_alpha.data();
+    FullmagFemModalSharedDomainPayload film_air_negative_alpha_payload =
+        film_air_payload;
+    film_air_negative_alpha_payload.linearization_descriptor =
+        &film_air_negative_alpha_descriptor;
+    fd::PoissonAirboxSharedDomainAssemblyResult film_air_negative_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain_payload(
+              film_air_negative_alpha_payload,
+              &film_air_negative_alpha_result) ==
+              fd::FrequencyDomainStatus::validation_error &&
+              std::strstr(film_air_negative_alpha_result.error_message, "alpha") != nullptr,
+          "payload builder must forward and reject negative descriptor alpha");
     auto expect_acceptance_rejection = [&](FullmagFemModalSharedDomainPayload candidate,
                                            const char *reason,
                                            const char *message) {
@@ -2330,6 +4307,132 @@ int main()
             missing_linearization_digest,
             &rejected_result) == fd::FrequencyDomainStatus::validation_error,
         "shared-domain payload rejects a missing LinearizationState.v6 identity");
+
+    // Floquet sparse-lane regression (B1): A_qphi(k) must equal
+    // -mu0 * A_phiq(k)^H, matching the k=0 lane's reciprocal sign so the
+    // demag Schur complement D(k) = -A_qphi(k) P(k)^-1 A_phiq(k) remains a
+    // positive-semidefinite representation of the magnetostatic self-energy.
+    // The film_air fixture's mesh already carries the x/y/z periodic node
+    // pairs the v6 certificate binds, so it can be driven through the
+    // Floquet payload path with an explicit k vector.
+    fd::FrequencyDomainFloquetPeriodicPair floquet_reciprocity_pairs[3]{};
+    {
+        const char *floquet_pair_ids[3] = {
+            "x_periodic_pair_0", "y_periodic_pair_0", "z_periodic_pair_0"};
+        const std::uint64_t floquet_pair_node_b[3] = {1u, 2u, 3u};
+        const double floquet_pair_translations[3][3] = {
+            {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
+        for (std::size_t index = 0u; index < 3u; ++index) {
+            floquet_reciprocity_pairs[index].pair_id = floquet_pair_ids[index];
+            floquet_reciprocity_pairs[index].node_a = 0u;
+            floquet_reciprocity_pairs[index].node_b = floquet_pair_node_b[index];
+            floquet_reciprocity_pairs[index].has_translation = true;
+            for (std::size_t axis = 0u; axis < 3u; ++axis) {
+                floquet_reciprocity_pairs[index].translation_m[axis] =
+                    floquet_pair_translations[index][axis];
+            }
+        }
+    }
+    const std::array<double, 3> floquet_reciprocity_k{{0.5, 0.0, 0.0}};
+    fd::PoissonAirboxSharedDomainAssemblyResult floquet_reciprocity_result{};
+    check(
+        fd::assemble_poisson_airbox_shared_domain_payload(
+            film_air_payload,
+            &floquet_reciprocity_result,
+            floquet_reciprocity_pairs,
+            3u,
+            &floquet_reciprocity_k,
+            nullptr,
+            false) == fd::FrequencyDomainStatus::ok,
+        floquet_reciprocity_result.error_message);
+    check(floquet_reciprocity_result.floquet_sparse_operator_ready,
+          "Floquet sparse reciprocity fixture must publish the sparse operator");
+    check(floquet_reciprocity_result.operator_digest[0] != '\0',
+          "Floquet shared-domain assembly must retain its operator digest");
+    check(!floquet_reciprocity_result.quadrature_provenance_json.empty(),
+          "Floquet shared-domain assembly must retain quadrature provenance");
+    check(floquet_reciprocity_result.quadrature_provenance_json.find(
+              "\"geometry\":\"tet4\"") != std::string::npos,
+          "Floquet quadrature provenance must identify the magnetic tetrahedron");
+    check(floquet_reciprocity_result.quadrature_provenance_json.find(
+              "\"element_count\":1") != std::string::npos,
+          "Floquet quadrature provenance must retain the magnetic-element count");
+    check(floquet_reciprocity_result.floquet_a_qq.row_count > 0u &&
+              floquet_reciprocity_result.floquet_uniform_transverse_probe_q_y.size() ==
+                  floquet_reciprocity_result.floquet_a_qq.row_count &&
+              floquet_reciprocity_result.floquet_uniform_transverse_probe_q_z.size() ==
+                  floquet_reciprocity_result.floquet_a_qq.row_count,
+          "Floquet shared-domain assembly must retain probes matching its constrained tangent layout");
+    check(floquet_reciprocity_result.floquet_a_qphi.values.size() > 0u &&
+              floquet_reciprocity_result.floquet_a_phiq.values.size() > 0u,
+          "Floquet sparse reciprocity fixture must exercise nonzero demag blocks");
+    // For the unit tetrahedron and kx=0.5 rad/m, the positive weak source
+    // S projects to a negative real (phi class 0, e1 class 0) entry. The
+    // descriptor convention A_phiq q + P phi = 0 requires A_phiq=-S.
+    check(
+        complex_matrix_value(
+            floquet_reciprocity_result.floquet_a_phiq, 0u, 0u).real() > 0.0,
+        "Floquet A_phiq must use the descriptor sign opposite to the weak source");
+    // The production payload and this reciprocity check share the model constant.
+    const double floquet_vacuum_permeability = fullmag::fem::kMu0;
+    double floquet_reciprocal_sign_error = 0.0;
+    double floquet_reciprocal_scale = 0.0;
+    for (std::uint64_t q = 0; q < floquet_reciprocity_result.floquet_a_qphi.row_count; ++q) {
+        for (std::uint64_t phi = 0;
+             phi < floquet_reciprocity_result.floquet_a_qphi.column_count;
+             ++phi) {
+            const std::complex<double> feedback = complex_matrix_value(
+                floquet_reciprocity_result.floquet_a_qphi, q, phi);
+            const std::complex<double> source = complex_matrix_value(
+                floquet_reciprocity_result.floquet_a_phiq, phi, q);
+            const std::complex<double> residual =
+                feedback + floquet_vacuum_permeability * std::conj(source);
+            floquet_reciprocal_sign_error =
+                std::max(floquet_reciprocal_sign_error, std::abs(residual));
+            floquet_reciprocal_scale = std::max(
+                floquet_reciprocal_scale,
+                std::max(
+                    std::abs(feedback),
+                    floquet_vacuum_permeability * std::abs(source)));
+        }
+    }
+    check(floquet_reciprocal_scale > 0.0,
+          "Floquet sparse reciprocity check must exercise nonzero feedback/source entries");
+    check(
+        floquet_reciprocal_sign_error <= 1.0e-9 * std::max(1.0, floquet_reciprocal_scale),
+        "Floquet demag feedback A_qphi(k) must be -mu0 times the conjugate transpose "
+        "of A_phiq(k) so the Schur Hessian is positive");
+
+    // A pure-Neumann Floquet block has no k=0 mean-zero gauge unless the
+    // assembled scalar operator actually retains that nullspace. Do not
+    // reject nonzero k using a geometry-independent |k|*L proxy; the actual
+    // scalar factorization and original potential residual own that decision.
+    FullmagFemModalSharedDomainPayload floquet_pure_neumann_payload = film_air_payload;
+    floquet_pure_neumann_payload.boundary_kind = "pure_neumann";
+    // pure_neumann forbids Robin data in both the k=0 and Floquet block
+    // assemblers, independent of the small-k gauge check under test here.
+    floquet_pure_neumann_payload.robin_beta = 0.0;
+    const std::array<double, 3> floquet_tiny_k{{1.0e-6, 0.0, 0.0}};
+    fd::PoissonAirboxSharedDomainAssemblyResult floquet_pure_neumann_result{};
+    check(
+        fd::assemble_poisson_airbox_shared_domain_payload(
+            floquet_pure_neumann_payload,
+            &floquet_pure_neumann_result,
+            floquet_reciprocity_pairs,
+            3u,
+            &floquet_tiny_k,
+            nullptr,
+            false) == fd::FrequencyDomainStatus::ok,
+        "nonzero pure_neumann Floquet assembly must not use a fixed k*L cutoff");
+    check(
+        floquet_pure_neumann_result.floquet_sparse_operator_ready,
+        "pure_neumann small-k assembly must expose the actual scalar operator for factorization");
+    check(
+        floquet_pure_neumann_result.phi_mean_weights.empty(),
+        "nonzero-k Floquet assembly must not carry the k=0 mean-zero gauge");
+    check(
+        std::strcmp(floquet_pure_neumann_result.gauge_policy, "require_invertible") == 0,
+        "pure_neumann Floquet metadata must report the actual no-gauge factorization policy");
 #endif
     return 0;
 }

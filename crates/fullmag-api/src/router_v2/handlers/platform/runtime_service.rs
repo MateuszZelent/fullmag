@@ -75,7 +75,7 @@ pub async fn get_runtime_service(
 /// observed only when guarded metadata says that it exists.  Orphaned owner or
 /// launch metadata also selects that path so a missing configuration is
 /// reported as an error/unknown state rather than as `not_configured`.
-fn resolve_config_path(
+pub(super) fn resolve_config_path(
     store_root: Option<&Path>,
     explicit_config_path: Option<PathBuf>,
 ) -> Option<PathBuf> {

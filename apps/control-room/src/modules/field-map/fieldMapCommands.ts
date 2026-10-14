@@ -370,13 +370,13 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       id === "planar-monitor.duplicate" ||
       id === "planar-monitor.rename"
     ) {
-      if (!context.api || typeof input?.monitorId !== "string") {
+      const monitorId = input?.monitorId;
+      if (!context.api || typeof monitorId !== "string") {
         return {
           message: "Planar monitor API or monitor id is missing.",
           status: "failed",
         };
       }
-      const monitorId = input.monitorId;
       let revision: number;
       if (id === "planar-monitor.delete") {
         const visualization = await context.api.visualization.state(requestOptions);
@@ -449,14 +449,14 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           };
         }
       } else {
-        if (typeof input.newName !== "string" || !input.newName.trim()) {
+        const newName = input?.newName;
+        if (typeof newName !== "string" || !newName.trim()) {
           context.layout?.setPanelVisible("right", true);
           return {
             message: "Edit the monitor name in the Inspector.",
             status: "completed",
           };
         }
-        const newName = input.newName;
         const response = await runAuthoringMutationWithHistory(
           { ...context, sessionScopeKey },
           "Rename planar monitor",

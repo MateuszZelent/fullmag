@@ -1,0 +1,151 @@
+{
+  "document": {
+    "path": "docs/physics/r4-producer-provenance.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "Brak dowodu native GPU modal handoff i parytetu; brak cichego fallbacku CPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Kontrakt dotyczy exact FEM equilibrium payloadów."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Kontrakt dotyczy exact FEM equilibrium payloadów."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-producer-framed-sha256",
+      "symbols": ["N", "p", "D-N"],
+      "sources": ["producer-framing"]
+    },
+    {
+      "id": "eq-producer-raw-sha256",
+      "symbols": ["R-b", "b"],
+      "sources": ["producer-raw-digest"]
+    },
+    {
+      "id": "eq-producer-payload-binding",
+      "symbols": ["Q", "R-b", "D-N"],
+      "sources": ["producer-payload-binding"]
+    },
+    {
+      "id": "eq-producer-source-policy",
+      "symbols": ["D-source-producer", "D-source-consumer"],
+      "sources": ["producer-source-policy"]
+    }
+  ],
+  "symbols": [
+    {"id": "N", "latex": "N", "meaning": "namespace ramki digestu", "si_unit": "1"},
+    {"id": "p", "latex": "p", "meaning": "dokładne bajty preimage", "si_unit": "1"},
+    {"id": "D-N", "latex": "D_N(p)", "meaning": "framed SHA-256 w namespace $N$", "si_unit": "1"},
+    {"id": "R-b", "latex": "R(b)", "meaning": "surowy SHA-256 bajtów $b$", "si_unit": "1"},
+    {"id": "b", "latex": "b", "meaning": "dokładny payload bajtowy", "si_unit": "1"},
+    {"id": "Q", "latex": "Q", "meaning": "zbiór accepted/certified/recomputed payloadów", "si_unit": "1"},
+    {"id": "D-source-producer", "latex": "D_{\\mathrm{source}}^{\\mathrm{producer}}", "meaning": "digest snapshotu źródła producenta", "si_unit": "1"},
+    {"id": "D-source-consumer", "latex": "D_{\\mathrm{source}}^{\\mathrm{consumer}}", "meaning": "digest snapshotu źródła konsumenta", "si_unit": "1"}
+  ],
+  "sources": [
+    {
+      "id": "producer-discovery",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_producer_provenance_discovery",
+      "responsibility": "Pełny computed sample-set, canonical paths i singular/plural binding bez fałszywej kwalifikacji payloadów."
+    },
+    {
+      "id": "standalone-execution-binding",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "bind_fem_execution_stage_identity",
+      "responsibility": "Nadanie rzeczywistej nowej execution identity przed dispatch; zachowanie jawnej orkiestracji i odrzucenie częściowych danych."
+    },
+    {
+      "id": "interactive-execution-binding",
+      "path": "crates/fullmag-runner/src/interactive/runtime.rs",
+      "symbol": "execute_planned_streaming",
+      "responsibility": "Binding standalone execution przed pipeline i writerem unified InteractiveRuntime."
+    },
+    {
+      "id": "producer-framing",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "linearization_identity_v2_content_sha256_from_preimage_bytes",
+      "responsibility": "Namespace i framed digest exact preimage."
+    },
+    {
+      "id": "producer-raw-digest",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "published_artifact_sha256",
+      "responsibility": "Surowy digest exact auxiliary artifact bytes."
+    },
+    {
+      "id": "producer-payload-binding",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "fem_relaxation_producer_provenance_artifact",
+      "responsibility": "Granica producenta: exact payload bytes, run identity i raw/content digests."
+    },
+    {
+      "id": "producer-source-policy",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "validate_for_handoff",
+      "responsibility": "Strict source snapshot, schema, path i fail-closed cross-build policy."
+    },
+    {
+      "id": "producer-build-snapshot-format",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "is_strict_source_snapshot_sha256",
+      "responsibility": "Source snapshot build identity to 64 lowercase hex bez prefiksu; odrębny od digestów payloadu."
+    },
+    {
+      "id": "producer-build-snapshot-authority",
+      "path": "crates/fullmag-build-info/src/lib.rs",
+      "symbol": "identity",
+      "responsibility": "Canonical build identity kopiowana przez granicę producenta bez normalizacji."
+    },
+    {
+      "id": "producer-cli-transport",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "accepted_relax_handoff_from_completed_stage_with_exact_artifacts",
+      "responsibility": "CLI loader sidecara i exact payloadów do verified handoffu."
+    },
+    {
+      "id": "producer-manifest-paths",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "sample_scoped_producer_provenance_paths",
+      "responsibility": "Wybiera canonicalne sample-scoped producer provenance paths, sortuje po sample_index i zachowuje exact path/bytes."
+    },
+    {
+      "id": "producer-path-manifest",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
+      "symbol": "build_eigen_path_frequency_domain_manifest",
+      "responsibility": "Publikuje singular/plural producer provenance manifest references zgodnie z rzeczywistym sample set."
+    },
+    {
+      "id": "producer-verified-api",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "from_completed_relax_verified_with_exact_artifacts_and_provenance",
+      "responsibility": "Verified constructor wymagający producer sidecara; brak current-build fallbacku."
+    },
+    {
+      "id": "producer-nonshared",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+      "symbol": "execute_native_cpu_modal_window_from_bloch_floquet_complex",
+      "responsibility": "Non-shared Floquet handoff i operator identity gap."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

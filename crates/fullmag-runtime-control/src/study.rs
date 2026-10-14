@@ -9,7 +9,9 @@ use fullmag_application::{
 use fullmag_authoring::{
     StudyInputPort, StudyInputSource, StudyPlan, StudyPortDataKind, StudyStep,
 };
-use fullmag_ir::{ExecutionDevice, ExecutionMode, ExecutionPlanIR, ExecutionPrecision, ProblemIR};
+use fullmag_ir::{
+    BackendTarget, ExecutionDevice, ExecutionMode, ExecutionPlanIR, ExecutionPrecision, ProblemIR,
+};
 use fullmag_plan::{
     lower_study_plan_with_catalog, PreparationMaterialization, PreparationPlanSource,
     StudyExecutionPlan, StudyProblemCatalog, StudyStepLoweringStatus,
@@ -23,6 +25,12 @@ pub struct AcceptedStudySnapshot {
     pub study: StudyPlan,
     pub catalog: StudyProblemCatalog,
     pub lowered: StudyExecutionPlan,
+}
+
+#[derive(Clone, Copy)]
+enum NativeFemPreparationKind {
+    TimeDomain,
+    AntennaExternalLeadInspection,
 }
 
 impl AcceptedStudySnapshot {
@@ -108,6 +116,37 @@ impl AcceptedStudySnapshot {
         step_id: &str,
         native: &fullmag_plan::NativeFemMeshSpaceEvidence,
     ) -> Result<PreparationReceipt> {
+        self.materialize_native_fem_preparation_receipt(
+            preparation_id,
+            step_id,
+            native,
+            NativeFemPreparationKind::TimeDomain,
+        )
+    }
+
+    /// Prepare the combined conductor/lead H1 P1 mesh of a pinned inspection
+    /// step. This does not certify current, Oersted fields, or LLG coupling.
+    pub fn materialize_antenna_external_lead_inspection_preparation_receipt(
+        &self,
+        preparation_id: impl Into<String>,
+        step_id: &str,
+        native: &fullmag_plan::NativeFemMeshSpaceEvidence,
+    ) -> Result<PreparationReceipt> {
+        self.materialize_native_fem_preparation_receipt(
+            preparation_id,
+            step_id,
+            native,
+            NativeFemPreparationKind::AntennaExternalLeadInspection,
+        )
+    }
+
+    fn materialize_native_fem_preparation_receipt(
+        &self,
+        preparation_id: impl Into<String>,
+        step_id: &str,
+        native: &fullmag_plan::NativeFemMeshSpaceEvidence,
+        kind: NativeFemPreparationKind,
+    ) -> Result<PreparationReceipt> {
         let step = self
             .lowered
             .steps
@@ -152,15 +191,30 @@ impl AcceptedStudySnapshot {
             "schema_version": "display_projection.v1",
             "payload": {"source": "accepted_run_default"},
         });
-        let materialization = PreparationMaterialization::from_fem_execution_plan_for_accepted_run(
-            problem_fingerprint,
-            source,
-            problem.backend_policy.requested_backend,
-            execution_plan,
-            preparation_fingerprint(&geometry_projection),
-            preparation_fingerprint(&display_projection),
-            native,
-        )?;
+        let geometry_fingerprint = preparation_fingerprint(&geometry_projection);
+        let display_fingerprint = preparation_fingerprint(&display_projection);
+        let materialization = match kind {
+            NativeFemPreparationKind::TimeDomain =>
+                PreparationMaterialization::from_fem_execution_plan_for_accepted_run(
+                    problem_fingerprint,
+                    source,
+                    problem.backend_policy.requested_backend,
+                    execution_plan,
+                    geometry_fingerprint,
+                    display_fingerprint,
+                    native,
+                )?,
+            NativeFemPreparationKind::AntennaExternalLeadInspection =>
+                PreparationMaterialization::from_antenna_external_lead_inspection_execution_plan_for_accepted_run(
+                    problem_fingerprint,
+                    source,
+                    problem.backend_policy.requested_backend,
+                    execution_plan,
+                    geometry_fingerprint,
+                    display_fingerprint,
+                    native,
+                )?,
+        };
         PreparationReceipt::ready_for_accepted_run(
             preparation_id,
             materialization.plan,
@@ -695,7 +749,15 @@ pub fn load_accepted_worker_step(
     if serde_json::to_value(&replanned)? != serde_json::to_value(execution_plan)? {
         bail!("worker execution plan differs from the accepted canonical plan");
     }
-    if matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+    let inspection = matches!(
+        &execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_)
+    );
+    if inspection && (execution_step.until_seconds.is_some() || !execution_step.inputs.is_empty()) {
+        bail!("accepted antenna inspection must not declare a magnetic horizon or inputs");
+    }
+    if !inspection
+        && matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
         && execution_step.until_seconds.is_none()
     {
         bail!("accepted TimeEvolution worker step has no pinned until_seconds");
@@ -2774,7 +2836,8 @@ pub fn load_accepted_study_snapshot(
                 asset.asset_id
             );
         }
-        store.cas().get(object_ref)?.with_context(|| {
+        // Verify the complete asset without allocating a discarded payload buffer.
+        store.cas().verified_length(object_ref)?.with_context(|| {
             format!("accepted run asset `{}` object is missing", asset.asset_id)
         })?;
     }
@@ -2888,6 +2951,38 @@ pub fn validate_requested_execution(
         }
 
         let planned_precision = match &execution.backend_plan {
+            fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
+                let intent = &inspection.requested_execution;
+                if step_requested.backend != "fem"
+                    || !matches!(step_requested.device.as_str(), "cpu" | "auto")
+                    || step_requested.precision != "double"
+                    || step_requested.mode != "strict"
+                    || intent.discretization != BackendTarget::Fem
+                    || !matches!(intent.device, ExecutionDevice::Cpu | ExecutionDevice::Auto)
+                    || intent.precision != ExecutionPrecision::Double
+                    || intent.execution_mode != ExecutionMode::Strict
+                    || device_name(intent.device) != step_requested.device
+                    || execution.common.resolved_backend != BackendTarget::Fem
+                    || step.until_seconds.is_some()
+                    || !matches!(
+                        &step.kind,
+                        fullmag_authoring::StudyStepKind::Primitive {
+                            stage_kind:
+                                fullmag_authoring::StudyPrimitiveStageKind::AntennaFieldSolve,
+                        }
+                    )
+                    || !step.inputs.is_empty()
+                    || step.outputs.len() != 1
+                    || step.outputs[0].port_id
+                        != fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID
+                    || step.outputs[0].data_kind != fullmag_authoring::StudyPortDataKind::Artifact
+                {
+                    bail!(
+                        "antenna inspection accepted-study requires FEM CPU-or-auto double strict and its sole inspection/Artifact port, without magnetic inputs or horizon"
+                    );
+                }
+                Some(intent.precision)
+            }
             fullmag_ir::BackendPlanIR::Fdm(plan) => Some(plan.precision),
             fullmag_ir::BackendPlanIR::FdmMultilayer(plan) => Some(plan.precision),
             fullmag_ir::BackendPlanIR::FemEigen(plan) => Some(plan.precision),

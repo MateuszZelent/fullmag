@@ -91,6 +91,7 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              {descriptor?.range.mode === "fixed" ? <SelectItem value="fixed" disabled>Selected range</SelectItem> : null}
               <SelectItem value="follow">Follow tail</SelectItem>
               <SelectItem value="tailRows">Last 120 rows</SelectItem>
               <SelectItem value="tailTime">Last 1 ns</SelectItem>
@@ -98,6 +99,12 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
             </SelectContent>
           </Select>
         </div>
+        {descriptor?.range.mode === "fixed" ? (
+          <FieldRow
+            label={`Selected range (${descriptor.xAxisId})`}
+            value={`${descriptor.range.fromSI.toPrecision(6)} … ${descriptor.range.toSI.toPrecision(6)}`}
+          />
+        ) : null}
         {seriesOptions.length > 0 ? (
           <fieldset className="fm-live-chart-inspector__series">
             <legend className="fm-live-chart-inspector__legend">Signals</legend>

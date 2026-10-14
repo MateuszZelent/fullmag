@@ -1251,6 +1251,9 @@ fn is_supported_study_artifact_codec(data_kind: &str, codec_id: &str, version: &
         || (data_kind == "scalar"
             && codec_id == crate::study_artifact::STUDY_SCALAR_CODEC_ID
             && version == crate::study_artifact::STUDY_SCALAR_CODEC_VERSION)
+        || (data_kind == "artifact"
+            && codec_id == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_ID
+            && version == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_VERSION)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 
-import type { ProjectBatchAxisSummaryResource } from "@/kernel/api/apiTypes";
+import type {
+  ProjectBatchAxisSummaryResource,
+  ProjectBatchCaseSummaryResource,
+} from "@/kernel/api/apiTypes";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
 import {
   useProjectBatchCasesResource,
@@ -112,83 +115,105 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
               <div aria-live="polite" className="mt-2 grid min-w-0 gap-2 rounded-md border border-fm-subtle p-2">
                 {cases.status === "loading" && !cases.data ? <p>Loading batch cases…</p> : null}
                 {cases.error ? <p role="alert">Could not load batch cases: {cases.error.message}</p> : null}
-                {cases.data?.cases.map((batchCase) => (
-                  <div className="grid min-w-0 gap-1 border-b border-fm-subtle pb-2 last:border-b-0 last:pb-0" key={batchCase.case_id}>
-                    <div className="flex min-w-0 items-center justify-between gap-2 text-fm-xs">
-                      <span className="truncate font-medium text-fm-primary" title={batchCase.case_id}>
-                        {batchCase.case_id}
-                      </span>
-                      <span className="shrink-0 text-fm-muted">{caseStateLabel(batchCase.state)}</span>
-                    </div>
-                    <div className="break-words text-fm-xs text-fm-muted">
-                      {formatParameterTuple(batchCase.parameter_tuple, cases.data?.axes ?? [])}
-                    </div>
-                    <div className="truncate text-fm-xs text-fm-muted" title={batchCase.planned_run_id}>
-                      Run: {batchCase.planned_run_id}
-                    </div>
-                    <Button
-                      aria-expanded={selectedRunId === batchCase.planned_run_id}
-                      className="justify-self-start"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => toggleRunDetails(batchCase.planned_run_id)}
-                    >
-                      {selectedRunId === batchCase.planned_run_id ? "Hide run details" : "View run details"}
-                    </Button>
-                    {selectedRunId === batchCase.planned_run_id ? (
-                      <div aria-live="polite" className="grid min-w-0 gap-1 rounded-md border border-fm-subtle p-2">
-                        {selectedRun.status === "loading" && !selectedRun.data ? <p>Loading run details…</p> : null}
-                        {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
-                        {selectedRun.data ? (
-                          <>
-                            <div className="text-fm-xs text-fm-muted">
-                              {selectedRun.data.catalog_state === "materialized"
-                                ? `Task catalog revision ${selectedRun.data.catalog_revision ?? "unknown"}`
-                                : "Task catalog has not been materialized"}
-                            </div>
-                            {selectedRun.data.tasks.map((task) => (
-                              <div className="min-w-0 text-fm-xs" key={task.task_id}>
-                                <span className="font-medium text-fm-primary">{task.lifecycle}</span>
-                                {task.readiness.state === "blocked"
-                                  ? ` · blocked: ${task.readiness.reason}`
-                                  : " · ready"}
-                                <div className="truncate text-fm-muted" title={task.task_id}>
-                                  {task.task_id}
-                                </div>
-                              </div>
-                            ))}
-                            {selectedRun.data.tasks.length === 0 ? <p>No tasks have been materialized.</p> : null}
-                          </>
-                        ) : null}
-                        <div className="grid min-w-0 gap-1 border-t border-fm-subtle pt-1">
-                          <span className="text-fm-xs font-medium text-fm-primary">Available results</span>
-                          {selectedRunResults.status === "loading" && !selectedRunResults.data ? (
-                            <p>Loading result sets…</p>
-                          ) : null}
-                          {selectedRunResults.error ? (
-                            <p role="alert">Could not load result sets: {selectedRunResults.error.message}</p>
-                          ) : null}
-                          {selectedRunResults.data?.items.map((item) => (
-                            <div className="break-words text-fm-xs text-fm-muted" key={`${item.solution_set_id}:${item.revision}`}>
-                              {item.solution_set_id} · revision {item.revision}
+                {cases.data?.cases.map((batchCase) => {
+                  const publishedRun = batchCase.published_run ?? null;
+                  return (
+                    <div className="grid min-w-0 gap-1 border-b border-fm-subtle pb-2 last:border-b-0 last:pb-0" key={batchCase.case_id}>
+                      <div className="flex min-w-0 items-center justify-between gap-2 text-fm-xs">
+                        <span className="truncate font-medium text-fm-primary" title={batchCase.case_id}>
+                          {batchCase.case_id}
+                        </span>
+                        <span className="shrink-0 text-fm-muted">{caseStateLabel(batchCase.state)}</span>
+                      </div>
+                      <div className="break-words text-fm-xs text-fm-muted">
+                        {formatParameterTuple(batchCase.parameter_tuple, cases.data?.axes ?? [])}
+                      </div>
+                      <div className="truncate text-fm-xs text-fm-muted" title={batchCase.planned_run_id}>
+                        Planned run: {batchCase.planned_run_id}
+                      </div>
+                      {publishedRun ? (
+                        <>
+                          <div className="truncate text-fm-xs text-fm-muted" title={publishedRun.run_id}>
+                            Published child run: {publishedRun.run_id}
+                          </div>
+                          <div className="text-fm-xs text-fm-muted">
+                            {publishedRun.catalog_state === "materialized"
+                              ? `Task catalog revision ${publishedRun.catalog_revision ?? "unknown"} · ${publishedRun.tasks.length} task(s)`
+                              : "Task catalog pending materialization"}
+                          </div>
+                          {publishedRun.tasks.map((task) => (
+                            <div className="truncate text-fm-xs text-fm-muted" key={task.task_id} title={task.task_id}>
+                              {task.lifecycle} · {task.task_id}
                             </div>
                           ))}
-                          {selectedRunResults.data?.items.length === 0 ? <p>No saved results for this run yet.</p> : null}
-                          {selectedRunResults.data?.next_cursor ? (
-                            <Button
-                              className="justify-self-start"
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => setResultCursor(selectedRunResults.data?.next_cursor ?? null)}
-                            >
-                              Next result sets
-                            </Button>
+                          <Button
+                            aria-expanded={selectedRunId === publishedRun.run_id}
+                            className="justify-self-start"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => toggleRunDetails(publishedRun.run_id)}
+                          >
+                            {selectedRunId === publishedRun.run_id ? "Hide run details" : "View run details"}
+                          </Button>
+                        </>
+                      ) : (
+                        <div className="text-fm-xs text-fm-muted">Child run has not been published.</div>
+                      )}
+                      {publishedRun && selectedRunId === publishedRun.run_id ? (
+                        <div aria-live="polite" className="grid min-w-0 gap-1 rounded-md border border-fm-subtle p-2">
+                          {selectedRun.status === "loading" && !selectedRun.data ? <p>Loading run details…</p> : null}
+                          {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
+                          {selectedRun.data ? (
+                            <>
+                              <div className="text-fm-xs text-fm-muted">
+                                {selectedRun.data.catalog_state === "materialized"
+                                  ? `Task catalog revision ${selectedRun.data.catalog_revision ?? "unknown"}`
+                                  : "Task catalog has not been materialized"}
+                              </div>
+                              {selectedRun.data.tasks.map((task) => (
+                                <div className="min-w-0 text-fm-xs" key={task.task_id}>
+                                  <span className="font-medium text-fm-primary">{task.lifecycle}</span>
+                                  {task.readiness.state === "blocked"
+                                    ? ` · blocked: ${task.readiness.reason}`
+                                    : " · ready"}
+                                  <div className="truncate text-fm-muted" title={task.task_id}>
+                                    {task.task_id}
+                                  </div>
+                                </div>
+                              ))}
+                              {selectedRun.data.tasks.length === 0 ? <p>No tasks have been materialized.</p> : null}
+                            </>
                           ) : null}
+                          <div className="grid min-w-0 gap-1 border-t border-fm-subtle pt-1">
+                            <span className="text-fm-xs font-medium text-fm-primary">Available results</span>
+                            {selectedRunResults.status === "loading" && !selectedRunResults.data ? (
+                              <p>Loading result sets…</p>
+                            ) : null}
+                            {selectedRunResults.error ? (
+                              <p role="alert">Could not load result sets: {selectedRunResults.error.message}</p>
+                            ) : null}
+                            {selectedRunResults.data?.items.map((item) => (
+                              <div className="break-words text-fm-xs text-fm-muted" key={`${item.solution_set_id}:${item.revision}`}>
+                                {item.solution_set_id} · revision {item.revision}
+                              </div>
+                            ))}
+                            {selectedRunResults.data?.items.length === 0 ? <p>No saved results for this run yet.</p> : null}
+                            {selectedRunResults.data?.next_cursor ? (
+                              <Button
+                                className="justify-self-start"
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => setResultCursor(selectedRunResults.data?.next_cursor ?? null)}
+                              >
+                                Next result sets
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
+                      ) : null}
+                    </div>
+                  );
+                })}
                 {cases.data?.cases.length === 0 ? <p>No cases were returned for this page.</p> : null}
                 {cases.data?.next_cursor ? (
                   <Button
@@ -233,10 +258,10 @@ function failurePolicyLabel(policy: "continue_independent" | "stop_admission"): 
     : "continue independent cases";
 }
 
-function caseStateLabel(state: "pending_expansion" | "pending_materialization"): string {
-  return state === "pending_expansion"
-    ? "Pending expansion"
-    : "Pending task materialization";
+function caseStateLabel(state: ProjectBatchCaseSummaryResource["state"]): string {
+  if (state === "pending_expansion") return "Pending expansion";
+  if (state === "pending_materialization") return "Child run published; task materialization pending";
+  return "Tasks materialized";
 }
 
 function formatParameterTuple(

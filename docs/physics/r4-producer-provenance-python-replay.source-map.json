@@ -1,0 +1,244 @@
+{
+  "document": {
+    "path": "docs/physics/r4-producer-provenance-python-replay.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "The interpreted adapter has no managed GPU residency or device evidence."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The sidecar binds FEM relaxation payloads."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The sidecar binds FEM relaxation payloads."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-producer-python-plan-framing",
+      "symbols": ["N", "p", "D_N"],
+      "sources": ["rust-producer-plan", "python-adapter"]
+    },
+    {
+      "id": "eq-producer-python-raw-payload",
+      "symbols": ["b_q", "R"],
+      "sources": ["rust-payload-ref", "python-adapter"]
+    },
+    {
+      "id": "eq-producer-python-source-binding",
+      "symbols": ["R", "D_N", "S_producer"],
+      "sources": ["python-adapter", "producer-contract"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "digest namespace",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "exact producer plan JSON bytes",
+      "si_unit": "1"
+    },
+    {
+      "id": "b_q",
+      "latex": "b_q",
+      "meaning": "exact bytes of payload q",
+      "si_unit": "1"
+    },
+    {
+      "id": "D_N",
+      "latex": "D_N",
+      "meaning": "framed SHA-256",
+      "si_unit": "1"
+    },
+    {
+      "id": "R",
+      "latex": "R",
+      "meaning": "raw SHA-256 transport digest",
+      "si_unit": "1"
+    },
+    {
+      "id": "S_producer",
+      "latex": "S_{\\mathrm{producer}}",
+      "meaning": "producer source snapshot",
+      "si_unit": "1"
+    },
+    {
+      "id": "m0",
+      "latex": "\\mathbf m_0",
+      "meaning": "equilibrium magnetization vectors",
+      "si_unit": "1"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_s",
+      "meaning": "saturation magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Aex",
+      "latex": "A_{\\mathrm{ex}}",
+      "meaning": "exchange stiffness",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "Ku",
+      "latex": "K_u",
+      "meaning": "uniaxial anisotropy",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "alpha",
+      "latex": "\\alpha",
+      "meaning": "raw relaxation damping",
+      "si_unit": "1"
+    },
+    {
+      "id": "k",
+      "latex": "\\mathbf k",
+      "meaning": "modal wave vector",
+      "si_unit": "\\mathrm{rad\\,m^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "producer-contract",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "validate_for_handoff",
+      "responsibility": "authoritative sidecar schema, path and digest contract",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "rust-producer-plan",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "fem_relaxation_producer_provenance_from_exact_artifacts",
+      "responsibility": "producer plan framing and source signatures",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "rust-payload-ref",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "validate_producer_payload_ref",
+      "responsibility": "relative source paths and raw/content digests",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "python-adapter",
+      "path": "scripts/fem_producer_provenance_replay.py",
+      "symbol": "replay_producer_provenance",
+      "responsibility": "independent source-bound interpreted replay with semantic identity cross-bindings",
+      "evidence_status": "interpreted_tested"
+    },
+    {
+      "id": "producer-routing",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_producer_payload_replay",
+      "responsibility": "sample_NNNN producer routing with operator qualification kept separate",
+      "evidence_status": "interpreted_tested"
+    },
+    {
+      "id": "consumer-plan-replay",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_consumer_plan_exact_replay",
+      "responsibility": "exact consumer plan bytes bound to identity digest without IR qualification",
+      "evidence_status": "interpreted_tested"
+    },
+    {
+      "id": "producer-routing-test",
+      "path": "scripts/test_fem_producer_provenance_replay.py",
+      "symbol": "test_main_shared_routing_replays_real_producer_bundle",
+      "responsibility": "real producer fixture routing and foreign artifact/path/hash regressions",
+      "evidence_status": "interpreted_pass"
+    },
+    {
+      "id": "python-adapter-tests",
+      "path": "scripts/test_fem_producer_provenance_replay.py",
+      "symbol": "class ProducerProvenanceReplayTests",
+      "responsibility": "valid bundle, inline/copy transport, marker normalization and self-consistent foreign-identity mutation regressions",
+      "evidence_status": "interpreted_pass"
+    },
+    {
+      "id": "field-replay",
+      "path": "scripts/fem_accepted_recomputed_replay.py",
+      "symbol": "replay_artifact_paths",
+      "responsibility": "typed field and certificate replay",
+      "evidence_status": "interpreted_tested"
+    },
+    {
+      "id": "identity-replay",
+      "path": "scripts/fem_linearization_identity_replay.py",
+      "symbol": "replay_identity_preimage",
+      "responsibility": "full identity exact preimage gate",
+      "evidence_status": "interpreted_tested"
+    },
+    {
+      "id": "mesh-replay",
+      "path": "scripts/comsol_mesh_identity.py",
+      "symbol": "mesh_topology_fingerprint_v3",
+      "responsibility": "canonical source mesh topology digest after producer marker normalization",
+      "evidence_status": "interpreted_tested"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "ProducerArtifactPaths.payload_paths",
+        "type": "Mapping[str, Path] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "when present, exactly three absolute copied-payload paths",
+        "meaning": "consumer transport locations while preserving original producer refs",
+        "backend_support": "FEM CPU/GPU payloads; runtime not verified",
+        "problem_ir": "No change"
+      },
+      {
+        "python": "ProducerArtifactPaths.producer_plan_path",
+        "type": "Path | None",
+        "default": "required for standalone producer bundle; None for inline modal bundle",
+        "si_unit": "1",
+        "validation": "exact bytes equal producer_plan_snapshot.preimage_json when supplied",
+        "meaning": "source FemPlanIR exact preimage",
+        "backend_support": "FEM CPU/GPU payloads; runtime not verified",
+        "problem_ir": "FemPlanIR"
+      },
+      {
+        "python": "replay_producer_provenance.expected_source_snapshot_sha256",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "64 lowercase hex without prefix, equal to producer build snapshot",
+        "meaning": "explicit consumer expectation for cross-build policy",
+        "backend_support": "FEM CPU/GPU payloads; runtime not verified",
+        "problem_ir": "No change"
+      },
+      {
+        "python": "manifest.artifacts.consumer_plan_snapshot_v1_paths",
+        "type": "list[str]",
+        "default": "absent",
+        "si_unit": "1",
+        "validation": "ordered canonical `sample_NNNN/consumer_plan_snapshot.v1.json` paths with raw digest binding",
+        "meaning": "exact consumer-plan transport locations",
+        "backend_support": "FEM CPU/GPU payloads; IR/runtime not verified",
+        "problem_ir": "FemEigenPlanIR snapshot"
+      }
+    ]
+  }
+}

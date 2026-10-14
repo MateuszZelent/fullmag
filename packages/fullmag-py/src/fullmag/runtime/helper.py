@@ -210,6 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_scene_config.add_argument("--precision", choices=[precision.value for precision in ExecutionPrecision], required=True)
     export_scene_config.add_argument("--mode", choices=[mode.value for mode in ExecutionMode], required=True)
     export_scene_config.add_argument("--asset-root", help="Project-owned root for resolving imported geometry sources.")
+    export_scene_config.add_argument(
+        "--materialize-geometry-assets", action="store_true",
+        help="Execution-only: realize canonical geometry and antenna lead inputs without running a solver. Default export stays geometry-light.",
+    )
 
     read_state = subparsers.add_parser(
         "read-magnetization-state",
@@ -262,6 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 requested_precision=args.precision,
                 requested_mode=args.mode,
                 source_root=args.asset_root,
+                materialize_geometry_assets=args.materialize_geometry_assets,
             )
             _write_json(execution_config)
             emit_progress("SceneDocument execution config export completed")
@@ -474,5 +479,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 2
 
 
+def _run_cli(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return main(arguments)
+    except IncompletePhysicsError:
+        if arguments[:1] != ["render-scene-document"]:
+            raise
+        # This typed refusal occurs before the renderer publishes any source.
+        # Other helper failures retain their original unknown outcome.
+        print(json.dumps({
+            "schema": "fullmag.scene-render-rejection.v1",
+            "code": "incomplete_physics",
+        }))
+        return 2
+
+
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(_run_cli())

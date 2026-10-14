@@ -31,14 +31,34 @@ i ocena możliwości wznowienia korzystają z tego samego modelu. Zasoby to:
 | `diagnostics/cpu` | wątki, model, obciążenie CPU, pamięć systemowa |
 | `diagnostics/gpu` | wszystkie urządzenia, pamięć, obciążenie, temperatura |
 | `platform/capabilities` | zgłoszone realizacje, precyzje i powody niedostępności |
+| `platform/compute/nodes` | trwałe identyfikatory hostów i stan świeżości snapshotu inventory |
 
-Istniejące zasoby telemetryczne działają także przy pustym workspace.
-Kształty API i wygenerowane klienty nie wymagają zmian.
+Zasoby telemetryczne działają także przy pustym workspace. Inventory jest
+odczytywane osobno przez wygenerowany klient v2, fasadę i resource hook; nie
+zastępuje telemetrii i nie wyprowadza UUID urządzeń z indeksu lub nazwy.
+Settings pokazuje także wersję snapshotu, źródło i czas próbki, topologię CPU
+(identyfikatory logiczne, sockety, NUMA i znane rdzenie), dozwolone CPU,
+obserwowaną pojemność, limit CPU i pamięć. Dla GPU pokazuje stabilny UUID,
+nazwę, PCI ID, VRAM, partycję i NUMA, a także raportowane mechanizmy
+egzekwowania ograniczeń. Wartości zachowane jako `last_known` są tak oznaczone;
+inventory nie oznacza rezerwacji ani nie wybiera urządzenia dla solvera.
+Sampler hosta odczytuje topologię Linux z sysfs i zbiór affinity wątku
+wykonującego próbkę przez `sched_getaffinity`; to nie dowodzi affinity workerów.
+Na Windows publikuje rdzenie, grupy procesorów i
+NUMA, a zbiór dozwolony mierzy dla pojedynczej grupy procesu. Gdy proces należy
+do wielu grup Windows, topologia pozostaje widoczna, ale allowed CPU set jest
+`unavailable` zamiast niepełnego przydziału. Bieżąca pojemność CPU pozostaje
+oddzielna od quota; Linux uwzględnia widoczne limity cgroup v1/v2, a brak
+pomiaru quota na innym hoście jest pokazywany jako `unavailable`, nie zero.
+Skaner NVIDIA uznaje GPU za pełne urządzenie tylko przy `mig.mode.current=Disabled`.
+`Enabled`, `N/A` i odpowiedź starszego `nvidia-smi` zachowują telemetrię, ale
+pozostawiają partycję `unknown`; taki wpis nie otwiera pełnego GPU do admission.
+Format pola opisuje [NVIDIA MIG User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/getting-started-with-mig.html).
 
-Potwierdzone odczyty telemetryczne są odświeżane co 5 sekund, gdy ekran jest
-widoczny. Ukryte okno nie odpytuje hosta. Timer i nasłuch widoczności są
-zwalniane po odmontowaniu ekranu. Ręczne odświeżenie pobiera również
-capabilities i pozwala ponowić nieudany odczyt.
+Potwierdzone odczyty telemetryczne i stan inventory są odświeżane co 5 sekund,
+gdy ekran jest widoczny. Ukryte okno nie odpytuje hosta. Timer i nasłuch
+widoczności są zwalniane po odmontowaniu ekranu. Ręczne odświeżenie pobiera
+również capabilities i inventory oraz pozwala ponowić nieudany odczyt.
 
 Starszy host desktopowy, który nie udostępnia odczytów HTTP, zachowuje obsługę
 istniejącego `compute_probe`. Źródło jest oznaczone w modelu. Wersja CUDA
@@ -50,8 +70,17 @@ Trwający pierwszy odczyt, brak odpowiedzi, nieudane odświeżenie, brak GPU
 i niedostępna telemetria GPU mają odrębne komunikaty. Po błędzie odświeżenia
 ostatnie odebrane wartości pozostają widoczne z oznaczeniem ich stanu. Próbka
 starsza niż 30 sekund jest oznaczana jako `stale`; przyszły lub niepoprawny
-czas próbki nie jest uznawany za bieżący.
-Odpowiedź `unavailable` nie staje się pomiarem 0% lub 0 GB.
+czas próbki nie jest uznawany za bieżący. Inventory publikuje ten sam limit
+`stale_after_seconds`; Start i Settings pokazują jego stan oddzielnie od
+telemetrii CPU/GPU i dostępności solvera. Gdy odświeżenie API zawiedzie,
+zachowana próbka nadal starzeje się lokalnie według tego limitu: dokładnie
+30 sekund pozostaje `current`, a później widok pokazuje `stale` bez czekania
+na udany następny odczyt.
+Odpowiedź `unavailable` nie staje się pomiarem 0% lub 0 GB. Stan węzła
+uwzględnia również zgodność `boot_id`: snapshot może mieć próbkę świeżą
+wiekowo, ale pozostać `unavailable` po restarcie hosta. Aging próbki nie
+zmienia tej niedostępności; Settings pokazuje stan węzła osobno od świeżości
+samej próbki.
 
 Przed pierwszym udanym odczytem nagłówek ma stan `Not probed`; w czasie
 oczekiwania opisuje trwający odczyt, a brak hosta lub błąd pozostaje odrębnym

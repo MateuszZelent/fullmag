@@ -6,12 +6,14 @@ import type { CommandContext } from "@/kernel/commands/commandTypes";
 export type MeshBuildConfirmCommandId =
   | "mesh.build-selected"
   | "mesh.build-shared-domain"
-  | "mesh.refine-worst-quality-element";
+  | "mesh.refine-worst-quality-element"
+  | "grid.build-fdm";
 
 const MESH_BUILD_CONFIRM_COMMAND_IDS = new Set<string>([
   "mesh.build-selected",
   "mesh.build-shared-domain",
   "mesh.refine-worst-quality-element",
+  "grid.build-fdm",
 ]);
 
 export function isMeshBuildConfirmCommandId(
@@ -46,7 +48,7 @@ export async function awaitMeshBuildConfirmation(
 ): Promise<{ confirmed: boolean; requestId: string; precondition?: RuntimeCommandPrecondition }> {
   const requestId = `mesh-confirm-${Date.now()}-${++confirmationSequence}`;
   const bus = context.bus;
-  if (!bus) return { confirmed: false, requestId };
+  if (!bus) return { confirmed: true, requestId };
   const guard = draftGuards.get(bus);
   if (guard && !(await guard())) return { confirmed: false, requestId };
   return new Promise((resolve) => {

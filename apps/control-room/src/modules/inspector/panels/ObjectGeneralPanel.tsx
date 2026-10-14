@@ -42,6 +42,7 @@ import {
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
+import { resolvePrimitiveSurfaceColor } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -94,7 +95,7 @@ interface PendingOperationState {
 
 type GeometryObjectVisualizationColors = Pick<
   VisualizationTargetSettings,
-  "shaderMonoColor" | "wireframeColor"
+  "primitiveMonoColor" | "shaderMonoColor" | "surfaceColorSource" | "wireframeColor"
 >;
 
 function resolveGeometryObjectVisualizationColors(
@@ -109,7 +110,9 @@ function resolveGeometryObjectVisualizationColors(
     visualizationState,
   }).settings;
   return {
+    primitiveMonoColor: settings.primitiveMonoColor,
     shaderMonoColor: settings.shaderMonoColor,
+    surfaceColorSource: settings.surfaceColorSource,
     wireframeColor: settings.wireframeColor,
   };
 }
@@ -121,7 +124,9 @@ function geometryObjectVisualizationColorsEquals(
   if (previous === next) return true;
   if (!previous || !next) return previous === next;
   return (
+    previous.primitiveMonoColor === next.primitiveMonoColor &&
     previous.shaderMonoColor === next.shaderMonoColor &&
+    previous.surfaceColorSource === next.surfaceColorSource &&
     previous.wireframeColor === next.wireframeColor
   );
 }
@@ -191,13 +196,18 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
   const object = resolveObjectGeneralPanelModel(selection, scene.data);
+  const sceneObject = scene.data?.objects?.find((entry) => entry.id === object.objectId);
+  const antennaWithoutMagnetization = sceneObject?.role === "antenna"
+    && sceneObject.magnetization_ref == null
+    && !sceneObject.physics_stack?.length
+    && !Object.keys(sceneObject.region_overrides ?? {}).length;
   const visualizationState = useVisualizationStateResource({
     enabled: object.mode === "committed",
   });
   const displayVisualizationState =
     visualizationState.optimisticData ?? visualizationState.data;
   const objectMetrics = useObjectMetricsResource(
-    object.mode === "committed" ? object.objectId : null,
+    object.mode === "committed" && !antennaWithoutMagnetization ? object.objectId : null,
   );
 
   const draftKey = `${object.mode}:${object.objectId}:${object.revision}`;
@@ -333,6 +343,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   );
 
   const metricsModel = resolveObjectMetricsPanelModel(objectMetrics.data);
+  const presentationRole = scene.data?.objects?.find(
+    (entry) => entry.id === object.objectId,
+  )?.role;
+  const primitiveColor = visualizationSettings
+    ? resolvePrimitiveSurfaceColor(presentationRole, visualizationSettings)
+    : null;
 
   function createAuthoringMutationContext() {
     const commandContext = createCommandContext("inspector", kernel, {
@@ -831,7 +847,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
     if (!visualizationTarget) return;
     const commandId =
       field === "primitiveColor"
-        ? "visualization.target.set-shader-mono-color"
+        ? "visualization.target.set-primitive-mono-color"
         : "visualization.target.set-wireframe-color";
     void kernel.commands.execute(
       commandId,
@@ -848,7 +864,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="Ferromagnet Object" collapsible defaultOpen>
+      <InspectorGroup title="Object" collapsible defaultOpen>
         {object.mode === "committed" ? (
           <>
             <FormField
@@ -897,9 +913,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
               label="Primitive color"
               mono={false}
               type="text"
-              value={visualizationSettings.shaderMonoColor}
+              value={visualizationSettings.primitiveMonoColor ?? ""}
+              hint="Viewport-local primitive preference; a solid shader override takes precedence."
               onChange={(event) => patchObjectColor("primitiveColor", event.target.value)}
             />
+            <FieldRow label="Preview color" value={primitiveColor?.color ?? "unavailable"} />
+            <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
             <FormField
               label="Frame color"
               mono={false}
@@ -911,7 +930,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         ) : null}
       </InspectorGroup>
 
-      <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
+      {!antennaWithoutMagnetization ? <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
         <FieldRow label="Fetch state" value={objectMetrics.status} />
         <FieldRow label="Sample" value={metricsModel.sample} />
         <FieldRow label="Source" value={metricsModel.source} />
@@ -922,7 +941,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Anisotropy" value={metricsModel.anisotropy} />
         <FieldRow label="DMI" value={metricsModel.dmi} />
         <FieldRow label="Total" value={metricsModel.total} />
-      </InspectorGroup>
+      </InspectorGroup> : null}
 
       <InspectorGroup title="Resource State" collapsible defaultOpen>
         <FieldRow label="Source" value={object.source} />

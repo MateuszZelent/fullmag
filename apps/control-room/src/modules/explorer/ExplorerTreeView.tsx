@@ -396,7 +396,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
           ? (event) => {
               if (event.button !== 0) return;
               if (
-                event.target instanceof HTMLElement &&
+                event.target instanceof Element &&
                 event.target.closest(".fm-explorer-tree-row__branch")
               ) {
                 return;
@@ -420,16 +420,20 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
             />
           ))
         : null}
-      <span className="fm-explorer-tree-row__branch" aria-hidden="true">
+      <span
+        className="fm-explorer-tree-row__branch"
+        aria-hidden="true"
+        onClick={
+          hasChildren
+            ? (event) => {
+                event.stopPropagation();
+                handleToggle();
+              }
+            : undefined
+        }
+      >
         {hasChildren ? (
-          <ChevronRight
-            size={13}
-            data-expanded={expanded}
-            onClick={(event) => {
-              event.stopPropagation();
-              handleToggle();
-            }}
-          />
+          <ChevronRight size={13} data-expanded={expanded} />
         ) : null}
       </span>
       <span

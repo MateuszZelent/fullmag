@@ -1,5 +1,63 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+Aktualny odbiór 14.10.2026: [P8-53BO](53bo-grid-modal-correlation.md)
+potwierdził pełny pojedynczy restart niepustego modelu z dirty dokumentem
+i kamerą, a następnie Grid/Compute/Close (81eb7f40, exit 0). Historyczne
+checkpointy poniżej nie cofają tego dowodu. Nadal otwarte są dwa restarty
+w jednej sesji, pełna macierz Inspector/view state/fault, integracja i wydanie.
+Dokładne granice i kontrakt następnego przyrostu:
+[P8-53BS](53bs-restart-remaining-gates.md). **P8-53 pozostaje IN PROGRESS.**
+
+Historyczny checkpoint wejściowy — [P8-53BM](53bm-camera-preservation.md), 13.10.2026:
+potwierdzono utratę projekcji kamery podczas rzeczywistego restartu.
+Owner v2 przenosi ścisły snapshot przez typowane API i wymaga zgodnego
+ACK/readback przed publikacją. Aktywna sesja bez zaobserwowanej kamery
+oraz replacement współdzielący stary rejestr są odrzucane.
+Managed Chrome fixture: 36/36 PASS w zakresie ownerów i diagnostyki capture.
+Natywna bramka API pakietu `1626bd35933b27d1edc6cbdb812c81429a6f5a8a21819e092b6c86e40fed872b`
+potwierdziła rewizję camera-only PATCH oraz absent/null/number skali
+(301 kontroli, receipt `1995c74607ba4a4a852388b1a854447a`).
+W tym checkpointcie rzeczywisty restart z odtworzeniem kamery po poprawce
+pozostawał otwarty. Najnowszy 53BO potwierdza jeden taki przebieg; fixture
+i bramka HTTP same nie zastępowały tego dowodu. Publiczny restart pozostaje
+nieudostępniony (`restart_available=false`), niezależnie od prywatnego PASS.
+
+[P8-53BL](53bl-inspector-owner-inventory.md), 13.10.2026:
+inwentaryzacja 23 zarejestrowanych ownerów Inspectora zakończona w źródłach.
+Nie wykazano brakującej ochrony standardowych staged formularzy.
+Stany natychmiastowe rozszerzeń i przekrojów oraz lokalne kontrolki zapytania
+Topological Charge wymagają odrębnego dowodu capture/restore.
+Pełna macierz browser i P8-53 pozostają otwarte.
+
+[P8-53BK](53bk-repeated-handoff-owner-chain.md), 13.10.2026:
+interpretowany łańcuch terminalnie odtworzonych kapsuł z nowym ownerem
+**PASS**, 162 kontrole bez pominięć, receipt `d061e0844b104248bf03fedb12ce3f34`.
+Nie zastępuje dwóch restartów A→B→C w jednej sesji przeglądarki;
+ta bramka oraz pozostałe wymagania P8-53 pozostają otwarte.
+
+[P8-53BJ](53bj-pending-inspector-save-cancel.md), 13.10.2026:
+Save/Cancel przy szkicu panelu materiału **CLOSED w opisanym zakresie**.
+Save pobrał zatwierdzone alpha=0.01, zachowując szkic alpha=0.03; Cancel
+dialogu New Problem zachował panel i scenę. Restart odmówił do jawnego Revert.
+Receipt `89e280c2a794426cb3a4e55127178bd1`: exit 0, dziewięć kontroli PASS,
+Grid i Compute zakończone normalnie, wszystkie 26 procesów odebrane.
+Pozostałe panele, powtórny restart i zapis desktop nadal pozostają otwarte.
+
+[P8-53BI](53bi-project-save-before-restart.md), 13.10.2026:
+Save Project w Chrome z czystym Inspectorem → restart → restore **CLOSED**.
+Rzeczywisty plik ZIP/CRC i skrypt potwierdzone; hash pobranego archiwum
+zgodny z dokumentem przed i po restarcie. Receipt
+`8ea73f1c32b1424a90a4d69906d5c665`, exit 0, dziewięć kontroli PASS,
+Grid i Compute normalnie zakończone, 26 procesów odebrane.
+Zapis desktop i Save/Cancel niezastosowanych szkiców pozostają otwarte.
+
+[P8-53BH](53bh-inspector-first-edit-after-resource-refresh.md), 13.10.2026:
+pierwsza edycja materiału po odświeżeniu, guard szkicu, Apply i restart/restore
+**CLOSED w opisanym zakresie**. Receipt `0349fe166bc24239b39ecf5260ad3fc5`:
+completed, exit 0, dziewięć kontroli, Grid i Compute zakończone normalnie,
+wszystkie 26 procesów odebrane. Save Project, Cancel, pozostałe panele
+Inspectora i powtórny restart pozostają otwarte. Nie zamyka całego P8-53.
+
 [P8-53BE](53be-compute-after-workspace-restore.md), 13.10.2026:
 Compute po restore dla FDM CPU strict double **CLOSED**. Browser F→K
 `01ad57bafdca4a89881a4138c1fdbfcd`, exit 0, potwierdza niezmienioną

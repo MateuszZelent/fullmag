@@ -14,7 +14,7 @@ DOCS_REQUIRING_TOKENS = [
     Path("docs/physics/frequency_domain_solver_physics.md"),
     Path("docs/physics/0600-fem-eigenmodes-linearized-llg.md"),
     Path("docs/specs/frequency-domain-artifacts-v2.md"),
-    Path("docs/plans/active/frequency-domain-fem-masterplan-2026-06-11/01-backend-native-fem-frequency-domain.md"),
+    Path("docs/plans/active/old_frequency-domain-fem-masterplan-2026-06-11/01-backend-native-fem-frequency-domain.md"),
 ]
 
 

@@ -5,15 +5,22 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
-import type { ArtifactResource, TableResource } from "@/kernel/api/apiTypes";
+import type {
+  AnalysisResultDatasetSummaryResource,
+  ArtifactResource,
+  TableResource,
+} from "@/kernel/api/apiTypes";
 
 import { buildExplorerTree, flattenExplorerNodes } from "./buildModelTree";
 import {
   buildPhysicsFirstResultsTree,
+  withPinnedAnalysisDefinitions,
+  withCatalogAnalysisFamilies,
   physicsFirstResultsSnapshotFromResources,
   type PhysicsFirstResultEntry,
 } from "./resultsExplorerNodes";
 import { selectExplorerNode } from "../explorerSelection";
+import type { ExplorerNode } from "../explorerTypes";
 
 const modalFinite = {
   artifactRevision: "spectrum-r7",
@@ -63,7 +70,6 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(tree[0]?.label).toBe("Results");
     expect(nodes.map((node) => node.label)).toEqual(
       expect.arrayContaining([
-        "Dynamics",
         "Resonance & FMR",
         "Linear eigenmodes · Modal",
         "Eigenfrequency Spectrum",
@@ -73,7 +79,6 @@ describe("buildPhysicsFirstResultsTree", () => {
         "Resonance Peaks",
         "Frequency Points",
         "Response Fields",
-        "Hysteresis",
         "Analysis Views",
         "Derived Values",
         "Tables",
@@ -81,6 +86,44 @@ describe("buildPhysicsFirstResultsTree", () => {
       ]),
     );
     expect(nodes.map((node) => node.label)).not.toContain("RF Coupling / FMR Activity");
+    // Families that published nothing in this run are not shown as placeholders.
+    expect(nodes.map((node) => node.label)).not.toContain("Dispersion & k-resolved response");
+    expect(nodes.map((node) => node.label)).not.toContain("Hysteresis");
+    expect(nodes.map((node) => node.label)).not.toContain("Dynamics");
+  });
+
+  it("tags analysis families with the module that owns them", () => {
+    const kPath = { kind: "path", label: "Γ–X", sampleCount: 8 } as const;
+    const families = buildPhysicsFirstResultsTree({
+      entries: [modalFinite, { ...modalFinite, kSampling: kPath, boundaryContext: "floquet_periodic", stageId: "k-path" }],
+      resultContextRunId: modalFinite.runId,
+    })[0]?.children;
+
+    expect(families?.find((node) => node.kind === "results.resonance.root")?.analysisModuleId).toBe(
+      "analysis.resonance",
+    );
+    const dispersion = families?.find((node) => node.kind === "results.dispersion.root");
+    expect(dispersion?.analysisModuleId).toBe("analysis.dispersion");
+    for (const descendant of flattenExplorerNodes(dispersion?.children ?? [])) {
+      expect(descendant.analysisModuleId).toBe("analysis.dispersion");
+    }
+  });
+
+  it("keeps Dynamics while snapshots load and omits it once the catalog is empty", () => {
+    const labels = (status: "loading" | "ready", frames: number) =>
+      flattenExplorerNodes(
+        buildPhysicsFirstResultsTree({
+          entries: [],
+          observationFrames: {
+            data: status === "ready" ? ({ frames: new Array(frames).fill(null) } as never) : null,
+            status,
+          } as never,
+          resultContextRunId: "run:frames",
+        }),
+      ).map((node) => node.label);
+
+    expect(labels("loading", 0)).toContain("Dynamics");
+    expect(labels("ready", 0)).not.toContain("Dynamics");
   });
 
   it("keeps fixed nonzero-k separate from a dispersion relation", () => {
@@ -244,29 +287,20 @@ describe("buildPhysicsFirstResultsTree", () => {
     });
   });
 
-  it("marks empty result families unavailable instead of presenting them as ready", () => {
+  it("omits empty analysis families and keeps empty postprocessing roots unavailable", () => {
     const nodes = flattenExplorerNodes(
       buildPhysicsFirstResultsTree({
         entries: [],
         resultContextRunId: "run:empty",
       }),
     );
+    const labels = nodes.map((candidate) => candidate.label);
 
-    // Dynamics always owns the "State snapshots" observation-frame root, so
-    // the family itself is a container; its only child carries the empty state.
-    const snapshots = nodes.find((candidate) => candidate.label === "State snapshots");
-    expect(snapshots).toMatchObject({
-      availability: "unavailable",
-      executionState: "not_started",
-      status: "unavailable",
-    });
-    expect(nodes.find((candidate) => candidate.label === "Dynamics")?.children)
-      .toEqual([expect.objectContaining({ id: snapshots?.id })]);
+    for (const label of ["Dynamics", "Resonance & FMR", "Dispersion & k-resolved response", "Hysteresis"]) {
+      expect(labels).not.toContain(label);
+    }
 
     for (const label of [
-      "Resonance & FMR",
-      "Dispersion & k-resolved response",
-      "Hysteresis",
       "Analysis Views",
       "Derived Values",
       "Tables",
@@ -739,6 +773,42 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     });
   });
 
+  it("uses the CSV wavevector when path metadata is absent", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 27, run_id: "runtime-run-27" },
+      dispersion: {
+        status: "ready",
+        text: [
+          "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,mode_field_id,mode_field_resource_key",
+          "0,2,0,12e9,2e7,-1e7,0,field-k0,data/fields/field-k0",
+        ].join("\n"),
+      },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-csv-k",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              k_sampling: { kind: "path", sample_count: 1 },
+            },
+            revision: "dispersion-csv-k-r1",
+            stage_id: "dispersion-csv-k-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+    const target = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
+
+    expect(target).toMatchObject({
+      sampleIndex: 0,
+      wavevectorKf: [2e7, -1e7, 0],
+    });
+  });
+
   it("publishes an explicit wavevector for a grid mode target when the grid resource provides one", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 26, run_id: "runtime-run-26" },
@@ -1115,3 +1185,325 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       .toContain("gamma");
   });
 });
+
+describe("withPinnedAnalysisDefinitions", () => {
+  const kPath = { kind: "path", label: "Γ–X", sampleCount: 2 } as const;
+  const fieldId = "analysis:eigen:sample-0001:mode-0000";
+  const tree = () =>
+    buildPhysicsFirstResultsTree({
+      entries: [
+        {
+          ...modalFinite,
+          analysisFieldTargets: [
+            {
+              fieldId,
+              frequencyHz: 12e9,
+              label: "Sample 1 · Mode 0",
+              modeId: "mode-0000",
+              representation: "complex-vector-xyz",
+              resourceRef: "eigen/modes/sample_0001/mode_0000.json",
+              sampleId: "sample-0001",
+              source: "eigen-mode",
+              view: "phase_rotated_real",
+            },
+          ],
+          boundaryContext: "floquet_periodic",
+          kSampling: kPath,
+          products: { modeShapes: true, spectrum: true },
+        },
+      ],
+      resultContextRunId: modalFinite.runId,
+    });
+  const catalogDataset = (
+    runId: string,
+    stageId: string,
+  ): AnalysisResultDatasetSummaryResource => ({
+    dataset_id: `catalog:${runId}:${stageId}:modal-eigen`,
+    dataset_revision: `catalog-revision:${stageId}`,
+    item_count: 1,
+    manifest_resource_key: `manifest:${runId}:${stageId}`,
+    product_kind: "modal_eigen",
+    run_id: runId,
+    sample_count: 1,
+    stage_id: stageId,
+    status: { completeness: "complete", execution: "published", qualification: "legacy", resource: "complete" },
+    title: `Modal dataset ${stageId}`,
+  });
+  const treeWithCatalog = () =>
+    withCatalogAnalysisFamilies(tree(), [catalogDataset(modalFinite.runId, modalFinite.stageId)]);
+  const definition = (field: string) => ({
+    data_ref: {
+      dataset_id: `catalog:${modalFinite.runId}:${modalFinite.stageId}:modal-eigen`,
+      dataset_revision: `catalog-revision:${modalFinite.stageId}`,
+      field_id: field,
+      run_id: modalFinite.runId,
+    },
+    definition_id: `analysis.dispersion:mode-visualization:${field}`,
+    definition_schema: "analysis.dispersion.mode_visualization.v1",
+    label: "Pinned mode",
+    module_id: "analysis.dispersion",
+    module_version: "0.1.0",
+    node_kind: "analysis.dispersion.mode_visualization",
+    revision: 1,
+  });
+
+  const publishedMode = (
+    id: string,
+    runId: string,
+    stageId: string,
+    revision: string,
+    sampleId: string,
+    modeId: string,
+  ): ExplorerNode => ({
+    id,
+    kind: "results.dispersion.modal.mode_at_k",
+    label: `Published ${id}`,
+    parentId: `dispersion-${runId}`,
+    analysisRunId: runId,
+    analysisStageId: stageId,
+    artifactRevision: revision,
+    datasetId: `dataset:${runId}:${stageId}`,
+    datasetRevision: `dataset-revision:${revision}`,
+    fieldId: "analysis:eigen:sample-local:mode-local",
+    sampleId,
+    modeId,
+  });
+
+  const resultsRoot = (runId: string, modes: ExplorerNode[]): ExplorerNode => ({
+    id: `results-${runId}`,
+    kind: "results.root",
+    label: "Results",
+    parentId: null,
+    analysisRunId: runId,
+    children: [{
+      id: `dispersion-${runId}`,
+      kind: "results.dispersion.root",
+      label: "Dispersion",
+      parentId: `results-${runId}`,
+      analysisModuleId: "analysis.dispersion",
+      children: modes,
+    }],
+  });
+
+  it("adds pinned copies of published mode nodes under the owning family", () => {
+    const nodes = flattenExplorerNodes(withPinnedAnalysisDefinitions(treeWithCatalog(), [definition(fieldId)]));
+    const group = nodes.find((node) => node.kind === "results.pinned_visualizations.root" && node.label === "Pinned visualizations");
+    expect(group?.analysisModuleId).toBe("analysis.dispersion");
+    const pinned = group?.children?.[0];
+    expect(pinned).toMatchObject({
+      datasetId: `catalog:${modalFinite.runId}:${modalFinite.stageId}:modal-eigen`,
+      datasetRevision: `catalog-revision:${modalFinite.stageId}`,
+      fieldId,
+      kind: "results.dispersion.modal.mode_at_k",
+      label: "Pinned mode",
+      sampleId: "sample-0001",
+      modeId: "mode-0000",
+    });
+    expect(pinned?.contextCommands).toEqual(["analysis.postprocessing.unpin-definition"]);
+  });
+
+  it("keeps a definition whose field is no longer published visible as unavailable", () => {
+    const nodes = flattenExplorerNodes(
+      withPinnedAnalysisDefinitions(treeWithCatalog(), [definition("analysis:eigen:sample-0009:mode-0009")]),
+    );
+    expect(nodes.find((node) => node.label === "Pinned mode")).toMatchObject({
+      availability: "unavailable",
+      kind: "results.pinned_visualizations.root",
+    });
+  });
+
+  it("reopens the exact run, dataset revision, sample and item for a repeated field ID", () => {
+    const fieldId = "analysis:eigen:sample-local:mode-local";
+    const first = publishedMode(
+      "first", "run-1", "stage-1", "revision-1", "sample-1", "mode-1",
+    );
+    const firstDuplicate = publishedMode(
+      "first-duplicate", "run-1", "stage-1", "revision-1", "sample-1b", "mode-1b",
+    );
+    const second = publishedMode(
+      "second", "run-1", "stage-2", "revision-2", "sample-2", "mode-2",
+    );
+    const third = publishedMode(
+      "third", "run-2", "stage-1", "revision-1", "sample-3", "mode-3",
+    );
+    const makeDefinition = (
+      label: string,
+      owner: {
+        runId: string;
+        stageId: string;
+        revision: string;
+        sampleId?: string;
+        itemId?: string;
+      },
+    ) => ({
+      data_ref: {
+        run_id: owner.runId,
+        dataset_id: `dataset:${owner.runId}:${owner.stageId}`,
+        dataset_revision: `dataset-revision:${owner.revision}`,
+        field_id: fieldId,
+        ...(owner.sampleId ? { sample_id: owner.sampleId } : {}),
+        ...(owner.itemId ? { item_id: owner.itemId } : {}),
+      },
+      definition_id: `pinned:${label}`,
+      definition_schema: "analysis.dispersion.mode_visualization.v1",
+      label,
+      module_id: "analysis.dispersion",
+      module_version: "0.1.0",
+      node_kind: "analysis.dispersion.mode_visualization",
+      revision: 1,
+    });
+    const definitions = [
+      makeDefinition("Pin stage 1", {
+        runId: "run-1",
+        stageId: "stage-1",
+        revision: "revision-1",
+        sampleId: "sample-1",
+        itemId: "mode-1",
+      }),
+      makeDefinition("Pin same dataset sample 1b", {
+        runId: "run-1",
+        stageId: "stage-1",
+        revision: "revision-1",
+        sampleId: "sample-1b",
+        itemId: "mode-1b",
+      }),
+      makeDefinition("Pin stage 2", {
+        runId: "run-1",
+        stageId: "stage-2",
+        revision: "revision-2",
+        sampleId: "sample-2",
+        itemId: "mode-2",
+      }),
+      makeDefinition("Pin run 2", {
+        runId: "run-2",
+        stageId: "stage-1",
+        revision: "revision-1",
+        sampleId: "sample-3",
+        itemId: "mode-3",
+      }),
+      makeDefinition("Legacy pin", {
+        runId: "run-2", stageId: "stage-1", revision: "revision-1",
+      }),
+    ];
+    const nodes = flattenExplorerNodes(
+      withPinnedAnalysisDefinitions(
+        [
+          resultsRoot("run-1", [first, firstDuplicate, second]),
+          resultsRoot("run-2", [third]),
+        ],
+        definitions,
+      ),
+    );
+
+    expect(nodes.find((node) => node.label === "Pin stage 1")).toMatchObject({
+      analysisRunId: "run-1",
+      analysisStageId: "stage-1",
+      artifactRevision: "revision-1",
+      datasetId: "dataset:run-1:stage-1",
+      datasetRevision: "dataset-revision:revision-1",
+      sampleId: "sample-1",
+      modeId: "mode-1",
+    });
+    expect(nodes.find((node) => node.label === "Pin stage 2")).toMatchObject({
+      analysisRunId: "run-1",
+      analysisStageId: "stage-2",
+      artifactRevision: "revision-2",
+      datasetId: "dataset:run-1:stage-2",
+      datasetRevision: "dataset-revision:revision-2",
+      sampleId: "sample-2",
+      modeId: "mode-2",
+    });
+    expect(
+      nodes.find((node) => node.label === "Pin same dataset sample 1b"),
+    ).toMatchObject({
+      analysisRunId: "run-1",
+      analysisStageId: "stage-1",
+      artifactRevision: "revision-1",
+      datasetId: "dataset:run-1:stage-1",
+      datasetRevision: "dataset-revision:revision-1",
+      sampleId: "sample-1b",
+      modeId: "mode-1b",
+    });
+    expect(nodes.find((node) => node.label === "Pin run 2")).toMatchObject({
+      analysisRunId: "run-2",
+      analysisStageId: "stage-1",
+      sampleId: "sample-3",
+      modeId: "mode-3",
+    });
+    expect(nodes.find((node) => node.label === "Legacy pin")).toMatchObject({
+      analysisRunId: "run-2",
+      analysisStageId: "stage-1",
+      datasetId: "dataset:run-2:stage-1",
+      datasetRevision: "dataset-revision:revision-1",
+      sampleId: "sample-3",
+      modeId: "mode-3",
+    });
+  });
+
+  it("keeps a legacy field-only pin unavailable when its base owner is ambiguous", () => {
+    const first = publishedMode("first", "run-1", "stage-1", "revision-1", "sample-1", "mode-1");
+    const second = publishedMode("second", "run-1", "stage-1", "revision-1", "sample-2", "mode-2");
+    const legacy = {
+      data_ref: {
+        run_id: "run-1",
+        dataset_id: "stage-1",
+        dataset_revision: "revision-1",
+        field_id: first.fieldId,
+      },
+      definition_id: "legacy-ambiguous",
+      definition_schema: "analysis.dispersion.mode_visualization.v1",
+      label: "Ambiguous legacy pin",
+      module_id: "analysis.dispersion",
+      module_version: "0.1.0",
+      node_kind: "analysis.dispersion.mode_visualization",
+      revision: 1,
+    };
+    const nodes = flattenExplorerNodes(withPinnedAnalysisDefinitions(
+      [resultsRoot("run-1", [first, second])],
+      [legacy],
+    ));
+
+    expect(nodes.find((node) => node.label === "Ambiguous legacy pin")).toMatchObject({
+      availability: "unavailable",
+      kind: "results.pinned_visualizations.root",
+    });
+  });
+
+  it("does not resolve a pin from stage and artifact revision without canonical dataset identity", () => {
+    const candidate = publishedMode(
+      "legacy-candidate", "run-1", "stage-1", "revision-1", "sample-1", "mode-1",
+    );
+    candidate.datasetId = undefined;
+    candidate.datasetRevision = undefined;
+    const definition = {
+      data_ref: {
+        run_id: "run-1",
+        dataset_id: "dataset:run-1:stage-1",
+        dataset_revision: "dataset-revision:revision-1",
+        field_id: candidate.fieldId,
+      },
+      definition_id: "canonical-owner-with-legacy-candidate",
+      definition_schema: "analysis.dispersion.mode_visualization.v1",
+      label: "Canonical owner",
+      module_id: "analysis.dispersion",
+      module_version: "0.1.0",
+      node_kind: "analysis.dispersion.mode_visualization",
+      revision: 1,
+    };
+    const nodes = flattenExplorerNodes(withPinnedAnalysisDefinitions(
+      [resultsRoot("run-1", [candidate])],
+      [definition],
+    ));
+
+    expect(nodes.find((node) => node.label === "Canonical owner")).toMatchObject({
+      availability: "unavailable",
+      kind: "results.pinned_visualizations.root",
+    });
+  });
+
+  it("leaves the tree unchanged without definitions", () => {
+    const base = tree();
+    expect(withPinnedAnalysisDefinitions(base, [])).toEqual(base);
+  });
+});
+

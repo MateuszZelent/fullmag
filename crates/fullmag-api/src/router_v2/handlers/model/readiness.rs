@@ -103,6 +103,9 @@ fn build_model_readiness(
         "model/scene",
         "Add at least one magnetic object.",
     );
+    let missing_material_object = solve_objects.iter().find(|object| {
+        fullmag_authoring::resolve_scene_object_solve_material(scene, object).is_err()
+    });
     let material_error = solve_objects.iter().find_map(|object| {
         fullmag_authoring::resolve_scene_object_solve_material(scene, object)
             .err()
@@ -112,11 +115,19 @@ fn build_model_readiness(
         "material",
         "Material",
         !solve_objects.is_empty() && material_error.is_none(),
-        "model/materials",
+        &missing_material_object
+            .map(|object| format!("model/objects/{}", object.id))
+            .unwrap_or_else(|| "model/materials".into()),
         material_error
             .as_deref()
             .unwrap_or("Assign a material to every magnetic object."),
     );
+    let missing_texture_object = solve_objects.iter().find(|object| {
+        !object
+            .magnetization_ref
+            .as_deref()
+            .is_some_and(|id| textures.contains(id))
+    });
     let texture = presence_check(
         "texture",
         "Initial magnetization",
@@ -127,9 +138,14 @@ fn build_model_readiness(
                     .as_deref()
                     .is_some_and(|id| textures.contains(id))
             }),
-        "model/magnetization-assets",
+        &missing_texture_object
+            .map(|object| format!("model/objects/{}", object.id))
+            .unwrap_or_else(|| "model/magnetization-assets".into()),
         "Assign initial magnetization to every magnetic object.",
     );
+    let missing_interaction_object = solve_objects
+        .iter()
+        .find(|object| !object.physics_stack.iter().any(|entry| entry.enabled));
     let interactions = presence_check(
         "interactions",
         "Interactions",
@@ -137,7 +153,9 @@ fn build_model_readiness(
             && solve_objects
                 .iter()
                 .all(|object| object.physics_stack.iter().any(|entry| entry.enabled)),
-        "model/objects/interactions",
+        &missing_interaction_object
+            .map(|object| format!("model/objects/{}", object.id))
+            .unwrap_or_else(|| "model/objects/interactions".into()),
         "Enable at least one interaction for every magnetic object.",
     );
     let discretization = discretization_check(snapshot, scene);
@@ -149,13 +167,37 @@ fn build_model_readiness(
         "Add at least one study stage.",
     );
 
+    let method = presence_check(
+        "method",
+        "Simulation method",
+        matches!(scene.study.requested_backend.as_str(), "fdm" | "fem"),
+        "model/study",
+        "Choose FEM or FDM in Study settings.",
+    );
+    let domain = domain_check(scene);
+    let mut execution = presence_check(
+        "execution",
+        "Execution request",
+        matches!(
+            scene.study.requested_device.as_str(),
+            "auto" | "cpu" | "gpu" | "cuda"
+        ),
+        "model/study",
+        "Choose CPU, GPU or Auto for the next solver run in Study settings.",
+    );
+    if execution.state == ModelReadinessCheckState::Complete {
+        execution.reason = Some("The requested device is configured; engine availability is checked during preparation for each run.".into());
+    }
     let checks = vec![
+        method,
+        domain,
         geometry,
         material,
         texture,
         interactions,
         discretization,
         study,
+        execution,
     ];
     let validation_error = fullmag_authoring::validate_scene_document(scene)
         .err()
@@ -169,8 +211,14 @@ fn build_model_readiness(
         blockers.push(error.clone());
     }
     let ready_to_run = blockers.is_empty();
-    let export_checks_complete = checks[..4]
+    let export_checks_complete = checks
         .iter()
+        .filter(|check| {
+            matches!(
+                check.id.as_str(),
+                "geometry" | "material" | "texture" | "interactions"
+            )
+        })
         .all(|check| check.state == ModelReadinessCheckState::Complete);
 
     ModelReadinessResource {
@@ -188,6 +236,47 @@ fn build_model_readiness(
             scale: unavailable_transform_capability(),
         },
     }
+}
+
+fn domain_check(scene: &fullmag_authoring::SceneDocument) -> ModelReadinessCheck {
+    let target = if scene.study.requested_backend == "fem" {
+        fullmag_authoring::GeometryBackendTarget::Fem
+    } else {
+        fullmag_authoring::GeometryBackendTarget::Fdm
+    };
+    let validation = fullmag_authoring::validate_geometry_scene(scene, target);
+    let outside = validation.diagnostics.iter().find(|diagnostic| {
+        matches!(
+            diagnostic.code.as_str(),
+            "GEOMETRY_OBJECT_OUTSIDE_UNIVERSE" | "GEOMETRY_UNIVERSE_INVALID_BOUNDS"
+        ) && diagnostic.blocks.iter().any(|block| block == "build_mesh")
+    });
+    let mut check = presence_check(
+        "domain",
+        "Domain policy",
+        outside.is_none(),
+        "meshing/policies/universe",
+        outside
+            .map(|diagnostic| diagnostic.message.as_str())
+            .unwrap_or("Review the domain policy."),
+    );
+    if check.state == ModelReadinessCheckState::Complete {
+        let universe = scene
+            .study
+            .universe_mesh
+            .as_ref()
+            .or(scene.universe.as_ref());
+        check.reason = Some(
+            if universe.is_some_and(|universe| universe.mode == "manual") {
+                "Manual domain bounds are configured; mesh and solver requirements are checked separately.".into()
+            } else if scene.objects.is_empty() {
+                "Automatic bounds will be derived after geometry is added. You can configure manual dimensions now or later.".into()
+            } else {
+                "Automatic domain policy follows the authored geometry; FEM air requirements depend on the selected physics.".into()
+            },
+        );
+    }
+    check
 }
 
 fn presence_check(
@@ -214,13 +303,7 @@ fn discretization_check(
     snapshot: &SessionStateResponse,
     scene: &fullmag_authoring::SceneDocument,
 ) -> ModelReadinessCheck {
-    let backend = scene
-        .study
-        .backend
-        .as_deref()
-        .filter(|backend| !backend.is_empty())
-        .unwrap_or(scene.study.requested_backend.as_str())
-        .to_ascii_lowercase();
+    let backend = scene.study.requested_backend.to_ascii_lowercase();
     match backend.as_str() {
         "fdm" => {
             let configured =

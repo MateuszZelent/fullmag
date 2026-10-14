@@ -9,8 +9,9 @@ from tempfile import TemporaryDirectory
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "fullmag-py" / "src"))
 
-from fullmag import OutputStorage
+from fullmag import FieldAutosave, OutputStorage
 from fullmag.runtime.output_storage_lowering import (
+    configure_problem_ir_autosave,
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
 )
@@ -20,6 +21,8 @@ from fullmag.runtime.scene_document import build_scene_document_from_builder
 from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import (
     _render_output_storage,
+    _render_stage_autosave,
+    _scene_stage_autosave,
     export_builder_draft,
     render_scene_document_as_script,
 )
@@ -30,7 +33,68 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def check_default_field_quantities() -> None:
+    storage = OutputStorage().to_ir()
+    for stage, expected in (
+        ({"kind": "relaxation"}, FieldAutosave("m", every_steps=100)),
+        ({"kind": "run", "until_seconds": "1e-12"}, FieldAutosave("m", every=1e-12)),
+    ):
+        policy = configure_scene_stage_autosaves([stage], storage)[0]["autosave"]
+        require(policy["fields"] == [expected.to_ir()], "implicit field is not canonical m")
+        public_policy = _scene_stage_autosave(policy)
+        require(public_policy.to_ir() == policy, "implicit autosave cannot round-trip through the public API")
+        require(f"fm.FieldAutosave({json.dumps('m')}," in _render_stage_autosave(public_policy), "implicit autosave export lost canonical m")
+        pipeline = configure_study_pipeline_autosaves(
+            {"nodes": [{"node_kind": "stage", "stage_kind": stage["kind"], "payload": stage}]},
+            storage,
+        )
+        require(pipeline["nodes"][0]["payload"]["autosave"] == policy, "pipeline implicit field differs from flat stage")
+        ir = {"study": {"kind": stage["kind"], "sampling": {"outputs": []}}}
+        configure_problem_ir_autosave(ir, storage, until_seconds=1e-12)
+        require(ir["study"]["sampling"]["stage_autosave"] == policy, "ProblemIR implicit field differs from scene export")
+
+
+def check_literal_stage_times() -> None:
+    default = OutputStorage()
+    literal_stage = {"kind": "run", "until_seconds": "1e-12"}
+    configured_literal = configure_scene_stage_autosaves(
+        [literal_stage], default.to_ir()
+    )[0]
+    require(configured_literal["until_seconds"] == "1e-12", "canonical stage time was rewritten")
+    require("autosave" not in literal_stage, "autosave mutated the input scene")
+    require(
+        configured_literal["autosave"]["fields"][0]["every_seconds"] == 1e-12,
+        "canonical string time did not supply the storage cadence",
+    )
+    literal_pipeline = configure_study_pipeline_autosaves(
+        {"nodes": [{"node_kind": "stage", "stage_kind": "run", "payload": literal_stage}]},
+        default.to_ir(),
+    )
+    require(
+        literal_pipeline["nodes"][0]["payload"]["autosave"] == configured_literal["autosave"],
+        "pipeline string time differs from flat stage autosave",
+    )
+    explicit_cadence = configure_scene_stage_autosaves(
+        [{**literal_stage, "output_every_seconds": "2e-13"}], default.to_ir()
+    )[0]
+    require(
+        explicit_cadence["autosave"]["fields"][0]["every_seconds"] == 2e-13,
+        "string output cadence did not take precedence over the run duration",
+    )
+    for invalid_time in (True, "", "0", "-1", "nan", "inf", "1e309", "1e-400", "1 * ps"):
+        try:
+            configure_scene_stage_autosaves(
+                [{"kind": "run", "until_seconds": invalid_time}], default.to_ir()
+            )
+        except ValueError as error:
+            require("positive output cadence" in str(error), "invalid time lost cadence validation")
+        else:
+            raise AssertionError(f"invalid stage time supplied a cadence: {invalid_time!r}")
+
+
 def main() -> None:
+    check_default_field_quantities()
+    check_literal_stage_times()
     python_sources = (
         REPO / "packages/fullmag-py/src/fullmag/model/output_storage.py",
         REPO / "packages/fullmag-py/src/fullmag/runtime/output_storage_lowering.py",
@@ -124,6 +188,7 @@ study.storage()
         [{"kind": "relaxation"}], default.to_ir()
     )[0]["autosave"]
     require(relaxation["format"] == "zarr", "relaxation autosave format mismatch")
+    require(relaxation["fields"][0]["quantity"] == "m", "relaxation default quantity mismatch")
     require(relaxation["fields"][0]["every_steps"] == 100, "relaxation cadence mismatch")
 
     time_stage = configure_scene_stage_autosaves(
@@ -135,7 +200,7 @@ study.storage()
                     "outputs": [
                         {
                             "kind": "field",
-                            "name": "magnetization",
+                            "name": "m",
                             "every_seconds": 0.5,
                         }
                     ]
@@ -145,7 +210,26 @@ study.storage()
         OutputStorage(data_format="h5").to_ir(),
     )[0]["autosave"]
     require(time_stage["format"] == "hdf5", "hdf5 stage format mismatch")
+    require(time_stage["fields"][0]["quantity"] == "magnetization", "authored output quantity changed")
     require(time_stage["fields"][0]["every_seconds"] == 0.5, "authored output cadence changed")
+
+    time_fallback = configure_scene_stage_autosaves(
+        [
+            {
+                "kind": "time_evolution",
+                "until_seconds": 4.0,
+                "output_every_seconds": 0.5,
+            }
+        ],
+        OutputStorage(data_format="h5").to_ir(),
+    )[0]["autosave"]
+    require(time_fallback["format"] == "hdf5", "time fallback autosave format mismatch")
+    require(
+        len(time_fallback["fields"]) == 1
+        and time_fallback["fields"][0]["quantity"] == "m"
+        and time_fallback["fields"][0]["every_seconds"] == 0.5,
+        "time fallback default quantity or cadence mismatch",
+    )
 
     explicit = {
         "kind": "stage_autosave",
@@ -154,6 +238,13 @@ study.storage()
         "format": "zarr",
         "fields": [{"kind": "field_autosave", "quantity": "m", "every_steps": 7}],
     }
+    retained_explicit = configure_scene_stage_autosaves(
+        [{"kind": "relaxation", "autosave": explicit}], OutputStorage().to_ir()
+    )[0]["autosave"]
+    require(
+        retained_explicit["fields"] == explicit["fields"],
+        "explicit autosave quantity or cadence changed",
+    )
     try:
         configure_scene_stage_autosaves(
             [{"kind": "relaxation", "autosave": explicit}],

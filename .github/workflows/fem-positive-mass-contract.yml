@@ -1,0 +1,82 @@
+name: FEM positive tangent-mass source contract
+
+on:
+  workflow_call:
+    inputs:
+      contract_profile:
+        description: Bounded CPU MFEM source-contract profile.
+        required: false
+        type: string
+        default: positive-mass
+  pull_request:
+    paths:
+      - '.github/workflows/fem-positive-mass-contract.yml'
+      - '.dockerignore'
+      - 'docker/fem-cpu/Dockerfile'
+      - 'native/CMakeLists.txt'
+      - 'native/cmake/FindFullmagMfem.cmake'
+      - 'backends/fem/CMakeLists.txt'
+      - 'backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp'
+      - 'backends/fem/tests/frequency_domain/floquet_bloch_scalar_test.cpp'
+      - 'backends/fem/cpu/frequency_domain/floquet_bloch_scalar.cpp'
+      - 'backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp'
+      - 'backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp'
+      - 'backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp'
+      - 'backends/fem/src/frequency_domain/modal_eigen_solver.cpp'
+      - 'backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp'
+      - 'scripts/ci/run_fem_positive_mass_contract.py'
+      - 'scripts/fullmag_storage.py'
+  workflow_dispatch:
+    inputs:
+      contract_profile:
+        description: Bounded CPU MFEM source-contract profile.
+        type: choice
+        required: true
+        default: positive-mass
+        options:
+          - positive-mass
+          - floquet-source-moments
+          - floquet-modal-slepc
+          - generic-modal-slepc
+          - floquet-count-slepc
+          - modal-phase-slepc
+
+permissions:
+  contents: read
+
+jobs:
+  fem-positive-mass-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ (inputs.contract_profile == 'floquet-modal-slepc' || inputs.contract_profile == 'generic-modal-slepc' || inputs.contract_profile == 'floquet-count-slepc' || inputs.contract_profile == 'modal-phase-slepc') && 240 || 180 }}
+    env:
+      FULLMAG_STORAGE_PROFILE: linux-host
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify C04 snapshot parser contracts before dependency build
+        run: python3 -m unittest discover -s scripts/ci -p "test_parse_floquet_factor_matrix_snapshots.py" -v
+
+      - name: Verify native failure receipt observations before dependency build
+        run: python3 -B -m unittest discover -s scripts/ci -p "test_fem_contract_failure_receipt.py" -v
+
+      - name: Build pinned CPU MFEM image and run the selected source contract
+        id: contract
+        run: python3 scripts/ci/run_fem_positive_mass_contract.py --contract-profile "${{ inputs.contract_profile || 'positive-mass' }}"
+
+      - name: Record C04 matrix measurements even after failed CTest
+        if: always() && steps.contract.outputs.evidence_dir != '' && inputs.contract_profile == 'floquet-modal-slepc'
+        env:
+          C04_EVIDENCE_DIR: ${{ steps.contract.outputs.evidence_dir }}
+        run: |
+          python3 scripts/ci/parse_floquet_factor_matrix_snapshots.py \
+            --log "$C04_EVIDENCE_DIR/native-build-and-ctest.log" \
+            --output "$C04_EVIDENCE_DIR/factor-matrix-snapshots.report.json"
+
+      - name: Upload contract receipt and logs
+        if: always() && steps.contract.outputs.evidence_dir != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: fem-cpu-source-contract-${{ inputs.contract_profile || 'positive-mass' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.contract.outputs.evidence_dir }}/**
+          if-no-files-found: warn
+          compression-level: 6

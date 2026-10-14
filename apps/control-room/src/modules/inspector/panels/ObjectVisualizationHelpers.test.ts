@@ -4,6 +4,7 @@ import {
   selectObjectVisualizationManifestStatus,
   selectObjectVisualizationPanelSnapshot,
 } from "./ObjectVisualizationHelpers";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 
 import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -22,6 +23,38 @@ describe("selectObjectVisualizationManifestStatus", () => {
       resources: { mesh_revision: undefined },
       session: { session_epoch: "", session_id: "" },
     });
+  });
+
+  it("preserves resolved FEM when the projected legacy domain remains FDM", () => {
+    const status = selectObjectVisualizationManifestStatus({
+      data: {
+        capabilities: {
+          explicit_topology: false,
+          active_lane: { resolved: { discretization: "fem" } },
+        },
+        domain: { discretization: "fdm" },
+        resources: { mesh_revision: 3 },
+        session: { session_epoch: 2, session_id: "session-a" },
+      },
+    } as never);
+
+    expect(resolveSessionDiscretization(status)).toBe("fem");
+  });
+
+  it("preserves an explicit unresolved lane instead of falling back to FDM", () => {
+    const status = selectObjectVisualizationManifestStatus({
+      data: {
+        capabilities: {
+          explicit_topology: false,
+          active_lane: null,
+        },
+        domain: { discretization: "fdm" },
+        resources: { mesh_revision: 3 },
+        session: { session_epoch: 2, session_id: "session-a" },
+      },
+    } as never);
+
+    expect(resolveSessionDiscretization(status)).toBeNull();
   });
 });
 

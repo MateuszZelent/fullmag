@@ -9,6 +9,7 @@ import type { DecodedTopology } from "@/kernel/api/codecs";
 
 import {
   FMRM_INACTIVE_REGION_ID,
+  buildUniverseDomainPolicyPresentation,
   buildDomainPresentation,
   domainPresentationKey,
   isFdmDomain,
@@ -95,6 +96,78 @@ function topology(): DecodedTopology {
 }
 
 describe("domain presentation boundary", () => {
+  it("keeps an empty automatic policy free of fabricated extents before runtime realization", () => {
+    const presentation = buildUniverseDomainPolicyPresentation({
+      policy: { config: null, revision: 0 },
+      runtimeResolved: false,
+    });
+
+    expect(presentation.authored).toEqual({
+      center: null,
+      centerSource: "not-applicable",
+      mode: { value: "auto", source: "canonical-default" },
+      padding: null,
+      paddingSource: "not-authored",
+      size: null,
+      sizeSource: "not-applicable",
+    });
+    expect(presentation.realization.state).toBe("runtime-unresolved");
+  });
+
+  it("keeps manual policy authored values separate from current mesh realization", () => {
+    const policy = { config: { mode: "manual", size: [3e-9, 4e-9, 5e-9] }, revision: 7 };
+    const authoredOnly = buildUniverseDomainPolicyPresentation({
+      policy,
+      runtimeResolved: true,
+    });
+
+    expect(authoredOnly.authored).toMatchObject({
+      center: null,
+      centerSource: "canonical-origin",
+      mode: { value: "manual", source: "authored" },
+      size: [3e-9, 4e-9, 5e-9],
+    });
+    expect(authoredOnly.realization.state).toBe("not-built");
+  });
+
+  it("marks mesh realization current or stale only from matching backend provenance", () => {
+    const current = buildUniverseDomainPolicyPresentation({
+      build: {
+        provenance: {
+          mesh_revision: 12,
+          requested_policy_revision: 7,
+          source_scene_revision: 3,
+        },
+        revision: 12,
+      },
+      buildStatus: "ready",
+      manifest: { ...femManifest(), source_scene_revision: 3 },
+      manifestStatus: "ready",
+      policy: { config: { mode: "manual", size: [3e-9, 4e-9, 5e-9] }, revision: 7 },
+      runtimeResolved: true,
+      sceneRevision: 3,
+    });
+    const stale = buildUniverseDomainPolicyPresentation({
+      build: {
+        provenance: {
+          mesh_revision: 12,
+          requested_policy_revision: 7,
+          source_scene_revision: 3,
+        },
+        revision: 12,
+      },
+      buildStatus: "ready",
+      manifest: { ...femManifest(), source_scene_revision: 3 },
+      manifestStatus: "ready",
+      policy: { config: { mode: "manual", size: [3e-9, 4e-9, 5e-9] }, revision: 8 },
+      runtimeResolved: true,
+      sceneRevision: 4,
+    });
+
+    expect(current.realization).toMatchObject({ state: "current", buildRevision: 12 });
+    expect(stale.realization.state).toBe("stale");
+  });
+
   it("derives an authored FDM Airbox role before membership materializes", async () => {
     const domainPresentationModule = (await import("./domainPresentation")) as Record<string, unknown>;
     const deriveRole = domainPresentationModule["deriveAuthoredFdmUniverseOutsideMagneticSupport"] as

@@ -1,19 +1,24 @@
 //! Durable reservations shared by every session store on one configured host.
 //!
 //! This ledger is an admission owner, not a hardware discovery service. Its
-//! root, stable host identity, topology digest, policy revision, and owner epoch
-//! are supplied by the caller. A native session writer lock serializes all
-//! reads and publications across handles and processes.
+//! root, stable host identity, topology digest, policy revision, and policy
+//! owner epoch are supplied by the caller. The inventory producer has a
+//! separate lease identity and epoch owned by this ledger. A native session
+//! writer lock serializes all reads and publications across handles/processes.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use fullmag_ir::compute_resources::ComputeParallelismIR;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::compute_node_snapshot::{ComputeNodeSnapshot, GpuPartition, Reported};
+use crate::compute_node_policy::{NodePolicy, NodePolicyStatus};
 use crate::durability::{atomic_write, confirm_publication, sync_directory};
 use crate::repository_path::{checked_path, read_bounded_regular_file, reject_link};
 use crate::store::SessionStore;
@@ -26,15 +31,26 @@ use crate::types::{
 use crate::writer::Writer;
 
 pub const HOST_RESOURCE_LEDGER_SCHEMA_V1: &str = "host_resource_ledger.v1";
+/// Current durable ledger schema with compute-node producer fencing fields.
+pub const HOST_RESOURCE_LEDGER_SCHEMA_V2: &str = "host_resource_ledger.v2";
+/// Durable ledger schema with a separately versioned operator node policy.
+pub const HOST_RESOURCE_LEDGER_SCHEMA_V3: &str = "host_resource_ledger.v3";
 pub const HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1: &str = "host_resource_ledger_policy.v1";
 pub const HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V1: &str = "host_resource_release_proof.v1";
 
 const HOST_RESOURCE_LEDGER_FILE: &str = "HOST_RESOURCE_LEDGER.json";
 const HOST_RESOURCE_LEDGER_MARKER_FILE: &str = "HOST_RESOURCE_LEDGER.init.json";
+const HOST_COMPUTE_NODE_SNAPSHOT_FILE: &str = "COMPUTE_NODE_SNAPSHOT.json";
+const HOST_INVENTORY_OWNER_LOCK_FILE: &str = "HOST_INVENTORY_OWNER.lock";
+const HOST_INVENTORY_OWNER_RECORD_FILE: &str = "HOST_INVENTORY_OWNER.json";
+const HOST_INVENTORY_OWNER_RECORD_SCHEMA_V1: &str = "host_inventory_owner.v1";
+const HOST_INVENTORY_OWNER_LOCK_DESCRIPTOR: &[u8] = b"fullmag.host-inventory-owner.lock.v1\n";
 const MAX_LEDGER_BYTES: usize = 8 * 1024 * 1024;
 const MAX_LEDGER_RECORDS: usize = 4096;
 const MAX_MARKER_BYTES: usize = 4096;
 const MAX_RELEASE_PROOF_BYTES: usize = 64 * 1024;
+const MAX_COMPUTE_NODE_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_HOST_INVENTORY_OWNER_RECORD_BYTES: usize = 4096;
 
 /// Ordinary contention in a validated host ledger. Corruption and fencing
 /// failures remain errors; schedulers may wait only for this admission outcome.
@@ -212,6 +228,12 @@ pub struct HostReservationRequest {
     pub expected_host_id: String,
     pub expected_policy_revision: u64,
     pub expected_owner_epoch: u64,
+    /// Shared-host inventory producer pinned when this request was formed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_compute_node_owner_id: Option<String>,
+    /// Exact producer lease epoch; independent of the configured policy epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_compute_node_owner_epoch: Option<u64>,
     pub expected_topology_sha256: String,
     pub budget: FmsResourceBudget,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -220,6 +242,13 @@ pub struct HostReservationRequest {
     pub gpu_vram_bytes_by_uuid: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub cpu_ids: BTreeSet<u32>,
+    /// Operator policy revision observed when this admission request was formed.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub expected_node_policy_revision: u64,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub scheduling_priority: i32,
+    #[serde(default, skip_serializing_if = "is_single_process")]
+    pub parallelism: ComputeParallelismIR,
 }
 
 impl HostReservationRequest {
@@ -231,6 +260,20 @@ impl HostReservationRequest {
             || self.expected_topology_sha256 != policy.topology_sha256
         {
             bail!("host resource reservation is fenced by a different policy, owner epoch, or topology");
+        }
+        match (
+            self.expected_compute_node_owner_id.as_deref(),
+            self.expected_compute_node_owner_epoch,
+        ) {
+            (None, None) => {}
+            (Some(owner_id), Some(owner_epoch)) => {
+                crate::repository_path::validate_store_id(owner_id)
+                    .context("invalid compute-node owner ID in host reservation")?;
+                if owner_epoch == 0 {
+                    bail!("compute-node owner epoch in host reservation must be positive");
+                }
+            }
+            _ => bail!("compute-node owner ID and epoch must be provided together"),
         }
         if self.budget.gpu_memory_bytes != 0 {
             bail!("reservation budget.gpu_memory_bytes must be zero; use per-GPU VRAM requests");
@@ -364,6 +407,12 @@ pub struct HostResourceReservation {
     pub host_id: String,
     pub policy_revision: u64,
     pub host_owner_epoch: u64,
+    /// Shared-host inventory producer pinned by the immutable request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_node_owner_id: Option<String>,
+    /// Exact producer lease epoch; independent of the configured policy epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_node_owner_epoch: Option<u64>,
     pub topology_sha256: String,
     pub budget: FmsResourceBudget,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -382,6 +431,14 @@ pub struct HostResourceReservation {
     pub preparation_launch_gate: Option<HostWorkerLaunchGate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preparation_launch_owner: Option<HostPreparationLaunchOwner>,
+    /// Policy revision under which this immutable allocation was admitted.
+    /// Zero is reserved for legacy records created before NodePolicy existed.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub node_policy_revision: u64,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub scheduling_priority: i32,
+    #[serde(default, skip_serializing_if = "is_single_process")]
+    pub parallelism: ComputeParallelismIR,
 }
 
 impl HostResourceReservation {
@@ -392,6 +449,8 @@ impl HostResourceReservation {
             host_id: request.expected_host_id.clone(),
             policy_revision: request.expected_policy_revision,
             host_owner_epoch: request.expected_owner_epoch,
+            compute_node_owner_id: request.expected_compute_node_owner_id.clone(),
+            compute_node_owner_epoch: request.expected_compute_node_owner_epoch,
             topology_sha256: request.expected_topology_sha256.clone(),
             budget: request.budget.clone(),
             exclusive_gpu_uuids: request.exclusive_gpu_uuids.clone(),
@@ -408,20 +467,29 @@ impl HostResourceReservation {
                 HostReservationOwner::Preparation { .. } => Some(HostWorkerLaunchGate::Pending),
                 HostReservationOwner::Solver { .. } => None,
             },
+            node_policy_revision: request.expected_node_policy_revision,
+            scheduling_priority: request.scheduling_priority,
+            parallelism: request.parallelism.clone(),
         })
     }
 
-    fn matches_request(&self, request: &HostReservationRequest, request_sha256: &str) -> bool {
-        self.request_sha256 == request_sha256
+    fn matches_request(&self, request: &HostReservationRequest) -> Result<bool> {
+        let mut original_policy_request = request.clone();
+        original_policy_request.expected_node_policy_revision = self.node_policy_revision;
+        Ok(self.request_sha256 == host_request_sha256(&original_policy_request)?
             && self.identity == request.identity
             && self.host_id == request.expected_host_id
             && self.policy_revision == request.expected_policy_revision
             && self.host_owner_epoch == request.expected_owner_epoch
+            && self.compute_node_owner_id == request.expected_compute_node_owner_id
+            && self.compute_node_owner_epoch == request.expected_compute_node_owner_epoch
             && self.topology_sha256 == request.expected_topology_sha256
             && self.budget == request.budget
             && self.exclusive_gpu_uuids == request.exclusive_gpu_uuids
             && self.gpu_vram_bytes_by_uuid == request.gpu_vram_bytes_by_uuid
             && self.cpu_ids == request.cpu_ids
+            && self.scheduling_priority == request.scheduling_priority
+            && self.parallelism == request.parallelism)
     }
 
     fn validate(&self, policy: &HostResourceLedgerPolicy) -> Result<()> {
@@ -481,11 +549,16 @@ impl HostResourceReservation {
             expected_host_id: self.host_id.clone(),
             expected_policy_revision: self.policy_revision,
             expected_owner_epoch: self.host_owner_epoch,
+            expected_compute_node_owner_id: self.compute_node_owner_id.clone(),
+            expected_compute_node_owner_epoch: self.compute_node_owner_epoch,
             expected_topology_sha256: self.topology_sha256.clone(),
             budget: self.budget.clone(),
             exclusive_gpu_uuids: self.exclusive_gpu_uuids.clone(),
             gpu_vram_bytes_by_uuid: self.gpu_vram_bytes_by_uuid.clone(),
             cpu_ids: self.cpu_ids.clone(),
+            expected_node_policy_revision: self.node_policy_revision,
+            scheduling_priority: self.scheduling_priority,
+            parallelism: self.parallelism.clone(),
         };
         request.validate(policy)?;
         if self.request_sha256 != host_request_sha256(&request)? {
@@ -501,6 +574,8 @@ struct HostResourceLedgerDocument {
     schema_version: String,
     policy: HostResourceLedgerPolicy,
     reservations: Vec<HostResourceReservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node_policy: Option<NodePolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -548,6 +623,87 @@ struct HostResourceReleaseProof {
 pub struct HostResourceLedgerSnapshot {
     pub policy: HostResourceLedgerPolicy,
     pub reservations: Vec<HostResourceReservation>,
+    pub node_policy: Option<NodePolicy>,
+}
+
+impl HostResourceLedgerSnapshot {
+    pub fn node_policy_status(&self) -> Result<Option<NodePolicyStatus>> {
+        self.node_policy
+            .as_ref()
+            .map(|policy| policy.status(&self.policy, &self.reservations))
+            .transpose()
+    }
+}
+
+/// Result of publishing one revision-fenced host observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComputeNodeSnapshotPublicationDisposition {
+    Accepted,
+    Replayed,
+}
+
+/// Public identity of the current owner of the shared host inventory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostInventoryOwnerDescriptor {
+    pub host_owner_id: String,
+    pub host_owner_epoch: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostInventoryOwnerRecord {
+    schema_version: String,
+    host_owner_id: String,
+    host_owner_epoch: u64,
+    owner_token: String,
+}
+
+impl HostInventoryOwnerRecord {
+    fn descriptor(&self) -> HostInventoryOwnerDescriptor {
+        HostInventoryOwnerDescriptor {
+            host_owner_id: self.host_owner_id.clone(),
+            host_owner_epoch: self.host_owner_epoch,
+        }
+    }
+}
+
+/// Exclusive lease over host-wide inventory ownership.
+///
+/// The native owner lock is authoritative. The durable record contains the
+/// last acquired epoch and a private token; it does not stand in for the lock.
+pub struct HostInventoryOwner {
+    lock: Option<File>,
+    root: PathBuf,
+    writer: Arc<Writer>,
+    descriptor: HostInventoryOwnerDescriptor,
+    owner_token: String,
+}
+
+impl HostInventoryOwner {
+    /// Read the public identity without exposing the private owner token.
+    pub fn descriptor(&self) -> &HostInventoryOwnerDescriptor {
+        &self.descriptor
+    }
+}
+
+impl Drop for HostInventoryOwner {
+    fn drop(&mut self) {
+        let writer_guard = loop {
+            match self.writer.acquire() {
+                Ok(guard) => break Some(guard),
+                Err(error) if error.is::<crate::writer::StoreWriterBusy>() => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(error) => {
+                    tracing::error!(%error, "could not synchronize host inventory owner release");
+                    break None;
+                }
+            }
+        };
+        drop(self.lock.take());
+        drop(writer_guard);
+    }
 }
 
 /// Durable shared-host resource owner rooted at one explicit local directory.
@@ -637,6 +793,9 @@ impl HostResourceLedger {
         {
             return Ok(HostTaskAdmissionReconciliation::LocalClaimUnavailable);
         }
+        let pinned_request = reservation_request(&document.reservations[index]);
+        self.validate_compute_node_request_locked(&pinned_request, true)?;
+        self.validate_observed_cpu_capacity_locked(&document, &pinned_request)?;
         document.reservations[index].state = HostResourceReservationState::Committed;
         validate_ledger_document(&document, &self.root)?;
         self.publish_document_locked(&document)?;
@@ -798,6 +957,9 @@ impl HostResourceLedger {
         }
         let mut document = self.read_document_locked()?;
         let index = self.worker_launch_index(&document, store, lease)?;
+        let pinned_request = reservation_request(&document.reservations[index]);
+        self.validate_compute_node_request_locked(&pinned_request, true)?;
+        self.validate_observed_cpu_capacity_locked(&document, &pinned_request)?;
         let catalog = store
             .read_run_catalog(&lease.run_id)?
             .context("worker launch requires its current task catalog")?;
@@ -860,6 +1022,9 @@ impl HostResourceLedger {
         let document = self.read_document_locked()?;
         let index = self.worker_launch_index(&document, store, lease)?;
         let reservation = &document.reservations[index];
+        let pinned_request = reservation_request(reservation);
+        self.validate_compute_node_request_locked(&pinned_request, true)?;
+        self.validate_observed_cpu_capacity_locked(&document, &pinned_request)?;
         if reservation.state != HostResourceReservationState::Committed
             || reservation.worker_launch_gate
                 != Some(HostWorkerLaunchGate::Consumed {
@@ -994,11 +1159,16 @@ impl HostResourceLedger {
             expected_host_id: row.host_id.clone(),
             expected_policy_revision: row.policy_revision,
             expected_owner_epoch: row.host_owner_epoch,
+            expected_compute_node_owner_id: row.compute_node_owner_id.clone(),
+            expected_compute_node_owner_epoch: row.compute_node_owner_epoch,
             expected_topology_sha256: row.topology_sha256.clone(),
             budget: row.budget.clone(),
             cpu_ids: row.cpu_ids.clone(),
             exclusive_gpu_uuids: row.exclusive_gpu_uuids.clone(),
             gpu_vram_bytes_by_uuid: row.gpu_vram_bytes_by_uuid.clone(),
+            expected_node_policy_revision: row.node_policy_revision,
+            scheduling_priority: row.scheduling_priority,
+            parallelism: row.parallelism.clone(),
         };
         validate_request_matches_preparation_lease(&request, &current, &store_id)?;
         Ok(index)
@@ -1068,6 +1238,9 @@ impl HostResourceLedger {
         }
         let lease_path = checked_path(store.root(), &lease.relative_path()?)?;
         confirm_publication(&lease_path)?;
+        let pinned_request = reservation_request(&document.reservations[index]);
+        self.validate_compute_node_request_locked(&pinned_request, true)?;
+        self.validate_observed_cpu_capacity_locked(&document, &pinned_request)?;
         document.reservations[index].state = HostResourceReservationState::Committed;
         validate_ledger_document(&document, &self.root)?;
         self.publish_document_locked(&document)?;
@@ -1538,6 +1711,9 @@ impl HostResourceLedger {
         }
         let mut document = self.read_document_locked()?;
         let index = self.preparation_launch_index(&document, store, lease)?;
+        let pinned_request = reservation_request(&document.reservations[index]);
+        self.validate_compute_node_request_locked(&pinned_request, true)?;
+        self.validate_observed_cpu_capacity_locked(&document, &pinned_request)?;
         if document.reservations[index].state != HostResourceReservationState::Committed
             || document.reservations[index].preparation_launch_gate
                 != Some(HostWorkerLaunchGate::Pending)
@@ -1607,6 +1783,9 @@ impl HostResourceLedger {
         let document = self.read_document_locked()?;
         let index = self.preparation_launch_index(&document, store, lease)?;
         let reservation = &document.reservations[index];
+        let pinned_request = reservation_request(reservation);
+        self.validate_compute_node_request_locked(&pinned_request, true)?;
+        self.validate_observed_cpu_capacity_locked(&document, &pinned_request)?;
         if reservation.state != HostResourceReservationState::Committed
             || reservation.preparation_launch_gate
                 != Some(HostWorkerLaunchGate::Consumed {
@@ -1651,9 +1830,10 @@ impl HostResourceLedger {
             (false, false) => {
                 ensure_fresh_ledger_root(&ledger.root)?;
                 let document = HostResourceLedgerDocument {
-                    schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
+                    schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string(),
                     policy: ledger.policy.clone(),
                     reservations: Vec::new(),
+                    node_policy: Some(NodePolicy::initial_for_capacity(&ledger.policy)),
                 };
                 validate_ledger_document(&document, &ledger.root)?;
                 let marker = HostResourceLedgerMarker {
@@ -1713,6 +1893,557 @@ impl HostResourceLedger {
         &self.policy
     }
 
+    /// Compare-and-swap the operator-controlled policy. Existing reservations
+    /// remain immutable; the resulting snapshot may report over-budget until
+    /// those allocations are released.
+    pub fn update_node_policy(
+        &self,
+        expected_revision: u64,
+        next: NodePolicy,
+    ) -> Result<NodePolicy> {
+        let _host_writer = self.writer.acquire()?;
+        let mut document = self.read_document_locked()?;
+        let current_revision = document
+            .node_policy
+            .as_ref()
+            .map(|policy| policy.revision)
+            .unwrap_or_default();
+        if current_revision != expected_revision {
+            return Err(crate::compute_node_policy::NodePolicyRevisionConflict {
+                expected_revision,
+                current_revision,
+            }
+            .into());
+        }
+        let next_revision = current_revision
+            .checked_add(1)
+            .context("compute node policy revision overflowed")?;
+        if next.revision != next_revision {
+            bail!("next compute node policy must increment the current revision by one");
+        }
+        next.validate(&document.policy)?;
+        document.node_policy = Some(next.clone());
+        document.schema_version = HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string();
+        validate_ledger_document(&document, &self.root)?;
+        self.publish_document_locked(&document)?;
+        Ok(next)
+    }
+
+    /// Public, path-safe node identity derived from the operator's stable host ID.
+    pub fn node_id(&self) -> String {
+        format!("host-{:x}", Sha256::digest(self.policy.host_id.as_bytes()))
+    }
+
+    /// Stable identity of the shared host ledger that owns resource admission.
+    pub fn owner_id(&self) -> String {
+        format!("ledger-{:x}", Sha256::digest(self.policy.host_id.as_bytes()))
+    }
+
+    /// Acquire the exclusive owner of the host inventory shared by all stores.
+    ///
+    /// A live native owner is ordinary contention and returns `Ok(None)`. The
+    /// host owner epoch is independent of the configured policy owner epoch.
+    pub fn try_acquire_inventory_owner(&self) -> Result<Option<HostInventoryOwner>> {
+        let _host_writer = self.writer.acquire()?;
+        self.read_document_locked()?;
+        let (previous, lock_exists) = self.read_inventory_owner_state_locked()?;
+        let lock = match open_inventory_owner_lock(&self.root, true)? {
+            InventoryOwnerLockAttempt::Acquired { file, created } => {
+                if created == lock_exists {
+                    bail!("host inventory owner lock changed during acquisition");
+                }
+                file
+            }
+            InventoryOwnerLockAttempt::Busy if lock_exists && previous.is_some() => {
+                return Ok(None);
+            }
+            InventoryOwnerLockAttempt::Busy => {
+                bail!("host inventory owner lock appeared without a durable owner record");
+            }
+            InventoryOwnerLockAttempt::Missing => {
+                bail!("host inventory owner lock disappeared during acquisition");
+            }
+        };
+
+        let host_owner_epoch = match previous {
+            Some(record) => record
+                .host_owner_epoch
+                .checked_add(1)
+                .context("host inventory owner epoch overflowed")?,
+            None => 1,
+        };
+        let owner_token = uuid::Uuid::new_v4().to_string();
+        let record = HostInventoryOwnerRecord {
+            schema_version: HOST_INVENTORY_OWNER_RECORD_SCHEMA_V1.into(),
+            host_owner_id: self.owner_id(),
+            host_owner_epoch,
+            owner_token: owner_token.clone(),
+        };
+        validate_inventory_owner_record(&record, &self.owner_id())?;
+        self.publish_inventory_owner_record_locked(&record)?;
+
+        Ok(Some(HostInventoryOwner {
+            lock: Some(lock),
+            root: self.root.clone(),
+            writer: self.writer.clone(),
+            descriptor: record.descriptor(),
+            owner_token,
+        }))
+    }
+
+    /// Read the current durable owner only while its native lock is held.
+    pub fn active_inventory_owner(&self) -> Result<Option<HostInventoryOwnerDescriptor>> {
+        let _host_writer = self.writer.acquire()?;
+        self.read_document_locked()?;
+        self.active_inventory_owner_locked()
+    }
+
+    fn active_inventory_owner_locked(&self) -> Result<Option<HostInventoryOwnerDescriptor>> {
+        let (record, lock_exists) = self.read_inventory_owner_state_locked()?;
+        let Some(record) = record else {
+            if lock_exists {
+                bail!("host inventory owner lock exists without a durable owner record");
+            }
+            return Ok(None);
+        };
+        match open_inventory_owner_lock(&self.root, false)? {
+            InventoryOwnerLockAttempt::Busy => Ok(Some(record.descriptor())),
+            InventoryOwnerLockAttempt::Acquired { file, .. } => {
+                drop(file);
+                Ok(None)
+            }
+            InventoryOwnerLockAttempt::Missing => {
+                bail!("host inventory owner record exists without its native lock file");
+            }
+        }
+    }
+
+    /// Return the owner pinned by the current fresh v2 sample. The producer
+    /// lease and sample are checked under the same ledger writer used by
+    /// reservation admission.
+    pub fn current_compute_node_owner_for_admission(
+        &self,
+    ) -> Result<HostInventoryOwnerDescriptor> {
+        let _host_writer = self.writer.acquire()?;
+        self.read_document_locked()?;
+        let snapshot = self
+            .read_compute_node_snapshot_locked()?
+            .context("host admission requires a published compute-node sample")?;
+        let descriptor = HostInventoryOwnerDescriptor {
+            host_owner_id: snapshot
+                .host_owner_id
+                .clone()
+                .context("compute-node sample is missing its host owner ID")?,
+            host_owner_epoch: snapshot
+                .host_owner_epoch
+                .context("compute-node sample is missing its host owner epoch")?,
+        };
+        self.validate_compute_node_owner_locked(
+            Some(&descriptor.host_owner_id),
+            Some(descriptor.host_owner_epoch),
+            true,
+        )?;
+        Ok(descriptor)
+    }
+
+    fn validate_compute_node_owner_locked(
+        &self,
+        owner_id: Option<&str>,
+        owner_epoch: Option<u64>,
+        required: bool,
+    ) -> Result<()> {
+        let (owner_id, owner_epoch) = match (owner_id, owner_epoch) {
+            (Some(owner_id), Some(owner_epoch)) => (owner_id, owner_epoch),
+            (None, None) if !required => return Ok(()),
+            _ => bail!("host admission requires a pinned compute-node owner ID and epoch"),
+        };
+        let ledger_owner_id = self.owner_id();
+        if owner_epoch == 0 || owner_id != ledger_owner_id.as_str() {
+            bail!("host request is pinned to an invalid compute-node owner");
+        }
+        let active = self
+            .active_inventory_owner_locked()?
+            .context("host admission has no active compute-node inventory owner")?;
+        if active.host_owner_id.as_str() != owner_id || active.host_owner_epoch != owner_epoch {
+            bail!("host request is fenced by a different compute-node inventory owner");
+        }
+        let snapshot = self
+            .read_compute_node_snapshot_locked()?
+            .context("host admission requires a published compute-node sample")?;
+        if snapshot.schema_version
+            != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
+            || snapshot.node_id != self.node_id()
+            || snapshot.runtime_owner_id != self.owner_id()
+            || snapshot.owner_epoch != self.policy.owner_epoch
+            || snapshot.host_owner_id.as_deref() != Some(owner_id)
+            || snapshot.host_owner_epoch != Some(owner_epoch)
+            || !snapshot.is_current_at(chrono::Utc::now())?
+        {
+            bail!("host admission requires a current sample for the active compute-node owner");
+        }
+        Ok(())
+    }
+
+    /// Reconcile any pinned placement against current inventory facts. A
+    /// configured CPU mask or GPU UUID is not enough by itself: unavailable
+    /// and last-known inventory must not authorize a new reservation or spawn.
+    fn validate_compute_node_request_locked(
+        &self,
+        request: &HostReservationRequest,
+        required: bool,
+    ) -> Result<()> {
+        self.validate_compute_node_owner_locked(
+            request.expected_compute_node_owner_id.as_deref(),
+            request.expected_compute_node_owner_epoch,
+            required,
+        )?;
+        if request.expected_compute_node_owner_id.is_none() {
+            return Ok(());
+        }
+
+        let snapshot = self
+            .read_compute_node_snapshot_locked()?
+            .context("host admission requires a published compute-node sample")?;
+
+        if !self.policy.allowed_cpu_ids.is_empty() || !request.cpu_ids.is_empty() {
+            let topology = match &snapshot.cpu.topology {
+                Reported::Available { value } => value,
+                Reported::Unavailable { .. } => {
+                    bail!("CPU-pinned host admission requires current CPU topology")
+                }
+            };
+            let allowed_ids = match &snapshot.cpu.os_constraints.allowed_logical_cpu_ids {
+                Reported::Available { value } => value,
+                Reported::Unavailable { .. } => {
+                    bail!("CPU-pinned host admission requires the current OS-allowed CPU set")
+                }
+            };
+            let topology_ids = topology
+                .logical_cpus
+                .iter()
+                .map(|processor| processor.id)
+                .collect::<BTreeSet<_>>();
+            if !self.policy.allowed_cpu_ids.is_subset(&topology_ids)
+                || !self.policy.allowed_cpu_ids.is_subset(allowed_ids)
+                || !request.cpu_ids.is_subset(&topology_ids)
+                || !request.cpu_ids.is_subset(allowed_ids)
+            {
+                bail!("host CPU policy or placement is outside the current CPU inventory");
+            }
+        }
+
+        if !request.exclusive_gpu_uuids.is_empty() {
+            let devices = match &snapshot.gpus {
+                Reported::Available { value } => value,
+                Reported::Unavailable { .. } => {
+                    bail!("GPU host admission requires current GPU inventory")
+                }
+            };
+            for uuid in &request.exclusive_gpu_uuids {
+                let device = devices
+                    .iter()
+                    .find(|device| device.uuid == *uuid)
+                    .context("requested GPU UUID is absent from current host inventory")?;
+                if !matches!(
+                    &device.partition,
+                    Reported::Available {
+                        value: GpuPartition::FullDevice
+                    }
+                ) {
+                    bail!("GPU host admission requires a confirmed full-device partition");
+                }
+                let physical_vram = match &device.vram_bytes {
+                    Reported::Available { value } => *value,
+                    Reported::Unavailable { .. } => {
+                        bail!("GPU host admission requires current device VRAM capacity")
+                    }
+                };
+                if self
+                    .policy
+                    .gpu_vram_bytes_by_uuid
+                    .get(uuid)
+                    .is_some_and(|capacity| *capacity > physical_vram)
+                {
+                    bail!("configured GPU capacity exceeds the current device VRAM");
+                }
+                if request
+                    .gpu_vram_bytes_by_uuid
+                    .get(uuid)
+                    .is_some_and(|requested| *requested > physical_vram)
+                {
+                    bail!("requested GPU VRAM exceeds the current device capacity");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Bound new CPU admission and launch to the configured policy and, when
+    /// available, the latest effective OS/cgroup capacity. The snapshot is an
+    /// admission limit only; it does not prove that a worker enforces it.
+    fn validate_observed_cpu_capacity_locked(
+        &self,
+        document: &HostResourceLedgerDocument,
+        request: &HostReservationRequest,
+    ) -> Result<()> {
+        if request.expected_compute_node_owner_id.is_none() || request.budget.cpu_millis == 0 {
+            return Ok(());
+        }
+        self.validate_compute_node_owner_locked(
+            request.expected_compute_node_owner_id.as_deref(),
+            request.expected_compute_node_owner_epoch,
+            true,
+        )?;
+        let snapshot = self
+            .read_compute_node_snapshot_locked()?
+            .context("host CPU admission requires a published compute-node sample")?;
+        let observed_capacity_millis = match &snapshot.cpu.effective_capacity_millis {
+            crate::compute_node_snapshot::Observation::Available { value } => *value,
+            crate::compute_node_snapshot::Observation::Unavailable { .. } => return Ok(()),
+        };
+        let capacity_millis = document
+            .policy
+            .total_budget
+            .cpu_millis
+            .min(observed_capacity_millis);
+        let reserved_cpu_millis = document
+            .reservations
+            .iter()
+            .filter(|reservation| reservation.state != HostResourceReservationState::Released)
+            .try_fold(0u64, |sum, reservation| {
+                checked_sum(sum, reservation.budget.cpu_millis, "CPU")
+            })?;
+        if reserved_cpu_millis > capacity_millis {
+            return Err(HostResourceCapacityUnavailable(format!(
+                "host CPU reservations exceed current effective capacity of {capacity_millis} milli-CPU"
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Validate the exact durable owner and native lock under the shared ledger writer.
+    pub fn validate_inventory_owner(&self, owner: &HostInventoryOwner) -> Result<()> {
+        let _host_writer = self.writer.acquire()?;
+        self.read_document_locked()?;
+        self.validate_inventory_owner_locked(owner)
+    }
+
+    fn validate_inventory_owner_locked(&self, owner: &HostInventoryOwner) -> Result<()> {
+        if owner.root != self.root
+            || owner.lock.is_none()
+            || owner.descriptor.host_owner_id != self.owner_id()
+        {
+            bail!("host inventory owner belongs to a different ledger or is no longer held");
+        }
+
+        let (record, lock_exists) = self.read_inventory_owner_state_locked()?;
+        if !lock_exists {
+            bail!("host inventory owner has no durable native lock file");
+        }
+        let record = record.context("host inventory owner record is missing")?;
+        if record.host_owner_id != owner.descriptor.host_owner_id
+            || record.host_owner_epoch != owner.descriptor.host_owner_epoch
+            || record.owner_token != owner.owner_token
+        {
+            bail!("host inventory owner differs from the exact durable owner record");
+        }
+        match open_inventory_owner_lock(&self.root, false)? {
+            InventoryOwnerLockAttempt::Busy => Ok(()),
+            InventoryOwnerLockAttempt::Acquired { file, .. } => {
+                drop(file);
+                bail!("host inventory owner no longer holds its native lock");
+            }
+            InventoryOwnerLockAttempt::Missing => {
+                bail!("host inventory owner native lock file is missing");
+            }
+        }
+    }
+
+    fn read_inventory_owner_state_locked(
+        &self,
+    ) -> Result<(Option<HostInventoryOwnerRecord>, bool)> {
+        let record_path = checked_path(&self.root, HOST_INVENTORY_OWNER_RECORD_FILE)?;
+        reject_link(&record_path)?;
+        let record = match fs::symlink_metadata(&record_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                bail!("host inventory owner record must be a regular file")
+            }
+            Ok(_) => {
+                let bytes = read_bounded_regular_file(
+                    &self.root,
+                    HOST_INVENTORY_OWNER_RECORD_FILE,
+                    MAX_HOST_INVENTORY_OWNER_RECORD_BYTES,
+                )?;
+                let record: HostInventoryOwnerRecord = serde_json::from_slice(&bytes)
+                    .context("parse persisted host inventory owner record")?;
+                validate_inventory_owner_record(&record, &self.owner_id())?;
+                Some(record)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("inspect host inventory owner record"),
+        };
+
+        let lock_path = checked_path(&self.root, HOST_INVENTORY_OWNER_LOCK_FILE)?;
+        reject_link(&lock_path)?;
+        let lock_exists = match fs::symlink_metadata(&lock_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                bail!("host inventory owner lock must be a regular file")
+            }
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error).context("inspect host inventory owner lock"),
+        };
+        if record.is_some() != lock_exists {
+            bail!("host inventory owner lock and durable record are incomplete");
+        }
+        Ok((record, lock_exists))
+    }
+
+    fn publish_inventory_owner_record_locked(
+        &self,
+        record: &HostInventoryOwnerRecord,
+    ) -> Result<()> {
+        validate_inventory_owner_record(record, &self.owner_id())?;
+        let bytes = bounded_json_bytes(
+            record,
+            MAX_HOST_INVENTORY_OWNER_RECORD_BYTES,
+            "host inventory owner record",
+        )?;
+        publish_exact(
+            &self.root,
+            HOST_INVENTORY_OWNER_RECORD_FILE,
+            &bytes,
+            MAX_HOST_INVENTORY_OWNER_RECORD_BYTES,
+        )
+    }
+
+    /// Read the last bounded compute-node observation under the shared host
+    /// writer lock. Freshness is derived by the consumer at its observation time.
+    pub fn read_compute_node_snapshot(&self) -> Result<Option<ComputeNodeSnapshot>> {
+        let _host_writer = self.writer.acquire()?;
+        self.read_document_locked()?;
+        self.read_compute_node_snapshot_locked()
+    }
+
+    /// Publish one validated observation under the same lock that protects
+    /// host reservations. The snapshot must be pinned to this ledger's host
+    /// policy and advance its durable revisions exactly when their digests do.
+    pub fn publish_compute_node_snapshot(
+        &self,
+        snapshot: &ComputeNodeSnapshot,
+    ) -> Result<ComputeNodeSnapshotPublicationDisposition> {
+        snapshot.validate()?;
+        if snapshot.schema_version == crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2 {
+            bail!("v2 compute-node snapshots require the active host inventory owner");
+        }
+        if snapshot.node_id != self.node_id()
+            || snapshot.owner_epoch != self.policy.owner_epoch
+        {
+            bail!("compute-node snapshot differs from the configured host identity or owner epoch");
+        }
+
+        let bytes = bounded_json_bytes(
+            snapshot,
+            MAX_COMPUTE_NODE_SNAPSHOT_BYTES,
+            "compute-node snapshot",
+        )?;
+        let _host_writer = self.writer.acquire()?;
+        self.read_document_locked()?;
+        self.publish_compute_node_snapshot_locked(snapshot, &bytes)
+    }
+
+    /// Publish a v2 observation under the same writer lock that protects the
+    /// host-owner record and reservations.
+    pub fn publish_compute_node_snapshot_with_owner(
+        &self,
+        owner: &HostInventoryOwner,
+        snapshot: &ComputeNodeSnapshot,
+    ) -> Result<ComputeNodeSnapshotPublicationDisposition> {
+        snapshot.validate()?;
+        if snapshot.schema_version != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
+            || snapshot.node_id != self.node_id()
+            || snapshot.runtime_owner_id != self.owner_id()
+            || snapshot.owner_epoch != self.policy.owner_epoch
+            || snapshot.host_owner_id.as_deref()
+                != Some(owner.descriptor.host_owner_id.as_str())
+            || snapshot.host_owner_epoch != Some(owner.descriptor.host_owner_epoch)
+        {
+            bail!(
+                "v2 compute-node snapshot differs from the active host inventory owner or configured ledger"
+            );
+        }
+
+        let bytes = bounded_json_bytes(
+            snapshot,
+            MAX_COMPUTE_NODE_SNAPSHOT_BYTES,
+            "compute-node snapshot",
+        )?;
+        let _host_writer = self.writer.acquire()?;
+        self.read_document_locked()?;
+        self.validate_inventory_owner_locked(owner)?;
+        self.publish_compute_node_snapshot_locked(snapshot, &bytes)
+    }
+
+    fn publish_compute_node_snapshot_locked(
+        &self,
+        snapshot: &ComputeNodeSnapshot,
+        bytes: &[u8],
+    ) -> Result<ComputeNodeSnapshotPublicationDisposition> {
+        if let Some(previous) = self.read_compute_node_snapshot_locked()? {
+            if previous == *snapshot {
+                return Ok(ComputeNodeSnapshotPublicationDisposition::Replayed);
+            }
+            if snapshot.node_id == previous.node_id
+                && snapshot.boot_id == previous.boot_id
+                && snapshot.sample.collected_at <= previous.sample.collected_at
+            {
+                bail!("compute-node snapshot sample time must advance within one boot");
+            }
+            snapshot.validate_successor_of(&previous)?;
+        } else if snapshot.inventory_revision != 1 || snapshot.capabilities_revision != 1 {
+            bail!("first compute-node snapshot must start revisions at one");
+        }
+
+        let destination = checked_path(&self.root, HOST_COMPUTE_NODE_SNAPSHOT_FILE)?;
+        reject_link(&destination)?;
+        match atomic_write(&destination, bytes) {
+            Ok(()) => confirm_publication(&destination)?,
+            Err(write_error) => match read_bounded_regular_file(
+                &self.root,
+                HOST_COMPUTE_NODE_SNAPSHOT_FILE,
+                MAX_COMPUTE_NODE_SNAPSHOT_BYTES,
+            ) {
+                Ok(published) if published.as_slice() == bytes => {
+                    confirm_publication(&destination)?
+                }
+                _ => return Err(write_error),
+            },
+        }
+        Ok(ComputeNodeSnapshotPublicationDisposition::Accepted)
+    }
+
+    fn read_compute_node_snapshot_locked(&self) -> Result<Option<ComputeNodeSnapshot>> {
+        let path = checked_path(&self.root, HOST_COMPUTE_NODE_SNAPSHOT_FILE)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                bail!("compute-node snapshot must be a regular file")
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("inspect compute-node snapshot"),
+        }
+        let bytes = read_bounded_regular_file(
+            &self.root,
+            HOST_COMPUTE_NODE_SNAPSHOT_FILE,
+            MAX_COMPUTE_NODE_SNAPSHOT_BYTES,
+        )?;
+        let snapshot: ComputeNodeSnapshot = serde_json::from_slice(&bytes)
+            .context("parse persisted compute-node snapshot")?;
+        snapshot.validate()?;
+        Ok(Some(snapshot))
+    }
+
     /// Read and validate the complete durable snapshot under the native writer
     /// lock. Missing or corrupt state is never interpreted as an empty ledger.
     pub fn read(&self) -> Result<HostResourceLedgerSnapshot> {
@@ -1721,6 +2452,7 @@ impl HostResourceLedger {
         Ok(HostResourceLedgerSnapshot {
             policy: document.policy,
             reservations: document.reservations,
+            node_policy: document.node_policy,
         })
     }
 
@@ -1730,8 +2462,15 @@ impl HostResourceLedger {
         let _host_writer = self.writer.acquire()?;
         let mut document = self.read_document_locked()?;
         request.validate(&document.policy)?;
+        self.validate_compute_node_request_locked(request, false)?;
+        let original_len = document.reservations.len();
         let (reservation, changed) = insert_tentative(&mut document, request, &self.root)?;
         if changed {
+            if let Err(error) = validate_node_policy_admission(&document, request) {
+                document.reservations.truncate(original_len);
+                return Err(error);
+            }
+            self.validate_observed_cpu_capacity_locked(&document, request)?;
             self.publish_document_locked(&document)?;
         }
         Ok(reservation)
@@ -1812,11 +2551,35 @@ impl HostResourceLedger {
         }
         let mut document = self.read_document_locked()?;
         request.validate(&document.policy)?;
+        self.validate_compute_node_request_locked(request, true)?;
+        let original_len = document.reservations.len();
         let Some((reservation, changed)) =
             try_insert_admission(&mut document, request, &self.root)?
         else {
             return Ok(None);
         };
+        if changed {
+            match validate_node_policy_admission(&document, request) {
+                Ok(()) => {}
+                Err(error) if error.is::<HostResourceCapacityUnavailable>() => {
+                    document.reservations.truncate(original_len);
+                    return Ok(None);
+                }
+                Err(error) => {
+                    document.reservations.truncate(original_len);
+                    return Err(error);
+                }
+            }
+        }
+        if let Err(error) = self.validate_observed_cpu_capacity_locked(&document, request) {
+            if error.is::<HostResourceCapacityUnavailable>() {
+                if changed {
+                    document.reservations.truncate(original_len);
+                }
+                return Ok(None);
+            }
+            return Err(error);
+        }
         if changed {
             self.publish_document_locked(&document)?;
         }
@@ -1853,6 +2616,8 @@ impl HostResourceLedger {
         }
 
         if reservation.state == HostResourceReservationState::Tentative {
+            self.validate_compute_node_request_locked(request, true)?;
+            self.validate_observed_cpu_capacity_locked(&document, request)?;
             let current = document
                 .reservations
                 .iter_mut()
@@ -1897,11 +2662,35 @@ impl HostResourceLedger {
         }
         let mut document = self.read_document_locked()?;
         request.validate(&document.policy)?;
+        self.validate_compute_node_request_locked(request, true)?;
+        let original_len = document.reservations.len();
         let Some((reservation, changed)) =
             try_insert_admission(&mut document, request, &self.root)?
         else {
             return Ok(None);
         };
+        if changed {
+            match validate_node_policy_admission(&document, request) {
+                Ok(()) => {}
+                Err(error) if error.is::<HostResourceCapacityUnavailable>() => {
+                    document.reservations.truncate(original_len);
+                    return Ok(None);
+                }
+                Err(error) => {
+                    document.reservations.truncate(original_len);
+                    return Err(error);
+                }
+            }
+        }
+        if let Err(error) = self.validate_observed_cpu_capacity_locked(&document, request) {
+            if error.is::<HostResourceCapacityUnavailable>() {
+                if changed {
+                    document.reservations.truncate(original_len);
+                }
+                return Ok(None);
+            }
+            return Err(error);
+        }
         if changed {
             self.publish_document_locked(&document)?;
         }
@@ -1941,6 +2730,8 @@ impl HostResourceLedger {
         };
 
         if reservation.state == HostResourceReservationState::Tentative {
+            self.validate_compute_node_request_locked(request, true)?;
+            self.validate_observed_cpu_capacity_locked(&document, request)?;
             let current = document
                 .reservations
                 .iter_mut()
@@ -2326,11 +3117,13 @@ impl HostResourceLedger {
     }
 
     fn publish_document_locked(&self, document: &HostResourceLedgerDocument) -> Result<()> {
-        validate_ledger_document(document, &self.root)?;
+        let mut document = document.clone();
+        document.schema_version = HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string();
+        validate_ledger_document(&document, &self.root)?;
         if document.policy != self.policy {
             bail!("refusing to publish a host ledger under a different policy");
         }
-        let bytes = bounded_json_bytes(document, MAX_LEDGER_BYTES, "ledger")?;
+        let bytes = bounded_json_bytes(&document, MAX_LEDGER_BYTES, "ledger")?;
         publish_exact(
             &self.root,
             HOST_RESOURCE_LEDGER_FILE,
@@ -2338,6 +3131,117 @@ impl HostResourceLedger {
             MAX_LEDGER_BYTES,
         )
     }
+}
+
+enum InventoryOwnerLockAttempt {
+    Acquired { file: File, created: bool },
+    Busy,
+    Missing,
+}
+
+/// Open and, when requested, create the stable native lock file for one
+/// shared-host inventory lease. The file is never replaced or removed.
+fn open_inventory_owner_lock(
+    root: &Path,
+    create_if_missing: bool,
+) -> Result<InventoryOwnerLockAttempt> {
+    let path = checked_path(root, HOST_INVENTORY_OWNER_LOCK_FILE)?;
+    reject_link(&path)?;
+
+    let (mut file, created) = if create_if_missing {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .with_context(|| {
+                        format!("opening host inventory owner lock {}", path.display())
+                    })?,
+                false,
+            ),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("creating host inventory owner lock {}", path.display())
+                });
+            }
+        }
+    } else {
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                bail!("host inventory owner lock must be a regular file")
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(InventoryOwnerLockAttempt::Missing);
+            }
+            Err(error) => return Err(error).context("inspect host inventory owner lock"),
+        }
+        (
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .with_context(|| {
+                    format!("opening host inventory owner lock {}", path.display())
+                })?,
+            false,
+        )
+    };
+
+    reject_link(&path)?;
+    if !file.metadata()?.is_file() {
+        bail!("host inventory owner lock must be a regular file");
+    }
+    if !created {
+        file.seek(SeekFrom::Start(0))?;
+        let mut descriptor = Vec::new();
+        (&mut file)
+            .take(HOST_INVENTORY_OWNER_LOCK_DESCRIPTOR.len() as u64 + 1)
+            .read_to_end(&mut descriptor)?;
+        if descriptor != HOST_INVENTORY_OWNER_LOCK_DESCRIPTOR {
+            bail!("host inventory owner lock descriptor is missing or corrupt");
+        }
+    }
+
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(InventoryOwnerLockAttempt::Busy),
+        Err(TryLockError::Error(error)) => {
+            return Err(error).context("acquiring native host inventory owner lock");
+        }
+    }
+
+    if created {
+        file.write_all(HOST_INVENTORY_OWNER_LOCK_DESCRIPTOR)?;
+        file.sync_all()?;
+        sync_directory(root)?;
+    }
+    Ok(InventoryOwnerLockAttempt::Acquired { file, created })
+}
+
+fn validate_inventory_owner_record(
+    record: &HostInventoryOwnerRecord,
+    expected_host_owner_id: &str,
+) -> Result<()> {
+    if record.schema_version != HOST_INVENTORY_OWNER_RECORD_SCHEMA_V1 {
+        bail!("unsupported host inventory owner record schema");
+    }
+    if record.host_owner_id != expected_host_owner_id || record.host_owner_epoch == 0 {
+        bail!("host inventory owner record has an invalid identity or epoch");
+    }
+    let token = uuid::Uuid::parse_str(&record.owner_token)
+        .context("host inventory owner token is invalid")?;
+    if token.to_string() != record.owner_token {
+        bail!("host inventory owner token is not canonical");
+    }
+    Ok(())
 }
 
 fn canonical_ledger_root(root: &Path, create_leaf: bool) -> Result<PathBuf> {
@@ -2479,6 +3383,18 @@ fn policy_sha256(policy: &HostResourceLedgerPolicy) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
+}
+
+fn is_single_process(value: &ComputeParallelismIR) -> bool {
+    matches!(value, ComputeParallelismIR::SingleProcess)
+}
+
 fn host_request_sha256(request: &HostReservationRequest) -> Result<String> {
     let bytes = serde_json::to_vec(request).context("serializing host reservation request")?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
@@ -2553,13 +3469,12 @@ fn insert_tentative(
     root: &Path,
 ) -> Result<(HostResourceReservation, bool)> {
     request.validate(&document.policy)?;
-    let request_sha256 = host_request_sha256(request)?;
     if let Some(existing) = document
         .reservations
         .iter()
         .find(|reservation| reservation.identity == request.identity)
     {
-        if !existing.matches_request(request, &request_sha256) {
+        if !existing.matches_request(request)? {
             bail!("exact host reservation identity was replayed with changed request contents");
         }
         if existing.state == HostResourceReservationState::Released {
@@ -2622,11 +3537,34 @@ fn try_insert_admission(
     }
 }
 
+fn validate_node_policy_admission(
+    document: &HostResourceLedgerDocument,
+    request: &HostReservationRequest,
+) -> Result<()> {
+    let node_policy = document.node_policy.as_ref().ok_or_else(|| {
+        HostResourceCapacityUnavailable(
+            "operator node policy is not configured for this host ledger".into(),
+        )
+    })?;
+    node_policy.validate_new_admission(&document.policy, &document.reservations, request)
+}
+
 fn validate_ledger_document(document: &HostResourceLedgerDocument, root: &Path) -> Result<()> {
-    if document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V1 {
+    if document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V1
+        && document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V2
+        && document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V3
+    {
         bail!("unsupported host resource ledger schema");
     }
+    if document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V3
+        && document.node_policy.is_some()
+    {
+        bail!("legacy host resource ledger cannot contain a node policy");
+    }
     document.policy.validate()?;
+    if let Some(node_policy) = &document.node_policy {
+        node_policy.validate(&document.policy)?;
+    }
     if document.reservations.len() > MAX_LEDGER_RECORDS {
         bail!("host resource ledger exceeds its {MAX_LEDGER_RECORDS}-record limit");
     }
@@ -2648,6 +3586,16 @@ fn validate_ledger_document(document: &HostResourceLedgerDocument, root: &Path) 
 
     for reservation in &document.reservations {
         reservation.validate(&document.policy)?;
+        if reservation.node_policy_revision > 0 {
+            let current_revision = document
+                .node_policy
+                .as_ref()
+                .map(|policy| policy.revision)
+                .context("node-policy-bound reservation exists without a node policy")?;
+            if reservation.node_policy_revision > current_revision {
+                bail!("host reservation is bound to a future node policy revision");
+            }
+        }
         if reservation.state == HostResourceReservationState::Released {
             validate_release_proof(root, &document.policy, reservation)?;
         }
@@ -3007,11 +3955,16 @@ fn reservation_request(row: &HostResourceReservation) -> HostReservationRequest 
         expected_host_id: row.host_id.clone(),
         expected_policy_revision: row.policy_revision,
         expected_owner_epoch: row.host_owner_epoch,
+        expected_compute_node_owner_id: row.compute_node_owner_id.clone(),
+        expected_compute_node_owner_epoch: row.compute_node_owner_epoch,
         expected_topology_sha256: row.topology_sha256.clone(),
         budget: row.budget.clone(),
         cpu_ids: row.cpu_ids.clone(),
         exclusive_gpu_uuids: row.exclusive_gpu_uuids.clone(),
         gpu_vram_bytes_by_uuid: row.gpu_vram_bytes_by_uuid.clone(),
+        expected_node_policy_revision: row.node_policy_revision,
+        scheduling_priority: row.scheduling_priority,
+        parallelism: row.parallelism.clone(),
     }
 }
 
@@ -3438,6 +4391,463 @@ mod tests {
         }
     }
 
+    fn compute_node_snapshot(
+        policy: &HostResourceLedgerPolicy,
+        node_id: String,
+        collected_at: chrono::DateTime<chrono::Utc>,
+        inventory_revision: u64,
+        capabilities_revision: u64,
+    ) -> ComputeNodeSnapshot {
+        use crate::compute_node_snapshot::{
+            ComputeNodeSample, ComputeNodeSnapshotData, CpuLogicalProcessor, CpuOsConstraints,
+            CpuSnapshot, CpuTopology, EnforcementSnapshot, EnforcementStatus, GpuDeviceSnapshot,
+            GpuPartition, MemorySnapshot, Observation, Reported, SampleSource,
+            UnavailableReason,
+        };
+
+        let logical_cpus = policy
+            .allowed_cpu_ids
+            .iter()
+            .map(|id| CpuLogicalProcessor {
+                id: *id,
+                socket_id: Some(0),
+                numa_node_id: Some(0),
+                core_id: Some(*id),
+                smt_sibling_ids: vec![*id],
+                processor_group: None,
+                group_logical_cpu_id: None,
+            })
+            .collect::<Vec<_>>();
+        let gpus = policy
+            .gpu_vram_bytes_by_uuid
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (uuid, vram_bytes))| GpuDeviceSnapshot {
+                uuid: uuid.clone(),
+                pci_id: Reported::Available {
+                    value: format!("0000:{ordinal:02x}:00.0"),
+                },
+                name: Reported::Available {
+                    value: format!("Fixture GPU {ordinal}"),
+                },
+                local_ordinal: Observation::Available {
+                    value: u32::try_from(ordinal).unwrap(),
+                },
+                vram_bytes: Reported::Available {
+                    value: *vram_bytes,
+                },
+                utilization_percent: Observation::Available { value: 0 },
+                temperature_millicelsius: Observation::Unavailable {
+                    reason: UnavailableReason::NotReported,
+                },
+                partition: Reported::Available {
+                    value: GpuPartition::FullDevice,
+                },
+                topology: Reported::Unavailable {
+                    reason: UnavailableReason::NotReported,
+                    last_known: None,
+                },
+                runtime_compatibility: Reported::Unavailable {
+                    reason: UnavailableReason::NotReported,
+                    last_known: None,
+                },
+            })
+            .collect::<Vec<_>>();
+
+        ComputeNodeSnapshot::new(
+            ComputeNodeSnapshotData {
+                node_id,
+                boot_id: "boot-test".into(),
+                runtime_owner_id: "owner-test".into(),
+                host_owner_id: None,
+                host_owner_epoch: None,
+                owner_epoch: policy.owner_epoch,
+                inventory_revision,
+                capabilities_revision,
+                cpu: CpuSnapshot {
+                    topology: Reported::Available {
+                        value: CpuTopology {
+                            logical_cpus,
+                        },
+                    },
+                    os_constraints: CpuOsConstraints {
+                        allowed_logical_cpu_ids: Reported::Available {
+                            value: policy.allowed_cpu_ids.clone(),
+                        },
+                        quota: Reported::Unavailable {
+                            reason: UnavailableReason::NotReported,
+                            last_known: None,
+                        },
+                    },
+                    effective_capacity_millis: Observation::Available {
+                        value: policy.total_budget.cpu_millis,
+                    },
+                    load_percent: Observation::Unavailable {
+                        reason: UnavailableReason::NotReported,
+                    },
+                },
+                memory: MemorySnapshot {
+                    total_bytes: Observation::Available {
+                        value: policy.total_budget.memory_bytes,
+                    },
+                    available_bytes: Observation::Available {
+                        value: policy.total_budget.memory_bytes.saturating_sub(1024),
+                    },
+                },
+                gpus: Reported::Available { value: gpus },
+                capabilities: Reported::Unavailable {
+                    reason: UnavailableReason::NotReported,
+                    last_known: None,
+                },
+                sample: ComputeNodeSample::new(
+                    SampleSource::HostOs,
+                    collected_at.clone(),
+                    None,
+                    collected_at.clone(),
+                ),
+                enforcement: EnforcementSnapshot {
+                    cpu_affinity: EnforcementStatus::Unavailable,
+                    cpu_quota: EnforcementStatus::Unavailable,
+                    memory_cap: EnforcementStatus::Unavailable,
+                    gpu_visibility: EnforcementStatus::Unavailable,
+                    storage_quota: EnforcementStatus::Unavailable,
+                },
+            },
+            collected_at,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn compute_node_snapshot_is_bounded_owner_bound_and_replayable() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let snapshot = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+
+        assert_eq!(
+            ledger.publish_compute_node_snapshot(&snapshot).unwrap(),
+            ComputeNodeSnapshotPublicationDisposition::Accepted
+        );
+        assert_eq!(
+            ledger.publish_compute_node_snapshot(&snapshot).unwrap(),
+            ComputeNodeSnapshotPublicationDisposition::Replayed
+        );
+        assert_eq!(ledger.read_compute_node_snapshot().unwrap(), Some(snapshot.clone()));
+
+        let mut stale_owner_epoch = snapshot;
+        stale_owner_epoch.owner_epoch += 1;
+        assert!(ledger.publish_compute_node_snapshot(&stale_owner_epoch).is_err());
+    }
+
+    #[test]
+    fn v2_compute_node_publication_is_atomically_fenced_by_host_inventory_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut snapshot = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+        snapshot.schema_version =
+            crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        snapshot.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        snapshot.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        snapshot.validate().unwrap();
+
+        assert!(ledger.publish_compute_node_snapshot(&snapshot).is_err());
+        assert_eq!(
+            ledger
+                .publish_compute_node_snapshot_with_owner(&owner, &snapshot)
+                .unwrap(),
+            ComputeNodeSnapshotPublicationDisposition::Accepted
+        );
+
+        drop(owner);
+        let next_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        assert_eq!(next_owner.descriptor().host_owner_epoch, 2);
+        assert!(ledger
+            .publish_compute_node_snapshot_with_owner(&next_owner, &snapshot)
+            .is_err());
+        assert_eq!(
+            ledger.read_compute_node_snapshot().unwrap(),
+            Some(snapshot)
+        );
+    }
+
+    #[test]
+    fn host_reservation_cannot_cross_compute_node_owner_epoch() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let first_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut first_sample = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+        first_sample.schema_version =
+            crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        first_sample.host_owner_id = Some(first_owner.descriptor().host_owner_id.clone());
+        first_sample.host_owner_epoch = Some(first_owner.descriptor().host_owner_epoch);
+        ledger
+            .publish_compute_node_snapshot_with_owner(&first_owner, &first_sample)
+            .unwrap();
+
+        let mut request = request(
+            &policy,
+            &format!("sha256:{}", "1".repeat(64)),
+            "owner-fenced",
+            budget(1000, 1024, 0),
+            &[],
+            &[],
+            &[],
+        );
+        request.expected_compute_node_owner_id =
+            Some(first_owner.descriptor().host_owner_id.clone());
+        request.expected_compute_node_owner_epoch =
+            Some(first_owner.descriptor().host_owner_epoch);
+        ledger.reserve(&request).unwrap();
+
+        drop(first_owner);
+        let second_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut second_sample = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+        second_sample.schema_version =
+            crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        second_sample.host_owner_id = Some(second_owner.descriptor().host_owner_id.clone());
+        second_sample.host_owner_epoch = Some(second_owner.descriptor().host_owner_epoch);
+        ledger
+            .publish_compute_node_snapshot_with_owner(&second_owner, &second_sample)
+            .unwrap();
+
+        assert!(ledger.reserve(&request).is_err());
+        request.expected_compute_node_owner_epoch =
+            Some(second_owner.descriptor().host_owner_epoch);
+        assert!(ledger.reserve(&request).is_err());
+    }
+
+    #[test]
+    fn host_reservation_does_not_use_last_known_cpu_inventory_for_pinned_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        let topology = sample.cpu.topology.known_value().cloned();
+        sample.cpu.topology = Reported::Unavailable {
+            reason: crate::compute_node_snapshot::UnavailableReason::SourceUnavailable,
+            last_known: topology,
+        };
+        let allowed_ids = sample
+            .cpu
+            .os_constraints
+            .allowed_logical_cpu_ids
+            .known_value()
+            .cloned();
+        sample.cpu.os_constraints.allowed_logical_cpu_ids = Reported::Unavailable {
+            reason: crate::compute_node_snapshot::UnavailableReason::SourceUnavailable,
+            last_known: allowed_ids,
+        };
+        ledger
+            .publish_compute_node_snapshot_with_owner(&owner, &sample)
+            .unwrap();
+
+        let mut request = request(
+            &policy,
+            &format!("sha256:{}", "1".repeat(64)),
+            "last-known-cpu",
+            budget(1000, 1024, 0),
+            &[],
+            &[],
+            &[],
+        );
+        request.expected_compute_node_owner_id =
+            Some(owner.descriptor().host_owner_id.clone());
+        request.expected_compute_node_owner_epoch =
+            Some(owner.descriptor().host_owner_epoch);
+
+        assert!(ledger.reserve(&request).is_err());
+    }
+
+    #[test]
+    fn host_reservation_is_bounded_by_current_effective_cpu_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        sample.cpu.effective_capacity_millis =
+            crate::compute_node_snapshot::Observation::Available { value: 500 };
+        ledger
+            .publish_compute_node_snapshot_with_owner(&owner, &sample)
+            .unwrap();
+
+        let store_id = format!("sha256:{}", "1".repeat(64));
+        let mut first = request(
+            &policy,
+            &store_id,
+            "effective-cpu-first",
+            budget(400, 1024, 0),
+            &[],
+            &[],
+            &[],
+        );
+        first.expected_compute_node_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        first.expected_compute_node_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        ledger.reserve(&first).unwrap();
+
+        let mut second = request(
+            &policy,
+            &store_id,
+            "effective-cpu-second",
+            budget(200, 1024, 0),
+            &[],
+            &[],
+            &[],
+        );
+        second.expected_compute_node_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        second.expected_compute_node_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+
+        let error = ledger.reserve(&second).unwrap_err();
+        assert!(error.is::<HostResourceCapacityUnavailable>());
+        assert_eq!(ledger.read().unwrap().reservations.len(), 1);
+    }
+
+    #[test]
+    fn host_reservation_rejects_unknown_gpu_partition() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        if let Reported::Available { value } = &mut sample.gpus {
+            value[0].partition = Reported::Available {
+                value: GpuPartition::Unknown,
+            };
+        }
+        ledger
+            .publish_compute_node_snapshot_with_owner(&owner, &sample)
+            .unwrap();
+
+        let mut request = request(
+            &policy,
+            &format!("sha256:{}", "1".repeat(64)),
+            "unknown-gpu-partition",
+            budget(1000, 1024, 0),
+            &[GPU_A],
+            &[(GPU_A.to_string(), 2048)],
+            &[],
+        );
+        request.expected_compute_node_owner_id =
+            Some(owner.descriptor().host_owner_id.clone());
+        request.expected_compute_node_owner_epoch =
+            Some(owner.descriptor().host_owner_epoch);
+
+        assert!(ledger.reserve(&request).is_err());
+    }
+
+    #[test]
+    fn host_inventory_owner_first_acquisition_starts_at_epoch_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy()).unwrap();
+
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+
+        assert_eq!(owner.descriptor().host_owner_epoch, 1);
+    }
+
+    #[test]
+    fn host_inventory_owner_is_exclusive_while_native_lock_is_live() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+
+        assert!(ledger.try_acquire_inventory_owner().unwrap().is_none());
+        assert_eq!(
+            ledger.active_inventory_owner().unwrap(),
+            Some(owner.descriptor().clone())
+        );
+        ledger.validate_inventory_owner(&owner).unwrap();
+
+        drop(owner);
+        assert_eq!(ledger.active_inventory_owner().unwrap(), None);
+    }
+
+    #[test]
+    fn host_inventory_owner_epoch_increments_after_drop() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy()).unwrap();
+        let first = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        assert_eq!(first.descriptor().host_owner_epoch, 1);
+
+        drop(first);
+        let second = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+
+        assert_eq!(second.descriptor().host_owner_epoch, 2);
+    }
+
+    #[test]
+    fn host_inventory_owner_id_is_stable_across_ledger_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let configured_policy = policy();
+        let ledger =
+            HostResourceLedger::initialize(directory.path(), configured_policy.clone()).unwrap();
+        let expected_id = ledger.owner_id();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        assert_eq!(owner.descriptor().host_owner_id, expected_id);
+        drop(owner);
+
+        let reopened = HostResourceLedger::open(directory.path(), configured_policy).unwrap();
+        assert_eq!(reopened.owner_id(), expected_id);
+        let owner = reopened.try_acquire_inventory_owner().unwrap().unwrap();
+        assert_eq!(owner.descriptor().host_owner_id, expected_id);
+    }
+
     fn budget(cpu_millis: u64, memory_bytes: u64, storage_bytes: u64) -> FmsResourceBudget {
         FmsResourceBudget {
             cpu_millis,
@@ -3470,11 +4880,16 @@ mod tests {
             expected_host_id: policy.host_id.clone(),
             expected_policy_revision: policy.revision,
             expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: None,
+            expected_compute_node_owner_epoch: None,
             expected_topology_sha256: policy.topology_sha256.clone(),
             budget: budget(1000, 1024, 0),
             exclusive_gpu_uuids: [GPU_A.to_string()].into_iter().collect(),
             gpu_vram_bytes_by_uuid: [(GPU_A.to_string(), 2048)].into_iter().collect(),
             cpu_ids: [0].into_iter().collect(),
+            expected_node_policy_revision: 0,
+            scheduling_priority: 0,
+            parallelism: ComputeParallelismIR::SingleProcess,
         };
         let reservation = HostResourceReservation::from_request(&request).unwrap();
         let now = chrono::Utc::now();
@@ -3583,6 +4998,7 @@ mod tests {
         _directory: tempfile::TempDir,
         store: SessionStore,
         ledger: HostResourceLedger,
+        _inventory_owner: HostInventoryOwner,
         request: HostReservationRequest,
         pool: crate::FmsPreparationResourcePool,
         lease: FmsPreparationResourceLease,
@@ -3595,8 +5011,27 @@ mod tests {
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let ledger_root = directory.path().join("host-ledger");
         let ledger = HostResourceLedger::initialize(&ledger_root, policy.clone()).unwrap();
+        let inventory_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = compute_node_snapshot(
+            &policy,
+            ledger.node_id(),
+            chrono::Utc::now(),
+            1,
+            1,
+        );
+        sample.schema_version =
+            crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.host_owner_id = Some(inventory_owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(inventory_owner.descriptor().host_owner_epoch);
+        ledger
+            .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
+            .unwrap();
 
         request.identity.store_id = HostResourceLedger::store_id(store.root()).unwrap();
+        request.expected_compute_node_owner_id =
+            Some(inventory_owner.descriptor().host_owner_id.clone());
+        request.expected_compute_node_owner_epoch =
+            Some(inventory_owner.descriptor().host_owner_epoch);
         lease.state = FmsResourceLeaseState::Active;
         lease.heartbeat_sequence = 0;
         lease.released_at = None;
@@ -3640,6 +5075,7 @@ mod tests {
             _directory: directory,
             store,
             ledger,
+            _inventory_owner: inventory_owner,
             request,
             pool,
             lease,
@@ -3716,11 +5152,16 @@ mod tests {
             expected_host_id: policy.host_id.clone(),
             expected_policy_revision: policy.revision,
             expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: None,
+            expected_compute_node_owner_epoch: None,
             expected_topology_sha256: policy.topology_sha256.clone(),
             budget: request_budget,
             exclusive_gpu_uuids: BTreeSet::new(),
             gpu_vram_bytes_by_uuid: BTreeMap::new(),
             cpu_ids: cpu_ids.iter().copied().collect(),
+            expected_node_policy_revision: 1,
+            scheduling_priority: 0,
+            parallelism: ComputeParallelismIR::SingleProcess,
         }
     }
 
@@ -3748,11 +5189,16 @@ mod tests {
             expected_host_id: policy.host_id.clone(),
             expected_policy_revision: policy.revision,
             expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: None,
+            expected_compute_node_owner_epoch: None,
             expected_topology_sha256: policy.topology_sha256.clone(),
             budget: request_budget,
             exclusive_gpu_uuids: gpu_uuids.iter().map(|uuid| uuid.to_string()).collect(),
             gpu_vram_bytes_by_uuid: gpu_vram.iter().cloned().collect(),
             cpu_ids: cpu_ids.iter().copied().collect(),
+            expected_node_policy_revision: 1,
+            scheduling_priority: 0,
+            parallelism: ComputeParallelismIR::SingleProcess,
         }
     }
 
@@ -3764,6 +5210,113 @@ mod tests {
         let root = base.join(name);
         fs::create_dir(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn lowering_node_policy_preserves_active_reservation_and_blocks_new_over_budget_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let capacity_policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), capacity_policy.clone()).unwrap();
+        let store_id = format!("sha256:{}", "1".repeat(64));
+        let active_request = request(
+            &capacity_policy,
+            &store_id,
+            "active",
+            FmsResourceBudget {
+                cpu_millis: 2500,
+                memory_bytes: 2000,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1000,
+            },
+            &[],
+            &[],
+            &[],
+        );
+        let active = ledger.reserve(&active_request).unwrap();
+
+        let mut next = ledger.read().unwrap().node_policy.unwrap();
+        next.revision += 1;
+        next.reserved_budget.cpu_millis = 2000;
+        let updated = ledger.update_node_policy(1, next).unwrap();
+        assert_eq!(updated.revision, 2);
+
+        let snapshot = ledger.read().unwrap();
+        assert!(snapshot
+            .node_policy_status()
+            .unwrap()
+            .unwrap()
+            .over_budget);
+        assert_eq!(snapshot.reservations, vec![active]);
+
+        let mut new_request = request(
+            &capacity_policy,
+            &store_id,
+            "new",
+            FmsResourceBudget {
+                cpu_millis: 500,
+                memory_bytes: 500,
+                gpu_memory_bytes: 0,
+                storage_bytes: 500,
+            },
+            &[],
+            &[],
+            &[],
+        );
+        new_request.expected_node_policy_revision = 2;
+        let error = ledger.reserve(&new_request).unwrap_err();
+        assert!(error.is::<HostResourceCapacityUnavailable>());
+        assert_eq!(ledger.read().unwrap().reservations.len(), 1);
+    }
+
+    #[test]
+    fn node_policy_drain_blocks_new_work_but_allows_exact_replay_and_requires_revision_cas() {
+        let directory = tempfile::tempdir().unwrap();
+        let capacity_policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), capacity_policy.clone()).unwrap();
+        let store_id = format!("sha256:{}", "2".repeat(64));
+        let original = request(
+            &capacity_policy,
+            &store_id,
+            "same",
+            FmsResourceBudget {
+                cpu_millis: 1000,
+                memory_bytes: 1000,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1000,
+            },
+            &[],
+            &[],
+            &[],
+        );
+        let reservation = ledger.reserve(&original).unwrap();
+
+        let mut next = ledger.read().unwrap().node_policy.unwrap();
+        next.revision += 1;
+        next.draining = true;
+        ledger.update_node_policy(1, next.clone()).unwrap();
+
+        assert_eq!(ledger.reserve(&original).unwrap(), reservation);
+        let mut new_request = request(
+            &capacity_policy,
+            &store_id,
+            "new",
+            FmsResourceBudget {
+                cpu_millis: 1000,
+                memory_bytes: 1000,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1000,
+            },
+            &[],
+            &[],
+            &[],
+        );
+        new_request.expected_node_policy_revision = 2;
+        let error = ledger.reserve(&new_request).unwrap_err();
+        assert!(error.is::<HostResourceCapacityUnavailable>());
+
+        next.revision = 3;
+        assert!(ledger.update_node_policy(1, next).is_err());
+        assert_eq!(ledger.read().unwrap().reservations, vec![reservation]);
     }
 
     #[test]
@@ -4208,17 +5761,23 @@ mod tests {
             expected_host_id: policy.host_id.clone(),
             expected_policy_revision: policy.revision,
             expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: None,
+            expected_compute_node_owner_epoch: None,
             expected_topology_sha256: policy.topology_sha256.clone(),
             budget: budget(4000, 8000, 6000),
             exclusive_gpu_uuids: BTreeSet::new(),
             gpu_vram_bytes_by_uuid: BTreeMap::new(),
             cpu_ids: [0, 1, 2, 3].into_iter().collect(),
+            expected_node_policy_revision: 0,
+            scheduling_priority: 0,
+            parallelism: ComputeParallelismIR::SingleProcess,
         };
         let active = HostResourceReservation::from_request(&active_request).unwrap();
         let document = HostResourceLedgerDocument {
             schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
             policy: policy.clone(),
             reservations: vec![released.clone(), active],
+            node_policy: None,
         };
 
         assert!(validate_ledger_document(&document, directory.path()).is_err());
@@ -4251,6 +5810,7 @@ mod tests {
             schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
             policy,
             reservations: vec![released, document.reservations[1].clone()],
+            node_policy: None,
         };
         assert!(validate_ledger_document(&missing_digest_document, directory.path()).is_err());
     }
@@ -5153,17 +6713,23 @@ mod tests {
             expected_host_id: policy.host_id.clone(),
             expected_policy_revision: policy.revision,
             expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: None,
+            expected_compute_node_owner_epoch: None,
             expected_topology_sha256: policy.topology_sha256.clone(),
             budget: budget(3000, 6001, 5000),
             exclusive_gpu_uuids: BTreeSet::new(),
             gpu_vram_bytes_by_uuid: BTreeMap::new(),
             cpu_ids: [1, 2, 3].into_iter().collect(),
+            expected_node_policy_revision: 0,
+            scheduling_priority: 0,
+            parallelism: ComputeParallelismIR::SingleProcess,
         };
         let active = HostResourceReservation::from_request(&active_request).unwrap();
         let document = HostResourceLedgerDocument {
             schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
             policy: policy.clone(),
             reservations: vec![released.clone(), active],
+            node_policy: None,
         };
         assert!(validate_ledger_document(&document, directory.path()).is_err());
 
@@ -5220,6 +6786,7 @@ mod tests {
             schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
             policy,
             reservations: vec![released, document.reservations[1].clone()],
+            node_policy: None,
         };
         assert!(validate_ledger_document(&mismatched_document, directory.path()).is_err());
     }
@@ -5266,9 +6833,10 @@ mod tests {
         let mut changed_budget = HostResourceReservation::from_request(&request).unwrap();
         changed_budget.budget.memory_bytes += 1;
         let document = HostResourceLedgerDocument {
-            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
+            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string(),
             policy: policy.clone(),
             reservations: vec![changed_budget],
+            node_policy: Some(NodePolicy::initial_for_capacity(&policy)),
         };
         assert!(validate_ledger_document(&document, directory.path())
             .unwrap_err()
@@ -5278,9 +6846,10 @@ mod tests {
         let mut changed_digest = HostResourceReservation::from_request(&request).unwrap();
         changed_digest.request_sha256 = "0".repeat(64);
         let document = HostResourceLedgerDocument {
-            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
-            policy,
+            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string(),
+            policy: policy.clone(),
             reservations: vec![changed_digest],
+            node_policy: Some(NodePolicy::initial_for_capacity(&policy)),
         };
         assert!(validate_ledger_document(&document, directory.path())
             .unwrap_err()
@@ -5322,9 +6891,10 @@ mod tests {
         let mut released = HostResourceReservation::from_request(&released_request).unwrap();
         released.state = HostResourceReservationState::Released;
         let released_document = HostResourceLedgerDocument {
-            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
+            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string(),
             policy: policy.clone(),
             reservations: vec![released],
+            node_policy: Some(NodePolicy::initial_for_capacity(&policy)),
         };
         assert!(validate_ledger_document(&released_document, &root)
             .unwrap_err()
@@ -5350,12 +6920,13 @@ mod tests {
             &[],
         );
         let document = HostResourceLedgerDocument {
-            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
-            policy,
+            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string(),
+            policy: policy.clone(),
             reservations: vec![
                 HostResourceReservation::from_request(&first).unwrap(),
                 HostResourceReservation::from_request(&second).unwrap(),
             ],
+            node_policy: Some(NodePolicy::initial_for_capacity(&policy)),
         };
         assert!(validate_ledger_document(&document, &root)
             .unwrap_err()

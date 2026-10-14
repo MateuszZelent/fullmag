@@ -28,6 +28,21 @@ The older public `/v1/live/current/...` tree has been removed. Only
 
 ## 2. Canonical route families
 
+### Pomocniczy inventory grafu fizyki
+
+`GET /v2/sessions/current/model/physics-graph` udostępnia opcjonalne
+`objects` w formacie `physics_object.v1`: immutable `object_id`, autorską
+nazwę, prezentacyjny `type` oraz dokładny `geometry_id` używany przez
+kanoniczny eksport sceny. Ta tabela obejmuje wyłącznie obiekty pomocnicze,
+nie magnetyki; przy pustej kolekcji pole jest pomijane, zgodnie z Python DSL.
+Nie aktywuje solvera na podstawie nazwy/typu i nie zawiera danych siatki lub
+pól. Opcjonalne `label` oraz `material_assignment_ids` nie są uzupełniane
+z domysłu. Nieznana rola lub konflikt właścicieli kończy się odmową
+normalizacji, nie cichym remapowaniem ID. `scene_revision` i existing
+request-context guard pozostają granicą aktualności zasobu. Stan wykonania
+i ograniczenia odbioru opisuje nota 0950, anchor
+`antenna-auxiliary-graph-resource`.
+
 ### Warunek oczekiwanej sesji HTTP (P3a)
 
 Żądania powiązane z sesją mogą przekazać `x-fullmag-session-scope`:
@@ -131,6 +146,39 @@ Submit zachowuje ten sam klucz idempotencji. Konflikt blokady nie oznacza
 błędnego payloadu ani przyjęcia nowego runu. Nie wolno omijać blokady,
 zmieniać klucza ani tworzyć zastępczego magazynu w ramach takiego ponowienia.
 
+Przygotowanie tożsamości przed Submit:
+`POST /v2/persistence/projects/{project_id}/run-intent` przyjmuje dokładne
+archiwum `.fms`, `expected_revision`, jawne `RunIntentAuthoring`, skompilowany
+StudyPlan/katalog oraz wiązania asset ID→ścieżka. Zwraca kanoniczny RunIntent
+i fingerprint specyfikacji. Klucz idempotencji nie jest częścią tego
+fingerprintu; oba jawne identyfikatory są zachowane, nie generowane przez API.
+Rewizja jest porównywana wyłącznie z dostarczonym archiwum, nie z najnowszą
+sceną, aktywną sesją ani stanem projektu na dysku. Nieznane pola authoring,
+brak assetu, niespójny Study i konflikt żądanego wykonania powodują odmowę.
+Archiwum ma limit 64 MiB po dekodowaniu oraz odpowiadający limit base64
+sprawdzany przed dekodowaniem; obowiązuje też globalny limit body API.
+
+Operacja nie otwiera accepted-run store, nie zapisuje CAS/journal, nie
+uruchamia meshing/solvera i nie wykonuje admission ani rozpoznania hosta.
+Nie poświadcza istnienia opublikowanego profilu. Submit musi otrzymać ten sam
+zestaw wejść i ponownie sprawdza kontrakty oraz opublikowane wersje profili.
+Sukces przygotowania nie oznacza przyjęcia runu ani naukowej kwalifikacji.
+Stan wdrożenia 2026-10-11: handler/router/OpenAPI zapisane źródłowo; build,
+regeneracja typowanego klienta, integracja UI i prepare→Submit runtime
+pozostają **NOT VERIFIED**.
+
+Produkcyjny konsument CLI przygotowania jest podłączony źródłowo przez
+`fullmag prepare-run-json authored.json --project-id <id> --api-url <origin>`.
+Wejście ma dokładnie kształt ProjectRunIntentRequest, bez gotowego RunIntent.
+Stdout zawiera pięciopolowy ProjectRunSubmitRequest przeznaczony dla jawnego
+późniejszego `fullmag run-json prepared.json --api-url <origin>`. Komenda nie
+zapisuje pliku wyjściowego ani nie wykonuje Submit automatycznie. Kontroluje
+zwrotny project/revision, wszystkie pola RunIntentAuthoring i fingerprint.
+Odczyt pliku oraz poprawnej odpowiedzi HTTP ma limit 96 MiB, odczyt błędu
+HTTP limit 2 KiB. To transport skompilowanych wejść, nie kompilator sceny
+lub skryptu do Study/ProblemIR. Build i wykonanie nowej komendy pozostają
+**NOT VERIFIED**; snapshot joba 66 nie obejmuje tej późniejszej zmiany CLI.
+
 Recovery bieżącej sesji: `GET` i `DELETE /v2/sessions/current/persistence/recovery`
 obejmują wyłącznie snapshot o `session_id` przechwyconej aktywnej sesji.
 Walidacja kontekstu i operacja pozostają pod blokadą zmiany sesji. Usuwanie
@@ -157,6 +205,53 @@ oddzielny zakres. Kształt odpowiedzi OpenAPI pozostaje bez zmian.
 - `visualization/client-acks` owns bounded, diagnostic frontend feedback for renderer state revisions. Clients `POST` `applied`, `rendered`, or `failed` acknowledgements after consuming `visualization/state`; operators and scripts can `GET` the resource to confirm whether a visible browser applied a requested mode such as `surface` versus `wireframe`.
 - `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
+
+### Korelacja wyników komend obserwacji i importu — 2026-10-05
+
+Spójna migracja producentów CLI i odbiorców API jest zapisana w commicie
+`48e8f622427856b70a044bc1a8e18cf09f4b27dd` (2026-10-06). Niezależne
+source checks na dokładnym indexie: 8/8 PASS; Rust/runtime NOT VERIFIED.
+Nie jest to dowód fizycznego obliczenia: HEAD commita korelacji
+`crates/fullmag-cli/src/interactive_runtime_host.rs::compute_current_energies`
+może zwrócić Ok bez runtime po błędzie przygotowania. Ten odrębny błąd
+wymaga naprawy propagacji i regresji wykonania przed kwalifikacją completion.
+
+Źródłową naprawę zapisuje commit `46daf528dc529f02888a09e6e2746e406082f2a5`:
+`ensure_base_runtime_ready` jest fallible, fields/energies/import propagują
+błąd, a energia odmawia braku runtime. Import przygotowuje runtime przed
+publikacją continuation/generation; idle warning zachowuje polling.
+INDEX source 5/5 oraz dotychczasowe 8/8 PASS; wykonanie Rust/runtime nadal
+NOT VERIFIED. Błąd resync usuwa runtime, nie jest to gwarancja rollbacku.
+Rozwiązywanie i dołączanie baz anten w obserwacji pozostaje zależnym WIP.
+
+Przejściowy bridge CLI → API wymaga dokładnego `command_id` w terminalnym
+wpisie logu dla `compute_fields`, `compute_energies` i `load_state`, wraz z
+markerem wyniku i czasem nie wcześniejszym niż dispatch. Brak ID albo wynik
+innej komendy nie potwierdza wykonania, również w tej samej milisekundzie.
+Sukces `compute_fields` wymaga ponadto gotowości wszystkich żądanych quantity,
+scope, generation i carrier; sam wcześniej dostępny cache nie wystarcza.
+Energia nie używa starych scalar rows ani idle jako dowodu ukończenia.
+Failure ma pierwszeństwo przed success. Pozostałe komendy nie wymagają jeszcze
+obecności ID, ale jawnie zapisane ID zawsze ogranicza wpis do tej dokładnej
+komendy: log innego Run/Relax/Solve, obliczenia pola lub dowolnej innej komendy
+nie może być ich terminalnym dowodem. Test świeżości nadal obowiązuje, także
+w tej samej milisekundzie. Wpis bez ID zachowuje dotychczasowe zachowanie dla
+niezmigrowanych rodzajów; ta korekta nie kwalifikuje ich pełnego completion.
+Starszy producent bez ID pozostawi te trzy komendy pending zamiast
+uruchamiać niejawny fallback. Kształt OpenAPI nie zmienia się: pole ID jest
+już opcjonalne w `crates/fullmag-api/src/types.rs::EngineLogEntry`.
+
+Właściciele: `crates/fullmag-cli/src/live_workspace.rs::push_command_log`
+zapisuje ID atomowo z wpisem pod lockiem; API konsumuje wynik przez
+`crates/fullmag-api/src/session.rs::command_has_terminal_log` i
+`infer_dispatched_command_completion`. Zwykły tail upsert nie zmienia wpisów
+z ID (`crates/fullmag-cli/src/formatting.rs::upsert_engine_log_tail`).
+Nie jest to trwały protokół completion: limit 256 logów i scalanie wakeups
+mogą wyprzeć wynik przed jego odbiorem i pozostawić `dispatched`.
+Warunek usunięcia bridge: trwały typed command outcome z replay/recovery
+oraz wykonana regresja burst/eviction. Zakres bieżących source/type checks,
+nieuruchomione testy Rust i otwarte bramki runtime zapisano w T12
+[planu anten](../superpowers/plans/2026-09-08-microwave-antenna-refactoring-plan.md).
 
 ### Planned M0–M3 spin-transport projections
 
@@ -749,7 +844,16 @@ Current object-authoring routes:
 region endpoint references the deleted object, so the committed scene cannot
 retain dangling coupling endpoints. The response includes `transaction_kind`,
 `scene_revision`, and `committed_scene`. Direct object and region mutation
-routes also return the committed scene. Material mutation returns the committed
+routes also return the committed scene.
+
+Pole `committed_scene` jest typowanym `SceneResource`, identycznym z projekcją
+`GET model/scene` dla tej samej rewizji; `scene_revision` musi odpowiadać
+`committed_scene.revision`. Nie zastępuje prywatnego `SceneDocument` w storage.
+Klient może opublikować ten zasób przez centralnego właściciela cache przed
+unieważnieniem zależności, pod warunkiem związania z sesją, klientem i rewizją.
+Starszy ACK nie może zastąpić nowszego zasobu ani przerwać jego odczytu.
+Odczyt sceny przed mutacją potrzebny do historii pozostaje wymagany.
+Material mutation returns the committed
 material asset and must invalidate `model/scene` because material changes can
 synchronize interaction state such as interfacial DMI. There is currently no
 `GET /v2/sessions/current/model/objects/{object_id}` read route; browser
@@ -873,6 +977,37 @@ codec with thin JSON axis/unit metadata. The existing
 not reused as an arbitrary spatial line cut; line cuts are revisioned analysis
 products under `analysis/field-line-cuts`.
 
+Obecna sesyjna trasa binarna dla opublikowanego rozwiązania to
+`GET /v2/sessions/current/data/antenna/field-solutions/{solution_id}/payloads/{payload_kind}`.
+Udostępnia `conductor_positions`, `sample_positions`, opcjonalne
+`sample_topology` oraz `electric_potential_per_ampere`,
+`current_density_per_ampere` i `magnetic_field_per_ampere`; trzy ostatnie
+wymagają query `port_mode_id`. Odpowiedź używa `application/octet-stream`,
+silnego ETag z tożsamością sesji, manifestu, portu i payloadu oraz zakresów
+bajtowych. Serwer weryfikuje digest manifestu, wszystkie referencje binarne
+oraz zgodność liczności próbek, układów, typów skalarów i jednostek V/J/H
+z nośnikami, skończoność wszystkich wartości `float64_le` oraz zakres indeksów
+opcjonalnej topologii tet4, także gdy manifest i payload zostały ponownie
+zahashowane. Referencje V/J/H różnych portów nie mogą aliasować tego samego
+pliku payloadu. Sprawdzenie
+poprzedza `304` lub zwrócenie bajtów. To dostęp do niezmiennej bazy na amper,
+nie katalog chwilowych pól LLG ani gotowa warstwa wizualizacji.
+
+Zasób metadanych rozwiązania przenosi opcjonalne `sample_carrier`:
+`domain`, `carrier_kind`, `location="node"` i `topology_digest` pełnej siatki
+próbkowania z planu. Nowy producent zapisuje te dane obowiązkowo. Historyczny
+manifest bez nich daje `null`. Serwer sprawdza niepuste identyfikatory domeny,
+rodzaj nośnika, lokalizację i kanoniczny digest SHA-256 przed odpowiedzią lub
+`304`. Digest siatki pochodzi z planu i nie jest wyliczany ponownie z samych
+payloadów współrzędnych/tet4. Adopcja do viewportu wymaga dodatkowej zgodności
+z bieżącą domeną, topologią i transformacją; sama obecność metadanych nie
+uprawnia do przypisania bazy do aktualnego obiektu lub airboxu.
+Pole `target_projection_signature` tego zasobu jest `null`: baza źródłowa
+nie posiada jeszcze certyfikatu projekcji na docelową siatkę. Sama liczba
+deklarowanych targetów, także równa jeden, nie zmienia tego stanu. Mapa
+podpisów targetów wewnątrz `signatures` pozostaje metadanymi zależności
+planowania i nie może być użyta jako dowód materializacji projekcji.
+
 Every field advertises a `domain_ref`: V and J live on conductor topology,
 field bases may live on an antenna inspection grid, and LLG projections live
 on a concrete magnetic target topology. Matching point counts do not make
@@ -882,6 +1017,145 @@ The websocket announces exact command lifecycle and changed resource
 revisions. Geometry, port, mesh, and target changes may invalidate solution
 resources. A waveform-only edit invalidates model/drive state but does not
 advance the antenna field-solution or field-basis revision.
+
+### Odrębny wynik inspekcji anteny z zewnętrznymi leadami
+
+Kontrakt naukowy jest własnością noty 0950. Przyrost T14 przewiduje osobne
+zasoby, bez rozszerzania legacy katalogu qualified field basis:
+
+```text
+GET /v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection
+GET /v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/payloads/{payload_kind}?content_digest=sha256:...
+```
+
+`stage_id` w URL jest dokładnym runtime stage ID z zasobu wykonania, np.
+`stage-000`. Koperta odpowiedzi zachowuje `runtime_stage_id` oraz authored
+`stage_id` odczytany z `antenna_external_lead_stage_output.v1.json`.
+Nie ma skanowania innych etapów, aliasów indeksowych ani fallbacku do
+ostatniego etapu. Tylko zarejestrowany artifact ref pod
+`antenna/external_lead_stage_outputs/<runtime_stage_id>/` w jawnym artifact root
+może wskazać rekord. Ten sam owner obsługuje etapy pośrednie i końcowe,
+również z `--output-dir`; API nie rekonstruuje ani nie poszerza katalogu sesji.
+Presentation `entrypoint_kind` nie jest kryterium aktywacji fizyki.
+Tożsamość sesji, epoch, run, revision, root i refs pobierane są
+razem; zmiana właściciela podczas odczytu daje `409`.
+
+Jawne powiązanie autorskiej definicji z wykonaniem niesie
+`StageExecutionRecordResource.antenna_solve_stage_id`. To opcjonalne ID
+`ExternalLeadInspection.input.stage.id` albo `FieldSolve.stage_id`, nie ID
+węzła pipeline, nazwa, indeks ani `active_stage_id`. `stage_id` tego zasobu
+pozostaje runtime ID. Koperta `StageExecutionResource` zwraca wymagane
+`session_id`, `session_epoch`, `request_scope_epoch` i `run_id` z tej samej
+sprawdzonej migawki. Brak historycznego powiązania pozostaje nieznany.
+Inspector wymaga zgodności ownera i jawnego powiązania z definicją anteny.
+Zero oznacza brak wykonania; przy jednym powiązaniu wynik może być wskazany
+jednoznacznie, a przy wielu użytkownik wybiera dokładny runtime ID przez
+wspólny komponent Select. Nie ma automatycznego wyboru pierwszego/ostatniego
+wyniku ani selekcji po etykiecie/indeksie. Wybór jest niewielkim, nieutrwalanym
+stanem UI przypiętym do definicji, runu i trzech pól tożsamości sesji.
+Rewizja w tym samym kontekście go zachowuje; zmiana kontekstu usuwa go przed
+zatwierdzeniem renderu, także przy sekwencji A→B→A. Zniknięcie wybranego ID
+w tym samym runie wymaga ponownego jawnego wyboru, bez fallbacku do innego
+wyniku. Puste lub zduplikowane runtime ID blokują selekcję. Następnie
+porównuje trzy pola sesji,
+run oraz oba ID etapu z odpowiedzią inspection przed odczytem payloadów.
+
+Wszystkie siedem odczytów rodziny anten — stage catalog, metadane i payloady
+field solution/source spectrum oraz dwa zasoby inspection — sprawdza
+kanoniczny `x-fullmag-session-scope` przed odczytem plików oraz przed
+odpowiedzią warunkową lub binarną. Stary zakres daje `409` z komunikatem
+`request_context_stale`, także przy `If-None-Match: *` i `Range`.
+Brak nagłówka zachowuje ścieżkę bootstrap/legacy, ale wewnętrzny kontekst
+żądania nadal wiąże odczyt z inkarnacją aktywnej sesji.
+`request_scope_epoch` jest niezależny od naukowego `session_epoch`:
+ponowny import identycznej sesji/run musi unieważnić stary zakres.
+Naukowy epoch metadanych pochodzi z tego samego `current_live_session_epoch`
+co zasób statusu i walidacja nagłówka, z uwzględnieniem efektywnego lifecycle
+etapu; samo `session.status` nie wystarcza do odróżnienia tombstone.
+Odczyt root/refs i końcowa kontrola tożsamości używają kolejności blokad
+`current_live_session_transition -> current_live_state`; nie mogą widzieć
+nowej migawki importu ze starym licznikiem inkarnacji. Blokady są zwalniane
+przed kosztownym odczytem plików. ETag każdego zasobu i payloadu antenowego
+uwzględnia inkarnację. Wszystkie cztery koperty metadanych antenowych
+(field solution, source spectrum, stage catalog i inspection) jawnie zwracają
+wymagane `request_scope_epoch`; owner recheck obejmuje go również po pracy I/O.
+
+Control Room odczytuje tę rodzinę wyłącznie przez typowaną fasadę
+`ControlRoomApi.data.antenna` i wspólne resource hooks. Siedem hooków
+używa `useSessionScopedResourceKey`: bez potwierdzonej tożsamości sesji
+odczyt jest wyłączony, a scope z kontekstu loadera trafia do nagłówka HTTP,
+nie do URL. Klucz cache obejmuje inkarnację; ponowne otwarcie identycznej
+sesji nie może odziedziczyć poprzedniego wyniku. Helpery ETag field/spectrum
+uwzględniają `request_scope_epoch`, zgodnie z serwerem. Porównanie katalogu
+z bazą lub widmem sprawdza również tę inkarnację.
+
+Inspection ma osobne metody `externalLeadInspection` i
+`externalLeadInspectionPayload` oraz hooki metadanych/payloadu. Payload
+wymaga dokładnego `runtime_stage_id`, digestu jedynego `inspection_ref`
+zgodnego z manifestem oraz zgodności trzech pól tożsamości sesji.
+`failed|cancelled`, brak manifestu lub stary właściciel wyłączają pobieranie;
+metadane terminalnego wyniku nadal są dostępne. Klucz payloadu obejmuje
+digest, rewizję/digest rekordu i wybrany Range. Fasada ogranicza body do
+128 MiB przed dekodowaniem, również gdy caller zażąda większego limitu.
+Nie przelicza wartości SI ani nie rekonstruuje hashowanego ETag inspekcji
+na podstawie ETag bazy pola. Konflikty i błędy integralności nie stają się
+„brakiem wyniku”; tylko zwykłe `404`, z wyjątkiem `missing_payload`, może
+dać pusty zasób metadanych. Zmiana katalogu artefaktów lub wykonania etapu
+unieważnia wspólny prefiks antenowych stage resources, także scoped keys
+inspekcji i jej payloadów; nie unieważnia przy tym topologii viewportu.
+
+Osobna sekcja `AntennaExternalLeadInspectionPanel` w Inspectorze solve
+prezentuje status, kwalifikację, zakres pola, diagnostykę, port/output,
+rewizję/digest rekordu, sampling carrier, requested/resolved execution
+i pięć descriptorów z jednostkami. Nigdy nie zamienia `inspection_only`
+na `ready` ani na quantity/bazę do LLG. Podgląd pobiera najwyżej pierwsze
+osiem próbek przez dwa digest-pinned Range GET (pozycje w m, H w A/m),
+po sprawdzeniu jednostek, układu, count/byte count, manifest-only i output
+reference. Dekoder wymaga dokładnego `Content-Range`, długości, ETag
+i skończonych wartości `float64_le`. Nie normalizuje przez prąd ani nie
+przelicza H na B. Bundle, device IDs i potencjał są opisane metadanymi,
+nie pobierane automatycznie. `failed|cancelled`, błędna tożsamość,
+niejednoznaczność i stale/loading nie wyzwalają podglądu starego wyniku.
+Sekcja pozostaje zamontowana podczas odświeżania; nie mutuje sceny.
+Metadane tego samego ownera mogą pozostać widoczne z oznaczeniem oczekiwania,
+ale liczbowe próbki są zastępowane stabilnymi placeholderami do chwili
+uzyskania aktualnego payloadu. Stałe miejsca komunikatów nie zmieniają
+bottom-scroll ani fokusu przy invalidation/ACK. Brak nowego lokalnego cache
+danych serwerowych; właścicielem pozostaje wspólna warstwa resource.
+
+JSON niesie wierny record, `record_content_digest` i cienki opcjonalny manifest:
+`inspection_only` z jednym `inspection_ref` albo `failed|cancelled` bez
+outputs. Qualification pozostaje `NOT VERIFIED`, scope
+`external_electrode_truncation`. Nie występują legacy `asset_id`,
+`solution_ref`, `ready`, quantity catalog ani pola na amper. Manifest ma
+`validation_scope="manifest_only"`; poprawne metadane nie dowodzą
+integralności binary payloadów ani aktualności wobec zmienionej sceny.
+Kontrola JSON nie czyta dużych tablic. Manifest i stage record mają limit
+1 MiB, są regularnymi plikami bez symlink descendants.
+
+| `payload_kind` | Typ / układ | Jednostka | Właściciel danych |
+|---|---|---|---|
+| `bundle` | `ordered_binary_v1`, `accepted_external_lead_bundle.ordered.v1` | kontener `1`; wewnątrz V, A i A/m | autorytatywny retained V/RT0/geometry/ledger/H |
+| `sample_positions` | `float64_le`, `sample_xyz_interleaved` | m | exact sample ordering bundle |
+| `magnetic_field` | `float64_le`, `sample_xyz_interleaved` | A/m | exact H bundle, bez rescale |
+| `device_vertex_ids` | `uint64_le`, `authored_device_vertex_order` | 1 | pełny device partition |
+| `device_potential` | `float64_le`, `authored_device_vertex_order` | V | V dla tego samego ordered device ID |
+
+Binary GET wymaga `content_digest` zgodnego z `inspection_ref.content_digest`,
+nie digestu rekordu etapu. Weryfikuje cały
+canonical pakiet przez runner, a następnie hash/size wybranego payloadu,
+przed obsługą conditional GET/Range. ETag wiąże session/epoch/request scope/run/revision,
+runtime/authored stage, output, manifest digest, payload kind i SHA.
+Każdy plik jest ograniczony do 128 MiB. Pełna weryfikacja wszystkich pięciu
+plików na żądanie jest świadomym kosztem obecnego verifiera; cache lub
+częściowy verifier wymagają osobnego kontraktu. Odczyt nie wykonuje solve,
+projekcji ani FFT i nie nadaje kwalifikacji LLG. Nie zastępuje go ogólny
+endpoint artefaktów.
+
+Warunki zamknięcia T14 obejmują build bieżących źródeł, regenerację OpenAPI i
+typowanego klienta, facade/resource hooks, runtime HTTP oraz UI. Sama obecność
+tras i niewykonanych regresji Rust pozostaje `source_only`, nie dowodzi
+działającej powierzchni użytkownika.
 
 ### Planar topological-charge analysis resource
 
@@ -1296,3 +1570,70 @@ uszkodzony CAS albo niepoprawny scalar 500.
 Status implementacji: backend source i rejestracja OpenAPI. Managed export,
 generated transport, facade/hook i UI pozostają NOT VERIFIED; nie edytujemy
 ręcznie wygenerowanego kontraktu przed odbiorem buildu.
+
+
+## Proponowane rozszerzenie FMVP v5: pelna tozsamosc pola
+
+Status: implementacja w toku, runtime/browser NOT VERIFIED. Decyzja i dokladny
+layout: [ADR0053](../adr/0053-fmvp-full-field-identity.md). FMVPv5/FMMIv4
+zachowuje48-bajtowy header oraztopology/indexing/scope;88-bajtowa stala czesc
+metadata rozszerza FMMIv3 o dlugosc pelnego UTF-8quantityID podoffsetem80.
+Pelne ID pochodzi z binarnego payloadu;prefix16bajtow zheadera jest sprawdzany
+bajtowo, nie nadpisywany HTTP. Reader v2/v3/v4 pozostaje zgodny.
+
+Brak topologii dla headless artifact reads jest jawny: LegacyCountOnly,
+puste indices, revision0/hashzero, decoder null topologyidentity. Taki payload
+nie spelnia wymagania full_domain dla overlay. Sourcequalification pozostaje
+odrebna: calkowicie nieobecna albo kompletna jak w v4; nigdy fikcyjne live.
+
+Rollout producer/codec/overlay jest jednym etapem; standardowe modalne i
+response field IDs musza przejsc API orazbrowserproof bezskracania nazw.
+
+
+### R2: wybor magnetyzacji razem z fizycznym zrodlem
+
+Dla `m` bieżąca kwalifikowana magnetyzacja live ma pierwszenstwo nad
+Latest/Preview tylko wtedy, gdy jej rzeczywisty payload source step jest
+scisle nowszy. Rowne lub nowsze cached source zachowuje pierwszenstwo.
+Regula nie zmienia pozostalych quantities ani provenance/domain guards.
+Wartosci, meta/catalog freshness, observation frame, bundle i command
+readiness musza odnosic sie do tego samego wybranego zrodla. Nie laczymy
+wartosci kroku 8 z frame kroku 7. Quantity/resource revision i source
+request revision pozostaja odrebnymi znaczeniami; brak scientific identity
+nie moze byc uzupelniony resource counterem.
+
+Bare magnetization poprzedniego physical step nie jest kopiowana do nowego
+kroku bez payloadu. Przed zmiana state/mesh mozna zachowac ja w istniejacym
+cache Latest, przez canonical binder i accepted-source registry, z oryginalnym
+step/time/frame oraz historyczna projekcja revision/timestamp. Snapshotujemy
+wylacznie wybrane qualified live values; istniejący wybrany cache pozostaje.
+Nowy progress nie staje sie scientific observation. Nie dodajemy publicznego
+schematu ani drugiego store. Zachowanie dotyczy atomowego runtime candidate;
+przy zmianie run/session epoch nie przenosimy bare payloadu do nowej pracy.
+Stary bufor moze byc current field wylacznie przy zgodnej frame epoch, domain
+generation i topology revision. Sama liczba wezlow/komorek nie wystarcza.
+
+Materializer pending/error dotyczacy scisle starszego source step nie moze
+degradowac wybranej nowszej kwalifikowanej fizycznej magnetyzacji, także zachowanej
+w Latest/Preview. Brak accepted frame nie pozwala pominąć statusu. Status dotyczacy tego samego
+lub nowszego zrodla zachowuje dotychczasowe ograniczenia. Exact scope,
+generation i carrier guards nadal obowiazuja. Bundle jest tworzone tylko
+gdy wybrana frame odpowiada przyjetej physical scalar row i carrierowi;
+w przeciwnym razie pozostaje unavailable.
+
+Wymagana regresja obejmuje vector/meta/catalog/frame/bundle/readiness,
+Latest i Preview precedence, rowne/nowsze cached step, brak live payloadu,
+progress/nonfinite/bad cardinality, same-cardinality mesh change oraz status
+pending/error starszego i tego samego kroku. Source code nie jest dowodem
+wykonania; testy wykonujemy tylko w GHA.
+
+
+Doprecyzowanie R2 po review: w tej samej session/run i niezmienionej
+siatce zachowujemy także wybraną magnetyzację live przed nadejściem
+ściśle starszego fizycznego payloadu. Runtime frame nie zmienia run;
+nie przenosimy tej reguły na reset epoch lub zmianę ownership.
+Registered m frame jest sprawdzana również w actual binderach, zanim
+nowy current step mógłby ponownie certyfikować stare dane. Stary m preview
+nie jest kopiowany przez zmianę domain/topology. Dowód bundle wymaga
+obowiązkowego nonnull carrier/frame/physical-row match w positive fixture;
+warunkowe sprawdzenie tylko gdy bundle istnieje jest niewystarczające.

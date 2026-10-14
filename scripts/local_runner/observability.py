@@ -21,8 +21,8 @@ import time
 import uuid
 from typing import Any, Mapping
 
-from fullmag_storage import atomic_json, validate_path
-from local_runner.retention import plan as retention_plan
+from fullmag_storage import atomic_json, validate_path, file_lock
+from local_runner.retention import PreviewCancelled, plan as retention_plan
 
 
 _DEFAULT_POLICY = {
@@ -37,6 +37,7 @@ _DEFAULT_POLICY = {
     "ttl_sources_hours": 168,
     "ttl_logs_days": 30,
     "min_artifacts_to_keep": 3,
+    "runtime_retention_enabled": False,
     "disk_warning_threshold_gib": 30,
     "disk_critical_threshold_gib": 10,
     "min_free_space_gib": 8,
@@ -232,24 +233,21 @@ class ProcessResourceTracker:
 
 
 def _probe_docker_root(storage_path: Path) -> tuple[str, str, str | None]:
-    """Find actual docker storage or backing root path on Linux or Windows."""
+    """Measure daemon storage only when explicitly mounted in this namespace."""
     try:
-        from local_runner.coordinator import docker
-        out = docker(["info", "--format", "{{.DockerRootDir}}"]).strip()
-        if out and os.path.exists(out):
-            return out, f"Docker backing storage ({out})", "ext4"
+        if Path('/var/run/docker.sock').exists():
+            from local_runner.unix_docker import docker
+        else:
+            from local_runner.coordinator import docker
+        info = json.loads(docker(["info"]))
+        out = info.get('DockerRootDir')
+        # A daemon path is not automatically a path in the coordinator's
+        # filesystem. Ordinary Docker Desktop folders can be unrelated to its
+        # backing disk; only an explicit mount is eligible for measurement.
+        if isinstance(out, str) and os.path.ismount(out):
+            return out, f"Docker storage mount ({out})", None
     except Exception:
         pass
-
-    candidates = [
-        ("/var/lib/docker", "Docker backing storage (/var/lib/docker)", "ext4"),
-        ("/run/desktop/mnt/host", "Docker Desktop host mount", "overlay"),
-        (os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"), "DockerDesktop"), "Docker Desktop data root", "NTFS"),
-        (str(storage_path.anchor if hasattr(storage_path, "anchor") and storage_path.anchor else "/"), "Host backing filesystem", "local"),
-    ]
-    for path_str, name, fs in candidates:
-        if os.path.exists(path_str):
-            return path_str, name, fs
     return str(storage_path), "Docker backing storage", None
 
 
@@ -265,8 +263,13 @@ class ObservabilityHub:
         self._events: deque[dict[str, Any]] = deque(maxlen=_MAX_EVENTS)
         self._metric_samples: deque[dict[str, Any]] = deque(maxlen=_MAX_METRIC_SAMPLES)
         self._plans: dict[str, dict[str, Any]] = {}
+        self.retention_execution_available = False
+        self.runtime_retention_available = False
         self._resources_cache: dict[str, Any] | None = None
         self._resources_cache_time: float = 0.0
+        self._resources_cache_queue = None
+        self._resources_scan_lock = threading.Lock()
+        self._resources_generation = 0
         self._init_default_events()
         self._init_metrics_history()
 
@@ -424,13 +427,43 @@ class ObservabilityHub:
             try:
                 data = json.loads(policy_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    return {**_DEFAULT_POLICY, **data}
+                    policy = {**_DEFAULT_POLICY, **data}
+                    return self._effective_retention_policy(policy)
             except Exception:
                 pass
-        return dict(_DEFAULT_POLICY)
+        return self._effective_retention_policy(dict(_DEFAULT_POLICY))
+
+    def _effective_retention_policy(self, policy):
+        available = self.retention_execution_available
+        policy['automatic_mode_available'] = available
+        policy['execution_available'] = available
+        runtime_available = self.runtime_retention_available
+        policy['runtime_available'] = runtime_available
+        policy['maintenance_scopes_supported'] = (['execution', 'sources', 'runtime'] if runtime_available
+                                                   else (['execution'] if available else []))
+        policy['runtime_retention_enabled'] = runtime_available and policy.get('runtime_retention_enabled') is True
+        policy['mode_supported'] = ['preview', 'automatic'] if available else ['preview']
+        if not available or policy.get('mode') not in policy['mode_supported']:
+            policy['mode'] = 'preview'
+        if available:
+            policy['notice'] = 'Retencja execution: podgląd lub rzeczywiste wykonanie z ponowną walidacją. Źródła, wyniki i cache nie podlegają temu TTL.'
+            if runtime_available:
+                policy['notice'] += ' Stare paczki runtime wymagają pełnej kontroli odwołań; ich automatyczne usuwanie włącza się osobno.'
+        return policy
 
     def set_retention_policy(self, updates: Mapping[str, Any]) -> dict[str, Any]:
         current = self.get_retention_policy()
+        if 'runtime_retention_enabled' in updates:
+            enabled = updates['runtime_retention_enabled']
+            if not isinstance(enabled, bool) or (enabled and not self.runtime_retention_available):
+                raise ValueError('Runtime retention is unavailable or its flag is not boolean')
+            current['runtime_retention_enabled'] = enabled
+
+        if 'min_artifacts_to_keep' in updates:
+            minimum = updates['min_artifacts_to_keep']
+            if isinstance(minimum, bool) or not isinstance(minimum, int) or not 1 <= minimum <= 20:
+                raise ValueError('min_artifacts_to_keep must be an integer between 1 and 20')
+            current['min_artifacts_to_keep'] = minimum
 
         # Validate numeric ranges
         for num_key in (
@@ -439,7 +472,6 @@ class ObservabilityHub:
             "ttl_orphan_hours",
             "ttl_sources_hours",
             "ttl_logs_days",
-            "min_artifacts_to_keep",
             "min_free_space_gib",
             "disk_sample_interval_seconds",
         ):
@@ -464,7 +496,10 @@ class ObservabilityHub:
 
         if "mode" in updates:
             requested_mode = str(updates["mode"]).strip().lower()
-            if requested_mode == "automatic":
+            if requested_mode == "automatic" and self.retention_execution_available:
+                current.update(mode='automatic', requested_mode='automatic', mode_status='implemented')
+                current.pop('mode_notice', None)
+            elif requested_mode == "automatic":
                 # Honest notification: automatic cleanup scheduler is not attached
                 current["mode"] = "preview"
                 current["requested_mode"] = "automatic"
@@ -480,7 +515,7 @@ class ObservabilityHub:
         policy_path = self.storage / "index" / "retention-policy.json"
         policy_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(policy_path, current)
-        self._resources_cache = None
+        self._invalidate_resources_cache()
         self.record_event("INFO", "policy_updated", "Retention and storage policy updated by operator")
         return current
 
@@ -502,7 +537,9 @@ class ObservabilityHub:
         return {}
 
     def set_pinned(self, resource_id: str, pin: bool, reason: str = "") -> dict[str, Any]:
-        with self._lock:
+        lock = validate_path(self.storage / 'locks' / 'retention.lock', self.storage)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, file_lock(lock, 'retention pin mutation'):
             pinned = self.get_pinned()
             if pin:
                 pinned[resource_id] = {
@@ -518,7 +555,7 @@ class ObservabilityHub:
             path = self._pinned_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_json(path, pinned)
-            self._resources_cache = None
+            self._invalidate_resources_cache()
             return {"resource_id": resource_id, "pinned": pin, "reason": reason}
 
     # -------------------------------------------------------------------------
@@ -605,7 +642,7 @@ class ObservabilityHub:
                 "id": "docker-backing-vhdx",
                 "name": docker_name,
                 "mount_point": docker_path,
-                "filesystem": docker_fs or "ext4",
+                "filesystem": docker_fs,
                 "total_bytes": d_total,
                 "used_bytes": d_used,
                 "free_bytes": d_free,
@@ -618,11 +655,35 @@ class ObservabilityHub:
 
         return volumes
 
+    def _invalidate_resources_cache(self):
+        with self._lock:
+            self._resources_generation += 1
+            self._resources_cache = None
+
     def get_storage_resources(self, queue=None) -> dict[str, Any]:
+        """Share one inventory scan; keep telemetry independent of disk traversal."""
+        with self._resources_scan_lock:
+            while True:
+                with self._lock:
+                    if (self._resources_cache is not None
+                            and time.monotonic() - self._resources_cache_time < 10.0
+                            and self._resources_cache_queue is queue):
+                        return self._resources_cache
+                    generation = self._resources_generation
+                result = self._scan_storage_resources(queue)
+                with self._lock:
+                    if generation != self._resources_generation:
+                        # Pin or policy changed during the scan. Re-read it
+                        # before publishing retention eligibility to the UI.
+                        continue
+                    self._resources_cache = result
+                    self._resources_cache_time = time.monotonic()
+                    self._resources_cache_queue = queue
+                    return result
+
+    def _scan_storage_resources(self, queue=None) -> dict[str, Any]:
         """Aggregate categorized storage inventory with protection rationales."""
         now = time.time()
-        if self._resources_cache and (now - self._resources_cache_time < 10.0) and queue is None:
-            return self._resources_cache
 
         pinned = self.get_pinned()
         policy = self.get_retention_policy()
@@ -635,14 +696,14 @@ class ObservabilityHub:
         if queue is not None:
             jobs = []
             try:
-                if hasattr(queue, 'connection') and getattr(queue, 'path', None) and Path(queue.path).is_file():
+                if callable(getattr(queue, 'connection', None)) and getattr(queue, 'path', None) and Path(queue.path).is_file():
                     with queue.connection() as db:
                         rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
                         jobs = [queue.record(row) for row in rows]
                 else:
                     jobs = queue.list(owner=self.owner, limit=1000)
-            except Exception:
-                jobs = []
+            except Exception as error:
+                raise RuntimeError('Retention queue inventory unavailable') from error
             if jobs:
                 try:
                     raw_engine_plan = retention_plan(
@@ -999,137 +1060,270 @@ class ObservabilityHub:
             "had_errors": had_errors,
             "measured_at": _utc_now_iso(),
         }
-        self._resources_cache = result
-        self._resources_cache_time = now
         return result
 
     # -------------------------------------------------------------------------
     # Retention Planning
     # -------------------------------------------------------------------------
-    def generate_retention_plan(self, queue=None) -> dict[str, Any]:
-        with self._lock:
-            jobs = []
-            if queue is not None:
-                try:
-                    if hasattr(queue, 'connection') and getattr(queue, 'path', None) and Path(queue.path).is_file():
-                        with queue.connection() as db:
-                            rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
-                            jobs = [queue.record(row) for row in rows]
-                    else:
-                        jobs = queue.list(owner=self.owner, limit=1000)
-                except Exception:
-                    jobs = []
+    def generate_retention_plan(self, queue=None, *, job_ids=None, progress=None,
+                                cancelled=None) -> dict[str, Any]:
+        def check_cancelled() -> None:
+            if cancelled is not None and cancelled.is_set():
+                raise PreviewCancelled("Retention preview was cancelled")
 
-            policy = self.get_retention_policy()
-            ttl_success_h = float(policy.get("ttl_success_hours", 24))
-            ttl_failure_h = float(policy.get("ttl_failure_hours", 168))
-            now = time.time()
+        check_cancelled()
+        jobs = []
+        if queue is not None:
+            try:
+                if callable(getattr(queue, 'connection', None)) and getattr(queue, 'path', None) and Path(queue.path).is_file():
+                    with queue.connection() as db:
+                        rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
+                        jobs = [queue.record(row) for row in rows]
+                else:
+                    jobs = queue.list(owner=self.owner, limit=1000)
+            except Exception as error:
+                raise RuntimeError('Retention queue inventory unavailable') from error
+        check_cancelled()
 
-            raw_plan = {}
-            if jobs:
-                try:
-                    raw_plan = retention_plan(str(self.storage), jobs, now, success_hours=ttl_success_h, failed_hours=ttl_failure_h)
-                except Exception as err:
-                    raw_plan = {"error": str(err), "candidates": [], "retained": []}
+        outside = []
+        if job_ids is not None:
+            wanted = set(job_ids)
+            by_id = {job['job_id']: job for job in jobs if isinstance(job, Mapping) and isinstance(job.get('job_id'), str)}
+            if not wanted or not wanted <= set(by_id) or any(by_id[jid].get('owner') != self.owner for jid in wanted):
+                raise ValueError('Unknown or foreign retention selection')
+            outside = [job for job in jobs if not isinstance(job, Mapping) or job.get('job_id') not in wanted]
+            jobs = [job for job in jobs if isinstance(job, Mapping) and job.get('job_id') in wanted]
 
-            pinned = self.get_pinned()
-            plan_id = f"plan-{uuid.uuid4().hex[:8]}"
+        check_cancelled()
+        pinned = self.get_pinned()
+        indexed_pins = []
+        scan_jobs = []
+        for job in jobs:
+            check_cancelled()
+            if not isinstance(job, Mapping) or not isinstance(job.get('job_id'), str) or not isinstance(job.get('worktree_id'), str):
+                scan_jobs.append(job)
+                continue
+            key = f"exec-{job['worktree_id']}-{job['job_id']}"
+            if key in pinned or job['job_id'] in pinned:
+                info = pinned.get(key) or pinned.get(job['job_id']) or {}
+                reason = info.get('reason', 'Przypięte przez operatora') if isinstance(info, dict) else 'Przypięte przez operatora'
+                indexed_pins.append({'job_id': job['job_id'], 'worktree_id': job['worktree_id'],
+                                     'state': job.get('state'), 'execution': None,
+                                     'reason': str(reason) + ' (ochrona przed retencją)'})
+            else:
+                scan_jobs.append(job)
+        jobs = scan_jobs
+        check_cancelled()
 
-            candidates = []
-            pinned_retained = []
-            for c in raw_plan.get("candidates", []):
-                wt = c.get("worktree_id")
-                jid = c.get("job_id")
-                res_id = f"exec-{wt}-{jid}"
-                if res_id in pinned or jid in pinned:
-                    pin_info = pinned.get(res_id) or pinned.get(jid) or {}
-                    pin_reason = pin_info.get("reason", "Przypięte przez operatora")
-                    pinned_retained.append({
-                        "resource_id": res_id,
-                        "name": f"{wt}/{jid}/execution",
-                        "worktree_id": wt,
-                        "job_id": jid,
-                        "path": c.get("execution"),
-                        "size_bytes": c.get("bytes", 0),
-                        "why_retained": f"{pin_reason} (ochrona przed retencją)",
-                    })
-                    continue
-                candidates.append({
+        job_progress = {}
+
+        def report(fields):
+            check_cancelled()
+            if progress is not None:
+                progress({**job_progress, **fields})
+
+        def monitored_jobs():
+            for index, job in enumerate(jobs):
+                check_cancelled()
+                job_progress.update({
+                    'processed_jobs': index,
+                    'total_jobs': len(jobs),
+                    'current_job_id': job.get('job_id') if isinstance(job, Mapping) else None,
+                })
+                if progress is not None:
+                    progress(dict(job_progress))
+                yield job
+                check_cancelled()
+            if progress is not None:
+                job_progress.update({
+                    'processed_jobs': len(jobs),
+                    'total_jobs': len(jobs),
+                    'current_job_id': None,
+                })
+                progress(dict(job_progress))
+
+        policy = self.get_retention_policy()
+        ttl_success_h = float(policy.get("ttl_success_hours", 24))
+        ttl_failure_h = float(policy.get("ttl_failure_hours", 168))
+        now = time.time()
+
+        raw_plan = {"candidates": [], "retained": []}
+        if jobs:
+            try:
+                options = {}
+                if cancelled is not None:
+                    options.update(cancelled=cancelled, progress=report)
+                raw_plan = retention_plan(str(self.storage), monitored_jobs(), now,
+                                          success_hours=ttl_success_h, failed_hours=ttl_failure_h,
+                                          **options)
+            except PreviewCancelled:
+                raise
+            except Exception as error:
+                raise RuntimeError('Retention execution inventory unavailable') from error
+        check_cancelled()
+        if raw_plan.get('error'):
+            raise RuntimeError('Retention inventory failed: ' + str(raw_plan['error']))
+
+        raw_plan['retained'] += [{'job_id': job.get('job_id') if isinstance(job, Mapping) else None,
+                                  'worktree_id': job.get('worktree_id') if isinstance(job, Mapping) else None,
+                                  'state': job.get('state') if isinstance(job, Mapping) else None, 'execution': None,
+                                  'reason': 'outside_selected_scope'} for job in outside]
+        raw_plan['retained'] += indexed_pins
+        if 'space' in raw_plan:
+            unknown_sizes = sum(row.get('bytes') is None for row in raw_plan['retained'])
+            raw_plan['space'].update(unmeasured_retained_count=unknown_sizes, measurement_complete=unknown_sizes == 0)
+        pinned = self.get_pinned()
+        plan_id = f"plan-{uuid.uuid4().hex[:8]}"
+
+        candidates = []
+        pinned_retained = []
+        for c in raw_plan.get("candidates", []):
+            check_cancelled()
+            wt = c.get("worktree_id")
+            jid = c.get("job_id")
+            res_id = f"exec-{wt}-{jid}"
+            if res_id in pinned or jid in pinned:
+                pin_info = pinned.get(res_id) or pinned.get(jid) or {}
+                pin_reason = pin_info.get("reason", "Przypięte przez operatora") if isinstance(pin_info, dict) else "Przypięte przez operatora"
+                pinned_retained.append({
                     "resource_id": res_id,
                     "name": f"{wt}/{jid}/execution",
                     "worktree_id": wt,
                     "job_id": jid,
                     "path": c.get("execution"),
                     "size_bytes": c.get("bytes", 0),
-                    "reason": c.get("reason", "Upłynął okres retencji po zakończeniu zadania"),
+                    "why_retained": f"{pin_reason} (ochrona przed retencją)",
                 })
+                continue
+            candidates.append({
+                "resource_id": res_id,
+                "name": f"{wt}/{jid}/execution",
+                "worktree_id": wt,
+                "job_id": jid,
+                "path": c.get("execution"),
+                "size_bytes": c.get("bytes", 0),
+                "reason": c.get("reason", "Upłynął okres retencji po zakończeniu zadania"),
+            })
 
-            retained = list(pinned_retained)
-            for r in raw_plan.get("retained", []):
-                wt = r.get("worktree_id")
-                jid = r.get("job_id")
-                res_id = f"exec-{wt}-{jid}"
-                retained.append({
-                    "resource_id": res_id,
-                    "name": f"{wt}/{jid}/execution" if wt and jid else "unknown",
-                    "worktree_id": wt,
-                    "job_id": jid,
-                    "path": r.get("execution"),
-                    "size_bytes": r.get("bytes", 0) or 0,
-                    "why_retained": r.get("reason", "Chronione przez silnik retencji"),
-                })
+        retained = list(pinned_retained)
+        for r in raw_plan.get("retained", []):
+            check_cancelled()
+            wt = r.get("worktree_id")
+            jid = r.get("job_id")
+            res_id = f"exec-{wt}-{jid}"
+            retained.append({
+                "resource_id": res_id,
+                "name": f"{wt}/{jid}/execution" if wt and jid else "unknown",
+                "worktree_id": wt,
+                "job_id": jid,
+                "path": r.get("execution"),
+                "size_bytes": r.get("bytes"),
+                "why_retained": r.get("reason", "Chronione przez silnik retencji"),
+            })
 
-            # Ensure all on-disk execution trees missing identity/journal or absent from raw_plan are protected
-            accounted_identities = {
-                (item.get("worktree_id"), item.get("job_id"))
-                for item in candidates + retained
-                if item.get("worktree_id") and item.get("job_id")
-            }
-            runs_dir = self.storage / "runs"
-            if runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
-                for wt_dir in sorted(runs_dir.iterdir()):
-                    if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
+        # Ensure all on-disk execution trees missing identity/journal or absent from raw_plan are protected
+        accounted_identities = {
+            (item.get("worktree_id"), item.get("job_id"))
+            for item in candidates + retained
+            if item.get("worktree_id") and item.get("job_id")
+        }
+        runs_dir = self.storage / "runs"
+        orphan_worktrees = 0
+        orphan_jobs = 0
+        last_orphan_progress = 0.0
+
+        def report_orphan(phase: str, *, force: bool = False) -> None:
+            nonlocal last_orphan_progress
+            check_cancelled()
+            if progress is None:
+                return
+            now_monotonic = time.monotonic()
+            if not force and now_monotonic - last_orphan_progress < 0.5:
+                return
+            progress({
+                **job_progress,
+                'orphan_scan_phase': phase,
+                'orphan_worktrees_enumerated': orphan_worktrees,
+                'orphan_jobs_enumerated': orphan_jobs,
+            })
+            last_orphan_progress = now_monotonic
+
+        def sorted_children(directory: Path, phase: str) -> list[Path]:
+            nonlocal orphan_worktrees, orphan_jobs
+            check_cancelled()
+            children = []
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    check_cancelled()
+                    children.append(Path(entry.path))
+                    if phase == 'worktrees':
+                        orphan_worktrees += 1
+                    else:
+                        orphan_jobs += 1
+                    report_orphan('enumerating_' + phase)
+            check_cancelled()
+            report_orphan('sorting_' + phase)
+            children.sort()
+            check_cancelled()
+            return children
+
+        check_cancelled()
+        if job_ids is None and runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
+            report_orphan('enumerating_worktrees', force=True)
+            for wt_dir in sorted_children(runs_dir, 'worktrees'):
+                check_cancelled()
+                if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
+                    continue
+                for job_dir in sorted_children(wt_dir, 'jobs'):
+                    check_cancelled()
+                    if not job_dir.is_dir() or _is_reparse_or_symlink(job_dir):
                         continue
-                    for job_dir in sorted(wt_dir.iterdir()):
-                        if not job_dir.is_dir() or _is_reparse_or_symlink(job_dir):
-                            continue
-                        ident = (wt_dir.name, job_dir.name)
-                        if ident not in accounted_identities:
-                            exec_dir = job_dir / "execution"
-                            if exec_dir.is_dir() and not _is_reparse_or_symlink(exec_dir):
-                                sz = _fast_dir_size(exec_dir)
-                                retained.append({
-                                    "resource_id": f"exec-{wt_dir.name}-{job_dir.name}",
-                                    "name": f"{wt_dir.name}/{job_dir.name}/execution",
-                                    "worktree_id": wt_dir.name,
-                                    "job_id": job_dir.name,
-                                    "path": str(exec_dir),
-                                    "size_bytes": sz[0],
-                                    "why_retained": "Niezweryfikowany lub osierocony katalog - ochrona przed usunięciem",
-                                })
-                                accounted_identities.add(ident)
+                    ident = (wt_dir.name, job_dir.name)
+                    if ident not in accounted_identities:
+                        exec_dir = job_dir / "execution"
+                        if exec_dir.is_dir() and not _is_reparse_or_symlink(exec_dir):
+                            retained.append({
+                                "resource_id": f"exec-{wt_dir.name}-{job_dir.name}",
+                                "name": f"{wt_dir.name}/{job_dir.name}/execution",
+                                "worktree_id": wt_dir.name,
+                                "job_id": job_dir.name,
+                                "path": str(exec_dir),
+                                "size_bytes": None,
+                                "why_retained": "Niezweryfikowany lub osierocony katalog - ochrona przed usunięciem",
+                            })
+                            accounted_identities.add(ident)
 
-            volumes = self.get_storage_volumes()
-            free_before = volumes[0]["free_bytes"] if volumes and volumes[0]["free_bytes"] is not None else 0
-            estimated_reclaim = sum(c["size_bytes"] for c in candidates)
+        check_cancelled()
+        volumes = self.get_storage_volumes()
+        check_cancelled()
+        free_before = volumes[0].get("free_bytes") if volumes else None
+        estimated_reclaim = sum(c["size_bytes"] for c in candidates)
 
-            plan_record = {
-                "plan_id": plan_id,
-                "created_at": _utc_now_iso(),
-                "policy_version": self.get_retention_policy()["version"],
-                "status": "preview",
-                "candidates_count": len(candidates),
-                "candidates": candidates,
-                "retained_count": len(retained),
-                "retained": retained,
-                "estimated_reclaimed_bytes": estimated_reclaim,
-                "disk_free_before_bytes": free_before,
-                "disk_free_after_estimated_bytes": free_before + estimated_reclaim,
-                "raw_engine_plan": raw_plan,
-            }
-            self._plans[plan_id] = plan_record
+        plan_record = {
+            "plan_id": plan_id,
+            "created_at": _utc_now_iso(),
+            "policy_version": self.get_retention_policy()["version"],
+            "status": "preview",
+            "candidates_count": len(candidates),
+            "candidates": candidates,
+            "retained_count": len(retained),
+            "retained": retained,
+            "estimated_reclaimed_bytes": estimated_reclaim,
+            "disk_free_before_bytes": free_before,
+            "disk_free_after_estimated_bytes": free_before + estimated_reclaim if free_before is not None else None,
+            "raw_engine_plan": raw_plan,
+        }
+        check_cancelled()
+        # Cancellable previews publish only through RetentionService after it
+        # takes its cancellation lock. This prevents a complete engine plan
+        # from becoming apply-addressable while cancellation wins the race.
+        if cancelled is None:
+            with self._lock:
+                self._plans[plan_id] = plan_record
+                while len(self._plans) > 16:
+                    self._plans.pop(next(iter(self._plans)))
             self.record_event("INFO", "retention_plan_created", f"Created retention plan {plan_id} ({len(candidates)} candidates)")
-            return plan_record
+        return plan_record
 
     def apply_retention_plan(self, plan_id: str) -> dict[str, Any]:
         """Idempotent and safe plan execution. Never removes unverified or shared data."""
@@ -1201,189 +1395,314 @@ def _fast_dir_size(path: Path) -> tuple[int, int, bool]:
     return total_bytes, count, had_errors
 
 
+_TIMELINE_STAGE_ID = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}\Z")
+_BUILD_RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
+_COORDINATOR_RECEIPT_SCHEMA = "fullmag.local-runner.coordinator.v1"
+_WORKER_STAGE_START = re.compile(
+    r"\[fullmag runner\] stage ([a-z0-9][a-z0-9_.-]{0,63}) start command="
+)
+_WORKER_STAGE_END = re.compile(
+    r"\[fullmag runner\] stage ([a-z0-9][a-z0-9_.-]{0,63}) "
+    r"end exit_code=(None|-?\d+) duration_ms=([0-9]+(?:\.[0-9]+)?)"
+)
+_TIMELINE_STAGE_LABELS = {
+    "native-build": "Kompilacja natywna (Rust/CLI)",
+    "frontend-dependencies": "Zależności frontendu (pnpm)",
+    "frontend-build": "Kompilacja frontendu (Next/Vite)",
+}
+
+
+def _planned_build_stage_names(profile_name: object) -> list[str] | None:
+    """Derive worker stages from the trusted build profile, not a UI default."""
+    if not isinstance(profile_name, str):
+        return None
+    # Import lazily so observability remains independent during runner startup.
+    from local_runner.build_entrypoint import PROFILES
+
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        return None
+    if profile.contract_scenarios:
+        names = ["native-build"] if profile.build_runtime else []
+        names.extend(f"contract-{scenario}" for scenario in profile.contract_scenarios)
+        return names
+    if profile.runtime_only:
+        return ["native-build"]
+    return ["native-build", "frontend-dependencies", "frontend-build"]
+
+
+def _timeline_stage_name(value: object) -> str | None:
+    if isinstance(value, str) and _TIMELINE_STAGE_ID.fullmatch(value):
+        return value
+    return None
+
+
+def _timeline_json_object(path: Path) -> dict[str, Any] | None:
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _timeline_receipt_matches_job(receipt: Mapping[str, Any], job: Mapping[str, Any]) -> bool:
+    if receipt.get("schema") != _BUILD_RECEIPT_SCHEMA:
+        return False
+    for key in ("job_id", "profile"):
+        expected = job.get(key)
+        if not isinstance(expected, str) or receipt.get(key) != expected:
+            return False
+    source_digest = job.get("source_digest")
+    if source_digest is not None and receipt.get("source_digest") != source_digest:
+        return False
+    return isinstance(receipt.get("stages"), list)
+
+
+def _worker_stage_events(worker_log_text: str) -> tuple[list[str], set[str], dict[str, dict[str, Any]]]:
+    """Read only explicit stage start/end markers from the completed worker log."""
+    order: list[str] = []
+    started: set[str] = set()
+    ended: dict[str, dict[str, Any]] = {}
+
+    def add_name(name: str) -> None:
+        if name not in order:
+            order.append(name)
+        started.add(name)
+
+    for line in worker_log_text.splitlines():
+        start_match = _WORKER_STAGE_START.search(line)
+        if start_match:
+            name = _timeline_stage_name(start_match.group(1))
+            if name is not None:
+                add_name(name)
+        end_match = _WORKER_STAGE_END.search(line)
+        if not end_match:
+            continue
+        name = _timeline_stage_name(end_match.group(1))
+        if name is None:
+            continue
+        add_name(name)
+        code_text = end_match.group(2)
+        duration_ms = float(end_match.group(3))
+        ended[name] = {
+            "exit_code": int(code_text) if code_text != "None" else None,
+            "exit_recorded": True,
+            "duration_ms": duration_ms if math.isfinite(duration_ms) else None,
+        }
+    return order, started, ended
+
+
+def _stage_log_file_names(logs_dir: Path | None) -> list[str]:
+    if logs_dir is None or not logs_dir.is_dir():
+        return []
+    names: list[str] = []
+    try:
+        paths = sorted(logs_dir.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return names
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            continue
+        for suffix in (".stdout.log", ".stderr.log"):
+            if path.name.endswith(suffix):
+                name = _timeline_stage_name(path.name[: -len(suffix)])
+                if name is not None and name not in names:
+                    names.append(name)
+                break
+    return names
+
+
+def _timeline_duration_seconds(duration_ms: object) -> float | None:
+    if (
+        isinstance(duration_ms, bool)
+        or not isinstance(duration_ms, (int, float))
+        or not math.isfinite(duration_ms)
+        or duration_ms < 0
+    ):
+        return None
+    return round(float(duration_ms) / 1000.0, 2)
+
+
 def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list[dict[str, Any]]:
-    """Construct multi-stage timeline representation of a build job with honest status."""
+    """Build a profile-aware timeline from worker evidence and coordinator state."""
     created_at = job.get("created_at")
     started_at = job.get("started_at")
-    updated_at = job.get("updated_at")
     state = job.get("state", "unknown")
     exit_code = job.get("exit_code")
-
-    stages = [
-        {"id": "queued", "name": "Kolejka (Queued)", "status": "succeeded", "started_at": created_at, "duration_seconds": None},
-        {"id": "prepare", "name": "Przygotowanie (Source & Mounts)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "native-build", "name": "Kompilacja natywna (Rust/CLI)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "frontend-dependencies", "name": "Zależności frontendu (pnpm)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "frontend-build", "name": "Kompilacja frontendu (Next/Vite)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "receipt-verification", "name": "Weryfikacja receipt i hashy", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "result", "name": "Wynik końcowy", "status": "pending", "started_at": None, "duration_seconds": None},
-    ]
-
-    if state == "queued":
-        stages[0]["status"] = "running"
-        return stages
-
-    stages[0]["status"] = "succeeded"
+    profile_plan = _planned_build_stage_names(job.get("profile"))
 
     storage = Path(storage_root)
-    worktree_id = job.get("worktree_id", "")
-    job_id = job.get("job_id", "")
-    job_dir = storage / "runs" / worktree_id / job_id if worktree_id and job_id else None
+    worktree_id = job.get("worktree_id")
+    job_id = job.get("job_id")
+    job_dir = (
+        storage / "runs" / worktree_id / job_id
+        if isinstance(worktree_id, str)
+        and worktree_id
+        and isinstance(job_id, str)
+        and job_id
+        else None
+    )
 
-    journal = {}
-    receipt_data = None
+    journal: dict[str, Any] = {}
+    worker_receipt: dict[str, Any] | None = None
     worker_log_text = ""
+    if job_dir is not None and job_dir.is_dir():
+        for journal_path in (job_dir / "coordinator.json", job_dir / "receipt.json"):
+            loaded_journal = _timeline_json_object(journal_path)
+            if (
+                loaded_journal is not None
+                and loaded_journal.get("schema") == _COORDINATOR_RECEIPT_SCHEMA
+                and loaded_journal.get("job_id") == job_id
+            ):
+                journal = loaded_journal
+                break
 
-    if job_dir and job_dir.exists():
-        coord_file = job_dir / "coordinator.json"
-        if coord_file.is_file():
-            try:
-                journal = json.loads(coord_file.read_text(encoding="utf-8"))
-            except Exception:
-                journal = {}
-
-        for r_path in (
+        for receipt_path in (
             job_dir / "artifacts" / "build-receipt.json",
             job_dir / "artifacts" / "receipt.json",
-            job_dir / "receipt.json",
         ):
-            if r_path.is_file():
-                try:
-                    loaded = json.loads(r_path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        receipt_data = loaded
-                        break
-                except Exception:
-                    pass
+            loaded_receipt = _timeline_json_object(receipt_path)
+            if (
+                loaded_receipt is not None
+                and _timeline_receipt_matches_job(loaded_receipt, job)
+            ):
+                worker_receipt = loaded_receipt
+                break
 
         worker_log_file = job_dir / "worker.log"
-        if worker_log_file.is_file():
+        if worker_log_file.is_file() and not worker_log_file.is_symlink():
             try:
                 worker_log_text = worker_log_file.read_text(encoding="utf-8")
-            except Exception:
+            except (OSError, UnicodeError):
                 worker_log_text = ""
 
-    if not started_at and journal.get("started_at"):
-        started_at = journal["started_at"]
+    receipt_stage_records = (
+        worker_receipt.get("stages", []) if worker_receipt is not None else []
+    )
+    records_by_name: dict[str, dict[str, Any]] = {}
+    recorded_stage_names: list[str] = []
+    for record in receipt_stage_records:
+        if not isinstance(record, dict):
+            continue
+        name = _timeline_stage_name(record.get("name"))
+        if name is None:
+            continue
+        records_by_name[name] = record
+        if name not in recorded_stage_names:
+            recorded_stage_names.append(name)
 
-    # Stage 1: prepare
-    stages[1]["status"] = "succeeded"
-    stages[1]["started_at"] = started_at or created_at
-    if started_at and created_at and isinstance(started_at, (int, float)) and isinstance(created_at, (int, float)):
-        stages[0]["duration_seconds"] = max(0.0, round(started_at - created_at, 2))
+    log_stage_order, logged_started, logged_ended = _worker_stage_events(worker_log_text)
+    logs_dir = job_dir / "artifacts" / "logs" if job_dir is not None else None
+    file_stage_names = _stage_log_file_names(logs_dir)
+    observed_stage_names = set(recorded_stage_names) | logged_started | set(file_stage_names)
 
-    # Case A: We have a valid build receipt with recorded stages
-    if receipt_data and isinstance(receipt_data.get("stages"), list) and receipt_data["stages"]:
-        stage_map = {
-            "native-build": 2,
-            "frontend-dependencies": 3,
-            "frontend-build": 4,
+    planned_later_stages = {
+        name: profile_plan[index + 1 :]
+        for index, name in enumerate(profile_plan or ())
+    }
+    stage_names: list[str] = []
+    for name in profile_plan or ():
+        if name not in stage_names:
+            stage_names.append(name)
+    for name in recorded_stage_names + log_stage_order + file_stage_names:
+        if name not in stage_names:
+            stage_names.append(name)
+
+    def append_stage(name: str, label: str | None = None) -> dict[str, Any]:
+        return {
+            "id": name,
+            "name": label if label is not None else _TIMELINE_STAGE_LABELS.get(name, name),
+            "status": "pending",
+            "started_at": None,
+            "duration_seconds": None,
         }
-        for st_info in receipt_data["stages"]:
-            s_name = st_info.get("name")
-            if s_name in stage_map:
-                idx = stage_map[s_name]
-                s_code = st_info.get("exit_code")
-                stages[idx]["status"] = "succeeded" if s_code == 0 else "failed"
-                stages[idx]["started_at"] = st_info.get("started_at")
-                stages[idx]["exit_code"] = s_code
-                dur_ms = st_info.get("duration_ms")
-                if dur_ms is not None:
-                    stages[idx]["duration_seconds"] = round(dur_ms / 1000.0, 2)
 
-        # Stage 5: receipt-verification
-        if receipt_data.get("state") == "succeeded" and all(s.get("exit_code") == 0 for s in receipt_data["stages"]):
-            stages[5]["status"] = "succeeded"
-            stages[5]["started_at"] = receipt_data.get("finished_at")
-        else:
-            stages[5]["status"] = "failed" if state == "failed" else "cancelled"
+    queue_stage = append_stage("queued", "Kolejka (Queued)")
+    queue_stage["status"] = "running" if state == "queued" else "succeeded"
+    prepare_stage = append_stage("prepare", "Przygotowanie (Source & Mounts)")
+    result_stage = append_stage("result", "Wynik końcowy")
+    receipt_verification = append_stage(
+        "receipt-verification", "Weryfikacja receipt i hashy"
+    )
 
-        # Stage 6: result
-        stages[6]["status"] = state if state in ("succeeded", "failed", "cancelled") else "succeeded"
-        stages[6]["exit_code"] = exit_code if exit_code is not None else (0 if stages[6]["status"] == "succeeded" else 1)
-        return stages
-
-    # Case B: No complete build receipt yet (job is running or ended abnormally)
-    logs_dir = job_dir / "artifacts" / "logs" if job_dir else None
-
-    stage_prefixes = [
-        (2, "native-build"),
-        (3, "frontend-dependencies"),
-        (4, "frontend-build"),
-    ]
-
-    has_stage_log = {}
-    if logs_dir and logs_dir.is_dir():
-        for idx, prefix in stage_prefixes:
-            out_f = logs_dir / f"{prefix}.stdout.log"
-            err_f = logs_dir / f"{prefix}.stderr.log"
-            has_stage_log[prefix] = out_f.exists() or err_f.exists()
-    else:
-        for _, prefix in stage_prefixes:
-            has_stage_log[prefix] = False
-
-    stage_ended = {}
-    if worker_log_text:
-        for _, prefix in stage_prefixes:
-            end_match = re.search(rf"\[fullmag runner\] stage {re.escape(prefix)} end exit_code=(\d+)", worker_log_text)
-            if end_match:
-                code = int(end_match.group(1))
-                stage_ended[prefix] = code
-
-    if state == "running":
-        if started_at:
-            stages[1]["status"] = "succeeded"
-            if stage_ended:
-                for idx, prefix in stage_prefixes:
-                    if prefix in stage_ended:
-                        code = stage_ended[prefix]
-                        stages[idx]["status"] = "succeeded" if code == 0 else "failed"
-                        stages[idx]["exit_code"] = code
-                    else:
-                        stages[idx]["status"] = "running"
-                        break
-                else:
-                    stages[5]["status"] = "running"
-            else:
-                if has_stage_log.get("frontend-build"):
-                    stages[2]["status"] = "succeeded"
-                    stages[3]["status"] = "succeeded"
-                    stages[4]["status"] = "running"
-                elif has_stage_log.get("frontend-dependencies"):
-                    stages[2]["status"] = "succeeded"
-                    stages[3]["status"] = "running"
-                else:
-                    stages[2]["status"] = "running"
-        else:
-            stages[1]["status"] = "running"
-    elif state == "succeeded":
-        for s in stages:
-            s["status"] = "succeeded"
-        stages[6]["exit_code"] = 0
+    execution_stages = [append_stage(name) for name in stage_names]
+    prepared_phases = {"prepared", "create-requested", "created", "start-requested", "terminal"}
+    if state == "queued":
+        prepare_stage["status"] = "pending"
+    elif observed_stage_names or journal.get("phase") in prepared_phases or state == "succeeded":
+        prepare_stage["status"] = "succeeded"
+    elif state in ("running", "cancel_requested"):
+        prepare_stage["status"] = "running"
     elif state in ("failed", "cancelled"):
-        if stage_ended:
-            for idx, prefix in stage_prefixes:
-                if prefix in stage_ended:
-                    code = stage_ended[prefix]
-                    stages[idx]["status"] = "succeeded" if code == 0 else "failed"
-                    stages[idx]["exit_code"] = code
-                elif stages[idx - 1]["status"] == "succeeded":
-                    stages[idx]["status"] = state
-                    break
-        else:
-            if has_stage_log.get("frontend-build"):
-                stages[2]["status"] = "succeeded"
-                stages[3]["status"] = "succeeded"
-                stages[4]["status"] = state
-            elif has_stage_log.get("frontend-dependencies"):
-                stages[2]["status"] = "succeeded"
-                stages[3]["status"] = state
-            elif has_stage_log.get("native-build"):
-                stages[2]["status"] = state
-            else:
-                stages[1]["status"] = state
-        stages[5]["status"] = "failed" if state == "failed" else "cancelled"
-        stages[6]["status"] = state
-        stages[6]["exit_code"] = exit_code
+        prepare_stage["status"] = state
+    prepare_stage["started_at"] = started_at
 
-    return stages
+    for stage in execution_stages:
+        name = stage["id"]
+        record = records_by_name.get(name)
+        log_end = logged_ended.get(name)
+        has_recorded_exit = record is not None and "exit_code" in record
+        has_logged_exit = log_end is not None and log_end.get("exit_recorded") is True
+        has_exit = has_recorded_exit or has_logged_exit
+        code = record.get("exit_code") if has_recorded_exit else (
+            log_end.get("exit_code") if has_logged_exit else None
+        )
+
+        if has_exit:
+            stage["status"] = (
+                "succeeded" if type(code) is int and code == 0 else "failed"
+            )
+            stage["exit_code"] = code
+        elif any(
+            later in observed_stage_names
+            for later in planned_later_stages.get(name, ())
+        ):
+            # Only a later stage in the trusted profile plan proves an earlier
+            # stage returned 0; observed extra log names do not establish order.
+            stage["status"] = "succeeded"
+            stage["exit_code"] = 0
+        elif name in observed_stage_names:
+            if state in ("running", "cancel_requested"):
+                stage["status"] = "running"
+            elif state == "cancelled":
+                stage["status"] = "cancelled"
+
+        if record is not None:
+            stage["started_at"] = record.get("started_at")
+            stage["duration_seconds"] = _timeline_duration_seconds(
+                record.get("duration_ms")
+            )
+        if stage["duration_seconds"] is None and log_end is not None:
+            stage["duration_seconds"] = _timeline_duration_seconds(
+                log_end.get("duration_ms")
+            )
+
+    if state == "succeeded" and worker_receipt is not None:
+        receipt_verification["status"] = "succeeded"
+        receipt_verification["started_at"] = journal.get("finished_at")
+    elif journal.get("validation_error"):
+        receipt_verification["status"] = "failed"
+        receipt_verification["started_at"] = journal.get("finished_at")
+    elif state in ("running", "cancel_requested") and worker_receipt is not None:
+        # A worker receipt is submitted evidence; it is not coordinator
+        # verification of source identity or artifact hashes.
+        receipt_verification["status"] = "running"
+
+    if state in ("succeeded", "failed", "cancelled"):
+        result_stage["status"] = state
+        if type(exit_code) is int:
+            result_stage["exit_code"] = exit_code
+
+    if (
+        isinstance(created_at, (int, float))
+        and not isinstance(created_at, bool)
+        and isinstance(started_at, (int, float))
+        and not isinstance(started_at, bool)
+    ):
+        queue_stage["duration_seconds"] = max(
+            0.0, round(float(started_at) - float(created_at), 2)
+        )
+
+    return [queue_stage, prepare_stage, *execution_stages, receipt_verification, result_stage]

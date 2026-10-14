@@ -8,7 +8,7 @@ use crate::{
     KnownSceneOerstedField, KnownSceneSpinTorque, SceneCurrentTransport, SceneDocument,
     SceneRegionRef, SceneSpinInterface, SceneSpinTransport,
 };
-use fullmag_ir::{DriveActivationIR, FieldTargetIR};
+use fullmag_ir::{DriveActivationIR, FieldTargetIR, PhysicsObjectIR, PhysicsObjectTypeIR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -82,12 +82,18 @@ pub struct PhysicsEdgeIR {
 pub struct PhysicsGraphIR {
     pub schema_version: String,
     pub scene_revision: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<PhysicsObjectIR>,
     pub modules: Vec<PhysicsModuleIR>,
     pub edges: Vec<PhysicsEdgeIR>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PhysicsGraphError {
+    InvalidObjectBinding {
+        object_id: String,
+        reason: String,
+    },
     DuplicateModuleId(String),
     MissingObject {
         object_id: String,
@@ -103,6 +109,9 @@ pub enum PhysicsGraphError {
 impl fmt::Display for PhysicsGraphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidObjectBinding { object_id, reason } => {
+                write!(f, "object '{object_id}': {reason}")
+            }
             Self::DuplicateModuleId(id) => write!(f, "duplicate physics module id '{id}'"),
             Self::MissingObject {
                 object_id,
@@ -123,6 +132,7 @@ impl fmt::Display for PhysicsGraphError {
 impl std::error::Error for PhysicsGraphError {}
 
 pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, PhysicsGraphError> {
+    let objects = normalize_auxiliary_objects(scene)?;
     let object_ids: BTreeSet<&str> = scene
         .objects
         .iter()
@@ -428,9 +438,83 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
     Ok(PhysicsGraphIR {
         schema_version: "physics_graph.v1".to_string(),
         scene_revision: scene.revision,
+        objects,
         modules,
         edges,
     })
+}
+
+fn normalize_auxiliary_objects(
+    scene: &SceneDocument,
+) -> Result<Vec<PhysicsObjectIR>, PhysicsGraphError> {
+    let mut object_ids = BTreeSet::new();
+    let mut geometry_owners = BTreeMap::new();
+    let magnetic_aliases = scene
+        .objects
+        .iter()
+        .filter(|object| object.role == "magnet")
+        .map(|object| crate::adapters::builder_geometry_name_for_object(object))
+        .collect::<BTreeSet<_>>();
+    let fail = |id: &str, reason: String| PhysicsGraphError::InvalidObjectBinding {
+        object_id: id.to_string(),
+        reason,
+    };
+    let mut objects = Vec::new();
+    for object in &scene.objects {
+        if object.id.trim().is_empty() || !object_ids.insert(object.id.as_str()) {
+            return Err(fail(
+                &object.id,
+                "empty or duplicate immutable object ID".to_string(),
+            ));
+        }
+        if object.id.trim() != object.id {
+            return Err(fail(
+                &object.id,
+                "immutable object ID must not contain surrounding whitespace".to_string(),
+            ));
+        }
+        let geometry_id = crate::adapters::builder_geometry_name_for_object(object);
+        if geometry_owners
+            .insert(geometry_id.clone(), object.id.as_str())
+            .is_some()
+        {
+            return Err(fail(
+                &object.id,
+                format!("ambiguous geometry name '{geometry_id}'"),
+            ));
+        }
+        if object.role == "magnet" {
+            continue;
+        }
+        if magnetic_aliases.contains(&object.id) {
+            return Err(fail(
+                &object.id,
+                "auxiliary ID conflicts with a magnetic name alias".to_string(),
+            ));
+        }
+        let object_type = match object.role.as_str() {
+            "geometry" => PhysicsObjectTypeIR::Geometry,
+            "conductor" => PhysicsObjectTypeIR::Conductor,
+            "electrode" => PhysicsObjectTypeIR::Electrode,
+            "antenna" => PhysicsObjectTypeIR::Antenna,
+            role => {
+                return Err(fail(
+                    &object.id,
+                    format!("unsupported auxiliary presentation type '{role}'"),
+                ));
+            }
+        };
+        objects.push(PhysicsObjectIR::new(
+            &object.id,
+            &geometry_id,
+            object_type,
+            &geometry_id,
+        ));
+    }
+    objects.sort_by(|left, right| {
+        (&left.geometry_id, &left.object_id).cmp(&(&right.geometry_id, &right.object_id))
+    });
+    Ok(objects)
 }
 
 fn current_solve_domain(current: &crate::KnownSceneCurrentTransport) -> Vec<SceneRegionRef> {

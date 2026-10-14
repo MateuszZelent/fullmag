@@ -629,6 +629,7 @@ describe("MeshPartLayer", () => {
     );
 
     expect(source).toContain("buildModeCompositionVectorLayerInput");
+    expect(source.match(/identity: modal\.buffer\.identity,/g)).toHaveLength(2);
     expect(source).toContain("modalVectorLayerInput?.segments ?? vectorLayerInput.segments");
     expect(source).toContain("modalVectorsActive || renderPlan.vectors.visible");
   });

@@ -13,7 +13,7 @@ import {
 import { useRef, type KeyboardEvent, type Ref } from "react";
 
 import type { StartSection } from "../model/startScreenState";
-import type { ComputeProbeState } from "../model/types";
+import type { ComputeNodeInventorySummary, ComputeProbeState } from "../model/types";
 
 import { STUDY_TEMPLATES } from "../model/templates";
 
@@ -42,6 +42,7 @@ export const RAIL_SECTIONS: readonly RailEntry[] = [
 
 export interface StartRailProps {
   readonly compute: ComputeProbeState;
+  readonly nodeInventory?: ComputeNodeInventorySummary;
   readonly refreshing?: boolean;
   readonly stale?: boolean;
   readonly computeError?: string | null;
@@ -53,6 +54,7 @@ export interface StartRailProps {
 
 export function StartRail({
   compute,
+  nodeInventory,
   refreshing = false,
   stale = false,
   computeError = null,
@@ -120,6 +122,7 @@ export function StartRail({
       <div aria-hidden="true" className="fm-start-rail__sep" />
       <ComputeEnvironmentWidget
         compute={compute}
+        nodeInventory={nodeInventory}
         error={computeError}
         onConfigure={() => onRunCommand("start.section.settings")}
         onRefresh={onRefreshCompute}

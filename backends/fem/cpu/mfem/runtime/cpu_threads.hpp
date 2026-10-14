@@ -55,8 +55,10 @@ inline constexpr int FULLMAG_FEM_HOST_THREAD_POLICY_GPU_DEFAULT_ONE =
  * Resolve CPU thread intent from environment variables.
  *
  * `FULLMAG_CPU_THREADS=auto` owns auto mode and overrides manual OMP settings.
- * Otherwise `OMP_NUM_THREADS` wins over manual `FULLMAG_CPU_THREADS`, matching
- * OpenMP user expectations.
+ * Its worker-resolved native limit uses `FULLMAG_NATIVE_THREADS_AUTO_RESOLVED`,
+ * falling back to the older `FULLMAG_CPU_THREADS_AUTO_RESOLVED` for legacy
+ * launchers. Otherwise `OMP_NUM_THREADS` wins over manual
+ * `FULLMAG_CPU_THREADS`, matching OpenMP user expectations.
  */
 CpuThreadRequest requested_cpu_threads();
 

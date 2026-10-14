@@ -6,6 +6,7 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Context, Result};
 use fullmag_application::TaskClaim;
+use fullmag_session::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2;
 use fullmag_session::host_resource_ledger::HostResourceLedger;
 use fullmag_session::host_resource_ledger::{HostReservationRequest, HostResourceReservationState};
 use fullmag_session::runtime_service::RuntimeServiceConfig;
@@ -49,12 +50,21 @@ mod recovery_tests {
         _directory: tempfile::TempDir,
         store: SessionStore,
         ledger: HostResourceLedger,
+        inventory_owner: fullmag_session::host_resource_ledger::HostInventoryOwner,
         context: HostRuntimeAdmission,
         request: HostReservationRequest,
         budget: FmsResourceBudget,
     }
 
     fn recovery_fixture() -> RecoveryFixture {
+        recovery_fixture_with_sample(true)
+    }
+
+    fn recovery_fixture_without_sample() -> RecoveryFixture {
+        recovery_fixture_with_sample(false)
+    }
+
+    fn recovery_fixture_with_sample(include_sample: bool) -> RecoveryFixture {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let budget = FmsResourceBudget {
@@ -80,6 +90,18 @@ mod recovery_tests {
         };
         let ledger_root = directory.path().join("host");
         let ledger = HostResourceLedger::initialize(&ledger_root, policy.clone()).unwrap();
+        let inventory_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        if include_sample {
+            let sample = crate::compute_node_probe::sample_compute_node_for_owner(
+                &ledger,
+                inventory_owner.descriptor(),
+                None,
+            )
+            .unwrap();
+            ledger
+                .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
+                .unwrap();
+        }
         let config = RuntimeServiceConfig {
             schema_version: "runtime_service_config.v2".into(),
             store_root: store.root().to_owned(),
@@ -130,12 +152,21 @@ mod recovery_tests {
             },
             expected_host_id: policy.host_id.clone(),
             expected_policy_revision: policy.revision,
+            expected_node_policy_revision: 1,
             expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: Some(
+                inventory_owner.descriptor().host_owner_id.clone(),
+            ),
+            expected_compute_node_owner_epoch: Some(
+                inventory_owner.descriptor().host_owner_epoch,
+            ),
             expected_topology_sha256: policy.topology_sha256.clone(),
             budget,
             cpu_ids: BTreeSet::new(),
             exclusive_gpu_uuids: BTreeSet::new(),
             gpu_vram_bytes_by_uuid: BTreeMap::new(),
+            scheduling_priority: 0,
+            parallelism: fullmag_ir::compute_resources::ComputeParallelismIR::SingleProcess,
         };
         let context = HostRuntimeAdmission::open(&config).unwrap().unwrap();
 
@@ -143,10 +174,64 @@ mod recovery_tests {
             _directory: directory,
             store,
             ledger,
+            inventory_owner,
             context,
             request,
             budget,
         }
+    }
+
+    #[test]
+    fn missing_compute_node_sample_defers_host_admission() {
+        let fixture = recovery_fixture_without_sample();
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
+    }
+
+    #[test]
+    fn current_snapshot_requires_the_active_shared_host_inventory_owner() {
+        let fixture = recovery_fixture();
+        assert!(fixture.context.has_current_compute_snapshot().unwrap());
+        drop(fixture.inventory_owner);
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
+    }
+
+    #[test]
+    fn snapshot_from_previous_boot_defers_host_admission() {
+        let fixture = recovery_fixture_without_sample();
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger,
+            fixture.inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        snapshot.boot_id = "previous-host-boot".into();
+        fixture
+            .ledger
+            .publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot)
+            .unwrap();
+
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
+    }
+
+    #[test]
+    fn stale_compute_node_sample_defers_host_admission() {
+        let fixture = recovery_fixture_without_sample();
+        let now = chrono::Utc::now();
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger,
+            fixture.inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        snapshot.sample.collected_at =
+            now.clone() - chrono::Duration::seconds(31);
+        snapshot.sample.refresh_freshness_at(now);
+        fixture
+            .ledger
+            .publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot)
+            .unwrap();
+
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
     }
 
     fn seed_ready_queued_catalog(fixture: &RecoveryFixture, ownership_epoch: Option<u64>) {
@@ -662,6 +747,42 @@ impl HostRuntimeAdmission {
 
     pub fn ledger(&self) -> &HostResourceLedger {
         &self.ledger
+    }
+
+    /// Defer new admissions unless the persisted sample is current for this
+    /// boot and the exact configured host ledger owner. This does not prove
+    /// that the service process itself is live; its owner/recovery gate remains
+    /// an independent prerequisite.
+    pub fn has_current_compute_snapshot(&self) -> Result<bool> {
+        let Some(snapshot) = self.ledger.read_compute_node_snapshot()? else {
+            return Ok(false);
+        };
+        snapshot.validate()?;
+        if snapshot.node_id != self.ledger.node_id()
+            || snapshot.runtime_owner_id != self.ledger.owner_id()
+            || snapshot.owner_epoch != self.ledger.policy().owner_epoch
+        {
+            bail!("compute-node sample does not match the configured host ledger owner");
+        }
+
+        if snapshot.schema_version != COMPUTE_NODE_SNAPSHOT_SCHEMA_V2 {
+            return Ok(false);
+        }
+        let Some(active_owner) = self.ledger.active_inventory_owner()? else {
+            return Ok(false);
+        };
+        if snapshot.host_owner_id.as_deref() != Some(active_owner.host_owner_id.as_str())
+            || snapshot.host_owner_epoch != Some(active_owner.host_owner_epoch)
+        {
+            return Ok(false);
+        }
+
+        let now = chrono::Utc::now();
+        let current_boot_id = crate::compute_node_probe::current_host_boot_id(now.clone())?;
+        if snapshot.boot_id != current_boot_id {
+            return Ok(false);
+        }
+        snapshot.is_current_at(now)
     }
 
     pub fn solver_placement(&self, resource_id: &str) -> Result<&HostTaskPlacement> {
@@ -1224,6 +1345,9 @@ impl HostRuntimeAdmission {
     }
 
     fn ensure_committed_request(&self, request: &HostReservationRequest) -> Result<()> {
+        if !self.has_current_compute_snapshot()? {
+            bail!("process spawn requires a current compute-node sample for this boot");
+        }
         let snapshot = self.ledger.read()?;
         let reservation = snapshot
             .reservations
@@ -1233,6 +1357,8 @@ impl HostRuntimeAdmission {
         if reservation.state != HostResourceReservationState::Committed
             || reservation.host_id != request.expected_host_id
             || reservation.host_owner_epoch != request.expected_owner_epoch
+            || reservation.compute_node_owner_id != request.expected_compute_node_owner_id
+            || reservation.compute_node_owner_epoch != request.expected_compute_node_owner_epoch
             || reservation.policy_revision != request.expected_policy_revision
             || reservation.topology_sha256 != request.expected_topology_sha256
             || reservation.budget != request.budget

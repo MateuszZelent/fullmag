@@ -206,6 +206,9 @@ pub struct FieldVectorQuery {
     pub phase_rad: Option<f64>,
     /// Optional optimistic-concurrency precondition for the domain generation.
     pub expected_generation_id: Option<String>,
+    /// Optional optimistic-concurrency precondition for a committed analysis artifact generation.
+    /// This is distinct from `expected_generation_id`, which identifies the mesh/domain generation.
+    pub expected_artifact_generation_id: Option<String>,
     /// Optional optimistic-concurrency precondition for the resolved field carrier.
     pub expected_carrier_revision: Option<String>,
 }

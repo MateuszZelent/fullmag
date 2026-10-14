@@ -19,6 +19,10 @@ const VIEWPORT_3D_EVENT_HANDLER_KEYS = [
 const VIEWPORT_3D_IMMEDIATE_POINTER_DOWN_REGION_PX = 240;
 const VIEWPORT_3D_STATIC_CLICK_DELTA_PX = 2;
 
+interface Viewport3DPointerDownDispatch {
+  immediate: boolean;
+}
+
 export function pickViewport3DEventHandlers(
   handlers: EventManager<HTMLElement>["handlers"],
 ): EventManager<HTMLElement>["handlers"] {
@@ -67,41 +71,43 @@ export function isViewport3DImmediatePointerDownRegion(event: Event): boolean {
 export function createViewport3DPointerDownHandler(
   store: Parameters<typeof createPointerEvents>[0],
   pointerDownHandler?: EventListener,
+  pointerDownDispatch?: Viewport3DPointerDownDispatch,
 ): EventListener {
   return (event) => {
-    if (pointerDownHandler && isViewport3DImmediatePointerDownRegion(event)) {
-      pointerDownHandler(event);
-      event.preventDefault?.();
-      event.stopPropagation?.();
-      (event as Event & { stopImmediatePropagation?: () => void })
-        .stopImmediatePropagation?.();
-      return;
-    }
-
     const state = store.getState();
     state.internal.initialClick = viewport3DEventOffset(event);
     state.internal.initialHits = [];
+    const immediate = Boolean(pointerDownHandler && isViewport3DImmediatePointerDownRegion(event));
+    if (pointerDownDispatch) pointerDownDispatch.immediate = immediate;
+    if (immediate) {
+      pointerDownHandler?.(event);
+      return;
+    }
   };
 }
 
 export function createViewport3DClickSelectionHandler({
   clickHandler,
   pointerDownHandler,
+  pointerDownDispatch,
   store,
   pointerDownAlreadyHandled = () => false,
 }: {
   pointerDownAlreadyHandled?: () => boolean;
   clickHandler?: EventListener;
   pointerDownHandler?: EventListener;
+  pointerDownDispatch?: Viewport3DPointerDownDispatch;
   store: Parameters<typeof createPointerEvents>[0];
 }): EventListener {
   return (event) => {
+    const alreadyDispatched = pointerDownDispatch?.immediate ?? false;
+    if (pointerDownDispatch) pointerDownDispatch.immediate = false;
     if (viewport3DClickDelta(store, event) > VIEWPORT_3D_STATIC_CLICK_DELTA_PX) {
       return;
     }
 
     if (pointerDownAlreadyHandled()) return;
-    pointerDownHandler?.(event);
+    if (!alreadyDispatched) pointerDownHandler?.(event);
     if (store.getState().internal.initialHits.length > 0) return;
     clickHandler?.(event);
   };
@@ -126,6 +132,7 @@ export function createViewport3DEventManager(
 ): EventManager<HTMLElement> {
   const manager = createPointerEvents(store);
   const pickedHandlers = pickViewport3DEventHandlers(manager.handlers);
+  const pointerDownDispatch: Viewport3DPointerDownDispatch = { immediate: false };
   let probingMoveHandle = false;
   let movePointerDownHandled = false;
   let connectedTarget: HTMLElement | null = null;
@@ -173,11 +180,13 @@ export function createViewport3DEventManager(
         pointerDownAlreadyHandled: () => movePointerDownHandled,
         clickHandler: pickedHandlers?.onClick,
         pointerDownHandler: pickedHandlers?.onPointerDown,
+        pointerDownDispatch,
         store,
       }),
       onPointerDown: createViewport3DPointerDownHandler(
         store,
         pickedHandlers?.onPointerDown,
+        pointerDownDispatch,
       ),
       onPointerMove: createViewport3DPointerMoveHandler(
         pickedHandlers?.onPointerMove,

@@ -22,6 +22,10 @@ vi.mock("@/kernel/selection/useSelection", () => ({
   useSelectionSelector: (selector: (selection: unknown) => unknown) =>
     selector({ ref: selectedResultRunId ? { analysisRunId: selectedResultRunId, type: "frequency-domain" } : null }),
 }));
+vi.mock("@/kernel/resources/postprocessingDefinitionResources", () => ({
+  usePostprocessingDefinitionsResource: () => ({ data: null, status: "idle" }),
+}));
+
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFrequencyDomainManifestResource: (options: unknown) => { manifest(options); return manifestState; },
   useFrequencyDomainEigenSpectrumResource: (options: unknown) => { spectrum(options); return spectrumState; },
@@ -128,7 +132,7 @@ describe("frequency surface mismatch", () => {
             mesh_identity: "mesh-1",
             requested_execution: {
               boundary_context: "finite_open",
-              calculation_mode: "fmr_response",
+              calculation_mode: "fmr_modal_driven",
             },
             run_id: "run-1",
             stage_id: "stage-1",

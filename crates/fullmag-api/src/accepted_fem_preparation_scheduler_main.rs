@@ -554,6 +554,11 @@ fn admit_candidate(
     candidates: &[PreparationCandidate],
     host: Option<&fullmag_runtime_control::host_runtime::HostRuntimeAdmission>,
 ) -> Result<Option<FmsPreparationResourceLease>> {
+    if let Some(host) = host {
+        if !host.has_current_compute_snapshot()? {
+            return Ok(None);
+        }
+    }
     for candidate in candidates {
         let now = chrono::Utc::now();
         let mut lease = FmsPreparationResourceLease {
@@ -576,6 +581,9 @@ fn admit_candidate(
             host_launch_binding: None,
         };
         let disposition = if let Some(host) = host {
+            if !host.has_current_compute_snapshot()? {
+                return Ok(None);
+            }
             lease.host_launch_binding = Some(host.ledger().worker_launch_binding());
             let cpu_ids = host.preparation_cpu_ids(&lease.resource_id)?;
             let request =

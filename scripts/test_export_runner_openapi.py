@@ -18,7 +18,9 @@ import unittest
 from unittest.mock import patch
 
 import export_runner_openapi as exporter
-from local_runner.build_entrypoint import required_outputs_for_profile
+from fullmag_storage import StorageError
+from local_runner.runtime_use import retention_mutation_guard
+from local_runner.build_entrypoint import HEADLESS_REQUIRED_OUTPUTS, required_outputs_for_profile
 from local_runner.worker_entrypoint import canonical
 
 
@@ -31,7 +33,13 @@ JOB_ID = "e" * 32
 
 
 class Fixture:
-    def __init__(self) -> None:
+    def __init__(self, profile: str = "fem-cpu-release", *,
+                 outputs: tuple[str, ...] | None = None,
+                 source_mode="commit", dirty=False) -> None:
+        self.profile = profile
+        self.outputs = required_outputs_for_profile(profile) if outputs is None else outputs
+        self.source_mode = source_mode
+        self.dirty = dirty
         self.temp = tempfile.TemporaryDirectory(prefix="fullmag-openapi-export-")
         root = Path(self.temp.name)
         self.storage = root / "storage"
@@ -42,7 +50,7 @@ class Fixture:
             "storage_root": str(self.storage),
             "build_storage_root": str(self.storage),
             "runs_root": str(self.storage / "runs" / WORKTREE),
-            "build_root": str(self.storage / "builds" / WORKTREE / "fem-cpu-release"),
+            "build_root": str(self.storage / "builds" / WORKTREE / self.profile),
             "worktree_id": WORKTREE,
         }
         self._write_source()
@@ -58,18 +66,22 @@ class Fixture:
         path.write_bytes(content)
 
     def _native_identity(self) -> dict[str, object]:
+        dirty_content = [{
+            "path": "README.md", "kind": "regular_file", "mode": "100644",
+            "sha256": self.source_manifest["files"][0]["sha256"], "git_index_entries": [],
+        }] if self.dirty else []
         payload = {
             "schema": "fullmag.source-snapshot.v2",
             "head_commit_full": COMMIT,
             "head_tree_sha256": "1" * 64,
-            "git_status_porcelain_v1": [],
-            "dirty_path_content": [],
+            "git_status_porcelain_v1": [{"status": " M", "paths": ["README.md"]}] if self.dirty else [],
+            "dirty_path_content": dirty_content,
             "ignored_non_runtime_dirty": True,
         }
         return {
             **payload,
-            "source_snapshot_dirty": False,
-            "dirty_content_sha256": hashlib.sha256(canonical([])).hexdigest(),
+            "source_snapshot_dirty": self.dirty,
+            "dirty_content_sha256": hashlib.sha256(canonical(dirty_content)).hexdigest(),
             "source_snapshot_sha256": hashlib.sha256(canonical(payload)).hexdigest(),
         }
 
@@ -79,7 +91,7 @@ class Fixture:
         self._write(self.capsule / "tree" / relative, file_bytes)
         core = {
             "schema_version": "fullmag.source-capsule.v1",
-            "source_mode": "commit",
+            "source_mode": self.source_mode,
             "resolved_commit": COMMIT,
             "files": [{"path": relative, "type": "file", "mode": "100644",
                        "size": len(file_bytes), "sha256": hashlib.sha256(file_bytes).hexdigest()}],
@@ -100,7 +112,7 @@ class Fixture:
             "schema": "fullmag.runner-execution.v1",
             "job_id": JOB_ID,
             "source_digest": self.source_manifest["source_digest"],
-            "profile": "fem-cpu-release",
+            "profile": self.profile,
             "image_digest": IMAGE,
             "native_source_identity": native,
         }
@@ -112,7 +124,7 @@ class Fixture:
         artifacts = self.run_root / "artifacts"
         output = self.package
         entries = []
-        for index, relative in enumerate(required_outputs_for_profile("fem-cpu-release")):
+        for index, relative in enumerate(self.outputs):
             content = (f"fixture-{index}\n").encode()
             path = output.joinpath(*relative.split("/"))
             self._write(path, content)
@@ -123,7 +135,7 @@ class Fixture:
             "schema": "fullmag.local-runner.build-receipt.v1",
             "job_id": JOB_ID,
             "source_digest": self.source_manifest["source_digest"],
-            "profile": "fem-cpu-release",
+            "profile": self.profile,
             "state": "succeeded",
             "qualification": "NOT VERIFIED",
             "image_digest": IMAGE,
@@ -133,13 +145,16 @@ class Fixture:
             "stages": [{"name": name, "exit_code": 0} for name in
                         ("native-build", "frontend-dependencies", "frontend-build")],
         }
+        if self.profile.startswith("fem-cpu-slepc-runtime-"):
+            receipt["runtime_only"] = True
+            receipt["stages"] = [{"name": "native-build", "exit_code": 0}]
         self._write(artifacts / "build-receipt.json", (json.dumps(receipt) + "\n").encode())
         journal = {
             "schema": "fullmag.local-runner.coordinator.v1",
             "job_id": JOB_ID,
             "owner": "fixture",
             "operation": "build",
-            "profile": "fem-cpu-release",
+            "profile": self.profile,
             "source_digest": self.source_manifest["source_digest"],
             "image_digest": IMAGE,
             "mounts": [["bind", str(self.capsule), "/source", False]],
@@ -174,7 +189,7 @@ class Fixture:
             "INSERT INTO jobs (job_id,owner,request_key,request_hash,worktree_id,source_digest,"
             "profile,operation,payload,state,created_at,updated_at,exit_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (JOB_ID, "fixture", "request", "0" * 64, WORKTREE, self.source_manifest["source_digest"],
-             "fem-cpu-release", "build", json.dumps(payload), "succeeded", 1, 1, 0),
+             self.profile, "build", json.dumps(payload), "succeeded", 1, 1, 0),
         )
         database.commit()
         database.close()
@@ -225,6 +240,101 @@ class ExportRunnerOpenApiTests(unittest.TestCase):
         self.assertEqual(before, sorted(path.relative_to(self.fixture.package).as_posix()
                                         for path in self.fixture.package.rglob("*")))
 
+    def test_retention_cannot_enter_during_capture_or_receipt_publication(self) -> None:
+        original_record = exporter._record_evidence
+        observed = []
+
+        def assert_protected(phase):
+            with self.assertRaises(StorageError):
+                with retention_mutation_guard(self.fixture.layout):
+                    self.fail("Retention acquired a live runtime package")
+            observed.append(phase)
+
+        def capture(command):
+            assert_protected("capture")
+            return self._capture(command)
+
+        def record(**kwargs):
+            assert_protected("receipt")
+            return original_record(**kwargs)
+
+        with patch.object(exporter, "_record_evidence", side_effect=record):
+            evidence = exporter.export_openapi(
+                Path("C:/fixture/fullmag"), JOB_ID, COMMIT,
+                layout=self.fixture.layout, image_inspect=self._image, capture=capture,
+            )
+        self.assertEqual(observed, ["capture", "receipt"])
+        with retention_mutation_guard(self.fixture.layout):
+            self.assertTrue((evidence / "receipt.json").is_file())
+
+    def test_retention_blocks_admission_before_package_validation(self) -> None:
+        with retention_mutation_guard(self.fixture.layout), \
+                patch.object(exporter, "_validate_managed_build") as validate:
+            with self.assertRaisesRegex(exporter.ExportError, "blocked by storage retention"):
+                exporter.export_openapi(
+                    Path("C:/fixture/fullmag"), JOB_ID, COMMIT,
+                    layout=self.fixture.layout, image_inspect=self._image, capture=self._capture,
+                )
+        validate.assert_not_called()
+
+    def test_runtime_profile_exports_without_full_release_or_frontend(self) -> None:
+        self.fixture.close()
+        self.fixture = Fixture("fem-cpu-slepc-runtime-v2", outputs=HEADLESS_REQUIRED_OUTPUTS)
+        receipt = json.loads((self.fixture.run_root / "artifacts" / "build-receipt.json").read_text())
+        self.assertFalse((self.fixture.package / "web" / "index.html").exists())
+        self.assertLess(len(self.fixture.outputs), 15)
+        # Isolate the export consumer from runtime-attestation fixtures. The
+        # build executor owns those invariants and must still validate first.
+        with patch.object(exporter, "validate_build_receipt", return_value=receipt) as validate:
+            evidence = exporter.export_openapi(
+                Path("C:/fixture/fullmag"), JOB_ID, COMMIT,
+                layout=self.fixture.layout, image_inspect=self._image, capture=self._capture,
+            )
+        validate.assert_called_once()
+        self.assertEqual(validate.call_args.args[1]["profile"], "fem-cpu-slepc-runtime-v2")
+        proof = json.loads((evidence / "proof.json").read_text())
+        self.assertTrue((evidence / "stdout.raw.json").stat().st_size > 0)
+        self.assertTrue(proof)
+        self.assertIn("--network=none", self.command)
+        self.assertIn("--read-only", self.command)
+        library_path = next(value.split("=", 1)[1] for value in self.command
+                            if value.startswith("LD_LIBRARY_PATH="))
+        self.assertEqual(library_path.split(":")[0], "/package/lib")
+        self.assertIn("/opt/fullmag-mfem-cpu/lib", library_path.split(":"))
+
+    def test_unknown_profile_cannot_choose_library_environment(self) -> None:
+        build = exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT)
+        with patch.object(exporter, "PROFILES", {}, create=True):
+            with self.assertRaisesRegex(exporter.ExportError, "profile is not recognized"):
+                exporter.docker_run_argv(build, "1" * 32)
+
+    def test_invalid_runtime_receipt_is_rejected_before_capture(self) -> None:
+        self.fixture.close()
+        self.fixture = Fixture("fem-cpu-slepc-runtime-v2", outputs=HEADLESS_REQUIRED_OUTPUTS)
+        with patch.object(exporter, "validate_build_receipt", side_effect=ValueError("invalid runtime attestation")) as validate:
+            with patch.object(exporter, "_capture") as capture:
+                with self.assertRaisesRegex(ValueError, "invalid runtime attestation"):
+                    exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT)
+        validate.assert_called_once()
+        capture.assert_not_called()
+
+    def test_profile_without_declared_api_binary_is_rejected(self) -> None:
+        declared = tuple(output for output in required_outputs_for_profile(self.fixture.profile)
+                         if output != "bin/fullmag-api")
+        self.assertGreaterEqual(len(declared), 14)
+        with patch.object(exporter, "required_outputs_for_profile", return_value=declared):
+            with self.assertRaisesRegex(exporter.ExportError, "does not declare the fullmag-api output"):
+                exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT)
+
+    def test_incomplete_release_receipt_is_still_rejected(self) -> None:
+        receipt_path = self.fixture.run_root / "artifacts" / "build-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["artifacts"] = [entry for entry in receipt["artifacts"]
+                                if entry["path"] != "outputs/.fullmag/local/web/index.html"]
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Required build outputs missing"):
+            exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT)
+
     def test_nonterminal_queue_is_rejected_before_package_access(self) -> None:
         database = sqlite3.connect(self.fixture.storage / "index" / "runner-jobs.sqlite")
         database.execute("UPDATE jobs SET state='running' WHERE job_id=?", (JOB_ID,))
@@ -238,6 +348,74 @@ class ExportRunnerOpenApiTests(unittest.TestCase):
         native["source_snapshot_dirty"] = True
         with self.assertRaises(exporter.ExportError):
             exporter._validate_native_identity(native, COMMIT)
+
+    def _snapshot_fixture(self, *, dirty=True):
+        self.fixture.close()
+        self.fixture = Fixture(source_mode="snapshot", dirty=dirty)
+        return {
+            "source_digest": self.fixture.source_manifest["source_digest"],
+            "native_snapshot_sha256": self.fixture.context["native_source_identity"]["source_snapshot_sha256"],
+        }
+
+    def test_explicit_snapshot_export_binds_both_digests_and_actual_dirty_state(self):
+        for dirty in (True, False):
+            pins = self._snapshot_fixture(dirty=dirty)
+
+            def capture(command):
+                result = self._capture(command)
+                document = json.loads(result.stdout)
+                document["x-fullmag-build-identity"]["worktree_state"] = "dirty" if dirty else "clean"
+                return exporter.ProcessCapture(0, json.dumps(document).encode(), b"", False, False, started=True)
+
+            evidence = exporter.export_openapi(
+                Path("C:/fixture/fullmag"), JOB_ID, COMMIT, **pins,
+                layout=self.fixture.layout, image_inspect=self._image, capture=capture,
+            )
+            receipt = json.loads((evidence / "receipt.json").read_text())
+            proof = json.loads((evidence / "proof.json").read_text())
+            self.assertEqual(receipt["source_mode"], "snapshot")
+            self.assertEqual(receipt["source_digest"], pins["source_digest"])
+            self.assertEqual(proof["source_identity"]["worktree_state"], "dirty" if dirty else "clean")
+            self.assertEqual(receipt["source_worktree_state"], proof["source_identity"]["worktree_state"])
+            self.assertEqual(receipt["qualification"], "NOT VERIFIED")
+
+    def test_snapshot_requires_complete_well_formed_matching_pins_before_any_capture(self):
+        pins = self._snapshot_fixture()
+        for changes in (
+            {"source_digest": None}, {"native_snapshot_sha256": None},
+            {"source_digest": "c" * 64}, {"native_snapshot_sha256": "d" * 64},
+            {"source_digest": "bad"}, {"native_snapshot_sha256": "bad"},
+        ):
+            with self.subTest(changes=changes), patch.object(exporter, "_new_evidence_root") as allocate:
+                with self.assertRaises(exporter.ExportError):
+                    exporter.export_openapi(
+                        Path("C:/fixture/fullmag"), JOB_ID, COMMIT, **(pins | changes),
+                        layout=self.fixture.layout, image_inspect=self._image, capture=self._capture,
+                    )
+                allocate.assert_not_called()
+
+    def test_snapshot_mode_does_not_accept_commit_capsule(self):
+        pins = {"source_digest": self.fixture.source_manifest["source_digest"],
+                "native_snapshot_sha256": self.fixture.context["native_source_identity"]["source_snapshot_sha256"]}
+        with self.assertRaises(exporter.ExportError):
+            exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT, **pins)
+
+    def test_default_commit_route_refuses_even_clean_snapshot(self):
+        self._snapshot_fixture(dirty=False)
+        with self.assertRaises(exporter.ExportError):
+            exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT)
+
+    def test_snapshot_export_refuses_wrong_raw_dirty_state_and_preserves_failed_proof(self):
+        pins = self._snapshot_fixture()
+        with self.assertRaises(exporter.ExportError) as raised:
+            exporter.export_openapi(
+                Path("C:/fixture/fullmag"), JOB_ID, COMMIT, **pins,
+                layout=self.fixture.layout, image_inspect=self._image, capture=self._capture,
+            )
+        evidence = Path(str(raised.exception).rsplit(" at ", 1)[-1])
+        proof = json.loads((evidence / "proof.json").read_text())
+        self.assertEqual(proof["state"], "failed")
+        self.assertEqual(proof["source_identity"]["worktree_state"], "dirty")
 
     def test_stale_openapi_identity_is_retained_as_failed_evidence(self) -> None:
         def stale(_command):
@@ -690,6 +868,30 @@ class ExportStorageShellTests(unittest.TestCase):
         result = self._run(JOB_ID, COMMIT, " # fullmag_storage.py resolve")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("invalid managed OpenAPI export recipe", result.stderr)
+
+    def test_shell_snapshot_requires_complete_pins_and_refuses_composites(self):
+        suffix = f' --source-digest "{SOURCE_DIGEST}" --native-snapshot-sha256 "{SNAPSHOT}"'
+        for invalid in (
+            f' --source-digest "{SOURCE_DIGEST}"',
+            f' --native-snapshot-sha256 "{SNAPSHOT}"',
+            suffix.replace(SOURCE_DIGEST, "bad"),
+            suffix + " && printf UNAUTHORIZED_EXPORT_COMMAND",
+            suffix + " # fullmag_storage.py resolve",
+        ):
+            with self.subTest(invalid=invalid):
+                result = self._run(JOB_ID, COMMIT, invalid)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("invalid managed OpenAPI export recipe", result.stderr)
+                self.assertNotIn("UNAUTHORIZED_EXPORT_COMMAND", result.stdout)
+
+    def test_shell_snapshot_dispatches_only_fixed_helper_with_exact_pins(self):
+        suffix = f' --source-digest "{SOURCE_DIGEST}" --native-snapshot-sha256 "{SNAPSHOT}"'
+        # A nonexistent exact job exercises wrapper dispatch, but is refused by
+        # read-only queue admission before evidence allocation or Docker access.
+        result = self._run(JOB_ID, COMMIT, suffix)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertNotIn("invalid managed OpenAPI export recipe", result.stderr)
+        self.assertIn("Managed build job does not exist", result.stderr)
 
 
 if __name__ == "__main__":

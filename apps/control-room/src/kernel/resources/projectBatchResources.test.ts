@@ -126,6 +126,49 @@ describe("saved project batch resources", () => {
     const mismatchedTuple = casePage();
     mismatchedTuple.cases[0]!.parameter_tuple = { other: 0.01 };
     expect(() => validateProjectBatchCasesEnvelope(mismatchedTuple, "batch-a")).toThrow();
+
+    const materialized = casePage();
+    materialized.cases[0] = {
+      ...materialized.cases[0]!,
+      state: "materialized",
+      published_run: {
+        run_id: "run-a",
+        catalog_state: "materialized",
+        catalog_revision: 3,
+        tasks: [{ task_id: "task-a", lifecycle: "queued" }],
+      },
+    };
+    expect(validateProjectBatchCasesEnvelope(materialized, "batch-a")).toBe(materialized);
+
+    const pendingMaterialization = casePage();
+    pendingMaterialization.cases[0] = {
+      ...pendingMaterialization.cases[0]!,
+      state: "pending_materialization",
+      published_run: {
+        run_id: "run-a",
+        catalog_state: "pending_materialization",
+        catalog_revision: null,
+        tasks: [],
+      },
+    };
+    expect(validateProjectBatchCasesEnvelope(pendingMaterialization, "batch-a"))
+      .toBe(pendingMaterialization);
+
+    const unconfirmedChild = casePage();
+    unconfirmedChild.cases[0] = {
+      ...unconfirmedChild.cases[0]!,
+      state: "materialized",
+      published_run: null,
+    };
+    expect(() => validateProjectBatchCasesEnvelope(unconfirmedChild, "batch-a")).toThrow();
+
+    const mismatchedPublishedRun = structuredClone(materialized);
+    mismatchedPublishedRun.cases[0]!.published_run!.run_id = "different-run";
+    expect(() => validateProjectBatchCasesEnvelope(mismatchedPublishedRun, "batch-a")).toThrow();
+
+    const duplicateTasks = structuredClone(materialized);
+    duplicateTasks.cases[0]!.published_run!.tasks.push({ task_id: "task-a", lifecycle: "running" });
+    expect(() => validateProjectBatchCasesEnvelope(duplicateTasks, "batch-a")).toThrow();
   });
 
   it("keeps project, batch, cursor, and page size separate in resource keys", () => {

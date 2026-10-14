@@ -31,6 +31,18 @@ export type BottomPanelTabId =
 /** Kernel-owned workspace compositions; modules never create a second shell. */
 export type WorkspaceLayoutPresetId = "workspace.results.frequency-domain";
 
+export type ViewportCompanionPlacement = "beside" | "below";
+
+/**
+ * A second viewport-main module shown next to the active one, e.g. the 3D
+ * viewport beside an analysis chart (ADR 0054). Each module still has a
+ * single mounted instance.
+ */
+export interface ViewportCompanion {
+  moduleId: ModuleId;
+  placement: ViewportCompanionPlacement;
+}
+
 export interface LayoutState {
   /** Currently active ribbon tab */
   activeModuleTab: RibbonTabId;
@@ -38,6 +50,8 @@ export interface LayoutState {
   activeViewportMainModuleId: ModuleId;
   /** Last spatial center surface, retained while a non-spatial module is active. */
   lastSpatialViewportMainModuleId?: "field-map" | "viewport-3d";
+  /** Optional second center surface shown in a split with the active one. */
+  viewportCompanion?: ViewportCompanion | null;
   /** Panel visibility */
   panelVisible: Record<PanelPosition, boolean>;
   /** Selected tab in the shared bottom diagnostics surface. */

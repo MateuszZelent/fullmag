@@ -88,6 +88,7 @@ interface PreparedDraft {
   readonly ready_build_id: string;
   readonly ready_source_sha256: string;
   readonly project_document: ProjectDocumentProof;
+  readonly project_document_after_grid: ProjectDocumentProof;
   readonly scene_summary: SceneSummary;
 }
 
@@ -495,6 +496,15 @@ function summarizeScene(scene: SceneResource): SceneSummary {
   };
 }
 
+function assertConfirmedCameraForCapture(kernel: ReturnType<typeof useKernel>): void {
+  const camera = kernel.cameraRegistry.getSnapshot();
+  if (camera.dirty || camera.syncInFlight || camera.error !== null
+    || camera.lastRemoteRevision === null || camera.remoteCamera === null
+    || canonicalJson(camera.camera) !== canonicalJson(camera.remoteCamera)) {
+    throw new Error("Wait for camera synchronization before preparing the before-capture. No before-capture was submitted.");
+  }
+}
+
 function assertUsefulScene(scene: SceneResource): SceneSummary {
   const summary = summarizeScene(scene);
   if (summary.object_count === 0 || summary.region_count === 0 || summary.material_count === 0) {
@@ -511,6 +521,18 @@ function assertUsefulScene(scene: SceneResource): SceneSummary {
     throw new Error("Add a region and an assigned existing material to the same authored object before preparing the draft.");
   }
   return summary;
+}
+
+function sceneAfterSuccessfulGrid(scene: SceneResource): SceneResource {
+  const expected = JSON.parse(JSON.stringify(scene)) as SceneResource;
+  for (const object of expected.objects ?? []) {
+    if (object.tags?.includes("mesh:dirty")) {
+      const remaining = object.tags.filter((tag) => tag !== "mesh:dirty");
+      if (remaining.length > 0) object.tags = remaining;
+      else delete object.tags;
+    }
+  }
+  return expected;
 }
 
 async function projectDocumentProof(
@@ -731,7 +753,8 @@ function NativeWorkspaceRestartFixtureBody() {
   const visibleScene = sceneResource.data ? summarizeScene(sceneResource.data) : null;
   const currentProofMatches = baseline !== null
     && documentPreview !== null
-    && canonicalJson(documentPreview) === canonicalJson(baseline.project_document);
+    && (canonicalJson(documentPreview) === canonicalJson(baseline.project_document)
+      || canonicalJson(documentPreview) === canonicalJson(baseline.project_document_after_grid));
   const currentIdentityMatches = baseline !== null
     && currentPin !== null && currentPin !== baseline.api_instance_id
     && hostSnapshot.kernel === kernel
@@ -766,6 +789,7 @@ function NativeWorkspaceRestartFixtureBody() {
       if (!sessionIdentity || !kernel.projectDocument) {
         throw new Error("The workspace needs a confirmed live session and project-document owner.");
       }
+      assertConfirmedCameraForCapture(kernel);
       const sceneBefore = await kernel.api.model.scene();
       assertUsefulScene(sceneBefore);
       const [backendBefore, eligibilityBefore, sessionStatusBefore] = await Promise.all([
@@ -813,6 +837,9 @@ function NativeWorkspaceRestartFixtureBody() {
           ready_build_id: eligibilityBefore.ready_build_id,
           ready_source_sha256: eligibilityBefore.ready_source_sha256,
           project_document: projectDocument,
+          project_document_after_grid: await projectDocumentProof(
+            kernel.projectDocument.getSnapshot(), sceneAfterSuccessfulGrid(sceneAfter),
+          ),
           scene_summary: assertUsefulScene(sceneAfter),
         };
         fixture.setPreparedDraft(prepared);
@@ -874,12 +901,14 @@ function NativeWorkspaceRestartFixtureBody() {
         || freshProof.ready_source_sha256 !== prepared.ready_source_sha256) {
         throw new Error("The verified ready build changed while the draft was being prepared.");
       }
+      assertConfirmedCameraForCapture(kernel);
       fixture.claimBeforeCapture();
       const captured = await fixture.postPrivate("before", {
         schema: BEFORE_SCHEMA,
         nonce: freshProof.nonce,
         api_instance_id: prepared.api_instance_id,
         project_document_before: prepared.project_document,
+        project_document_after_grid: prepared.project_document_after_grid,
       });
       if (captured.captured !== true || captured.object_count !== prepared.project_document.scene_object_count) {
         throw new Error("The parent did not confirm capture of the same nonempty real scene.");
@@ -932,11 +961,11 @@ function NativeWorkspaceRestartFixtureBody() {
         throw new Error("The real replacement API does not report the applied ready build and new workspace.");
       }
       const restoredDocument = await projectDocumentProof(kernel.projectDocument!.getSnapshot(), sceneAfter);
-      if (canonicalJson(restoredDocument) !== canonicalJson(captured.project_document)) {
+      if (canonicalJson(restoredDocument) !== canonicalJson(captured.project_document_after_grid)) {
         throw new Error("The restored dirty project document differs from its captured before state.");
       }
       const sceneHash = await sha256Text(canonicalJson(sceneAfter));
-      if (sceneHash !== captured.project_document.scene_resource_sha256) {
+      if (sceneHash !== captured.project_document_after_grid.scene_resource_sha256) {
         throw new Error("The replacement API scene differs from the before-restart canonical scene.");
       }
       const viewportAfter = readViewportProof();

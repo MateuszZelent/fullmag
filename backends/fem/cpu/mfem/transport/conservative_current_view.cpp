@@ -1,4 +1,6 @@
 #include "cpu/mfem/transport/conservative_current_view.hpp"
+#include "cpu/mfem/transport/affine_rt0_element.hpp"
+#include "cpu/mfem/transport/terminal_constrained_rt0_projection.hpp"
 
 #include <mfem.hpp>
 
@@ -361,7 +363,7 @@ void validate_stable_ids(
     }
 }
 
-void validate_affine_tetrahedral_mesh(const mfem::Mesh &mesh)
+void validate_affine_tetrahedral_mesh(const mfem::Mesh &mesh, bool local_shape_only = false)
 {
     require(mesh.Dimension() == 3 && mesh.SpaceDimension() == 3,
         "OE-T0 requires a three-dimensional mesh");
@@ -379,6 +381,21 @@ void validate_affine_tetrahedral_mesh(const mfem::Mesh &mesh)
         auto b = coordinate(mesh, vertices[2]);
         auto c = coordinate(mesh, vertices[3]);
         a -= p0; b -= p0; c -= p0;
+        if (local_shape_only) {
+            const double scale = std::max({std::abs(a[0]), std::abs(a[1]), std::abs(a[2]),
+                std::abs(b[0]), std::abs(b[1]), std::abs(b[2]),
+                std::abs(c[0]), std::abs(c[1]), std::abs(c[2])});
+            require(std::isfinite(scale) && scale > 0.0,
+                "terminal RT0 projection rejects unrepresentable tetrahedral edges");
+            a /= scale; b /= scale; c /= scale;
+            const double shape_determinant =
+                a[0] * (b[1] * c[2] - b[2] * c[1]) -
+                a[1] * (b[0] * c[2] - b[2] * c[0]) +
+                a[2] * (b[0] * c[1] - b[1] * c[0]);
+            require(std::isfinite(shape_determinant) && std::abs(shape_determinant) > kGeometryTolerance,
+                "terminal RT0 projection rejects degenerate tetrahedral shape");
+            continue;
+        }
         const double determinant =
             a[0] * (b[1] * c[2] - b[2] * c[1]) -
             a[1] * (b[0] * c[2] - b[2] * c[0]) +
@@ -505,6 +522,7 @@ public:
     std::unique_ptr<mfem::FiniteElementSpace> space;
     std::unique_ptr<mfem::GridFunction> field;
     StableMeshVertexIdentities stable_ids;
+    std::unique_ptr<std::vector<double>> charge_potential_vertex_values_v;
     ConservativeCurrentIdentity identity;
     ConservativeCurrentBalanceCertificate balance;
     ConstraintRankCertificate rank_certificate;
@@ -554,24 +572,25 @@ struct PhysicalCertificate {
     ConservativeCurrentBalanceCertificate summary;
 };
 
-mfem::Vector evaluate_field_at(
-    const mfem::GridFunction &field,
-    int element,
-    const mfem::Vector &physical_point)
+AffineRt0Element::Face canonical_face_points(
+    const mfem::Mesh &mesh,
+    const StableMeshVertexIdentities &ids,
+    int face)
 {
-    auto *transformation = field.FESpace()->GetMesh()->
-        GetElementTransformation(element);
-    mfem::InverseElementTransformation inverse(transformation);
-    mfem::IntegrationPoint reference;
-    require(inverse.Transform(physical_point, reference) ==
-            mfem::InverseElementTransformation::Inside,
-        "physical certificate could not invert a face centroid");
-    mfem::Vector value(3);
-    field.GetVectorValue(element, reference, value);
-    for (int component = 0; component < 3; ++component) {
-        validate_finite(value[component], "physical RT0 field value");
+    mfem::Array<int> vertices;
+    mesh.GetFaceVertices(face, vertices);
+    require(vertices.Size() == 3, "physical RT0 certificate requires a triangular face");
+    std::array<std::pair<std::uint64_t, int>, 3> ordered;
+    for (int local = 0; local < 3; ++local) {
+        ordered[local] = {ids.local_to_stable.at(vertices[local]), vertices[local]};
     }
-    return value;
+    std::sort(ordered.begin(), ordered.end());
+    AffineRt0Element::Face points;
+    for (int local = 0; local < 3; ++local) {
+        const auto *point = mesh.GetVertex(ordered[local].second);
+        points[local] = {point[0], point[1], point[2]};
+    }
+    return points;
 }
 
 std::map<FaceKey, int> boundary_face_map(
@@ -585,6 +604,35 @@ std::map<FaceKey, int> boundary_face_map(
             "combined mesh boundary face keys must be unique");
     }
     return result;
+}
+
+double rt0_face_canonical_flux_weight(const mfem::GridFunction &field,
+    const StableMeshVertexIdentities &ids, int face)
+{
+    const auto &space = *field.FESpace();
+    auto &mesh = *space.GetMesh();
+    int first = -1, second = -1;
+    mesh.GetFaceElements(face, &first, &second);
+    require(first >= 0, "RT0 face weight requires an adjacent element");
+    mfem::Array<int> face_dofs, element_dofs;
+    space.GetFaceDofs(face, face_dofs);
+    space.GetElementDofs(first, element_dofs);
+    require(face_dofs.Size() == 1 && element_dofs.Size() == 4,
+        "RT0 face weight requires the owned affine RT0 space");
+    const auto decode = [](int dof) { return dof < 0 ? -1 - dof : dof; };
+    const int global_dof = decode(face_dofs[0]);
+    int local = -1;
+    for (int index = 0; index < element_dofs.Size(); ++index) {
+        if (decode(element_dofs[index]) == global_dof) {
+            require(local < 0, "RT0 face weight has a repeated element DOF");
+            local = index;
+        }
+    }
+    require(local >= 0, "RT0 face weight has no matching element DOF");
+    const AffineRt0Element basis(field, first);
+    const double weight = basis.signed_face_weight(canonical_face_points(mesh, ids, face), local);
+    require(std::isfinite(weight) && weight != 0.0, "RT0 face canonical weight is not finite and nonzero");
+    return weight;
 }
 
 int boundary_adjacent_element(const mfem::Mesh &mesh, int boundary)
@@ -613,17 +661,18 @@ PhysicalCertificate integrate_physical_certificate(
     PhysicalCertificate result;
     result.records.reserve(mesh.GetNumFaces());
     result.faces.reserve(mesh.GetNumFaces());
+    std::vector<AffineRt0Element> elements;
+    elements.reserve(mesh.GetNE());
+    for (int element = 0; element < mesh.GetNE(); ++element) elements.emplace_back(field, element);
 
     for (int face = 0; face < mesh.GetNumFaces(); ++face) {
         const auto key = mesh_face_key(mesh, ids, face);
-        const auto area = canonical_face_area(mesh, ids, face);
-        const auto centroid = face_centroid(mesh, face);
+        const auto face_points = canonical_face_points(mesh, ids, face);
         int element1 = -1;
         int element2 = -1;
         mesh.GetFaceElements(face, &element1, &element2);
         require(element1 >= 0, "mesh face has no adjacent element");
-        const auto value1 = evaluate_field_at(field, element1, centroid);
-        const double canonical_flux1 = value1 * area;
+        const double canonical_flux1 = elements.at(element1).face_moment(face_points);
         validate_finite(canonical_flux1, "canonical face flux");
         CanonicalFaceFluxRecord record;
         record.face_vertex_ids = key;
@@ -639,8 +688,7 @@ PhysicalCertificate integrate_physical_certificate(
         element_balance.at(element1) += outward1;
         element_scale.at(element1) += std::abs(outward1);
         if (element2 >= 0) {
-            const auto value2 = evaluate_field_at(field, element2, centroid);
-            const double canonical_flux2 = value2 * area;
+            const double canonical_flux2 = elements.at(element2).face_moment(face_points);
             validate_finite(canonical_flux2, "second-side canonical face flux");
             const double outward2 =
                 canonical_outward_sign(mesh, ids, face, element2) * canonical_flux2;
@@ -833,7 +881,8 @@ ConstraintRankCertificate analyze_physical_constraint_rank(
     const std::vector<PairConstraint> &pairs,
     const std::vector<FaceKey> &terminal_faces,
     double physical_absolute_gate_a,
-    double physical_relative_gate)
+    double physical_relative_gate,
+    const std::vector<Rt0TerminalFluxConstraint> &terminal_constraints = {})
 {
     std::set<FaceKey> free_boundary_faces;
     for (const auto &pair : pairs) {
@@ -904,7 +953,7 @@ ConstraintRankCertificate analyze_physical_constraint_rank(
     }
 
     std::vector<ConservativeConstraintRankRow> rows;
-    rows.reserve(static_cast<std::size_t>(mesh.GetNE()) + pairs.size());
+    rows.reserve(static_cast<std::size_t>(mesh.GetNE()) + pairs.size() + terminal_constraints.size());
     for (int element = 0; element < mesh.GetNE(); ++element) {
         ConservativeConstraintRankRow row;
         row.constraint_id = divergence_id(element_key(mesh, ids, element));
@@ -962,6 +1011,27 @@ ConstraintRankCertificate analyze_physical_constraint_rank(
         if (row.canonical_column_ids[1] < row.canonical_column_ids[0]) {
             std::swap(row.canonical_column_ids[0], row.canonical_column_ids[1]);
             std::swap(row.incidence_coefficients[0], row.incidence_coefficients[1]);
+        }
+        rows.push_back(std::move(row));
+    }
+    for (const auto &terminal : terminal_constraints) {
+        ConservativeConstraintRankRow row;
+        row.constraint_id = "terminal-current:" + terminal.id;
+        row.rhs_a = terminal.measured_outward_current_a;
+        std::map<std::uint64_t, std::int64_t> incidence;
+        for (const auto &key : terminal.boundary_face_vertex_ids) {
+            const int face = key_to_face.at(key);
+            int first = -1, second = -1;
+            mesh.GetFaceElements(face, &first, &second);
+            require(first >= 0 && second < 0,
+                "terminal current constraint must reference exterior faces");
+            require(incidence.emplace(column_ids.at(key),
+                canonical_outward_sign(mesh, ids, face, first)).second,
+                "terminal current constraint contains a duplicate face");
+        }
+        for (const auto &[column, sign] : incidence) {
+            row.canonical_column_ids.push_back(column);
+            row.incidence_coefficients.push_back(sign);
         }
         rows.push_back(std::move(row));
     }
@@ -1476,6 +1546,32 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Import(
 
 namespace {
 
+std::unique_ptr<std::vector<double>> copy_charge_potential_vertices(
+    const mfem::GridFunction &potential)
+{
+    auto *space = potential.FESpace();
+    require(space != nullptr && space->GetMesh() != nullptr &&
+            space->GetVDim() == 1,
+        "charge potential requires an owned scalar finite-element space");
+    const int vertices = space->GetMesh()->GetNV();
+    require(space->GetNDofs() == vertices && potential.Size() == vertices,
+        "charge potential snapshot requires a vertex-only H1 P1 space");
+    auto values = std::make_unique<std::vector<double>>(vertices);
+    std::vector<bool> used(vertices, false);
+    mfem::Array<int> dofs;
+    for (int vertex = 0; vertex < vertices; ++vertex) {
+        space->GetVertexDofs(vertex, dofs);
+        require(dofs.Size() == 1 && dofs[0] >= 0 && dofs[0] < vertices &&
+                !used[dofs[0]],
+            "charge potential vertex-to-DOF map is not bijective");
+        used[dofs[0]] = true;
+        const double value = potential[dofs[0]];
+        validate_finite(value, "charge potential vertex value");
+        (*values)[vertex] = value == 0.0 ? 0.0 : value;
+    }
+    return values;
+}
+
 class PotentialCurrentCoefficient final : public mfem::VectorCoefficient {
 public:
     PotentialCurrentCoefficient(
@@ -1604,13 +1700,18 @@ WeightedRt0Result solve_weighted_rt0_projection(
     mfem::Coefficient &conductivity,
     const std::vector<PairConstraint> &pairs,
     const std::vector<FaceKey> &terminal_faces,
-    const ConstraintRankCertificate &rank_certificate)
+    const ConstraintRankCertificate &rank_certificate,
+    const std::vector<Rt0TerminalFluxConstraint> &terminal_constraints = {})
 {
     require(mesh != nullptr, "OE-T0 projection requires an owned mesh");
     require(mesh->GetNE() > 0, "OE-T0 projection requires elements");
     auto collection = std::make_unique<mfem::RT_FECollection>(0, 3);
     auto space = std::make_unique<mfem::FiniteElementSpace>(
         mesh.get(), collection.get());
+    // Generic MFEM RT0 tetrahedral basis functions have face moment 1/2.
+    // Assemble and solve in physical flux coordinates; convert to owned
+    // MFEM coefficients only after the KKT residual and energy checks.
+    const double inverse_rt0_face_moment = 2.0;
     const int global_dof_count = space->GetVSize();
     const bool sparse_kkt = global_dof_count > 4096;
     // This is the deterministic serial reference realization.  Production
@@ -1698,7 +1799,11 @@ WeightedRt0Result solve_weighted_rt0_projection(
         mfem::Geometry::TETRAHEDRON, 4);
     for (int element = 0; element < mesh->GetNE(); ++element) {
         const auto *finite_element = space->GetFE(element);
+        require(dynamic_cast<const mfem::RT_TetrahedronElement *>(finite_element) != nullptr &&
+                finite_element->GetOrder() == 1 && finite_element->GetDof() == 4,
+            "OE-T0 unit-flux coordinates require the generic tetrahedral RT0 basis");
         auto *transformation = mesh->GetElementTransformation(element);
+        const AffineRt0Element basis(*space, element);
         mfem::DenseMatrix vshape;
         vshape.SetSize(finite_element->GetDof(), 3);
         mfem::Vector raw(3);
@@ -1714,12 +1819,18 @@ WeightedRt0Result solve_weighted_rt0_projection(
                 rule.IntPoint(point).weight;
             const double inverse_sigma = 1.0 / sigma;
             raw_energy += inverse_sigma * (raw * raw) * weight;
-            finite_element->CalcVShape(*transformation, vshape);
+            mfem::Vector physical(3);
+            transformation->Transform(rule.IntPoint(point), physical);
+            const AffineRt0Element::Point physical_point{physical[0], physical[1], physical[2]};
+            for (int i = 0; i < vshape.Height(); ++i) {
+                const auto value = basis.basis_value_at(physical_point, i);
+                for (int component = 0; component < 3; ++component) vshape(i, component) = value[component];
+            }
             for (int i = 0; i < vshape.Height(); ++i) {
                 const auto [dof_i, sign_i] = local.at(static_cast<std::size_t>(i));
                 mfem::Vector shape_i(3);
                 for (int component = 0; component < 3; ++component) {
-                    shape_i[component] = vshape(i, component) * sign_i;
+                    shape_i[component] = vshape(i, component) * sign_i * inverse_rt0_face_moment;
                 }
                 weighted_rhs.at(static_cast<std::size_t>(dof_i)) +=
                     inverse_sigma * (shape_i * raw) * weight;
@@ -1727,7 +1838,7 @@ WeightedRt0Result solve_weighted_rt0_projection(
                     const auto [dof_j, sign_j] = local.at(static_cast<std::size_t>(j));
                     mfem::Vector shape_j(3);
                     for (int component = 0; component < 3; ++component) {
-                        shape_j[component] = vshape(j, component) * sign_j;
+                        shape_j[component] = vshape(j, component) * sign_j * inverse_rt0_face_moment;
                     }
                     const double contribution = inverse_sigma *
                         (shape_i * shape_j) * weight;
@@ -1745,7 +1856,7 @@ WeightedRt0Result solve_weighted_rt0_projection(
         sparse_mass->Finalize();
     }
     std::vector<WeightedRt0Constraint> constraints;
-    constraints.reserve(static_cast<std::size_t>(mesh->GetNE()) + pairs.size());
+    constraints.reserve(static_cast<std::size_t>(mesh->GetNE()) + pairs.size() + terminal_constraints.size());
     for (int element = 0; element < mesh->GetNE(); ++element) {
         WeightedRt0Constraint constraint;
         constraint.id = divergence_id(element_key(*mesh, ids, element));
@@ -1776,6 +1887,22 @@ WeightedRt0Result solve_weighted_rt0_projection(
                 static_cast<double>(first_sign)},
             {face_global_dof.at(static_cast<std::size_t>(second->second)),
                 static_cast<double>(second_sign)}};
+        constraints.push_back(std::move(constraint));
+    }
+
+    for (const auto &terminal : terminal_constraints) {
+        WeightedRt0Constraint constraint;
+        constraint.id = "terminal-current:" + terminal.id;
+        constraint.rhs = terminal.measured_outward_current_a;
+        for (const auto &key : terminal.boundary_face_vertex_ids) {
+            const int face = face_by_key.at(key);
+            require(face_incidence.at(static_cast<std::size_t>(face)).size() == 1,
+                "RT0 terminal current constraint must reference exterior faces");
+            const auto [element, sign] = face_incidence.at(static_cast<std::size_t>(face)).front();
+            (void)element;
+            constraint.coefficients.emplace_back(face_global_dof.at(static_cast<std::size_t>(face)),
+                static_cast<double>(sign));
+        }
         constraints.push_back(std::move(constraint));
     }
 
@@ -2047,7 +2174,7 @@ WeightedRt0Result solve_weighted_rt0_projection(
 
     auto field = std::make_unique<mfem::GridFunction>(space.get());
     for (int dof = 0; dof < global_dof_count; ++dof) {
-        (*field)[dof] = solution.at(static_cast<std::size_t>(dof));
+        (*field)[dof] = solution.at(static_cast<std::size_t>(dof)) * inverse_rt0_face_moment;
     }
     WeightedRt0Result result;
     result.mesh = std::move(mesh);
@@ -2470,6 +2597,364 @@ ConservativeCurrentView::Ptr build_mpi_global_current_view(
 
 } // namespace
 
+class TerminalConstrainedRt0Projection::Impl {
+public:
+    WeightedRt0Result projection;
+    StableMeshVertexIdentities stable_ids;
+    ConstraintRankCertificate rank;
+    std::vector<std::string> ids;
+    std::vector<double> measured;
+    std::vector<double> residuals;
+    std::vector<Rt0InterfaceFluxMeasurement> interface_measurements;
+    std::vector<Rt0TerminalFluxConstraint> terminals;
+    std::vector<Rt0InterfaceFacePair> interfaces;
+};
+
+TerminalConstrainedRt0Projection::TerminalConstrainedRt0Projection(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl))
+{}
+TerminalConstrainedRt0Projection::~TerminalConstrainedRt0Projection() = default;
+const mfem::GridFunction &TerminalConstrainedRt0Projection::field() const { return *impl_->projection.field; }
+const StableMeshVertexIdentities &TerminalConstrainedRt0Projection::stable_vertex_identities() const { return impl_->stable_ids; }
+const ConstraintRankCertificate &TerminalConstrainedRt0Projection::constraint_rank_certificate() const { return impl_->rank; }
+const std::vector<std::string> &TerminalConstrainedRt0Projection::terminal_ids() const { return impl_->ids; }
+const std::vector<double> &TerminalConstrainedRt0Projection::measured_outward_currents_a() const { return impl_->measured; }
+const std::vector<double> &TerminalConstrainedRt0Projection::current_residuals_a() const { return impl_->residuals; }
+const std::vector<Rt0InterfaceFluxMeasurement> &TerminalConstrainedRt0Projection::interface_flux_measurements() const { return impl_->interface_measurements; }
+const std::vector<Rt0TerminalFluxConstraint> &TerminalConstrainedRt0Projection::terminal_constraints() const { return impl_->terminals; }
+const std::vector<Rt0InterfaceFacePair> &TerminalConstrainedRt0Projection::interface_pairs() const { return impl_->interfaces; }
+double TerminalConstrainedRt0Projection::scaled_kkt_residual() const { return impl_->projection.scaled_kkt_residual; }
+double TerminalConstrainedRt0Projection::correction_norm_mw() const { return impl_->projection.correction_norm_mw; }
+
+TerminalRt0PhysicalMeasurements measure_terminal_current_projection(
+    const TerminalConstrainedRt0Projection &projection)
+{
+    const auto &mesh = *projection.field().FESpace()->GetMesh();
+    const auto &ids = projection.stable_vertex_identities();
+    std::vector<PairConstraint> pairs;
+    std::vector<FaceKey> terminal_faces;
+    std::set<FaceKey> classified;
+    for (const auto &terminal : projection.terminal_constraints()) {
+        for (const auto &key : terminal.boundary_face_vertex_ids) {
+            terminal_faces.push_back(key);
+            classified.insert(key);
+        }
+    }
+    for (const auto &pair : projection.interface_pairs()) {
+        pairs.push_back({3, pair.id, pair.first_face_vertex_ids, pair.second_face_vertex_ids});
+        classified.insert(pair.first_face_vertex_ids);
+        classified.insert(pair.second_face_vertex_ids);
+    }
+    const auto physical = integrate_physical_certificate(projection.field(), ids, pairs,
+        terminal_faces, "accepted-terminal-physical-measurement", 1.0e-10, 1.0e-18);
+    const auto boundaries = boundary_face_map(mesh, ids);
+    std::map<ElementKey, double> scales;
+    std::map<FaceKey, double> outward;
+    std::map<FaceKey, int> physical_faces;
+    for (int face = 0; face < mesh.GetNumFaces(); ++face) physical_faces.emplace(mesh_face_key(mesh, ids, face), face);
+    TerminalRt0PhysicalMeasurements result;
+    const auto gate = [](long double residual, long double scale, long double relative) {
+        const long double tolerance = 1.0e-18L + relative * scale;
+        require(std::isfinite(residual) && std::isfinite(scale) && scale >= 0.0L &&
+                std::isfinite(tolerance) && std::abs(residual) <= tolerance,
+            "independent terminal RT0 physical measurement failed its local SI gate");
+    };
+    for (const auto &row : physical.elements) {
+        gate(row.residual_a, row.denominator_a, 1.0e-10L);
+        scales.emplace(row.key, row.denominator_a);
+        result.elements.push_back({row.key, row.residual_a, row.denominator_a});
+    }
+    for (std::size_t index = 0; index < physical.faces.size(); ++index) {
+        const auto &row = physical.faces[index];
+        require(row.key == physical.records[index].face_vertex_ids,
+            "independent RT0 face measurement ordering differs from its canonical records");
+        const int face = physical_faces.at(row.key);
+        int first = -1, second = -1;
+        mesh.GetFaceElements(face, &first, &second);
+        const auto weight = rt0_face_canonical_flux_weight(projection.field(), ids, face);
+        mfem::Array<int> dofs;
+        projection.field().FESpace()->GetFaceDofs(face, dofs);
+        const int dof = dofs[0] < 0 ? -1 - dofs[0] : dofs[0];
+        long double local_scale = scales.at(element_key(mesh, ids, first));
+        if (second >= 0) local_scale += scales.at(element_key(mesh, ids, second));
+        gate(static_cast<long double>(physical.records[index].flux_a) -
+                static_cast<long double>(weight) * projection.field()[dof], local_scale, 1.0e-10L);
+        if (row.side_count == 2) {
+            gate(row.canonical_jump_a, std::abs(static_cast<long double>(row.side1_flux_a)) +
+                std::abs(static_cast<long double>(row.side2_flux_a)), 1.0e-10L);
+        } else {
+            outward.emplace(row.key, row.side1_flux_a);
+            if (classified.count(row.key) == 0) {
+                const int element = boundary_adjacent_element(mesh, boundaries.at(row.key));
+                gate(row.side1_flux_a, scales.at(element_key(mesh, ids, element)), 1.0e-10L);
+            }
+        }
+        result.faces.push_back({row.key, row.side_count, physical.records[index].flux_a,
+            row.side1_flux_a, row.side2_flux_a, row.canonical_jump_a, weight});
+    }
+    for (const auto &terminal : projection.terminal_constraints()) {
+        long double measured = 0.0L;
+        for (const auto &key : terminal.boundary_face_vertex_ids) measured += outward.at(key);
+        gate(measured - terminal.measured_outward_current_a,
+            std::abs(static_cast<long double>(terminal.measured_outward_current_a)), 1.0e-8L);
+        const double value = static_cast<double>(measured);
+        validate_finite(value, "independent RT0 terminal current");
+        result.terminal_outward_currents_a.push_back(value == 0.0 ? 0.0 : value);
+    }
+    for (const auto &pair : projection.interface_pairs()) {
+        const double first = outward.at(pair.first_face_vertex_ids);
+        const double second = outward.at(pair.second_face_vertex_ids);
+        const long double mismatch = static_cast<long double>(first) + second;
+        gate(mismatch, std::abs(static_cast<long double>(first)) +
+            std::abs(static_cast<long double>(second)), 1.0e-10L);
+        const double error = static_cast<double>(mismatch);
+        validate_finite(error, "independent RT0 interface mismatch");
+        result.interfaces.push_back({pair.id, first, second, error == 0.0 ? 0.0 : error});
+    }
+    validate_finite(projection.scaled_kkt_residual(), "accepted RT0 scaled KKT residual");
+    validate_finite(projection.correction_norm_mw(), "accepted RT0 correction norm");
+    require(projection.scaled_kkt_residual() >= 0.0 && projection.correction_norm_mw() >= 0.0,
+        "accepted RT0 diagnostic norms must be nonnegative");
+    return result;
+}
+
+void validate_terminal_current_mesh(const mfem::Mesh &mesh)
+{
+#if defined(MFEM_USE_MPI)
+    require(dynamic_cast<const mfem::ParMesh *>(&mesh) == nullptr,
+        "terminal RT0 projection requires a serial mesh");
+#endif
+    validate_affine_tetrahedral_mesh(mesh, true);
+    require(!mesh.Nonconforming(), "terminal RT0 projection requires a conforming mesh");
+}
+
+void validate_terminal_current_identifier(const std::string &value)
+{
+    validate_semantic_string(value, "terminal current semantic identifier");
+}
+
+void validate_terminal_current_interfaces(const mfem::Mesh &mesh,
+    const StableMeshVertexIdentities &ids, const std::vector<FaceKey> &terminal_faces,
+    const std::vector<Rt0InterfaceFacePair> &interfaces)
+{
+    validate_terminal_current_mesh(mesh);
+    validate_stable_ids(mesh, ids);
+    const auto boundaries = boundary_face_map(mesh, ids);
+    std::set<FaceKey> unique_faces;
+    require(terminal_faces.size() <= boundaries.size(),
+        "RT0 terminal face count exceeds the physical boundary");
+    for (const auto &key : terminal_faces) {
+        require(key[0] != 0 && key[0] < key[1] && key[1] < key[2] &&
+                boundaries.count(key) == 1 && unique_faces.insert(key).second,
+            "RT0 terminal face must be canonical, unique and on the physical boundary");
+        int face = -1, orientation = 0, first = -1, second = -1;
+        mesh.GetBdrElementFace(boundaries.at(key), &face, &orientation);
+        require(face >= 0, "RT0 terminal boundary has no physical face");
+        mesh.GetFaceElements(face, &first, &second);
+        require(first >= 0 && second < 0, "RT0 terminal must reference an exterior face");
+    }
+    require(interfaces.size() <= (boundaries.size() - unique_faces.size()) / 2u,
+        "RT0 interface pair count exceeds the unused physical boundary");
+    std::set<std::string> interface_ids;
+    std::map<std::uint64_t, int> vertex_by_id;
+    if (!interfaces.empty()) {
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            vertex_by_id.emplace(ids.local_to_stable[static_cast<std::size_t>(vertex)], vertex);
+        }
+    }
+    for (const auto &interface : interfaces) {
+        validate_semantic_string(interface.id, "RT0 interface ID");
+        require(interface_ids.insert(interface.id).second, "RT0 interface IDs must be unique");
+        std::array<FaceKey, 2> mapped_vertices{};
+        for (int side = 0; side < 2; ++side) {
+            const auto &key = side == 0 ? interface.first_face_vertex_ids : interface.second_face_vertex_ids;
+            require(key[0] != 0 && key[0] < key[1] && key[1] < key[2] &&
+                    boundaries.count(key) == 1 && unique_faces.insert(key).second,
+                "RT0 interface face must be canonical, exterior and not reused by a terminal or pair");
+            int face = -1, orientation = 0, first = -1, second = -1;
+            mesh.GetBdrElementFace(boundaries.at(key), &face, &orientation);
+            require(face >= 0, "RT0 interface boundary has no physical face");
+            mesh.GetFaceElements(face, &first, &second);
+            require(first >= 0 && second < 0, "RT0 interface must reference an exterior face");
+            for (int vertex = 0; vertex < 3; ++vertex) {
+                mapped_vertices[static_cast<std::size_t>(side)][static_cast<std::size_t>(vertex)] =
+                    interface.vertex_pairs[static_cast<std::size_t>(vertex)][static_cast<std::size_t>(side)];
+            }
+            std::sort(mapped_vertices[static_cast<std::size_t>(side)].begin(), mapped_vertices[static_cast<std::size_t>(side)].end());
+            require(mapped_vertices[static_cast<std::size_t>(side)] == key,
+                "RT0 interface vertex map is not a bijection of its face keys");
+        }
+        for (const auto &map : interface.vertex_pairs) {
+            const double *first = mesh.GetVertex(vertex_by_id.at(map[0]));
+            const double *second = mesh.GetVertex(vertex_by_id.at(map[1]));
+            for (int component = 0; component < 3; ++component) {
+                require(first[component] == second[component],
+                    "RT0 interface vertex map is not exactly geometrically coincident");
+            }
+        }
+        std::array<mfem::Vector, 2> outward{mfem::Vector(3), mfem::Vector(3)};
+        for (int side = 0; side < 2; ++side) {
+            const auto &key = side == 0 ? interface.first_face_vertex_ids : interface.second_face_vertex_ids;
+            int face = -1, orientation = 0;
+            mesh.GetBdrElementFace(boundaries.at(key), &face, &orientation);
+            outward[static_cast<std::size_t>(side)] = canonical_face_area(mesh, ids, face);
+            outward[static_cast<std::size_t>(side)] *= canonical_outward_sign(mesh, ids, face,
+                boundary_adjacent_element(mesh, boundaries.at(key)));
+            outward[static_cast<std::size_t>(side)] /= outward[static_cast<std::size_t>(side)].Norml2();
+        }
+        const double dot = outward[0] * outward[1];
+        require(std::isfinite(dot) && std::abs(dot + 1.0) <= 1.0e-12,
+            "RT0 interface outward normals are not opposite");
+    }
+}
+
+TerminalConstrainedRt0Projection::Ptr project_terminal_constrained_rt0(
+    mfem::Mesh &mesh, const StableMeshVertexIdentities &ids,
+    mfem::VectorCoefficient &raw_current, mfem::Coefficient &conductivity,
+    const std::vector<Rt0TerminalFluxConstraint> &terminals,
+    const std::vector<Rt0InterfaceFacePair> &interfaces)
+{
+    validate_terminal_current_mesh(mesh);
+    return project_terminal_constrained_rt0_owned(std::make_unique<mfem::Mesh>(mesh),
+        ids, raw_current, conductivity, terminals, interfaces);
+}
+
+TerminalConstrainedRt0Projection::Ptr project_terminal_constrained_rt0_owned(
+    std::unique_ptr<mfem::Mesh> owned_mesh, const StableMeshVertexIdentities &ids,
+    mfem::VectorCoefficient &raw_current, mfem::Coefficient &conductivity,
+    const std::vector<Rt0TerminalFluxConstraint> &terminals,
+    const std::vector<Rt0InterfaceFacePair> &interfaces)
+{
+    require(owned_mesh != nullptr, "owned terminal RT0 projection requires a mesh");
+    auto &mesh = *owned_mesh;
+    validate_terminal_current_mesh(mesh);
+    validate_stable_ids(mesh, ids);
+    require(raw_current.GetVDim() == 3 && !terminals.empty(),
+        "terminal RT0 projection requires a 3D current and terminals");
+    const auto boundaries = boundary_face_map(mesh, ids);
+    std::set<std::string> terminal_ids;
+    std::set<FaceKey> unique_faces;
+    std::vector<FaceKey> terminal_faces;
+    for (const auto &terminal : terminals) {
+        validate_semantic_string(terminal.id, "RT0 terminal ID");
+        require(terminal_ids.insert(terminal.id).second && !terminal.boundary_face_vertex_ids.empty() &&
+                std::isfinite(terminal.measured_outward_current_a),
+            "RT0 terminal identity, face list or measured H1 current is invalid");
+        require(terminal.boundary_face_vertex_ids.size() <= boundaries.size() - unique_faces.size(),
+            "RT0 terminal face count exceeds the physical boundary");
+        for (const auto &key : terminal.boundary_face_vertex_ids) {
+            require(key[0] != 0 && key[0] < key[1] && key[1] < key[2] &&
+                    boundaries.count(key) == 1 && unique_faces.insert(key).second,
+                "RT0 terminal face must be canonical, unique and on the physical boundary");
+            int face = -1, orientation = 0, first = -1, second = -1;
+            mesh.GetBdrElementFace(boundaries.at(key), &face, &orientation);
+            require(face >= 0, "RT0 terminal boundary has no physical face");
+            mesh.GetFaceElements(face, &first, &second);
+            require(first >= 0 && second < 0, "RT0 terminal must reference an exterior face");
+            terminal_faces.push_back(key);
+        }
+    }
+    validate_terminal_current_interfaces(mesh, ids, terminal_faces, interfaces);
+    std::vector<PairConstraint> pairs;
+    pairs.reserve(interfaces.size());
+    for (const auto &interface : interfaces) {
+        unique_faces.insert(interface.first_face_vertex_ids);
+        unique_faces.insert(interface.second_face_vertex_ids);
+        pairs.push_back({3, interface.id, interface.first_face_vertex_ids, interface.second_face_vertex_ids});
+    }
+    auto rank = analyze_physical_constraint_rank(mesh, ids, pairs, terminal_faces,
+        1.0e-18, 1.0e-10, terminals);
+    class CheckedRawCurrent final : public mfem::VectorCoefficient {
+    public:
+        explicit CheckedRawCurrent(mfem::VectorCoefficient &source)
+            : mfem::VectorCoefficient(3), source_(source) {}
+        void Eval(mfem::Vector &value, mfem::ElementTransformation &transformation,
+            const mfem::IntegrationPoint &point) override
+        {
+            source_.Eval(value, transformation, point);
+            require(value.Size() == 3, "raw RT0 current changed its vector dimension");
+            for (int component = 0; component < 3; ++component) {
+                validate_finite(value[component], "raw RT0 current component");
+            }
+        }
+    private:
+        mfem::VectorCoefficient &source_;
+    } checked_current(raw_current);
+    auto weighted = solve_weighted_rt0_projection(std::move(owned_mesh), ids,
+        checked_current, conductivity, pairs, terminal_faces, rank, terminals);
+    const auto physical = integrate_physical_certificate(*weighted.field, ids, pairs,
+        terminal_faces, "terminal-constrained-rt0-projection", 1.0e-10, 1.0e-18);
+    std::map<ElementKey, double> local_scales;
+    for (const auto &row : physical.elements) {
+        const double tolerance = 1.0e-18 + 1.0e-10 * row.denominator_a;
+        require(std::isfinite(row.residual_a) && std::isfinite(row.denominator_a) &&
+                row.denominator_a >= 0.0 && std::isfinite(tolerance) && std::abs(row.residual_a) <= tolerance,
+            "terminal RT0 projection failed its local element divergence gate");
+        local_scales.emplace(row.key, row.denominator_a);
+    }
+    std::map<FaceKey, double> outward_by_face;
+    for (const auto &row : physical.faces) {
+        if (row.side_count == 2) {
+            const double scale = std::abs(row.side1_flux_a) + std::abs(row.side2_flux_a);
+            const double tolerance = 1.0e-18 + 1.0e-10 * scale;
+            if (!(std::isfinite(row.canonical_jump_a) && std::isfinite(scale) &&
+                    std::isfinite(tolerance) && std::abs(row.canonical_jump_a) <= tolerance)) {
+                std::ostringstream message;
+                message << std::setprecision(17)
+                    << "terminal RT0 projection failed its local interior continuity gate"
+                    << "; face_ids=[" << row.key[0] << ',' << row.key[1] << ',' << row.key[2] << ']'
+                    << "; lex_first_outward_a=" << row.side1_flux_a
+                    << "; lex_second_outward_a=" << row.side2_flux_a
+                    << "; canonical_jump_a=" << row.canonical_jump_a
+                    << "; canonical_jump_order=MFEM_Elem1_minus_Elem2"
+                    << "; scale_a=" << scale << "; tolerance_a=" << tolerance;
+                reject(message.str());
+            }
+        } else {
+            validate_finite(row.side1_flux_a, "terminal RT0 outward face flux");
+            outward_by_face.emplace(row.key, row.side1_flux_a);
+            if (unique_faces.count(row.key) == 0) {
+                const int element = boundary_adjacent_element(*weighted.mesh, boundaries.at(row.key));
+                const double tolerance = 1.0e-18 + 1.0e-10 *
+                    local_scales.at(element_key(*weighted.mesh, ids, element));
+                require(std::isfinite(tolerance) && std::abs(row.side1_flux_a) <= tolerance,
+                    "terminal RT0 projection failed its local insulating face gate");
+            }
+        }
+    }
+    auto impl = std::make_unique<TerminalConstrainedRt0Projection::Impl>();
+    for (const auto &interface : interfaces) {
+        const double first = outward_by_face.at(interface.first_face_vertex_ids);
+        const double second = outward_by_face.at(interface.second_face_vertex_ids);
+        const long double mismatch = static_cast<long double>(first) + second;
+        const long double scale = std::abs(static_cast<long double>(first)) + std::abs(static_cast<long double>(second));
+        const long double tolerance = 1.0e-18L + 1.0e-10L * scale;
+        const double error = static_cast<double>(mismatch);
+        require(std::isfinite(mismatch) && std::isfinite(scale) && std::isfinite(tolerance) &&
+                std::isfinite(error) && std::abs(mismatch) <= tolerance,
+            "terminal RT0 projection failed its independently measured interface continuity gate");
+        impl->interface_measurements.push_back({interface.id, first, second, error == 0.0 ? 0.0 : error});
+    }
+    for (const auto &terminal : terminals) {
+        long double measured = 0.0L;
+        for (const auto &key : terminal.boundary_face_vertex_ids) measured += outward_by_face.at(key);
+        const long double residual = measured - terminal.measured_outward_current_a;
+        const double value = static_cast<double>(measured), error = static_cast<double>(residual);
+        require(std::isfinite(measured) && std::isfinite(residual) && std::isfinite(value) && std::isfinite(error) &&
+                std::abs(residual) <= 1.0e-18L + 1.0e-8L * std::abs(static_cast<long double>(terminal.measured_outward_current_a)),
+            "terminal RT0 projection failed its signed per-terminal current certificate");
+        impl->ids.push_back(terminal.id);
+        impl->measured.push_back(value == 0.0 ? 0.0 : value);
+        impl->residuals.push_back(error == 0.0 ? 0.0 : error);
+    }
+    impl->projection = std::move(weighted);
+    impl->stable_ids = ids;
+    impl->rank = std::move(rank);
+    impl->terminals = terminals;
+    impl->interfaces = interfaces;
+    return TerminalConstrainedRt0Projection::Ptr(new TerminalConstrainedRt0Projection(std::move(impl)));
+}
+
 ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
     const ConservativeCurrentBuildRequest &request)
 {
@@ -2493,6 +2978,7 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
         request.stable_vertex_identities, request.boundary_faces);
 
     FinalizedViewData data;
+    std::unique_ptr<std::vector<double>> charge_potential;
     if (const auto *closed =
             std::get_if<ClosedGeometryCurrentClosure>(&request.closure)) {
         require(!request.external_lead_coupled_solve,
@@ -2502,6 +2988,11 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
         const auto topology = validate_closed_geometry_closure(*request.mesh,
             request.stable_vertex_identities, device_boundaries, *closed);
         const auto &snapshot = *request.periodic_charge_potential;
+        require(snapshot.stable_vertex_identities().version ==
+                request.stable_vertex_identities.version &&
+                snapshot.stable_vertex_identities().local_to_stable ==
+                    request.stable_vertex_identities.local_to_stable,
+            "periodic charge-potential stable vertex identities differ");
         require(snapshot.operator_version() == "fem_charge_h1_periodic_jump.v1" &&
                 snapshot.converged() &&
                 snapshot.algebraic_relative_residual() <=
@@ -2530,6 +3021,7 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
                 kCertificateToleranceA,
             "periodic potential failed its paired weak-flux certificate");
 
+        charge_potential = copy_charge_potential_vertices(snapshot.potential_field());
         auto mesh = std::make_unique<mfem::Mesh>(*request.mesh);
         PotentialCurrentCoefficient current(
             snapshot.potential_field(), *request.conductivity);
@@ -2578,6 +3070,7 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
             request.mesh->GetNV(), request.mesh->GetNE(),
             request.stable_vertex_identities, external, conductivity,
             request.algebraic_relative_tolerance);
+        charge_potential = copy_charge_potential_vertices(*potential);
         PotentialCurrentCoefficient current(*potential, conductivity);
         const auto rank = analyze_physical_constraint_rank(
             *mesh, ids, topology.pairs, topology.terminal_faces,
@@ -2601,6 +3094,7 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
     impl->space = std::move(data.space);
     impl->field = std::move(data.field);
     impl->stable_ids = std::move(data.stable_ids);
+    impl->charge_potential_vertex_values_v = std::move(charge_potential);
     impl->identity = std::move(data.identity);
     impl->balance = data.balance;
     impl->rank_certificate = std::move(data.rank_certificate);
@@ -2618,6 +3112,18 @@ const mfem::FiniteElementSpace &ConservativeCurrentView::space() const
 const mfem::GridFunction &ConservativeCurrentView::field() const
 {
     return *impl_->field;
+}
+
+const StableMeshVertexIdentities &
+ConservativeCurrentView::stable_vertex_identities() const
+{
+    return impl_->stable_ids;
+}
+
+const std::vector<double> *
+ConservativeCurrentView::charge_potential_vertex_values_v() const
+{
+    return impl_->charge_potential_vertex_values_v.get();
 }
 
 const ConservativeCurrentIdentity &ConservativeCurrentView::identity() const

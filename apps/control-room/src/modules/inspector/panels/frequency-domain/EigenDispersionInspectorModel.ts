@@ -1,6 +1,14 @@
 "use client";
 
 import {
+  REFERENCE_COMPARISON_LABELS,
+  referenceComparisonStatus,
+  referenceModelBoundaryAssumption,
+  runBoundaryAssumptionFromMagnetostaticBc,
+} from "@/shared/domain/analysis/referenceComparisonStatus";
+import { useAnalyticReferenceModelsResource } from "@/kernel/resources/analyticReferenceResources";
+import type { AnalyticReferenceModelResource } from "@/kernel/api/apiTypes";
+import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
 } from "@/kernel/api/apiPaths";
 import {
@@ -13,6 +21,7 @@ import {
   buildEigenBranchesModel,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
+  eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -34,7 +43,7 @@ export function buildEigenDispersionPointViewModel(
 ): EigenDispersionPointViewModel {
   return {
     branchId: point.branchId ?? "unassigned",
-    fieldAvailable: Boolean(point.modeFieldId ?? point.modeFieldResourceKey),
+    fieldAvailable: eigenModeFieldAvailable(point),
     frequencyHz: point.frequencyHz,
     kLabel: point.sampleLabel ?? null,
     linewidthHz: point.linewidthHz,
@@ -49,6 +58,7 @@ export function useEigenDispersionInspectorSummary() {
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const branches = useFrequencyDomainEigenBranchesResource();
   const dispersion = useFrequencyDomainEigenDispersionResource();
+  const referenceModels = useAnalyticReferenceModelsResource();
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const branchesModel = buildEigenBranchesModel(branches.data);
   const dispersionModel = buildEigenDispersionChartModel(
@@ -70,8 +80,17 @@ export function useEigenDispersionInspectorSummary() {
     dispersion.data?.path_metadata,
   );
 
+  const comparison = dispersionReferenceComparison(
+    manifestPayload,
+    dispersionModel.points,
+    record(record(branches.data?.payload)?.diagnostics),
+    referenceModels.data?.models ?? [],
+  );
+
   return {
     analyticReference: dispersionAnalyticReferenceSummary(dispersionModel.points),
+    referenceComparison: `${REFERENCE_COMPARISON_LABELS[comparison.status]} — ${comparison.reasons.join(" ")}`,
+    referenceComparisonStatus: comparison.status,
     badge:
       dispersion.status === "ready"
         ? `${dispersionModel.points.length} point(s)`
@@ -86,7 +105,7 @@ export function useEigenDispersionInspectorSummary() {
     floquetGate: `modal ${capabilityStatus(boundaryCapabilities?.floquet_modal)}; response ${capabilityStatus(boundaryCapabilities?.floquet_response)}`,
     frequencyRange: formatFrequencyRange(frequencies),
     kPathSpan: `${formatNumberRange(pathValues)} rad/m`,
-    modalOverlays: `${spectrumModel.points.filter((point) => point.modeFieldId).length} mode field(s) available from modal spectrum`,
+    modalOverlays: `${spectrumModel.points.filter(eigenModeFieldAvailable).length} mode field(s) available from modal spectrum`,
     pathLabels: pathMetadata.labels,
     pathMetadataArtifact: pathMetadata.artifact,
     pathSampling: pathMetadata.sampling,
@@ -98,6 +117,80 @@ export function useEigenDispersionInspectorSummary() {
     trackedPointCount,
     validationIntent: dispersionValidationIntentSummary(manifestPayload),
   };
+}
+
+/** Comparison status from metadata only; curve agreement never yields "matching". */
+export function dispersionReferenceComparison(
+  manifestPayload: Record<string, unknown> | null,
+  points: readonly EigenDispersionPoint[],
+  branchDiagnostics: Record<string, unknown> | null,
+  referenceModels: readonly AnalyticReferenceModelResource[],
+) {
+  const validation = record(record(manifestPayload?.validation)?.dispersion_validation);
+  const requested = record(manifestPayload?.requested_execution);
+  const trackingSource = stringValue(branchDiagnostics?.tracking_score_source);
+  const maxPathWavevectorRadPerM = maxSampleWavevectorMagnitude(points);
+  const validityMaxWavevectorRadPerM = finiteNumber(validation?.max_k_rad_per_m) ?? null;
+  const comparison = referenceComparisonStatus({
+    branchTrackingConfirmed: trackingSource?.startsWith("modal_overlap_") === true &&
+      trackingSource !== "modal_overlap_unavailable",
+    hasReferencePoints: points.some((point) => point.analyticFrequencyHz != null),
+    maxPathWavevectorRadPerM,
+    referenceBoundaryAssumption: publishedOrKnownBoundaryAssumption(
+      stringValue(validation?.analytic_model) ?? null,
+      referenceModels,
+    ),
+    runBoundaryAssumption:
+      stringValue(requested?.boundary_assumption) ??
+      runBoundaryAssumptionFromMagnetostaticBc(stringValue(requested?.magnetostatic_bc) ?? null),
+    validityMaxWavevectorRadPerM,
+  });
+  if (maxPathWavevectorRadPerM != null || validityMaxWavevectorRadPerM == null) {
+    return comparison;
+  }
+
+  const rangeUnavailableReason =
+    "The declared k validity range cannot be checked because the complete per-sample wavevectors are missing or invalid; the cumulative path coordinate is not a substitute.";
+  if (comparison.status === "matching") {
+    return {
+      reasons: [rangeUnavailableReason],
+      status: "assumptions_not_recorded" as const,
+    };
+  }
+  return {
+    ...comparison,
+    reasons: [...comparison.reasons, rangeUnavailableReason],
+  };
+}
+
+function maxSampleWavevectorMagnitude(
+  points: readonly EigenDispersionPoint[],
+): number | null {
+  if (points.length === 0) return null;
+  let maximum = 0;
+  for (const point of points) {
+    const wavevector = point.wavevectorKf;
+    if (
+      !Array.isArray(wavevector) ||
+      wavevector.length !== 3 ||
+      !wavevector.every((component) => Number.isFinite(component))
+    ) {
+      return null;
+    }
+    const magnitude = Math.hypot(wavevector[0], wavevector[1], wavevector[2]);
+    if (!Number.isFinite(magnitude)) return null;
+    maximum = Math.max(maximum, magnitude);
+  }
+  return maximum;
+}
+
+/** The backend-published model is authoritative; the client table covers older servers. */
+function publishedOrKnownBoundaryAssumption(
+  analyticModel: string | null,
+  referenceModels: readonly AnalyticReferenceModelResource[],
+): string | null {
+  const published = referenceModels.find((model) => model.model_id === analyticModel);
+  return published?.boundary_assumption ?? referenceModelBoundaryAssumption(analyticModel);
 }
 
 function dispersionAnalyticReferenceSummary(

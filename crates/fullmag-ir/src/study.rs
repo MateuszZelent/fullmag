@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 #[allow(unused_imports)]
 use crate::{
-    BackendTarget, DiscretizationHintsIR, ExecutionPrecision, FrequencyExcitationIR,
+    BackendTarget, DiscretizationHintsIR, EigenSpectrumScopeIR, ExecutionPrecision, FrequencyExcitationIR,
     FrequencyResponseOutputIR, FrequencySweepIR, IntegratorChoice, KPointIR,
     MagnetostaticBoundaryConditionIR, MechanicsIR, ModeTrackingIR, RelaxationAlgorithmIR,
-    RelaxationControlIR, RequestedFemDemagIR, ResolvedFemDemagIR, SpinWaveBoundaryConditionIR,
-    TimeDependenceIR,
+    RelaxationControlIR, RequestedFemDemagIR, ResolvedFemDemagIR, SampleSelectorIR,
+    SpinWaveBoundaryConditionIR, TimeDependenceIR,
 };
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
@@ -136,6 +136,49 @@ pub enum DriveActivationIR {
     StageIds { stage_ids: Vec<String> },
 }
 
+/// Study family carried with a resolved time-stage plan.
+///
+/// A resolved runner no longer has the complete [`StudyIR`] value available,
+/// so the planner records this small semantic discriminator explicitly.  The
+/// `Unknown` default is fail-closed for plans deserialized from older schemas.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StudyKindIR {
+    #[default]
+    Unknown,
+    AntennaFieldSolve,
+    TimeEvolution,
+    Relaxation,
+    Hysteresis,
+    Eigenmodes,
+    FrequencyResponse,
+}
+
+impl StudyKindIR {
+    pub const fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown)
+    }
+}
+
+impl DriveActivationIR {
+    /// Resolve activation at a concrete execution stage.
+    ///
+    /// `AllTimeEvolution` is intentionally limited to a TimeEvolution study;
+    /// explicit `StageIds` remain valid for any study whose stage is named by
+    /// the author and are subject to the study-specific waveform validation.
+    pub fn is_active_for(
+        &self,
+        study_kind: StudyKindIR,
+        active_stage_id: Option<&str>,
+    ) -> bool {
+        match self {
+            Self::AllTimeEvolution {} => matches!(study_kind, StudyKindIR::TimeEvolution),
+            Self::StageIds { stage_ids } => active_stage_id
+                .is_some_and(|active| stage_ids.iter().any(|stage| stage == active)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FieldDriveMigrationIR {
@@ -240,9 +283,37 @@ pub enum CurrentModuleIR {
         time_envelope: Option<crate::TimeEnvelopeIR>,
         /// Complete executable charge solve. Legacy records without this
         /// payload remain readable but fail closed for `ohmic_poisson`.
-        #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            flatten,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_current_transport_definition"
+        )]
         definition: Option<crate::ChargeTransportDefinitionIR>,
     },
+}
+
+fn deserialize_current_transport_definition<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ChargeTransportDefinitionIR>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let remaining = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+    let has_current_source = ["conservative_current_source", "external_lead_preparation"]
+        .iter()
+        .any(|name| remaining.get(*name).is_some_and(|source| !source.is_null()));
+    let parsed = serde_json::from_value::<crate::ChargeTransportDefinitionIR>(
+        serde_json::Value::Object(remaining),
+    );
+    if has_current_source {
+        // A malformed authored source must not disappear through flatten's
+        // optional legacy-definition behavior.
+        parsed.map(Some).map_err(D::Error::custom)
+    } else {
+        // Preserve readable legacy records without a complete charge payload.
+        Ok(parsed.ok())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1188,6 +1259,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn drive_activation_scopes_default_rf_and_explicit_relax_stage() {
+        let default_rf = DriveActivationIR::AllTimeEvolution {};
+        assert!(default_rf.is_active_for(StudyKindIR::TimeEvolution, Some("run")));
+        assert!(!default_rf.is_active_for(StudyKindIR::Relaxation, Some("relax")));
+
+        let explicit_relax = DriveActivationIR::StageIds {
+            stage_ids: vec!["relax".into()],
+        };
+        assert!(explicit_relax.is_active_for(StudyKindIR::Relaxation, Some("relax")));
+        assert!(!explicit_relax.is_active_for(StudyKindIR::Relaxation, Some("other")));
+        assert!(!explicit_relax.is_active_for(StudyKindIR::Relaxation, None));
+    }
+
+    #[test]
     fn sampling_ir_deserializes_table_autosave_contract() {
         let sampling: SamplingIR = serde_json::from_value(serde_json::json!({
             "outputs": [],
@@ -1406,6 +1491,60 @@ impl KSamplingIR {
                 .saturating_add(usize::from(!samples_per_segment.is_empty())),
         }
     }
+
+    pub fn validation_errors(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        match self {
+            KSamplingIR::Single { k_vector } => {
+                if !k_vector.iter().all(|value| value.is_finite()) {
+                    errors.push(format!("{prefix}.k_vector must contain finite values"));
+                }
+            }
+            KSamplingIR::Path {
+                points,
+                samples_per_segment,
+                closed,
+            } => {
+                let path_prefix = format!("{prefix}.path");
+                if points.len() < 2 {
+                    errors.push(format!(
+                        "{path_prefix} requires at least two control points"
+                    ));
+                }
+                for point in points {
+                    if point
+                        .label
+                        .as_deref()
+                        .is_some_and(|label| label.trim().is_empty())
+                    {
+                        errors.push(format!("{path_prefix} point label must not be empty"));
+                    }
+                    if !point.k_vector.iter().all(|value| value.is_finite()) {
+                        errors.push(format!(
+                            "{path_prefix} point k_vector must contain finite values"
+                        ));
+                    }
+                }
+                let expected_segments = if *closed {
+                    points.len()
+                } else {
+                    points.len().saturating_sub(1)
+                };
+                if samples_per_segment.len() != expected_segments {
+                    errors.push(format!(
+                        "{path_prefix} expected {expected_segments} samples_per_segment entries, got {}",
+                        samples_per_segment.len()
+                    ));
+                }
+                if samples_per_segment.iter().any(|value| *value == 0) {
+                    errors.push(format!(
+                        "{path_prefix} samples_per_segment entries must be > 0"
+                    ));
+                }
+            }
+        }
+        errors
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1466,9 +1605,22 @@ pub enum EigenDampingPolicyIR {
     Include,
 }
 
+/// Physical solve selection, independent of the authored pipeline node identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaFieldSolveSelectionIR {
+    pub stage_id: String,
+    pub port_mode_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StudyIR {
+    AntennaFieldSolve {
+        sampling: SamplingIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selection: Option<AntennaFieldSolveSelectionIR>,
+    },
     TimeEvolution {
         dynamics: DynamicsIR,
         sampling: SamplingIR,
@@ -1576,6 +1728,33 @@ fn get_default_dynamics() -> &'static DynamicsIR {
 }
 
 impl StudyIR {
+    pub(crate) fn validate_antenna_selection(&self, stages: &[crate::AntennaFieldSolveStageIR]) -> Result<(), String> {
+        let Self::AntennaFieldSolve { selection: Some(selection), .. } = self else { return Ok(()) };
+        let mut matching = stages.iter().filter(|stage| stage.id == selection.stage_id);
+        let stage = matching.next();
+        if selection.stage_id.trim().is_empty()
+            || selection.port_mode_id.trim().is_empty()
+            || matching.next().is_some()
+            || !stage.is_some_and(|stage| stage.port_mode_ids.contains(&selection.port_mode_id))
+        {
+            return Err("antenna_field_solve.selection must reference exactly one declared solve and an included non-empty port mode".into());
+        }
+        Ok(())
+    }
+
+    /// Return the stable semantic study family used by resolved execution
+    /// plans and activation checks.
+    pub const fn kind(&self) -> StudyKindIR {
+        match self {
+            Self::AntennaFieldSolve { .. } => StudyKindIR::AntennaFieldSolve,
+            Self::TimeEvolution { .. } => StudyKindIR::TimeEvolution,
+            Self::Relaxation { .. } => StudyKindIR::Relaxation,
+            Self::Eigenmodes { .. } => StudyKindIR::Eigenmodes,
+            Self::FrequencyResponse { .. } => StudyKindIR::FrequencyResponse,
+            Self::Hysteresis { .. } => StudyKindIR::Hysteresis,
+        }
+    }
+
     pub fn dynamics(&self) -> &DynamicsIR {
         self.optional_dynamics()
             .expect("this study does not define LLG dynamics")
@@ -1583,6 +1762,7 @@ impl StudyIR {
 
     pub fn optional_dynamics(&self) -> Option<&DynamicsIR> {
         match self {
+            StudyIR::AntennaFieldSolve { .. } => None,
             StudyIR::TimeEvolution { dynamics, .. }
             | StudyIR::Eigenmodes { dynamics, .. }
             | StudyIR::FrequencyResponse { dynamics, .. } => Some(dynamics),
@@ -1593,7 +1773,8 @@ impl StudyIR {
 
     pub fn sampling(&self) -> &SamplingIR {
         match self {
-            StudyIR::TimeEvolution { sampling, .. }
+            StudyIR::AntennaFieldSolve { sampling, .. }
+            | StudyIR::TimeEvolution { sampling, .. }
             | StudyIR::Relaxation { sampling, .. }
             | StudyIR::Eigenmodes { sampling, .. }
             | StudyIR::FrequencyResponse { sampling, .. }
@@ -1603,7 +1784,8 @@ impl StudyIR {
 
     pub fn sampling_mut(&mut self) -> &mut SamplingIR {
         match self {
-            StudyIR::TimeEvolution { sampling, .. }
+            StudyIR::AntennaFieldSolve { sampling, .. }
+            | StudyIR::TimeEvolution { sampling, .. }
             | StudyIR::Relaxation { sampling, .. }
             | StudyIR::Eigenmodes { sampling, .. }
             | StudyIR::FrequencyResponse { sampling, .. }
@@ -1613,7 +1795,8 @@ impl StudyIR {
 
     pub fn relaxation(&self) -> Option<RelaxationControlIR> {
         match self {
-            StudyIR::TimeEvolution { .. }
+            StudyIR::AntennaFieldSolve { .. }
+            | StudyIR::TimeEvolution { .. }
             | StudyIR::Eigenmodes { .. }
             | StudyIR::FrequencyResponse { .. }
             | StudyIR::Hysteresis { .. } => None,
@@ -1665,27 +1848,38 @@ pub enum OutputIR {
     },
     EigenSpectrum {
         quantity: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<EigenSpectrumScopeIR>,
     },
     EigenMode {
         field: String,
+        #[serde(default, skip_serializing_if = "mode_selection_is_false")]
+        all_modes: bool,
+        #[serde(default)]
         indices: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        branches: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sample_selector: Option<SampleSelectorIR>,
     },
     DispersionCurve {
         name: String,
+        #[serde(default = "default_include_branch_table")]
+        include_branch_table: bool,
     },
     FrequencyResponseOutput {
         observable: FrequencyResponseOutputIR,
     },
     EigenDiagnostics {
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_tracking: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_residuals: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_overlaps: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_tangent_leakage: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_orthogonality: bool,
     },
     /// Generic quantity save — canonical QuantityId-driven output.
@@ -1701,6 +1895,28 @@ pub enum OutputIR {
         #[serde(skip_serializing_if = "Option::is_none")]
         component: Option<String>,
     },
+}
+
+impl OutputIR {
+    /// Returns the effective spectrum scope, defaulting legacy outputs to per-sample.
+    pub fn effective_eigen_spectrum_scope(&self) -> Option<EigenSpectrumScopeIR> {
+        match self {
+            Self::EigenSpectrum { scope, .. } => Some(scope.unwrap_or_default()),
+            _ => None,
+        }
+    }
+}
+
+fn default_include_branch_table() -> bool {
+    true
+}
+
+fn default_include_eigen_diagnostic_flag() -> bool {
+    true
+}
+
+fn mode_selection_is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl OutputIR {
@@ -2042,11 +2258,11 @@ fn default_table_id() -> String {
     "default".to_string()
 }
 
-fn default_measurement_axis() -> MeasurementAxisIR {
+pub(crate) fn default_measurement_axis() -> MeasurementAxisIR {
     MeasurementAxisIR::field_axis()
 }
 
-fn default_initial_protocol() -> String {
+pub(crate) fn default_initial_protocol() -> String {
     "positive_saturation".to_string()
 }
 
@@ -2054,7 +2270,7 @@ fn default_saturation_on_failure() -> String {
     "continue_with_warning".to_string()
 }
 
-fn default_branch_mode() -> String {
+pub(crate) fn default_branch_mode() -> String {
     "major_loop".to_string()
 }
 

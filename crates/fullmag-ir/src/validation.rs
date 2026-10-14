@@ -1,11 +1,12 @@
+use crate::field_drive_validation::{validate_drive_activation, validate_time_dependence};
 use crate::{
     AntennaFieldSourceModelIR, AntennaSpatialProfileIR, CurrentModuleIR, CurrentTransportModelIR,
-    DriveActivationIR, DynamicsIR, EmptyPolicyIR, EnergyTermIR, FieldEnvelopeIR,
-    FieldSpatialProfileIR, FieldTargetIR, MechanicalLoadIR, MechanicsIR, MonitorTargetIR,
-    PlanarExtentIR, PlanarOperatorIR, ProblemIR, ProblemIRV04, SpinTorqueModuleIR, StudyIR,
-    SurfaceBoundarySelectorIR, TimeDependenceIR, MAGNETIZATION_MODULE_SCHEMA_VERSION,
-    OBJECT_MATERIAL_ASSIGNMENT_SCHEMA_VERSION, PHYSICS_INTERFACE_SCHEMA_VERSION,
-    PHYSICS_OBJECT_SCHEMA_VERSION, PLANAR_FRAME_NORMALIZATION_VERSION,
+    DynamicsIR, EmptyPolicyIR, EnergyTermIR, FieldEnvelopeIR, FieldSpatialProfileIR, FieldTargetIR,
+    MechanicalLoadIR, MechanicsIR, MonitorTargetIR, PlanarExtentIR, PlanarOperatorIR, ProblemIR,
+    ProblemIRV04, SpinTorqueModuleIR, StudyIR, SurfaceBoundarySelectorIR, TimeDependenceIR,
+    MAGNETIZATION_MODULE_SCHEMA_VERSION, OBJECT_MATERIAL_ASSIGNMENT_SCHEMA_VERSION,
+    PHYSICS_INTERFACE_SCHEMA_VERSION, PHYSICS_OBJECT_SCHEMA_VERSION,
+    PLANAR_FRAME_NORMALIZATION_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -127,7 +128,9 @@ fn validate_v04_magnetization_constraints(problem: &ProblemIRV04, errors: &mut V
     );
 }
 
-fn pipeline_stage_ids(metadata: &BTreeMap<String, serde_json::Value>) -> BTreeSet<String> {
+pub(crate) fn pipeline_stage_ids(
+    metadata: &BTreeMap<String, serde_json::Value>,
+) -> BTreeSet<String> {
     metadata
         .get("study_pipeline")
         .and_then(|value| value.get("nodes"))
@@ -137,6 +140,16 @@ fn pipeline_stage_ids(metadata: &BTreeMap<String, serde_json::Value>) -> BTreeSe
         .filter_map(|node| node.get("id").and_then(serde_json::Value::as_str))
         .map(str::to_string)
         .collect()
+}
+
+pub(crate) fn declared_pipeline_stage_ids(
+    metadata: &BTreeMap<String, serde_json::Value>,
+) -> Option<BTreeSet<String>> {
+    metadata
+        .get("study_pipeline")
+        .and_then(|value| value.get("nodes"))
+        .and_then(serde_json::Value::as_array)
+        .map(|_| pipeline_stage_ids(metadata))
 }
 
 fn validate_magnetization_constraints<ObjectIds, RegionIds>(
@@ -1013,6 +1026,7 @@ fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
 pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     validate_v04_magnetization_constraints(problem, &mut errors);
+    crate::validate_antenna_composition(problem, &mut errors);
     if let Some(mesh_semantics) = &problem.mesh_semantics {
         if let Err(mesh_errors) = mesh_semantics.validate() {
             errors.extend(mesh_errors);
@@ -1024,16 +1038,29 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             crate::PROBLEM_IR_V04_VERSION
         ));
     }
+    for (field, version) in [
+        (
+            "script_api_version",
+            problem.problem_meta.script_api_version.as_str(),
+        ),
+        (
+            "serializer_version",
+            problem.problem_meta.serializer_version.as_str(),
+        ),
+    ] {
+        if version != crate::PROBLEM_IR_V04_VERSION {
+            errors.push(format!(
+                "problem_meta.{field} must be '{}' for ProblemIRV04 (found '{version}')",
+                crate::PROBLEM_IR_V04_VERSION
+            ));
+        }
+    }
+    errors.extend(problem.study.validation_errors());
     let geometry_ids: BTreeSet<&str> = problem
         .geometry
         .entries
         .iter()
         .map(crate::GeometryEntryIR::name)
-        .collect();
-    let material_ids: BTreeSet<&str> = problem
-        .materials
-        .iter()
-        .map(|material| material.name.as_str())
         .collect();
     let mut object_ids = BTreeSet::new();
     let mut object_names = BTreeSet::new();
@@ -1069,6 +1096,42 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
         .iter()
         .map(|object| object.object_id.as_str())
         .collect();
+    let mut material_ids = BTreeSet::new();
+    for (index, material) in problem.materials.iter().enumerate() {
+        if material.name.trim().is_empty() {
+            errors.push(format!("materials[{index}].name must not be empty"));
+        } else if !material_ids.insert(material.name.as_str()) {
+            errors.push(format!(
+                "materials[{index}] duplicate name '{}'",
+                material.name
+            ));
+        }
+    }
+
+    let mut region_ids = BTreeSet::new();
+    for (index, region) in problem.object_regions.iter().enumerate() {
+        if region.region_id.trim().is_empty() {
+            errors.push(format!(
+                "object_regions[{index}].region_id must not be empty"
+            ));
+        } else if !region_ids.insert(region.region_id.as_str()) {
+            errors.push(format!(
+                "object_regions[{index}] duplicate region_id '{}'",
+                region.region_id
+            ));
+        }
+        if region.owner_object.trim().is_empty() {
+            errors.push(format!(
+                "object_regions[{index}].owner_object must not be empty"
+            ));
+        } else if !object_ids.contains(region.owner_object.as_str()) {
+            errors.push(format!(
+                "object_regions[{index}].owner_object '{}' does not reference an existing object_id",
+                region.owner_object
+            ));
+        }
+    }
+
     let object_region_ids: BTreeSet<(&str, &str)> = problem
         .object_regions
         .iter()
@@ -1207,6 +1270,61 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             errors.push(format!(
                 "interfaces[{index}].side_a_to_side_b must be finite and non-zero"
             ));
+        }
+    }
+
+    if errors.is_empty() {
+        if let crate::SpatialRepresentationIR::Waveguide2p5d {
+            frame,
+            cross_section_mesh,
+            region_targets,
+            magnetostatic_bc,
+        } = problem.study.spatial_representation()
+        {
+            match crate::validate_waveguide_frame(*frame) {
+                Err(error) => errors.push(format!("study.spatial_representation.frame: {error}")),
+                Ok(validated_frame) => {
+                    let k_errors = crate::study_v04::validate_waveguide_k_sampling(
+                        &problem.study,
+                        &validated_frame,
+                    );
+                    if !k_errors.is_empty() {
+                        errors.extend(k_errors);
+                    } else {
+                        match crate::waveguide_mesh_bindings::validate_waveguide_registry_bindings_for_validated_problem(
+                            problem,
+                            cross_section_mesh,
+                            region_targets,
+                        ) {
+                            Err(error) => errors.push(format!(
+                                "study.spatial_representation: {error}"
+                            )),
+                            Ok(registry) => {
+                                match crate::waveguide_mesh_dirichlet::validate_finite_air_dirichlet_bindings(
+                                    &registry,
+                                    magnetostatic_bc.boundary_component_ids(),
+                                ) {
+                                    Err(error) => errors.push(format!(
+                                        "study.spatial_representation.magnetostatic_bc: {error}"
+                                    )),
+                                    Ok(dirichlet) => {
+                                        if let Err(error) =
+                                            crate::waveguide_mesh_world::validate_waveguide_world_mapping(
+                                                &dirichlet,
+                                                &validated_frame,
+                                            )
+                                        {
+                                            errors.push(format!(
+                                                "study.spatial_representation.frame: {error}"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1421,64 +1539,6 @@ pub(crate) fn validate_planar_monitors(problem: &ProblemIR, errors: &mut Vec<Str
     }
 }
 
-fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut Vec<String>) {
-    match value {
-        TimeDependenceIR::Constant => {}
-        TimeDependenceIR::Sinusoidal {
-            frequency_hz,
-            phase_rad,
-            offset,
-        } => {
-            if !frequency_hz.is_finite() || *frequency_hz <= 0.0 {
-                errors.push(format!("{label} frequency_hz must be finite and > 0"));
-            }
-            if !phase_rad.is_finite() || !offset.is_finite() {
-                errors.push(format!("{label} phase_rad and offset must be finite"));
-            }
-        }
-        TimeDependenceIR::Pulse { t_on, t_off } => {
-            if !t_on.is_finite() || !t_off.is_finite() || t_off <= t_on {
-                errors.push(format!("{label} pulse requires finite t_off > t_on"));
-            }
-        }
-        TimeDependenceIR::PiecewiseLinear { points } => {
-            if points.len() < 2 {
-                errors.push(format!(
-                    "{label} piecewise_linear requires at least 2 points"
-                ));
-            }
-            for point in points {
-                if !point[0].is_finite() || !point[1].is_finite() {
-                    errors.push(format!("{label} piecewise_linear points must be finite"));
-                }
-            }
-            for window in points.windows(2) {
-                if window[1][0] <= window[0][0] {
-                    errors.push(format!(
-                        "{label} piecewise_linear times must be strictly increasing"
-                    ));
-                }
-            }
-        }
-        TimeDependenceIR::SincPulse {
-            cutoff_hz,
-            t0,
-            amplitude,
-        } => {
-            if !cutoff_hz.is_finite() || *cutoff_hz <= 0.0 {
-                errors.push(format!(
-                    "{label} sinc_pulse cutoff_hz must be finite and > 0"
-                ));
-            }
-            if !t0.is_finite() || *t0 < 0.0 || !amplitude.is_finite() {
-                errors.push(format!(
-                    "{label} sinc_pulse t0 must be finite and >= 0; amplitude must be finite"
-                ));
-            }
-        }
-    }
-}
-
 fn validate_field_sinc(
     label: &str,
     axis: &[f64; 3],
@@ -1600,16 +1660,7 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
         .iter()
         .map(|region| (region.owner_object.as_str(), region.region_id.as_str()))
         .collect();
-    let pipeline_stage_ids: BTreeSet<&str> = problem
-        .problem_meta
-        .runtime_metadata
-        .get("study_pipeline")
-        .and_then(|value| value.get("nodes"))
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|node| node.get("id").and_then(|value| value.as_str()))
-        .collect();
+    let pipeline_stage_ids = declared_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
     let active_stage_id = problem
         .problem_meta
         .runtime_metadata
@@ -1629,8 +1680,28 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
             );
         }
     }
+    if let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("stage_waveform_origin_time_s")
+    {
+        let start = problem
+            .problem_meta
+            .runtime_metadata
+            .get("stage_start_time_s")
+            .and_then(|value| value.as_f64());
+        if value.as_f64().is_none_or(|origin| {
+            !origin.is_finite() || origin < 0.0 || start.is_none_or(|start| origin > start)
+        }) {
+            errors.push("runtime_metadata.stage_waveform_origin_time_s must be finite, non-negative, and no later than stage_start_time_s".to_string());
+        }
+    }
     if let Some(stage_id) = active_stage_id {
-        if stage_id.trim().is_empty() || !pipeline_stage_ids.contains(stage_id) {
+        if stage_id.trim().is_empty()
+            || pipeline_stage_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(stage_id))
+        {
             errors.push(format!(
                 "runtime_metadata.active_stage_id '{stage_id}' does not identify an enabled study pipeline stage"
             ));
@@ -1688,15 +1759,9 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
             &drive.waveform,
             errors,
         );
-        let active_in_current_stage = match (&drive.activation, active_stage_id) {
-            (DriveActivationIR::AllTimeEvolution {}, _) => {
-                matches!(problem.study, StudyIR::TimeEvolution { .. })
-            }
-            (DriveActivationIR::StageIds { stage_ids }, Some(active)) => {
-                stage_ids.iter().any(|stage_id| stage_id == active)
-            }
-            (DriveActivationIR::StageIds { .. }, None) => false,
-        };
+        let active_in_current_stage = drive
+            .activation
+            .is_active_for(problem.study.kind(), active_stage_id);
         if active_in_current_stage
             && matches!(problem.study, StudyIR::Relaxation { .. })
             && !matches!(drive.waveform, TimeDependenceIR::Constant)
@@ -1705,26 +1770,12 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
                 "field_drives[{index}] dynamic waveform is invalid in a minimizer/relaxation stage"
             ));
         }
-        if let DriveActivationIR::StageIds { stage_ids } = &drive.activation {
-            if stage_ids.is_empty() {
-                errors.push(format!(
-                    "field_drives[{index}] activation.stage_ids must not be empty"
-                ));
-            }
-            let mut local_ids = BTreeSet::new();
-            for stage_id in stage_ids {
-                if stage_id.trim().is_empty() || !local_ids.insert(stage_id.as_str()) {
-                    errors.push(format!(
-                        "field_drives[{index}] activation stage ids must be non-empty and unique"
-                    ));
-                }
-                if !pipeline_stage_ids.contains(stage_id.as_str()) {
-                    errors.push(format!(
-                        "field_drives[{index}] activation stage id '{stage_id}' does not exist"
-                    ));
-                }
-            }
-        }
+        validate_drive_activation(
+            &format!("field_drives[{index}]"),
+            &drive.activation,
+            pipeline_stage_ids.as_ref(),
+            errors,
+        );
         if drive
             .migration
             .as_ref()
@@ -2317,8 +2368,25 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                 conductivity_s_per_m,
                 time_envelope,
                 definition,
+                coupling,
                 ..
             } => {
+                if definition
+                    .as_ref()
+                    .is_some_and(|definition| definition.conservative_current_source.is_some())
+                    && (*model != CurrentTransportModelIR::OhmicPoisson
+                        || *coupling != crate::TransportCouplingIR::OneWay
+                        || time_envelope.is_some())
+                {
+                    errors.push(format!("current_modules[{index}].conservative_current_source requires static one-way ohmic_poisson transport"));
+                }
+                if definition.as_ref().is_some_and(|definition| definition.external_lead_preparation.is_some())
+                    && (*model != CurrentTransportModelIR::OhmicPoisson
+                        || *coupling != crate::TransportCouplingIR::OneWay
+                        || time_envelope.is_some())
+                {
+                    errors.push(format!("current_modules[{index}].external_lead_preparation requires static one-way ohmic_poisson transport"));
+                }
                 if let Some(envelope) = time_envelope {
                     validate_time_envelope(
                         format!("current_modules[{index}] current_transport time_envelope")
@@ -2392,6 +2460,98 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
     }
 }
 
+#[cfg(test)]
+#[test]
+fn current_source_definition_keeps_source_specific_boundary_and_gauge_contract() {
+    let mut definition:crate::ChargeTransportDefinitionIR=serde_json::from_value(serde_json::json!({
+        "domain":[{"object_id":"body"}],"materials":[{"region":{"object_id":"body"},"material":{"sigma_Spm":4.}}],
+        "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+        "conservative_current_source":crate::spin_transport::current_source_tests::fixture()
+    })).unwrap();
+    let mut errors = Vec::new();
+    validate_charge_transport_definition(
+        0,
+        &definition,
+        false,
+        crate::BackendTarget::Fem,
+        &mut errors,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    definition.gauge = crate::ChargePotentialGaugeIR::ZeroMean;
+    validate_charge_transport_definition(
+        0,
+        &definition,
+        false,
+        crate::BackendTarget::Fem,
+        &mut errors,
+    );
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("terminal_reference")));
+    definition.gauge = crate::ChargePotentialGaugeIR::TerminalReference;
+    definition
+        .boundaries
+        .push(crate::ChargeBoundaryIR::Insulating {
+            id: "legacy".into(),
+            surfaces: vec![],
+        });
+    errors.clear();
+    validate_charge_transport_definition(
+        0,
+        &definition,
+        false,
+        crate::BackendTarget::Fem,
+        &mut errors,
+    );
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("empty boundaries")));
+    definition.boundaries.clear();
+    errors.clear();
+    validate_charge_transport_definition(
+        0,
+        &definition,
+        true,
+        crate::BackendTarget::Fem,
+        &mut errors,
+    );
+    assert!(errors.iter().any(|error| error.contains("one-way")));
+    errors.clear();
+    validate_charge_transport_definition(
+        0,
+        &definition,
+        false,
+        crate::BackendTarget::Fdm,
+        &mut errors,
+    );
+    assert!(errors.iter().any(|error| error.contains("FEM H1")));
+}
+
+#[test]
+fn lead_preparation_definition_retains_authored_intent_without_legacy_boundary_fallback() {
+    let mut definition: crate::ChargeTransportDefinitionIR = serde_json::from_value(serde_json::json!({
+        "domain":[{"object_id":"device"}],"materials":[{"region":{"object_id":"device"},"material":{"sigma_Spm":4e7}}],
+        "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+        "external_lead_preparation":crate::antenna_lead_preparation::tests::fixture()
+    })).unwrap();
+    let mut errors = Vec::new();
+    validate_charge_transport_definition(0, &definition, false, crate::BackendTarget::Fem, &mut errors);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(definition.conservative_current_source.is_none());
+    definition.external_lead_preparation.as_mut().unwrap().extensions[0].object_id = "unknown".into();
+    validate_charge_transport_definition(0, &definition, false, crate::BackendTarget::Fem, &mut errors);
+    assert!(errors.iter().any(|error| error.contains("charge domain")));
+    definition.external_lead_preparation.as_mut().unwrap().extensions[0].object_id = "device".into();
+    errors.clear();
+    definition.conservative_current_source = Some(crate::spin_transport::current_source_tests::fixture());
+    validate_charge_transport_definition(0, &definition, false, crate::BackendTarget::Fem, &mut errors);
+    assert!(errors.iter().any(|error| error.contains("no source/view/closure")));
+    definition.conservative_current_source = None;
+    errors.clear();
+    validate_charge_transport_definition(0, &definition, false, crate::BackendTarget::Fdm, &mut errors);
+    assert!(errors.iter().any(|error| error.contains("external_lead_preparation requires the FEM H1")));
+}
+
 fn validate_charge_transport_definition(
     index: usize,
     definition: &crate::ChargeTransportDefinitionIR,
@@ -2400,6 +2560,58 @@ fn validate_charge_transport_definition(
     errors: &mut Vec<String>,
 ) {
     let prefix = format!("current_modules[{index}] current_transport");
+    if let Some(preparation) = &definition.external_lead_preparation {
+        errors.extend(preparation.validation_errors(&format!("{prefix}.external_lead_preparation")));
+        if reciprocal || !definition.boundaries.is_empty()
+            || definition.gauge != crate::ChargePotentialGaugeIR::TerminalReference
+            || definition.conservative_current_source.is_some()
+            || definition.conservative_current_view.is_some()
+            || definition.structured_current_closure.is_some()
+        {
+            errors.push(format!("{prefix}.external_lead_preparation requires one-way transport, empty boundaries, terminal_reference gauge and no source/view/closure"));
+        }
+        if !matches!(requested_backend, crate::BackendTarget::Fem | crate::BackendTarget::Auto)
+            || definition.solver.operator_version != "fem_charge_conforming_h1_p1.transparent.v1"
+            || definition.solver.engine != "cg"
+        {
+            errors.push(format!("{prefix}.external_lead_preparation requires the FEM H1 cg policy"));
+        }
+        for extension in &preparation.extensions {
+            if !definition.domain.iter().any(|region| region.object_id == extension.object_id) {
+                errors.push(format!("{prefix}.external_lead_preparation observation '{}' object_id must belong to the charge domain", extension.observation_id));
+            }
+        }
+    }
+    if let Some(source) = &definition.conservative_current_source {
+        errors.extend(source.validation_errors(&format!("{prefix}.conservative_current_source")));
+        if reciprocal
+            || !definition.boundaries.is_empty()
+            || definition.gauge != crate::ChargePotentialGaugeIR::TerminalReference
+            || definition.conservative_current_view.is_some()
+            || definition.structured_current_closure.is_some()
+        {
+            errors.push(format!("{prefix}.conservative_current_source requires one-way transport, empty boundaries, terminal_reference gauge and no other source/view"));
+        }
+        if !matches!(
+            requested_backend,
+            crate::BackendTarget::Fem | crate::BackendTarget::Auto
+        ) || definition.solver.operator_version != "fem_charge_conforming_h1_p1.transparent.v1"
+            || definition.solver.engine != "cg"
+        {
+            errors.push(format!(
+                "{prefix}.conservative_current_source requires the FEM H1 cg policy"
+            ));
+        }
+        for observation in source.terminal_observations() {
+            if !definition
+                .domain
+                .iter()
+                .any(|region| region.object_id == observation.object_id)
+            {
+                errors.push(format!("{prefix}.conservative_current_source observation '{}' object_id must belong to the charge domain", observation.id));
+            }
+        }
+    }
     if definition.conservative_current_view.is_some()
         && definition.structured_current_closure.is_some()
     {
@@ -2484,6 +2696,8 @@ fn validate_charge_transport_definition(
     let mut boundary_ids = BTreeSet::new();
     let mut assigned_surfaces = BTreeSet::new();
     let mut voltage_count = 0usize;
+    let mut terminal_count = 0usize;
+    let mut current_density_count = 0usize;
     for (boundary_index, boundary) in definition.boundaries.iter().enumerate() {
         if boundary.id().trim().is_empty() || !boundary_ids.insert(boundary.id()) {
             errors.push(format!(
@@ -2517,6 +2731,9 @@ fn validate_charge_transport_definition(
             }
         }
         match boundary {
+            crate::ChargeBoundaryIR::EquipotentialCurrentTerminal { .. } => {
+                terminal_count += 1;
+            }
             crate::ChargeBoundaryIR::VoltageElectrode { potential_v, .. } => {
                 voltage_count += 1;
                 if !potential_v.is_finite() {
@@ -2528,9 +2745,14 @@ fn validate_charge_transport_definition(
             crate::ChargeBoundaryIR::NormalCurrentElectrode {
                 outward_current_density_apm2,
                 ..
-            } if !outward_current_density_apm2.is_finite() => errors.push(format!(
-                "{prefix}.boundaries[{boundary_index}].outward_current_density_Apm2 must be finite"
-            )),
+            } => {
+                current_density_count += 1;
+                if !outward_current_density_apm2.is_finite() {
+                    errors.push(format!(
+                        "{prefix}.boundaries[{boundary_index}].outward_current_density_Apm2 must be finite"
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -2541,6 +2763,22 @@ fn validate_charge_transport_definition(
         crate::ChargePotentialGaugeIR::ZeroMean if voltage_count != 0 => errors.push(format!(
             "{prefix}.gauge=zero_mean conflicts with voltage electrodes"
         )),
+        crate::ChargePotentialGaugeIR::TerminalReference
+            if definition.conservative_current_source.is_none()
+                && definition.external_lead_preparation.is_none()
+                && (terminal_count == 0 || voltage_count != 0 || current_density_count != 0) =>
+        {
+            errors.push(format!(
+                "{prefix}.gauge=terminal_reference requires current terminals and no voltage or current-density electrodes"
+            ));
+        }
+        _ if terminal_count != 0
+            && definition.gauge != crate::ChargePotentialGaugeIR::TerminalReference =>
+        {
+            errors.push(format!(
+                "{prefix} equipotential current terminals require gauge=terminal_reference"
+            ));
+        }
         _ => {}
     }
     let solver = &definition.solver;
@@ -3830,7 +4068,7 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
             let DynamicsIR::Llg { mechanics, .. } = dynamics;
             mechanics.as_ref()
         }),
-        crate::StudyIR::Hysteresis { .. } => None,
+        crate::StudyIR::AntennaFieldSolve { .. } | crate::StudyIR::Hysteresis { .. } => None,
     };
     if mechanics.is_some() && !has_magnetoelastic {
         errors.push("llg.mechanics requires a Magnetoelastic energy term".to_string());

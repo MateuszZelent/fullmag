@@ -8,7 +8,6 @@ from fullmag.meshing._size_field_plan import (
 )
 from fullmag.meshing.asset_pipeline import (
     _shared_domain_size_field_default_hmax,
-    _strip_overridden_geometry_fields,
 )
 from fullmag.meshing._gmsh_types import MeshOptions, AirboxOptions
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
@@ -63,11 +62,10 @@ for i, f in enumerate(recipe_fields):
     print(f"  [{i}] {f}")
 
 if recipe_fields:
-    existing = _strip_overridden_geometry_fields(
-        list(mesh_options.size_fields), per_object_recipes
-    )
     from dataclasses import replace as _dc_replace
-    mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
+    mesh_options = _dc_replace(
+        mesh_options, size_fields=recipe_fields + list(mesh_options.size_fields)
+    )
 
 print(f"\n=== FINAL mesh_options.size_fields ({len(mesh_options.size_fields)} fields) ===")
 for i, f in enumerate(mesh_options.size_fields):

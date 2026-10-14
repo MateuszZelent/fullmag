@@ -9,6 +9,7 @@ import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
 import { ChangeDeviceStageInspector } from "./stages/ChangeDeviceStageInspector";
 import { AddFieldDriveStageInspector } from "./stages/AddFieldDriveStageInspector";
+import { AntennaFieldSolveStageInspector } from "./stages/AntennaFieldSolveStageInspector";
 import { AutosaveStageInspector } from "./stages/AutosaveStageInspector";
 import { EigenmodesStageInspector } from "./stages/EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./stages/FrequencyResponseStageInspector";
@@ -91,7 +92,8 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     { historyMode: "mutation-owned" },
   );
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
-  const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
+  const inspectorKind = draft?.pipelineNodeId && draft.kind === "unsupported"
+    ? "unsupported" : resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
   const frequencyDomainAuthoringView =
     resolveFrequencyDomainAuthoringView(selection.kind);
   const hysteresisView =
@@ -130,7 +132,13 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
       data-scene-status={scene.status}
       data-stage-draft-count={state.stageDrafts.length}
     >
-      {inspectorKind === "unsupported" ? (
+      {inspectorKind === "antenna_field_solve" ? (
+        <AntennaFieldSolveStageInspector
+          {...commonProps}
+          expectedKind="antenna_field_solve"
+          kindLabel="Antenna Field Solve"
+        />
+      ) : inspectorKind === "unsupported" ? (
         <UnsupportedStageInspector
           {...commonProps}
           expectedKind="unsupported"
@@ -140,7 +148,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         <AddFieldDriveStageInspector
           {...commonProps}
           expectedKind="add_field_drive"
-          kindLabel="Add Antenna"
+          kindLabel="Add Field Drive"
         />
       ) : inspectorKind === "table_autosave" ? (
         <TableAutosaveStageInspector
@@ -276,6 +284,7 @@ export function resolveStudyStageInspectorKind(
   selectionKind: InspectorPanelProps["selection"]["kind"],
   selectedStageKind: string | null | undefined,
 ) {
+  if (selectionKind === "study.stage.antenna_field_solve") return "antenna_field_solve";
   if (selectionKind === "study.stage.action" && selectedStageKind) {
     return selectedStageKind;
   }

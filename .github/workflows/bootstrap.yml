@@ -4,9 +4,64 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      contract_scope:
+        description: Select bootstrap, browser, Rust, bias-field artifacts, retention, or native modal contracts.
+        type: choice
+        required: true
+        default: bootstrap
+        options:
+          - bootstrap
+          - rust
+          - bias-field-artifacts
+          - browser
+          - positive-mass
+          - floquet-source-moments
+          - native-modal
+          - native-receipt
+          - floquet-modal-slepc
+          - generic-modal-slepc
+          - floquet-count-slepc
+          - modal-phase-slepc
+          - retention
 
 jobs:
+  native-modal-cabi-contract:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Check FEM CUDA driver library selection
+        run: python -B scripts/ci/test_fem_cuda_driver_selection.py
+
+      - name: Compile and run strict modal mass deduplication contract
+        run: |
+          g++ -std=c++17 -UNDEBUG -Ibackends/fem -Ibackends/fem/include -Inative/include backends/fem/tests/frequency_domain/mode_deduplication_test.cpp backends/fem/cpu/frequency_domain/mode_deduplication.cpp backends/fem/cpu/frequency_domain/mode_filter.cpp backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp -o "$RUNNER_TEMP/fullmag-modal-mass-dedup-test"
+          "$RUNNER_TEMP/fullmag-modal-mass-dedup-test"
+
+      - name: Compile and run dependency-free native modal ABI contract
+        run: python -B scripts/ci/run_modal_cabi_contract.py
+
+      - name: Preserve native contract receipt and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-modal-cabi-contract
+          path: |
+            ${{ runner.temp }}/fullmag-modal-cabi/receipt.json
+            ${{ runner.temp }}/fullmag-modal-cabi/step-*.log
+          if-no-files-found: error
+
   rust-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -20,18 +75,278 @@ jobs:
           cache-dependency-path: packages/fullmag-py/pyproject.toml
 
       - name: Install Rust
+        id: install-rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
       - name: Install Python runtime dependencies
+        id: install-python-runtime
         run: python -m pip install -e packages/fullmag-py
 
+      - name: Resolve storage for API artifact fixtures
+        run: |
+          python -B - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
+               "--profile", "ci-rust-contracts", "--create"],
+              check=True, capture_output=True, text=True,
+          )
+          layout = json.loads(result.stdout)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(
+                  f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
+              )
+          PY
+      - name: Run complete session reachability and archive contracts
+        run: cargo test -p fullmag-session --lib --no-fail-fast
+
+      - name: Run fail-closed compact workspace import regression
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: cargo test -p fullmag-api --bin fullmag-api compact_session_import_missing_declared_artifact_preserves_active_workspace
+
+      - name: Run runner retention preview cancellation contracts
+        env:
+          PYTHONPATH: scripts
+        run: |
+          python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py'
+          python -B -m unittest discover -s scripts -p 'test_local_runner_source_compaction.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_container_api.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_container_main.py'
+          python -B -m unittest discover -s scripts -p 'test_local_runner_cli.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_observability_review_regressions.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_observability.py'
+
+      - name: Run attempt-scoped Relax to Eigen bootstrap contract
+        run: cargo test -p fullmag-runner relax_bootstrap_certificates_are_attempt_scoped_and_worker_plans_bind_their_bytes --lib
+
+      - name: Run deterministic eigen worker input contracts
+        run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
+
+      - name: Run native modal cancellation completion contract
+        run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
+
+      - name: Run typed active eigen Stop and Pause contracts
+        run: |
+          cargo test -p fullmag-engine fem_sparse::tests::lobpcg_control_ --lib
+          cargo test -p fullmag-runner controlled_k_path_retains_only_the_completed_sample_prefix --lib
+          cargo test -p fullmag-runner eigen_path_returns_typed_partial_for_stop_and_pause_before_single_k_execution --lib
+          cargo test -p fullmag-runner writing_artifacts_control_preserves_certified_native_mode_bytes --lib
+          cargo test -p fullmag-runner completed_pool_prefix_precedes_persistent_stop_or_pause --lib
+          cargo test -p fullmag-runner interrupted_sample_diagnostics_do_not_collide_with_accepted_prefix_paths --lib
+          cargo test -p fullmag-runner direct_floquet_runtime_control_preserves_pause_and_stop_reasons --lib
+
+      - name: Run native modal artifact provenance contract
+        run: |
+          cargo test -p fullmag-runner native_modal_artifact_limitations_follow_executed_operator_payload --lib
+          cargo test -p fullmag-runner native_modal_manifest_distinguishes_numeric_solve_from_comparison --lib
+          cargo test -p fullmag-runner actual_path_manifest_distinguishes_numeric_solve_from_comparison --lib
+          cargo test -p fullmag-runner eigen_path_single_k_solver_model_ --lib
+          cargo test -p fullmag-runner relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation --lib
+          cargo test -p fullmag-runner floquet_dynamic_demag_provider_requires_exact_requested_pair_set --lib
+          cargo test -p fullmag-runner spectrum_quantity_ --lib
+
+      - name: Run diagnostic flag contracts through real single-k publishers
+        run: |
+          cargo test -p fullmag-runner eigen::output_selection::tests --lib
+          cargo test -p fullmag-runner eigen::diagnostic_artifact::tests --lib
+          cargo test -p fullmag-runner eigen_diagnostics_ --lib
+
+      - name: Run sample-scoped eigen artifact contracts
+        run: cargo test -p fullmag-runner output_publication_tests --lib
+
+      - name: Run selected-only path potential publication contracts
+        run: |
+          cargo test -p fullmag-runner path_potential_publication_tests --lib
+          cargo test -p fullmag-runner deferred_physical_potential_tests --lib
+
+      - name: Run bias-field sample identity rejection contracts
+        run: cargo test -p fullmag-runner native_field_sweep_identity_tests --lib
+
+      - name: Run bias-field tracked mode publication contracts
+        run: cargo test -p fullmag-runner bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication --lib
+
+      - name: Run eigen artifact and Kittel residual evidence contracts
+        run: cargo test -p fullmag-runner eigen::artifacts::tests --lib
+
+      - name: Run tracking confidence and branch writer contracts
+        run: |
+          cargo test -p fullmag-runner eigen::tracking::tests --lib --no-fail-fast
+          cargo test -p fullmag-runner tracked_pair_overlap_is_published_as_confidence_in_json_and_csv --lib
+          cargo test -p fullmag-runner tracking_only_mode_contributes_to_overlap_summary_without_public_mode_selection --lib
+
+      - name: Run raw single-k checkpoint durability contracts
+        run: cargo test -p fullmag-runner single_k_checkpoint --lib
+
+      - name: Verify the persisted checkpoint with its Python inspector
+        env:
+          FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python3
+        run: cargo test -p fullmag-runner checkpoint_inspector_accepts_actual_persisted_manifest --lib -- --ignored
+
+      - name: Run eigen path terminal sample admission contracts
+        run: |
+          cargo test -p fullmag-runner noncompleted_single_k_status_preserves_raw_bytes_and_stops_admission --lib
+          cargo test -p fullmag-runner completed_single_k_status_admits_and_publishes_every_path_sample --lib
+          cargo test -p fullmag-runner interrupted_status_keeps_available_raw_diagnostics_with_or_without_checkpoint_root --lib
+          cargo test -p fullmag-runner interrupted_checkpoint_write_failure_is_not_returned_as_cancelled --lib
+          cargo test -p fullmag-runner fem::eigen_path::checkpoint_admission_tests::parallel_pool_bundle_ --lib
+      - name: Run adaptive eigen process pool contracts
+        run: |
+          cargo test -p fullmag-runner k_process_pool --no-fail-fast
+          cargo test -p fullmag-runner adaptive_resources --no-fail-fast
+
+      - name: Run canonical IR, waveguide and typed V04 migration contracts
+        run: cargo test -p fullmag-ir --no-fail-fast
+
+      - name: Run eigen branch selector planning contracts
+        run: |
+          cargo test -p fullmag-plan fem_eigen_branch --lib
+          cargo test -p fullmag-plan fem_eigen_raw_mode_indices_remain_valid_without_path_sampling --lib
+          cargo test -p fullmag-plan eigen_output_validation_tests --lib
+          cargo test -p fullmag-plan eigen_spectrum_quantity_validation_tests --lib
+
+      - name: Run response sweep legacy Results catalog contracts
+        run: cargo test -p fullmag-api response_magnetic_sweep_v1_endpoint_returns_artifact_json
+
+      - name: Run Results artifact stage ownership contracts
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api result_catalog_uses_committed_eigen_owner_after_active_stage_advances
+          cargo test -p fullmag-api --bin fullmag-api result_catalog_rejects_generation_run_and_stage_reference_mismatches
+          cargo test -p fullmag-api --bin fullmag-api result_owner_uses_producer_only_for_exact_generation_members
+          cargo test -p fullmag-api --bin fullmag-api result_owner_resolves_exact_file_and_safe_directory_references
+          cargo test -p fullmag-api --bin fullmag-api result_owner_rejects_stage_reference_conflict_and_ambiguity
+
+      - name: Run modal solver policy planning contracts
+        run: |
+          cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
+          cargo test -p fullmag-plan fem_eigen_floquet_payload_tests --lib
+          cargo test -p fullmag-runner floquet_payload_tests --lib
+          cargo test -p fullmag-runner terminal_action_after_completed_pool_does_not_interrupt_but_active_actions_do --lib
+          cargo test -p fullmag-runner fem::eigen_progress::tests --lib
+          cargo test -p fullmag-runner gamma_classification_tests --lib
+          cargo test -p fullmag-runner eigen_diagnostics_reference_single_k_executor_publishes_without_native_provider --lib
+          cargo test -p fullmag-runner relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation --lib
+          cargo test -p fullmag-runner native_gpu_shared_domain_rejects_nonfinite_target_frequency --lib
+          cargo test -p fullmag-plan fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path --lib
+          cargo test -p fullmag-runner shared_domain_modal_scope_rejects_uncertified_local_tangent_terms --lib
+          cargo test -p fullmag-runner material_identity_tests --lib
+          cargo test -p fullmag-runner shared_domain_payload_omits_zero_anisotropy_after_certified_linearization --lib
+
+      - name: Run scene periodic boundary intent contracts
+        run: cargo test -p fullmag-authoring scene_pbc --lib
+
+      - name: Run postprocessing settings preservation contracts
+        run: cargo test -p fullmag-authoring postprocessing_settings_ --lib
+
+      - name: Run scene PBC Rust-Python synchronization regression
+        env:
+          FULLMAG_REPO_ROOT: ${{ github.workspace }}
+          RUST_MIN_STACK: 8388608
+        run: cargo test -p fullmag-api --bin fullmag-api scene_pbc_overrides_roundtrip_via_python_helper
+
+      - name: Run full field identity binary transport contracts
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api field_vector_v5
+          cargo test -p fullmag-api --bin fullmag-api analysis_field_vector_binary
+
+      - name: Run frequency-domain artifact ownership contracts
+        env:
+          # Canonical scene ACK contracts traverse a full SceneDocument, as do
+          # the other router contracts using this existing worker stack size.
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api field_sweep_items_keep_their_owner_identity_and_encode_resource_paths
+          cargo test -p fullmag-api --bin fullmag-api spectrum_v3_items_project_durable_field_identity_without_mutating_payload
+          cargo test -p fullmag-api --bin fullmag-api openapi_mode_field_availability_is_optional_boolean
+          cargo test -p fullmag-api --bin fullmag-api openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract
+          cargo test -p fullmag-api --bin fullmag-api quantities::tests
+          cargo test -p fullmag-api --bin fullmag-api frequency_domain_
+          cargo test -p fullmag-api --bin fullmag-api authoring_study_runtime_parallel_patch
+          cargo test -p fullmag-api --bin fullmag-api authoring_transaction_ack_
+          cargo test -p fullmag-api --bin fullmag-api modal_history_tests
+
+      - name: Run application materialization and eigen selector contracts
+        run: cargo test -p fullmag-application --no-fail-fast
+
+      - name: Run native session writer lease contracts
+        run: cargo test -p fullmag-session --lib writer --no-fail-fast
+
       - name: Run Rust quantity, API and CLI contracts
+        env:
+          # The router contract serializes a full SceneDocument; keep the
+          # test worker stack large enough for its nested serde traversal.
+          RUST_MIN_STACK: 8388608
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
 
+  bias-field-artifact-contracts:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'bias-field-artifacts' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+      - name: Install Python runtime dependencies
+        run: python -m pip install -e packages/fullmag-py 'pytest>=9,<10' 'pyyaml>=6,<7'
+      - name: Validate workflow scope and required-gate contracts
+        run: python -B -m pytest -q scripts/test_frontend3d_required_checks.py scripts/test_bootstrap_workflow_contract.py
+      - name: Run bias-field sample identity rejection contracts
+        run: cargo test -p fullmag-runner native_field_sweep_identity_tests --lib
+
+      - name: Run bias-field tracked mode publication contracts
+        run: cargo test -p fullmag-runner bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication --lib
+      - name: Run eigen branch selector planning contracts
+        run: |
+          cargo test -p fullmag-plan fem_eigen_branch --lib
+          cargo test -p fullmag-plan fem_eigen_raw_mode_indices_remain_valid_without_path_sampling --lib
+
+  checkpoint-windows-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.contract_scope == 'bootstrap' }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: checkpoint-windows
+
+      - name: Verify the Windows checkpoint policy from its real writer
+        run: cargo test -p fullmag-runner persists_platform_directory_sync_policy_from_real_checkpoint_writer --lib
+
+      - name: Verify the Windows writer-to-inspector contract
+        env:
+          FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python
+        run: cargo test -p fullmag-runner checkpoint_inspector_accepts_actual_persisted_manifest --lib -- --ignored
+
   generated-api-determinism:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,7 +372,19 @@ jobs:
           node --test apps/control-room/scripts/normalize-openapi-build-identity.node-test.mjs
           ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
 
+      - name: Preserve generated API contract for source review
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-api-contract-${{ github.run_id }}
+          path: |
+            apps/control-room/src/kernel/api/generated/openapi-v2.json
+            apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+          if-no-files-found: error
+
   api-hygiene-rg13:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -81,9 +408,11 @@ jobs:
           set -euo pipefail
           node_bin="$(command -v node)"
           test "$("$node_bin" --version)" = "v24.18.0"
+          PATH=/usr/bin:/bin "$node_bin" --test apps/control-room/scripts/check-api-hygiene.node-test.mjs
           PATH=/usr/bin:/bin "$node_bin" apps/control-room/scripts/check-api-hygiene.mjs
 
   control-room-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -103,6 +432,12 @@ jobs:
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install architecture gate dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          rg --version
 
       - name: Resource-first migration gates
         run: ./scripts/ci-resource-first-gates.sh --strict
@@ -126,6 +461,7 @@ jobs:
         run: pnpm --dir apps/control-room build
 
   browser-fixture-smoke:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -149,10 +485,35 @@ jobs:
       - name: Install Chromium for browser fixture smoke
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
 
-      - name: Run browser fixture smoke
+      - name: Setup Python for browser proof contract regressions
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install browser proof regression dependencies
+        run: python -m pip install 'pytest>=9,<10' PyYAML==6.0.3
+
+      - name: Verify browser proof gate and report binding contracts
+        run: python -m pytest -q scripts/test_frontend3d_required_checks.py
+
+      - name: Build Runner Console packages before parity and browser checks
+        run: node apps/runner-console/build.mjs
+
+      - name: Run packaged Runner Console queue contracts
+        env:
+          FULLMAG_RUNNER_UI_ROOT: ${{ github.workspace }}
+          FULLMAG_RUNNER_CONSOLE_ASSETS: ${{ github.workspace }}/scripts/local_runner/ui_dist
+          FULLMAG_RUNNER_PLAYWRIGHT: ${{ github.workspace }}/apps/control-room/node_modules/playwright
+          FULLMAG_RUNNER_SMOKE_SCREENSHOT: ${{ runner.temp }}/viewport-3d-browser-audit/runner-console.png
+        run: |
+          node apps/runner-console/test.mjs
+          export FULLMAG_RUNNER_CHROMIUM="$(node -p "require('./apps/control-room/node_modules/playwright').chromium.executablePath()")"
+          node apps/runner-console/browser-smoke.cjs
+
+      - name: Run browser fixture pre-proof gate
         env:
           CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
-        run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke
+        run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-pre-proof
 
       - name: Verify browser fixture smoke negative control
         env:
@@ -194,13 +555,23 @@ jobs:
           done
           test "$inspector_ready" = 1
           pnpm --dir apps/control-room run smoke:inspector
-          ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-source-verify-post-write
+          node apps/control-room/scripts/smoke-adaptive-study-authoring.mjs
+          CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
+            CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
+            pnpm --dir apps/control-room run smoke:analysis-plots
 
       - name: Run start screen stylesheet browser check
         # Static CSS plus inline markup: no server and no audit build are needed.
         env:
           CONTROL_ROOM_BROWSER_CHANNEL: chromium
         run: pnpm --dir apps/control-room run check:start-screen-browser
+
+      - name: Publish canonical browser proof and verify final source
+        env:
+          CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
+        run: |
+          ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-proof-manifest
+          ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-source-verify-post-write
 
       - name: Upload browser fixture smoke artifacts
         if: always()
@@ -273,6 +644,7 @@ jobs:
           if-no-files-found: error
 
   fdm-relaxation-qualification:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -294,6 +666,7 @@ jobs:
         run: timeout --foreground 180s cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture
 
   python-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -314,6 +687,15 @@ jobs:
       - name: Audit managed FEM CPU-only verification configuration
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
 
+      - name: Run complete build receipt contracts
+        run: python -B scripts/test_local_runner_build_executor.py -v
+
+      - name: Run strict eigen worker report protocol contracts
+        run: python -B scripts/test_validate_parallel_execution_report.py -v
+
+      - name: Run retained FEM startup diagnostic contracts
+        run: python -B scripts/test_diagnose_managed_fem_startup.py -v
+
       - name: Run bootstrap workflow contract
         run: |
           python -m pip install PyYAML==6.0.3
@@ -324,6 +706,11 @@ jobs:
           python -m pip install 'pytest>=9,<10'
           python -m pip install -e 'packages/fullmag-py[meshing,figures]'
 
+      - name: Run real Gmsh exact-layer airbox grading regressions
+        run: |
+          python -c "import gmsh"
+          python -m pytest -q scripts/test_box_layered_airbox_mesh.py
+
       - name: Run Göbel 2019 bimeron reproducibility contracts
         run: >-
           python -m pytest -q
@@ -331,12 +718,97 @@ jobs:
           tests/standard_problems/bimeron/goebel_2019/test_contract.py
           scripts/test_render_goebel_2019_bimeron_figure.py
 
+      - name: Run eigensolve scene and execution profile merge contracts
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_eigen_scene_merge_contract.py
+          packages/fullmag-py/tests/test_scene_document_problem_ir.py
+          packages/fullmag-py/tests/test_mesh_stl_fallback_owner_binding.py
+          packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
+          packages/fullmag-py/tests/test_scene_execution_config.py
+
+      - name: Run FEM tested/runtime library identity contracts
+        run: python scripts/test_fem_modal_library_identity.py -v
+
+      - name: Run managed runtime artifact root contracts
+        run: python scripts/test_managed_runtime_artifact_root.py -v
+
+      - name: Run output storage authoring and lowering contracts
+        run: python scripts/check_output_storage_contract.py
+
+      - name: Run complete SceneDocument authoring roundtrip regressions
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
+
+      - name: Run frozen probe terminal receipt contracts
+        run: python -B scripts/test_run_de_frozen_v2_probe.py -v
+
+      - name: Run ordered stage script roundtrip regressions
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_script_builder_roundtrip.py
+          packages/fullmag-py/tests/test_study_stages.py
+
+      - name: Run bounded mesh failure diagnostic contracts
+        run: python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -k MeshFailureDiagnosticTests -v
+
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
 
-      - name: Run Python meshing tests
-        run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v
+      - name: Run raw single-k checkpoint inspector contracts
+        run: python -B scripts/test_inspect_eigen_sample_checkpoint.py -v
 
+      - name: Run modal progress elapsed clock regression
+        run: |
+          g++ -std=c++17 -Inative/include -Ibackends/fem/include -Ibackends/fem/cpu backends/fem/tests/frequency_domain/modal_progress_elapsed_test.cpp -o "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
+          "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
+
+      - name: Run bounded waveguide dense algebra contracts
+        run: |
+          g++ -std=c++17 -UNDEBUG -Inative/include -Ibackends/fem/include backends/fem/tests/frequency_domain/floquet_waveguide_demag_k_test.cpp backends/fem/cpu/frequency_domain/floquet_waveguide_demag_k.cpp -o "$RUNNER_TEMP/fullmag-waveguide-dense-algebra-test"
+          "$RUNNER_TEMP/fullmag-waveguide-dense-algebra-test"
+
+      - name: Run COMSOL scientific gate regression suite
+        run: python -B scripts/test_validate_comsol_dispersion_scientific_gate.py -v
+
+      - name: Run nonzero-k controller capsule attestation regression
+        run: python -B scripts/test_nonzero_k_validation_controller.py -v
+
+      - name: Run DE Gamma Krylov trial contracts
+        run: python scripts/test_de_gamma_krylov_trial.py -v
+
+      - name: Run DE pilot receipt-bound comparison regressions
+        run: |
+          python -m pip install 'matplotlib>=3,<4'
+          python -c 'import matplotlib'
+          python -B scripts/test_de_pilot_receipts.py -v
+          python -B scripts/test_compare_de_100nm_pilot.py -v
+          python -m pytest -q scripts/test_validate_de_smoke_rows.py
+
+      - name: Run COMSOL A1 receipt-bound frequency comparison contracts
+        run: python -m pytest -q scripts/test_compare_comsol_a1_frequency_reference.py
+
+      - name: Run rejected COMSOL benchmark mesh terminal contract
+        run: >-
+          python -m pytest -q
+          tests/standard_problems/mumag/comsol_nonzero_k_dispersion/test_contract.py
+          -k materialization_cli_terminal_status_follows_benchmark_mesh_acceptance
+      - name: Run Python meshing tests
+        env:
+          FULLMAG_MESH_FAILURE_ARTIFACT_DIR: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
+        run: |
+          mkdir -p "$FULLMAG_MESH_FAILURE_ARTIFACT_DIR"
+          set -o pipefail
+          python -X faulthandler -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v 2>&1 | tee "$FULLMAG_MESH_FAILURE_ARTIFACT_DIR/unittest.log"
+
+      - name: Preserve Python meshing failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-meshing-failure-diagnostics
+          path: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
+          if-no-files-found: ignore
       - name: Run texture compatibility contracts
         run: >-
           python -m pytest -q
@@ -346,8 +818,131 @@ jobs:
       - name: Repository consistency checks
         run: python scripts/check_repo_consistency.py
 
-      - name: Run rotated DMI scene authoring regressions
-        run: >-
-          python -m pytest -q
-          packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
-          -k dmi
+
+  windows-volatile-storage-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Verify disposable compiler storage and environment restoration
+        run: python scripts/test_windows_volatile_build_storage.py -v
+
+  fem-positive-mass-contract:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'positive-mass' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+
+  fem-floquet-source-moments-contract:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'floquet-source-moments' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+    with:
+      contract_profile: floquet-source-moments
+
+  fem-floquet-modal-slepc-contract:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'floquet-modal-slepc' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+    with:
+      contract_profile: floquet-modal-slepc
+  fem-generic-modal-slepc-contract:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'generic-modal-slepc' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+    with:
+      contract_profile: generic-modal-slepc
+
+  fem-modal-phase-slepc-contract:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'modal-phase-slepc' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+    with:
+      contract_profile: modal-phase-slepc
+
+  fem-floquet-count-slepc-contract:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'floquet-count-slepc' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+    with:
+      contract_profile: floquet-count-slepc
+
+  runner-retention-contracts:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'retention' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Use canonical temporary storage for retention fixtures
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          scratch = Path(os.environ["RUNNER_TEMP"]).resolve() / "fullmag-retention-temp"
+          scratch.mkdir(parents=True, exist_ok=True)
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  environment.write(f"{name}={scratch}\n")
+      - name: Run coordinator profile activation and client lifecycle regressions
+        run: python -B scripts/test_local_runner_container_client.py -v
+      - name: Run execution and runtime retention regressions
+        run: python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py' -v
+      - name: Setup Node for retention console contracts
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - name: Build Runner Console packages before retention contracts
+        run: node apps/runner-console/build.mjs
+      - name: Run bounded retention console and packaged source contracts
+        run: node apps/runner-console/test.mjs
+      - name: Run retention HTTP routing and coordinator binding regressions
+        run: |
+          python -B -m unittest discover -s scripts/tests/local_runner -p test_container_api.py -v
+          python -B -m unittest discover -s scripts/tests/local_runner -p test_container_main.py -v
+      - name: Run archive receipt and verified runtime tombstone regressions
+        if: ${{ !cancelled() }}
+        run: python -B scripts/test_local_runner_archive_receipt.py -v
+      - name: Run runtime package quarantine and restart regressions
+        if: ${{ !cancelled() }}
+        run: python -B scripts/test_local_runner_runtime_retention.py -v
+      - name: Run runtime admission and reference snapshot guard regressions
+        if: ${{ !cancelled() }}
+        run: python -B scripts/test_local_runner_runtime_use.py -v
+      - name: Run local runner runtime reference regressions
+        run: python -B scripts/test_local_runner_runtime_references.py -v
+      - name: Run source capsule owner binding and cleanup regressions
+        run: python -B scripts/test_local_runner_source_compaction.py -v
+      - name: Run source store publication and lock recovery regressions
+        run: python -B scripts/test_local_runner_source_store.py -v
+      - name: Run bounded Docker Engine protocol regressions
+        run: python -B scripts/test_local_runner_unix_docker.py -v
+      - name: Run managed-browser container mount attestation regressions
+        run: python -B -m unittest discover -s scripts -p test_local_runner_managed_browser_guard.py
+      - name: Run actual subprocess Docker log streaming regressions
+        run: python -B scripts/test_local_runner_docker_logs.py -v
+
+  native-receipt-contracts:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'native-receipt' }}
+    uses: ./.github/workflows/eigensolve-native-receipt-contracts.yml

@@ -23,6 +23,7 @@ import {
   useSessionResourceIdentity,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
+import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -157,7 +158,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const sessionDiscretization = useSessionStatusSelector(
-    (status) => status.data?.domain.discretization ?? null,
+    (status) => resolveSessionAuthoringDiscretization(status.data),
   );
   const meshLane = resolveMeshInspectorLane(sessionDiscretization);
   const regionVisualizationSelection =

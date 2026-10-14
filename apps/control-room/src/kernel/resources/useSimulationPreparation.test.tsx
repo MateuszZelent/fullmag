@@ -3,9 +3,10 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
+import { SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import type {
   LiveStatusResource,
+  SessionListResource,
   SimulationPreparationResource,
 } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
@@ -19,6 +20,12 @@ import { ResourceInvalidationController } from "./ResourceInvalidationController
 import { resetSharedResourceRuntimeStoreForTests } from "./ResourceRuntimeStore";
 import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 import { useSimulationPreparation } from "./useSimulationPreparation";
+import { SESSION_STATUS_RESOURCE_KEY } from "./useSessionStatus";
+import {
+  preparationMinimumRevision,
+  preparationPublicationState,
+  preparationRetryKey,
+} from "./simulationPreparationPublication";
 
 interface Deferred<TData> {
   promise: Promise<TData>;
@@ -83,6 +90,8 @@ function statusFixture(): LiveStatusResource {
 
 function makeKernel(
   preparation: (options?: { signal?: AbortSignal }) => Promise<SimulationPreparationResource>,
+  publishedPreparationRevision: number | (() => Promise<LiveStatusResource>) = 0,
+  currentSessionId: () => string = () => "session-1",
 ) {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
@@ -90,7 +99,12 @@ function makeKernel(
     kernel: {
       api: {
         sessions: {
-          current: { status: async () => statusFixture() },
+          current: { status: typeof publishedPreparationRevision === "function"
+            ? publishedPreparationRevision
+            : async () => ({
+                ...statusFixture(),
+                resources: { simulation_preparation_revision: publishedPreparationRevision },
+              }) },
           // Session identity is confirmed against the session collection.
           list: async () => ({
             schema_version: "2.0.0",
@@ -98,7 +112,7 @@ function makeKernel(
               {
                 current: true,
                 name: "session-1",
-                session_id: "session-1",
+                session_id: currentSessionId(),
                 status: "running",
               },
             ],
@@ -111,7 +125,7 @@ function makeKernel(
         config: { enabled: false },
       }),
       resources,
-    } as React.ComponentProps<typeof KernelContext.Provider>["value"],
+    } as NonNullable<React.ComponentProps<typeof KernelContext.Provider>["value"]>,
     bus,
     resources,
   };
@@ -153,6 +167,259 @@ async function waitFor(
 }
 
 describe("useSimulationPreparation", () => {
+  it.each([
+    { publishedRevision: 0, requiredRevision: 7, status: 404, reports: true },
+    { publishedRevision: 7, requiredRevision: null, status: 404, reports: true },
+    { publishedRevision: 1, requiredRevision: null, status: 401, reports: true },
+    { publishedRevision: 1, requiredRevision: null, status: 500, reports: true },
+  ])("reports only unexpected initial failures: %j", async (testCase) => {
+    const failure = new ControlRoomApiError("preparation unavailable", testCase.status);
+    const load = vi.fn(() => Promise.reject(failure));
+    const { bus, kernel } = makeKernel(load, testCase.publishedRevision);
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    const unsubscribe = bus.on("resource:load-failed", (event) => failures.push(event));
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} requiredRevision={testCase.requiredRevision} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(
+        () => observations.some((observation) => observation.status === "error"),
+        "preparation failure did not remain visible",
+      );
+      expect(observations.at(-1)).toMatchObject({ data: null, error: failure, status: "error" });
+      expect(failures.some((event) => event.resourceKey.endsWith(SIMULATION_PREPARATION_PATH)))
+        .toBe(testCase.reports);
+    } finally {
+      unsubscribe();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("waits for unknown publication and loads only a published preparation", () => {
+    expect(preparationPublicationState(undefined, null)).toBe("unknown");
+    expect(preparationPublicationState(undefined, 7)).toBe("unknown");
+    expect(preparationPublicationState(null, null)).toBe("absent");
+    expect(preparationPublicationState(0, null)).toBe("absent");
+    expect(preparationPublicationState(7, null)).toBe("published");
+    expect(preparationPublicationState(0, 7)).toBe("published");
+    expect(preparationMinimumRevision(8, null)).toBe(8);
+    expect(preparationMinimumRevision(8, 9)).toBe(9);
+    expect(preparationMinimumRevision(undefined, 9)).toBeNull();
+    expect(preparationRetryKey("session=A&epoch=1&request_scope_epoch=X|preparation", 7))
+      .not.toBe(preparationRetryKey("session=A&epoch=2&request_scope_epoch=X|preparation", 7));
+  });
+
+  it("keeps an unpublished scratch preparation idle without issuing a GET", async () => {
+    const load = vi.fn(() => Promise.reject(new ControlRoomApiError("not found", 404)));
+    const { bus, kernel } = makeKernel(load);
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    const unsubscribe = bus.on("resource:load-failed", (event) => failures.push(event));
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(<KernelContext.Provider value={kernel}>
+          <Probe observations={observations} />
+        </KernelContext.Provider>);
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      });
+      expect(load).not.toHaveBeenCalled();
+      expect(observations.at(-1)).toMatchObject({ data: null, error: null, status: "idle" });
+      await act(async () => observations.at(-1)!.refetch());
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      });
+      expect(load).not.toHaveBeenCalled();
+      expect(failures).toEqual([]);
+    } finally {
+      unsubscribe();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not probe absence during a status refresh and starts after positive publication", async () => {
+    updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
+    const refresh = deferred<LiveStatusResource>();
+    const statusLoad = vi.fn()
+      .mockResolvedValueOnce(statusFixture())
+      .mockImplementationOnce(() => refresh.promise)
+      .mockResolvedValue({
+        ...statusFixture(), resources: { simulation_preparation_revision: 7 },
+      });
+    const load = vi.fn(() => Promise.resolve(preparationFixture(7)));
+    const { kernel, resources } = makeKernel(load, statusLoad);
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(<KernelContext.Provider value={kernel}>
+          <Probe observations={observations} />
+        </KernelContext.Provider>);
+      });
+      await waitFor(() => statusLoad.mock.calls.length === 1, "initial status did not load");
+      await act(async () => {
+        resources.invalidate(SESSION_STATUS_RESOURCE_KEY, "transport:1");
+        resources.invalidate(SIMULATION_PREPARATION_PATH, "transport:1");
+      });
+      await waitFor(() => statusLoad.mock.calls.length === 2, "status refresh did not load");
+      await act(async () => observations.at(-1)!.refetch());
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      });
+      expect(load).not.toHaveBeenCalled();
+      await act(async () => {
+        refresh.resolve(statusFixture());
+        await refresh.promise;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      });
+      expect(load).not.toHaveBeenCalled();
+      expect(observations.at(-1)).toMatchObject({ data: null, status: "idle" });
+      await act(async () => resources.invalidate(SESSION_STATUS_RESOURCE_KEY, "transport:2"));
+      await waitFor(() => load.mock.calls.length === 1, "published preparation did not load");
+      await waitFor(() => observations.at(-1)?.status === "ready", "published preparation was not ready");
+      expect(observations.at(-1)?.data?.revision).toBe(7);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("refreshes a new canonical minimum without explicit requiredRevision or preparation invalidation", async () => {
+    updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
+    let revision = 7;
+    const statusLoad = vi.fn(async () => ({
+      ...statusFixture(),
+      resources: { ...statusFixture().resources, simulation_preparation_revision: revision },
+    }));
+    const load = vi.fn(async () => preparationFixture(revision));
+    const { kernel, resources } = makeKernel(load, statusLoad);
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => root.render(<KernelContext.Provider value={kernel}>
+        <Probe observations={observations} />
+      </KernelContext.Provider>));
+      await waitFor(() => observations.at(-1)?.data?.revision === 7, "initial publication did not load");
+      // A higher transport pointer must not stand in for a preparation revision.
+      await act(async () => resources.invalidate(SIMULATION_PREPARATION_PATH, 100));
+      await waitFor(() => load.mock.calls.length === 2, "transport refresh did not load");
+      await waitFor(() => observations.at(-1)?.status === "ready", "transport refresh did not settle");
+      revision = 8;
+      await act(async () => resources.invalidate(SESSION_STATUS_RESOURCE_KEY, "status:next"));
+      await waitFor(() => observations.at(-1)?.data?.revision === 8, "canonical minimum did not refresh");
+      expect(load).toHaveBeenCalledTimes(3);
+      await act(async () => observations.at(-1)!.refetch());
+      await waitFor(() => load.mock.calls.length === 4, "published manual refresh was blocked");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("retries the same revision separately for different confirmed sessions", async () => {
+    vi.useFakeTimers();
+    updateRealtimeCommunicationPolicy({ status_refresh_ms: 1, error_retry_ms: 10 });
+    let sessionId = "session-1";
+    const statusLoad = vi.fn(async (): Promise<LiveStatusResource> => ({
+      ...statusFixture(),
+      resources: { ...statusFixture().resources, simulation_preparation_revision: 7 },
+      session: {
+        ...statusFixture().session,
+        session_id: sessionId,
+        session_epoch: `${sessionId}@1700000000000`,
+      },
+    }));
+    const load = vi.fn()
+      .mockRejectedValueOnce(new ControlRoomApiError("upstream unavailable", 502))
+      .mockResolvedValueOnce(preparationFixture(7))
+      .mockRejectedValueOnce(new ControlRoomApiError("upstream unavailable", 502))
+      .mockResolvedValueOnce(preparationFixture(7));
+    const { kernel, resources } = makeKernel(load, statusLoad, () => sessionId);
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => root.render(<KernelContext.Provider value={kernel}>
+        <Probe observations={observations} />
+      </KernelContext.Provider>));
+      await waitForPhase(() => load.mock.calls.length === 1 && observations.at(-1)?.status === "error", "session A initial failure");
+      expect(load).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTimeAsync(11));
+      await waitForPhase(() => observations.at(-1)?.status === "ready", "session A retry completion");
+      expect(load).toHaveBeenCalledTimes(2);
+      const nextStatus = deferred<LiveStatusResource>();
+      const nextCollection = deferred<SessionListResource>();
+      statusLoad.mockImplementationOnce(() => nextStatus.promise);
+      const collectionLoad = vi.spyOn(kernel.api.sessions, "list")
+        .mockImplementationOnce(() => nextCollection.promise);
+      sessionId = "session-2";
+      await act(async () => {
+        resources.invalidate(SESSIONS_PATH, "session:next");
+        resources.invalidate(SESSION_STATUS_RESOURCE_KEY, "session:next");
+      });
+      await waitForPhase(() => collectionLoad.mock.calls.length === 1 && statusLoad.mock.calls.length === 2, "session B identity requests");
+      expect(load).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        nextStatus.resolve({
+          ...statusFixture(),
+          resources: { ...statusFixture().resources, simulation_preparation_revision: 7 },
+          session: { ...statusFixture().session, session_id: sessionId, session_epoch: `${sessionId}@1700000000000` },
+        });
+        await nextStatus.promise;
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      // Status B cannot authorize preparation while the collection still names A.
+      expect(load).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        nextCollection.resolve({
+          schema_version: "2.0.0",
+          sessions: [{ current: true, name: sessionId, session_id: sessionId, status: "running" }],
+        });
+        await nextCollection.promise;
+      });
+      await waitForPhase(() => load.mock.calls.length === 3 && observations.at(-1)?.status === "error", "confirmed session B initial failure");
+      expect(load).toHaveBeenCalledTimes(3);
+      await act(async () => vi.advanceTimersByTimeAsync(11));
+      await waitForPhase(() => observations.at(-1)?.status === "ready", "session B retry completion");
+      expect(load).toHaveBeenCalledTimes(4);
+      expect(load.mock.calls.map(([options]) => options.sessionScopeKey)).toEqual([
+        "session=session-1&epoch=session-1%401700000000000&request_scope_epoch=api-instance%3A1",
+        "session=session-1&epoch=session-1%401700000000000&request_scope_epoch=api-instance%3A1",
+        "session=session-2&epoch=session-2%401700000000000&request_scope_epoch=api-instance%3A1",
+        "session=session-2&epoch=session-2%401700000000000&request_scope_epoch=api-instance%3A1",
+      ]);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+
+    async function waitForPhase(predicate: () => boolean, phase: string): Promise<void> {
+      for (let tick = 0; tick < 6; tick += 1) {
+        if (predicate()) return;
+        await act(async () => vi.advanceTimersByTimeAsync(1));
+      }
+      expect(predicate(), `${phase}: ${JSON.stringify({
+        loadScopes: load.mock.calls.map(([options]) => options.sessionScopeKey),
+        observations: observations.slice(-6).map(resultSnapshot),
+        statusRequests: statusLoad.mock.calls.length,
+      })}`).toBe(true);
+    }
+  });
+
   it("retries a failed load while the status advertises an unread preparation revision", async () => {
     vi.useFakeTimers();
     updateRealtimeCommunicationPolicy({ error_retry_ms: 10 });
@@ -405,7 +672,7 @@ describe("useSimulationPreparation", () => {
       signal = options?.signal;
       return pending.promise;
     });
-    const { kernel, resources } = makeKernel(load);
+    const { kernel, resources } = makeKernel(load, 11);
     resources.invalidate(SIMULATION_PREPARATION_PATH, 11);
     const serverObservations: PreparationResult[] = [];
     renderToStaticMarkup(

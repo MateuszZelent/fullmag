@@ -1,0 +1,109 @@
+name: dispersion-artifact-consumers
+
+on:
+  pull_request:
+    paths:
+      # Consumers import validators, receipts and analytic oracles across scripts.
+      - 'scripts/**/*.py'
+      - 'crates/fullmag-workspace-inspect/**'
+      - 'crates/fullmag-session/src/frequency_domain_artifact_generation.rs'
+      - 'crates/fullmag-session/src/lib.rs'
+      - 'crates/fullmag-runner/src/artifact_generation.rs'
+      - 'packages/fullmag-py/**'
+      - '.github/workflows/dispersion-artifact-consumers.yml'
+  push:
+    branches: [master, 'codex/**']
+    paths:
+      # Consumers import validators, receipts and analytic oracles across scripts.
+      - 'scripts/**/*.py'
+      - 'crates/fullmag-workspace-inspect/**'
+      - 'crates/fullmag-session/src/frequency_domain_artifact_generation.rs'
+      - 'crates/fullmag-session/src/lib.rs'
+      - 'crates/fullmag-runner/src/artifact_generation.rs'
+      - 'packages/fullmag-py/**'
+      - '.github/workflows/dispersion-artifact-consumers.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-consumer-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install Gmsh system dependency
+        run: sudo apt-get update && sudo apt-get install -y libglu1-mesa
+      - name: Install diagnostic dependencies
+        run: |
+          python -m pip install 'pytest>=9,<10' 'matplotlib>=3.8,<4'
+          python -m pip install -e "packages/fullmag-py[meshing]"
+      - name: Validate primary equilibrium and material provenance contracts
+        env:
+          PYTHONPATH: scripts
+        run: >-
+          python -B -m pytest -q
+          scripts/test_validate_comsol_dispersion_scientific_gate.py
+          scripts/test_comsol_tracking_provenance_gate.py
+          scripts/test_fem_producer_provenance_replay.py
+
+      - name: Run frequency-domain provenance verifier regressions
+        env:
+          PYTHONPATH: scripts
+        run: >-
+          python -B -m pytest -q
+          scripts/test_verify_fem_frequency_domain_eigen_artifacts.py
+          scripts/test_fem_nonshared_operator_replay.py
+
+      - name: Validate artifact root, plot and parity consumers
+        env:
+          PYTHONPATH: scripts
+          MPLBACKEND: Agg
+        run: >-
+          python -B -m pytest -q
+          scripts/test_managed_runtime_artifact_root.py
+          scripts/test_plot_signed_de_campaign.py
+          scripts/test_validate_de_smoke_rows.py
+          scripts/test_validate_serial_adaptive_probe.py
+          scripts/test_de_pilot_receipts.py
+          scripts/test_comsol_modal_field_certificate.py
+          scripts/test_run_comsol_dispersion_benchmark.py
+          packages/fullmag-py/tests/test_gmsh_quality_units.py
+
+      - name: Validate captured pilot and physical-potential consumers
+        env:
+          PYTHONPATH: scripts
+          MPLBACKEND: Agg
+        run: >-
+          python -B -m pytest -q
+          scripts/test_run_de_100nm_pilot.py
+          scripts/test_de_physical_potential.py
+          scripts/test_de_shifted_ksp_trial.py
+          scripts/test_de_gamma_krylov_trial.py
+          scripts/test_de_signed_state_closure.py
+
+  terminal-artifact-attestation:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: terminal-artifact-attestation
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Verify terminal producer publication and platform file safety
+        run: |
+          cargo test --locked -p fullmag-session --lib frequency_domain_artifact_generation
+          cargo test --locked -p fullmag-workspace-inspect --lib
+      - name: Verify immutable artifact binding and bounded reader races
+        run: python -B scripts/test_managed_runtime_artifact_root.py -v

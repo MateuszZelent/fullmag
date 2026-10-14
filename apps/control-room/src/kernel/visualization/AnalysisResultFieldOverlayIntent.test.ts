@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type {
   AnalysisResultFieldRef,
+  FieldVectorQuery,
   FieldVectorResponseMetadata,
 } from "../api/apiTypes";
 import type { DecodedFieldVector } from "../api/codecs";
+import { fieldVectorResourceKey } from "../api/fieldQueryIdentity";
 import type { AnalysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import {
@@ -41,7 +43,11 @@ const fieldRef: AnalysisResultFieldRef = {
   },
   quantity_id: "m",
   representation: "complex-vector-xyz",
-  resource_key: "data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002",
+  resource_key: fieldVectorResourceKey("analysis:eigen:sample-0001:mode-0002", {
+    component: "full",
+    scope_kind: "full",
+    view: "complex",
+  }),
   status: "ready",
 };
 
@@ -53,11 +59,11 @@ const topology = {
   pointCount: 2,
 };
 
-function validBinary(): DecodedFieldVector {
+function validBinary(formatVersion: 3 | 5 = 3): DecodedFieldVector {
   return {
     dtype: "float64",
     domainGenerationId: "generation-1",
-    formatVersion: 3,
+    formatVersion,
     grid: [1, 1, 2],
     indexing: "full_domain",
     meshTopologyHash: "sha256:topology-v1",
@@ -152,9 +158,122 @@ describe("AnalysisResultFieldOverlayIntent", () => {
       resourceRevision: fieldRef.field_revision,
       binaryQuery: { component: "full", scope_kind: "full", view: "complex" },
     });
+    expect(metadata.binaryQuery.expected_artifact_generation_id).toBeUndefined();
     expect(
       validateAnalysisResultFieldOverlayBinary(metadata, validBinary(), topology),
     ).toMatchObject({ complex: { componentCount: 3, pointCount: 2 } });
+    expect(
+      validateAnalysisResultFieldOverlayBinary(metadata, validBinary(5), topology),
+    ).toMatchObject({ complex: { componentCount: 3, pointCount: 2 } });
+  });
+
+  it("preserves the committed artifact generation and other vector identity parameters", () => {
+    const expectedQuery: FieldVectorQuery = {
+      component: "full",
+      expected_artifact_generation_id: "publication-14",
+      expected_carrier_revision: "carrier-revision-8",
+      expected_generation_id: "domain-generation-5",
+      scope_kind: "full",
+      view: "complex",
+    };
+    const resourceKey = fieldVectorResourceKey(fieldRef.field_id, expectedQuery);
+    const intent = createAnalysisResultFieldOverlayIntent(selection, {
+      ...fieldRef,
+      resource_key: resourceKey,
+    })!;
+    const metadata = resolveAnalysisResultFieldOverlayMetadata(intent);
+
+    expect(metadata).not.toBeNull();
+    expect(metadata?.binaryQuery).toMatchObject(expectedQuery);
+    expect(
+      fieldVectorResourceKey(metadata!.fieldId, metadata!.binaryQuery),
+    ).toBe(resourceKey);
+  });
+
+  it("normalizes a canonical phase-rotated result link to the full complex overlay query", () => {
+    const resourceKey = fieldVectorResourceKey(fieldRef.field_id, {
+      component: "magnitude",
+      expected_artifact_generation_id: "publication-14",
+      expected_generation_id: "domain-generation-5",
+      phase_rad: 0.375,
+      scope_kind: "full",
+      view: "phase_rotated_real",
+    });
+    const intent = createAnalysisResultFieldOverlayIntent(selection, {
+      ...fieldRef,
+      resource_key: resourceKey,
+    })!;
+    const metadata = resolveAnalysisResultFieldOverlayMetadata(intent);
+
+    expect(metadata?.binaryQuery).toMatchObject({
+      component: "full",
+      expected_artifact_generation_id: "publication-14",
+      expected_generation_id: "domain-generation-5",
+      phase_rad: 0.375,
+      scope_kind: "full",
+      view: "complex",
+    });
+  });
+
+  it.each([
+    [
+      "a mismatched field id",
+      fieldVectorResourceKey("analysis:eigen:other-field", {
+        component: "full",
+        scope_kind: "full",
+        view: "complex",
+      }),
+    ],
+    [
+      "a duplicate generation parameter",
+      `${fieldVectorResourceKey(fieldRef.field_id, {
+        component: "full",
+        expected_artifact_generation_id: "publication-14",
+        scope_kind: "full",
+        view: "complex",
+      })}&expected_artifact_generation_id=publication-15`,
+    ],
+    [
+      "a foreign origin",
+      `https://foreign.invalid${fieldVectorResourceKey(fieldRef.field_id)}`,
+    ],
+    ["a URI fragment", `${fieldVectorResourceKey(fieldRef.field_id)}#fragment`],
+    [
+      "a non-vector path",
+      "data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002",
+    ],
+    [
+      "an unsupported component",
+      fieldVectorResourceKey(fieldRef.field_id, {
+        component: "not-a-component",
+        scope_kind: "full",
+        view: "complex",
+      }),
+    ],
+    [
+      "a non-full scope",
+      fieldVectorResourceKey(fieldRef.field_id, {
+        component: "full",
+        scope_id: "film",
+        scope_kind: "object",
+        view: "complex",
+      }),
+    ],
+    [
+      "an unsupported view",
+      fieldVectorResourceKey(fieldRef.field_id, {
+        component: "full",
+        scope_kind: "full",
+        view: "phasor",
+      }),
+    ],
+  ])("rejects a field resource key with %s", (_label, resourceKey) => {
+    const intent = createAnalysisResultFieldOverlayIntent(selection, {
+      ...fieldRef,
+      resource_key: resourceKey,
+    })!;
+
+    expect(resolveAnalysisResultFieldOverlayMetadata(intent)).toBeNull();
   });
 
   it("requires a self-consistent binary response without conflating transport and source revisions", () => {
@@ -162,7 +281,7 @@ describe("AnalysisResultFieldOverlayIntent", () => {
     const responseMetadata: FieldVectorResponseMetadata = {
       component: "full",
       domainGenerationId: "generation-1",
-      encoding: "FMVP;version=3",
+      encoding: "FMVP;version=5",
       fieldIndexing: "full_domain",
       fieldRevision: "transport-revision-41",
       identityIssues: [],
@@ -180,6 +299,32 @@ describe("AnalysisResultFieldOverlayIntent", () => {
     expect(
       validateAnalysisResultFieldResponseMetadata(intent, responseMetadata),
     ).toBe(true);
+    const explicitNodeMetadata = {
+      ...responseMetadata,
+      fieldIndexing: "explicit_node_indices",
+      nodeIndexCount: responseMetadata.pointCount,
+    };
+    expect(
+      validateAnalysisResultFieldResponseMetadata(intent, explicitNodeMetadata),
+    ).toBe(true);
+    expect(
+      validateAnalysisResultFieldResponseMetadata(intent, {
+        ...explicitNodeMetadata,
+        encoding: "FMVP;version=3",
+      }),
+    ).toBe(false);
+    expect(
+      validateAnalysisResultFieldResponseMetadata(intent, {
+        ...explicitNodeMetadata,
+        nodeIndexCount: 1,
+      }),
+    ).toBe(false);
+    expect(
+      validateAnalysisResultFieldResponseMetadata(intent, {
+        ...responseMetadata,
+        encoding: "FMVP;version=3",
+      }),
+    ).toBe(true);
     expect(
       validateAnalysisResultFieldResponseMetadata(intent, {
         ...responseMetadata,
@@ -193,6 +338,32 @@ describe("AnalysisResultFieldOverlayIntent", () => {
           { field: "meshTopologyHash", headerValue: "wrong", payloadValue: "right" },
         ],
       }),
+    ).toBe(false);
+
+    const expectedArtifactGenerationId = "publication-14";
+    const generatedIntent = createAnalysisResultFieldOverlayIntent(selection, {
+      ...fieldRef,
+      resource_key: fieldVectorResourceKey(fieldRef.field_id, {
+        component: "full",
+        expected_artifact_generation_id: expectedArtifactGenerationId,
+        scope_kind: "full",
+        view: "complex",
+      }),
+    })!;
+    expect(
+      validateAnalysisResultFieldResponseMetadata(generatedIntent, {
+        ...responseMetadata,
+        artifactGenerationId: expectedArtifactGenerationId,
+      }),
+    ).toBe(true);
+    expect(
+      validateAnalysisResultFieldResponseMetadata(generatedIntent, {
+        ...responseMetadata,
+        artifactGenerationId: "publication-stale",
+      }),
+    ).toBe(false);
+    expect(
+      validateAnalysisResultFieldResponseMetadata(generatedIntent, responseMetadata),
     ).toBe(false);
   });
 
@@ -210,6 +381,73 @@ describe("AnalysisResultFieldOverlayIntent", () => {
         metadata,
         { ...validBinary(), ...binaryPatch },
         { ...topology, ...topologyPatch },
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts FMVP v5 explicit nodes only with a valid map to the matching mesh", () => {
+    const intent = createAnalysisResultFieldOverlayIntent(selection, fieldRef)!;
+    const metadata = resolveAnalysisResultFieldOverlayMetadata(intent)!;
+    const sharedTopology = { ...topology, pointCount: 5 };
+    const explicitField: DecodedFieldVector = {
+      ...validBinary(5),
+      grid: [2, 1, 1],
+      indexing: "explicit_node_indices",
+      nodeIndices: new Uint32Array([1, 3]),
+    };
+
+    const validated = validateAnalysisResultFieldOverlayBinary(
+      metadata,
+      explicitField,
+      sharedTopology,
+    );
+    expect(validated?.binary.nodeIndices).toEqual(new Uint32Array([1, 3]));
+    expect(validated?.complex.nodeIndices).toEqual(new Uint32Array([1, 3]));
+
+    expect(
+      validateAnalysisResultFieldOverlayBinary(
+        metadata,
+        { ...explicitField, formatVersion: 3 },
+        sharedTopology,
+      ),
+    ).toBeNull();
+    expect(
+      validateAnalysisResultFieldOverlayBinary(
+        metadata,
+        { ...explicitField, nodeIndices: new Uint32Array([1, 5]) },
+        sharedTopology,
+      ),
+    ).toBeNull();
+    expect(
+      validateAnalysisResultFieldOverlayBinary(
+        metadata,
+        { ...explicitField, nodeIndices: new Uint32Array([1]) },
+        sharedTopology,
+      ),
+    ).toBeNull();
+    expect(
+      validateAnalysisResultFieldOverlayBinary(
+        metadata,
+        explicitField,
+        { ...sharedTopology, meshTopologyHash: "sha256:other-topology" },
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects an FMVP v5 no-topology sentinel for the full-domain overlay", () => {
+    const intent = createAnalysisResultFieldOverlayIntent(selection, fieldRef)!;
+    const metadata = resolveAnalysisResultFieldOverlayMetadata(intent)!;
+
+    expect(
+      validateAnalysisResultFieldOverlayBinary(
+        metadata,
+        {
+          ...validBinary(5),
+          indexing: "legacy_count_only",
+          meshTopologyHash: null,
+          meshTopologyRevision: null,
+        },
+        topology,
       ),
     ).toBeNull();
   });

@@ -120,6 +120,38 @@ class CompilerInputsChecks(unittest.TestCase):
         self.assertEqual(rust_copy.read_bytes(), self.rust.read_bytes())
         self.assertEqual(rust_copy.stat().st_mtime_ns, self.rust.stat().st_mtime_ns)
 
+    def test_directory_replacement_is_refused_before_mutating_owned_files(self):
+        nested = self.repo / "docs/nested/note.md"
+        nested.parent.mkdir(parents=True)
+        nested.write_text("Retain these bytes on refusal.\n")
+        first = self.make()
+        result = self.materialize(first)
+        mirror = Path(result["source_root"])
+        before = (mirror / "crates/demo/src/lib.rs").read_bytes()
+        nested.unlink()
+        nested.parent.rmdir()
+        (self.repo / "docs").rmdir()
+        (self.repo / "docs").write_text("A file cannot replace an owned directory.\n")
+        self.rust.write_bytes(b"pub const VALUE: u8 = 99;\n")
+        second = self.make()
+        with self.assertRaisesRegex(compiler_inputs.CompilerInputsError, "transitions"):
+            self.materialize(second)
+        self.assertEqual((mirror / "docs/nested/note.md").read_text(), "Retain these bytes on refusal.\n")
+        self.assertEqual((mirror / "crates/demo/src/lib.rs").read_bytes(), before)
+
+    def test_shared_name_prefix_is_not_a_directory_transition(self):
+        nested = self.repo / "docs-extra/note.md"
+        nested.parent.mkdir()
+        nested.write_text("Neighbor directory remains owned.\n")
+        first = self.make()
+        self.materialize(first)
+        (self.repo / "docs").write_text("Sibling file with a shared name prefix.\n")
+        second = self.make()
+        result = self.materialize(second)
+        mirror = Path(result["source_root"])
+        self.assertEqual((mirror / "docs").read_bytes(), (self.repo / "docs").read_bytes())
+        self.assertEqual((mirror / "docs-extra/note.md").read_bytes(), nested.read_bytes())
+
     def test_removes_only_stale_files_owned_by_the_previous_binding(self):
         removed = self.repo / "crates/demo/src/removed.rs"
         removed.write_bytes(b"pub fn removed() {}\n")
@@ -140,10 +172,15 @@ class CompilerInputsChecks(unittest.TestCase):
         os.utime(self.rust, ns=(timestamp, timestamp))
         ram_root, working_root, _, storage_root = self.make_working_root()
         first = self.make()
-        with patch.dict(os.environ, {
+        # A Git fixture has its own resolver identity; do not inherit the
+        # managed parent runner's build/profile adapters into that repository.
+        fixture_env = {key: value for key, value in os.environ.items()
+                       if key not in fullmag_storage.MANAGED_VARIABLES}
+        fixture_env.update({
             volatile_build_storage.ROOT_ENV: str(ram_root),
             "FULLMAG_PROJECT_STORAGE_ROOT": storage_root,
-        }):
+        })
+        with patch.dict(os.environ, fixture_env, clear=True):
             first_result = self.materialize(first, working_root)
             mirror = working_root / "source"
             rust_copy = mirror / "crates/demo/src/lib.rs"

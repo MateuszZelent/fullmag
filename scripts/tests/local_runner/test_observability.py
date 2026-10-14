@@ -24,6 +24,52 @@ class ObservabilityTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.hub = ObservabilityHub(self.root, owner="test-operator")
 
+    def _timeline_job(self, profile, *, state="queued", job_id="job-timeline"):
+        return {
+            "job_id": job_id,
+            "worktree_id": "wt-timeline",
+            "profile": profile,
+            "source_digest": "a" * 64,
+            "state": state,
+            "created_at": 1000.0,
+            "started_at": 1001.0 if state != "queued" else None,
+        }
+
+    def _write_timeline_journal(self, job, *, phase="start-requested", state=None, **fields):
+        job_dir = self.root / "runs" / job["worktree_id"] / job["job_id"]
+        job_dir.mkdir(parents=True, exist_ok=True)
+        journal = {
+            "schema": "fullmag.local-runner.coordinator.v1",
+            "job_id": job["job_id"],
+            "profile": job["profile"],
+            "phase": phase,
+            "state": state or job["state"],
+            "started_at": 1001.0,
+            **fields,
+        }
+        (job_dir / "coordinator.json").write_text(json.dumps(journal), encoding="utf-8")
+        return job_dir
+
+    def _write_timeline_receipt(self, job, stages, *, state="succeeded"):
+        job_dir = self.root / "runs" / job["worktree_id"] / job["job_id"]
+        artifacts = job_dir / "artifacts"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        receipt = {
+            "schema": "fullmag.local-runner.build-receipt.v1",
+            "job_id": job["job_id"],
+            "profile": job["profile"],
+            "source_digest": job["source_digest"],
+            "state": state,
+            "stages": stages,
+            "finished_at": "2026-10-09T12:00:00Z",
+        }
+        (artifacts / "build-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+        return receipt
+
+    @staticmethod
+    def _stages_by_id(stages):
+        return {stage["id"]: stage for stage in stages}
+
     def test_event_recording_and_limiting(self):
         # Default startup events are present
         events = self.hub.get_events(limit=10)
@@ -81,7 +127,7 @@ class ObservabilityTests(unittest.TestCase):
 
     def test_storage_volumes_structure_and_thresholds(self):
         vols = self.hub.get_storage_volumes()
-        self.assertEqual(2, len(vols))
+        self.assertGreaterEqual(len(vols), 1)  # Docker backing storage need not be mounted here.
         storage_vol = vols[0]
         self.assertEqual("storage-root", storage_vol["id"])
         self.assertGreater(storage_vol["total_bytes"], 0)
@@ -184,70 +230,260 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual("preview", persisted["mode"])
         self.assertEqual(48, persisted["ttl_success_hours"])
 
-    def test_build_job_timeline_decomposition(self):
-        job = {
-            "job_id": "job-timeline-test",
-            "worktree_id": "wt-1",
-            "state": "running",
-            "created_at": time.time() - 30,
-            "started_at": time.time() - 25,
-        }
+    def test_runtime_minimum_requires_bounded_integer(self):
+        for invalid in (0, 21, 1.5, True, "3", None):
+            with self.subTest(value=invalid):
+                with self.assertRaises(ValueError):
+                    self.hub.set_retention_policy({'min_artifacts_to_keep': invalid})
+        self.assertEqual(3, self.hub.get_retention_policy()['min_artifacts_to_keep'])
+        self.assertEqual(1, self.hub.set_retention_policy({'min_artifacts_to_keep': 1})['min_artifacts_to_keep'])
 
-        # No log files on disk -> queued and prepare done, native-build running
-        stages = build_job_timeline(job, self.root)
-        self.assertEqual(7, len(stages))
-        self.assertEqual("succeeded", stages[0]["status"])  # queued
-        self.assertEqual("succeeded", stages[1]["status"])  # prepare
-        self.assertEqual("running", stages[2]["status"])    # native-build
+    def test_timeline_plan_matches_release_runtime_and_contract_profiles(self):
+        base = ["queued", "prepare"]
+        cases = (
+            (
+                "fem-cpu-release",
+                ["native-build", "frontend-dependencies", "frontend-build"],
+            ),
+            ("fem-cpu-slepc-runtime-v1", ["native-build"]),
+            ("fem-cpu-slepc-runtime-v2", ["native-build"]),
+            (
+                "fem-cpu-current-contracts-v1",
+                [
+                    "contract-steady-transport",
+                    "contract-steady-transport-rt0",
+                    "contract-oersted-oet0",
+                ],
+            ),
+            ("fem-cpu-slepc-modal-v1", ["native-build", "contract-slepc-modal"]),
+        )
+        for index, (profile, execution_stages) in enumerate(cases):
+            with self.subTest(profile=profile):
+                job = self._timeline_job(profile, job_id=f"profile-plan-{index}")
+                stages = build_job_timeline(job, self.root)
+                ids = [stage["id"] for stage in stages]
+                self.assertEqual(
+                    base + execution_stages + ["receipt-verification", "result"],
+                    ids,
+                )
+                self.assertTrue(all(stage["status"] == "pending" for stage in stages[1:]))
+                self.assertEqual("running", stages[0]["status"])
+                for stage in stages:
+                    if stage["id"].startswith("contract-"):
+                        self.assertEqual(stage["id"], stage["name"])
 
-        # Empty log file should NOT mark stage as succeeded (R5 verification)
-        runs_dir = self.root / "runs" / "wt-1" / "job-timeline-test" / "artifacts" / "logs"
-        runs_dir.mkdir(parents=True)
-        (runs_dir / "native-build.stdout.log").write_text("", encoding="utf-8")
-        stages_empty_log = build_job_timeline(job, self.root)
-        self.assertEqual("running", stages_empty_log[2]["status"])  # native-build is running
+    def test_timeline_runtime_receipt_and_coordinator_verification_are_distinct(self):
+        for index, profile in enumerate(("fem-cpu-slepc-runtime-v1", "fem-cpu-slepc-runtime-v2")):
+            with self.subTest(profile=profile):
+                job = self._timeline_job(
+                    profile,
+                    state="running",
+                    job_id=f"runtime-receipt-{index}",
+                )
+                self._write_timeline_journal(job)
+                self._write_timeline_receipt(
+                    job,
+                    [{"name": "native-build", "exit_code": 0, "started_at": "2026-10-09T11:59:00Z", "duration_ms": 12000}],
+                )
 
-        # When frontend-dependencies log appears, native-build succeeded and dependencies are running
-        (runs_dir / "frontend-dependencies.stdout.log").write_text("Packages installing...\n", encoding="utf-8")
-        stages_stage3 = build_job_timeline(job, self.root)
-        self.assertEqual("succeeded", stages_stage3[2]["status"])  # native-build succeeded
-        self.assertEqual("running", stages_stage3[3]["status"])    # frontend-dependencies running
-        self.assertEqual("pending", stages_stage3[4]["status"])    # frontend-build pending
+                running = self._stages_by_id(build_job_timeline(job, self.root))
+                self.assertEqual("succeeded", running["native-build"]["status"])
+                self.assertEqual(12.0, running["native-build"]["duration_seconds"])
+                self.assertEqual("running", running["receipt-verification"]["status"])
+                self.assertEqual("pending", running["result"]["status"])
+                self.assertNotIn("frontend-dependencies", running)
+                self.assertNotIn("frontend-build", running)
 
-        # When frontend-build log appears, dependencies succeeded and build is running
-        (runs_dir / "frontend-build.stdout.log").write_text("Vite building...\n", encoding="utf-8")
-        stages_stage4 = build_job_timeline(job, self.root)
-        self.assertEqual("succeeded", stages_stage4[2]["status"])  # native-build succeeded
-        self.assertEqual("succeeded", stages_stage4[3]["status"])  # frontend-dependencies succeeded
-        self.assertEqual("running", stages_stage4[4]["status"])    # frontend-build running
+                job["state"] = "succeeded"
+                job["exit_code"] = 0
+                self._write_timeline_journal(job, phase="terminal", state="succeeded", exit_code=0)
+                succeeded = self._stages_by_id(build_job_timeline(job, self.root))
+                self.assertEqual("succeeded", succeeded["receipt-verification"]["status"])
+                self.assertEqual("succeeded", succeeded["result"]["status"])
 
-        # Verify receipt with actual stages and duration decomposition
-        receipt = {
-            "schema": "fullmag.local-runner.build-receipt.v1",
-            "state": "succeeded",
-            "stages": [
-                {"name": "native-build", "exit_code": 0, "duration_ms": 12000, "started_at": "2026-09-13T12:01:00Z"},
-                {"name": "frontend-dependencies", "exit_code": 0, "duration_ms": 8500, "started_at": "2026-09-13T12:01:12Z"},
-                {"name": "frontend-build", "exit_code": 0, "duration_ms": 15000, "started_at": "2026-09-13T12:01:20Z"},
+    def test_timeline_rejects_receipt_with_mismatched_source_digest(self):
+        job = self._timeline_job(
+            "fem-cpu-slepc-runtime-v1",
+            state="succeeded",
+            job_id="receipt-source-digest-mismatch",
+        )
+        job["exit_code"] = 0
+        self._write_timeline_journal(
+            job,
+            phase="terminal",
+            state="succeeded",
+            exit_code=0,
+        )
+        receipt = self._write_timeline_receipt(
+            job,
+            [{"name": "native-build", "exit_code": 0}],
+        )
+        receipt["source_digest"] = "b" * 64
+        receipt_path = (
+            self.root
+            / "runs"
+            / job["worktree_id"]
+            / job["job_id"]
+            / "artifacts"
+            / "build-receipt.json"
+        )
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+        stages = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertNotEqual(job["source_digest"], receipt["source_digest"])
+        self.assertEqual("pending", stages["native-build"]["status"])
+        self.assertNotIn("exit_code", stages["native-build"])
+        self.assertEqual("pending", stages["receipt-verification"]["status"])
+        self.assertEqual("succeeded", stages["result"]["status"])
+
+    def test_timeline_partial_contract_failure_keeps_unexecuted_stages_pending(self):
+        job = self._timeline_job(
+            "fem-cpu-current-contracts-v1",
+            state="failed",
+            job_id="partial-contracts",
+        )
+        self._write_timeline_journal(job, phase="terminal", state="failed", exit_code=2)
+        self._write_timeline_receipt(
+            job,
+            [
+                {"name": "contract-steady-transport", "exit_code": 0, "duration_ms": 5000},
+                {"name": "contract-steady-transport-rt0", "exit_code": 1, "duration_ms": 7000},
             ],
-            "finished_at": "2026-09-13T12:01:35Z",
-        }
-        (runs_dir.parent / "build-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
-        stages_from_receipt = build_job_timeline(job, self.root)
-        self.assertEqual("succeeded", stages_from_receipt[2]["status"])
-        self.assertEqual(12.0, stages_from_receipt[2]["duration_seconds"])
-        self.assertEqual("succeeded", stages_from_receipt[3]["status"])
-        self.assertEqual(8.5, stages_from_receipt[3]["duration_seconds"])
-        self.assertEqual("succeeded", stages_from_receipt[4]["status"])
-        self.assertEqual(15.0, stages_from_receipt[4]["duration_seconds"])
-        self.assertEqual("succeeded", stages_from_receipt[5]["status"])  # receipt verification
+            state="failed",
+        )
 
-        # Succeeded terminal job
+        stages = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertEqual(
+            [
+                "queued",
+                "prepare",
+                "contract-steady-transport",
+                "contract-steady-transport-rt0",
+                "contract-oersted-oet0",
+                "receipt-verification",
+                "result",
+            ],
+            list(stages),
+        )
+        self.assertEqual("succeeded", stages["contract-steady-transport"]["status"])
+        self.assertEqual("failed", stages["contract-steady-transport-rt0"]["status"])
+        self.assertEqual("pending", stages["contract-oersted-oet0"]["status"])
+        self.assertEqual("pending", stages["receipt-verification"]["status"])
+        self.assertEqual("failed", stages["result"]["status"])
+
+    def test_timeline_live_stage_logs_follow_the_profile_order(self):
+        job = self._timeline_job(
+            "fem-cpu-slepc-modal-v1",
+            state="running",
+            job_id="live-modal-contract",
+        )
+        job_dir = self._write_timeline_journal(job)
+        logs = job_dir / "artifacts" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "native-build.stdout.log").write_text("", encoding="utf-8")
+        (logs / "contract-slepc-modal.stdout.log").write_text("running contract", encoding="utf-8")
+
+        stages = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertEqual("succeeded", stages["native-build"]["status"])
+        self.assertEqual("running", stages["contract-slepc-modal"]["status"])
+        self.assertEqual("pending", stages["receipt-verification"]["status"])
+        self.assertNotIn("frontend-dependencies", stages)
+        self.assertNotIn("frontend-build", stages)
+
+    def test_timeline_unknown_empty_stage_logs_do_not_infer_success(self):
+        job = self._timeline_job(
+            "future-profile-v9",
+            state="running",
+            job_id="unknown-empty-stage-logs",
+        )
+        job_dir = self._write_timeline_journal(job)
+        logs = job_dir / "artifacts" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "a.stdout.log").write_text("", encoding="utf-8")
+        (logs / "z.stdout.log").write_text("", encoding="utf-8")
+
+        stages = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertEqual("running", stages["a"]["status"])
+        self.assertNotIn("exit_code", stages["a"])
+        self.assertEqual("running", stages["z"]["status"])
+        self.assertNotIn("exit_code", stages["z"])
+
+    def test_timeline_known_profile_ignores_alien_stage_for_success_inference(self):
+        job = self._timeline_job(
+            "fem-cpu-slepc-runtime-v1",
+            state="running",
+            job_id="known-profile-alien-stage",
+        )
+        job_dir = self._write_timeline_journal(job)
+        logs = job_dir / "artifacts" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "native-build.stdout.log").write_text("", encoding="utf-8")
+        (logs / "alien-stage.stdout.log").write_text("", encoding="utf-8")
+
+        stages = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertEqual("running", stages["native-build"]["status"])
+        self.assertNotIn("exit_code", stages["native-build"])
+        self.assertEqual("running", stages["alien-stage"]["status"])
+        self.assertNotIn("exit_code", stages["alien-stage"])
+
+    def test_timeline_unknown_profile_without_receipt_does_not_invent_execution_stages(self):
+        job = self._timeline_job(
+            "future-profile-v9",
+            state="running",
+            job_id="unknown-profile",
+        )
+        self._write_timeline_journal(job)
+
+        stages = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertEqual(
+            ["queued", "prepare", "receipt-verification", "result"],
+            list(stages),
+        )
+        self.assertEqual("succeeded", stages["prepare"]["status"])
+        self.assertEqual("pending", stages["receipt-verification"]["status"])
+        self.assertEqual("pending", stages["result"]["status"])
+
         job["state"] = "succeeded"
         job["exit_code"] = 0
-        stages_succeeded = build_job_timeline(job, self.root)
-        for st in stages_succeeded:
-            self.assertEqual("succeeded", st["status"])
+        self._write_timeline_journal(job, phase="terminal", state="succeeded", exit_code=0)
+        completed_without_receipt = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertEqual("pending", completed_without_receipt["receipt-verification"]["status"])
+        self.assertEqual("succeeded", completed_without_receipt["result"]["status"])
+        self.assertNotIn("native-build", completed_without_receipt)
+
+    def test_timeline_terminal_results_are_stable_and_use_coordinator_status(self):
+        expected = {
+            "succeeded": "succeeded",
+            "failed": "failed",
+            "cancelled": "cancelled",
+        }
+        for index, (job_state, result_status) in enumerate(expected.items()):
+            with self.subTest(state=job_state):
+                job = self._timeline_job(
+                    "fem-cpu-slepc-runtime-v2",
+                    state=job_state,
+                    job_id=f"terminal-{index}",
+                )
+                self._write_timeline_journal(
+                    job,
+                    phase="terminal",
+                    state=job_state,
+                    exit_code=0 if job_state == "succeeded" else 2,
+                    **({"validation_error": "receipt rejected"} if job_state == "failed" else {}),
+                )
+                self._write_timeline_receipt(
+                    job,
+                    [{"name": "native-build", "exit_code": 0}],
+                    state="succeeded",
+                )
+
+                first = build_job_timeline(job, self.root)
+                second = build_job_timeline(job, self.root)
+                self.assertEqual(first, second)
+                stages = self._stages_by_id(first)
+                self.assertEqual(result_status, stages["result"]["status"])
+                if job_state == "failed":
+                    self.assertEqual("failed", stages["receipt-verification"]["status"])
 
     def test_pinned_retention_candidate_appears_in_retained(self):
         # Create a dummy run directory with execution
@@ -346,7 +582,9 @@ class ObservabilityTests(unittest.TestCase):
             def list(self, owner=None, limit=1000):
                 return []
 
-        plan = self.hub.generate_retention_plan(queue=EmptyQueue())
+        with patch('local_runner.observability._fast_dir_size') as scan:
+            plan = self.hub.generate_retention_plan(queue=EmptyQueue())
+            scan.assert_not_called()
         # The unindexed execution directory MUST NOT be a candidate!
         self.assertEqual(0, plan["candidates_count"])
         # It MUST be retained and protected
@@ -354,12 +592,13 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("exec-wt-unindexed-job-unindexed", retained_ids)
         retained_item = next(r for r in plan["retained"] if r["resource_id"] == "exec-wt-unindexed-job-unindexed")
         self.assertIn("ochrona przed usunięciem", retained_item["why_retained"])
-        self.assertEqual(2048, retained_item["size_bytes"])
+        self.assertIsNone(retained_item["size_bytes"])
 
     def test_timeline_progress_from_worker_log(self):
         job = {
             "job_id": "job-worker-log",
             "worktree_id": "wt-log",
+            "profile": "fem-cpu-release",
             "state": "running",
             "created_at": 1773000000.0,
             "started_at": 1773000002.0,
@@ -378,6 +617,7 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual("succeeded", stages[1]["status"])  # prepare
         self.assertEqual("succeeded", stages[2]["status"])  # native-build
         self.assertEqual(0, stages[2]["exit_code"])
+        self.assertEqual(5.0, stages[2]["duration_seconds"])
         self.assertEqual("running", stages[3]["status"])    # frontend-dependencies
         self.assertEqual("pending", stages[4]["status"])    # frontend-build
         self.assertEqual("pending", stages[5]["status"])    # receipt-verification

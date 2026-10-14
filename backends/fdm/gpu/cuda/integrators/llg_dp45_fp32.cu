@@ -764,7 +764,9 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             launch_project_frozen_fp32(ctx, nullptr);
             context_stage_fsal_accepted_step(ctx, dt);
             context_publish_endpoint_fields(ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
-            if (!fullmag_fdm_should_fill_step_stats(ctx)) {
+            const bool fill_control_stats =
+                fullmag_fdm_should_fill_control_stats(ctx);
+            if (!fullmag_fdm_should_fill_step_stats(ctx) && !fill_control_stats) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
             } else if (context_fill_current_stats(ctx, stats)) {
                 stats->dt_seconds = dt;

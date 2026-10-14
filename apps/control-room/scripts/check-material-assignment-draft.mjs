@@ -208,6 +208,80 @@ const staleResourceResolution = inspectorDraftState.resolveInspectorDraftState({
   state: afterAckState,
 });
 assert.equal(staleResourceResolution.dirty, false, "the stale resource transition must not mark ACK values dirty");
+const loadedResourceBaseKey = "loaded-material-resource-key";
+const cleanBeforeMaterialLoaded = inspectorDraftState.initialInspectorDraftState({
+  baseDraft: emptyBase,
+  baseKey: "empty-material-resource-key",
+  identityKey,
+});
+const loadedResourceDisplay = inspectorDraftState.resolveInspectorDraftState({
+  baseDraft: committedBase,
+  baseKey: loadedResourceBaseKey,
+  identityKey,
+  isDirty: model.magneticParametersDraftDirty,
+  state: cleanBeforeMaterialLoaded,
+});
+assert.deepEqual(loadedResourceDisplay, { dirty: false, draft: committedBase });
+const legacyFirstLoadedResourceEdit = inspectorDraftState.updateInspectorDraftState({
+  baseDraft: committedBase,
+  baseKey: loadedResourceBaseKey,
+  currentDraft: cleanBeforeMaterialLoaded.draft,
+  identityKey,
+  isDirty: model.magneticParametersDraftDirty,
+  patch: { alpha: "0.2" },
+});
+assert.notEqual(legacyFirstLoadedResourceEdit.draft.ms, committedBase.ms,
+  "the previous raw-state updater path reproduces the lost Ms regression");
+assert.notEqual(legacyFirstLoadedResourceEdit.draft.materialName, committedBase.materialName,
+  "the previous raw-state updater path reproduces the lost material-name regression");
+const firstLoadedResourceEdit = inspectorDraftState.updateResolvedInspectorDraftState({
+  baseDraft: committedBase,
+  baseKey: loadedResourceBaseKey,
+  currentState: cleanBeforeMaterialLoaded,
+  identityKey,
+  isDirty: model.magneticParametersDraftDirty,
+  patch: { alpha: "0.2" },
+});
+assert.equal(firstLoadedResourceEdit.draft.alpha, "0.2");
+for (const field of ["materialName", "materialRef", "ms", "aex", "dind", "dbulk"]) {
+  assert.equal(
+    firstLoadedResourceEdit.draft[field],
+    committedBase[field],
+    `the first edit after resource load must retain ${field}`,
+  );
+}
+const consecutiveLoadedResourceEdit = inspectorDraftState.updateResolvedInspectorDraftState({
+  baseDraft: committedBase,
+  baseKey: loadedResourceBaseKey,
+  currentState: firstLoadedResourceEdit,
+  identityKey,
+  isDirty: model.magneticParametersDraftDirty,
+  patch: { ms: "9e5" },
+});
+assert.equal(consecutiveLoadedResourceEdit.draft.alpha, "0.2", "a consecutive edit must retain the first queued change");
+assert.equal(consecutiveLoadedResourceEdit.draft.ms, "9e5");
+assert.equal(consecutiveLoadedResourceEdit.draft.materialName, committedBase.materialName);
+
+const preExistingLoadedDraft = inspectorDraftState.updateInspectorDraftState({
+  baseDraft: committedBase,
+  baseKey: loadedResourceBaseKey,
+  currentDraft: { ...committedBase, ms: "7.5e5", materialName: "User value" },
+  identityKey,
+  isDirty: model.magneticParametersDraftDirty,
+  patch: {},
+});
+const editedPreExistingLoadedDraft = inspectorDraftState.updateResolvedInspectorDraftState({
+  baseDraft: committedBase,
+  baseKey: loadedResourceBaseKey,
+  currentState: preExistingLoadedDraft,
+  identityKey,
+  isDirty: model.magneticParametersDraftDirty,
+  patch: { alpha: "0.2" },
+});
+assert.equal(editedPreExistingLoadedDraft.draft.ms, "7.5e5", "a new field edit must retain a pre-existing dirty field");
+assert.equal(editedPreExistingLoadedDraft.draft.materialName, "User value");
+assert.equal(editedPreExistingLoadedDraft.draft.aex, committedBase.aex);
+
 const effectiveAckResolution = inspectorDraftState.resolveInspectorDraftState({
   baseDraft: assignmentBaseOverride.baseDraft,
   baseKey: assignmentBaseOverride.baseKey,
@@ -216,10 +290,10 @@ const effectiveAckResolution = inspectorDraftState.resolveInspectorDraftState({
   state: afterAckState,
 });
 assert.deepEqual(effectiveAckResolution, { dirty: false, draft: committedBase });
-const editedAfterAckState = inspectorDraftState.updateInspectorDraftState({
+const editedAfterAckState = inspectorDraftState.updateResolvedInspectorDraftState({
   baseDraft: assignmentBaseOverride.baseDraft,
   baseKey: assignmentBaseOverride.baseKey,
-  currentDraft: effectiveAckResolution.draft,
+  currentState: afterAckState,
   identityKey,
   isDirty: model.magneticParametersDraftDirty,
   patch: { alpha: "0.2" },
@@ -338,6 +412,14 @@ const retryDraftRebase = model.rebaseMagneticParametersDraftAfterAssignment({
 assert.equal(model.magneticParametersDraftDirty(retryDraftRebase, retryCommittedBase), false);
 
 const panelSource = await readFile(panelPath, "utf8");
+const updateDraftStart = panelSource.indexOf("function updateDraft(");
+const updateDraftEnd = panelSource.indexOf("\n  function rebaseAssignedMaterialDraft", updateDraftStart);
+const updateDraftSource = panelSource.slice(updateDraftStart, updateDraftEnd);
+assert.ok(updateDraftStart >= 0 && updateDraftEnd > updateDraftStart);
+assert.ok(updateDraftSource.includes("updateResolvedInspectorDraftState({"));
+assert.ok(updateDraftSource.includes("currentState: draftStateForResolution(current)"));
+assert.ok(!updateDraftSource.includes("draftStateForResolution.draft"),
+  "the first field edit must resolve the functional updater's current state");
 const createStart = panelSource.indexOf("async function createAndAssignMaterial");
 const createRebase = panelSource.indexOf("rebaseAssignedMaterialDraft(", createStart);
 const createCatch = panelSource.indexOf("} catch (error)", createStart);
@@ -371,6 +453,10 @@ const result = {
     "successful-retry-rebases",
     "failure-paths-do-not-acknowledge-draft",
     "stale-resource-does-not-create-false-dirty-state",
+    "legacy-first-edit-reproduces-resource-value-loss",
+    "first-edit-after-clean-resource-load-retains-untouched-values",
+    "consecutive-edits-after-resource-load-preserve-queued-changes",
+    "pre-existing-dirty-values-survive-the-next-field-edit",
     "post-ack-user-edit-survives-resource-catch-up",
     "newer-resource-revision-releases-ack-base",
     "newer-scene-snapshot-wins-over-stale-material-hook",

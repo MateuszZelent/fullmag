@@ -169,7 +169,7 @@ semantyki lease/protokołu. Nie dopisujemy pól po cichu do formatu v1.
 | Pole/grupa | Kontrakt |
 |---|---|
 | `node_id`, `boot_id`, `inventory_revision` | Trwały host, bieżące uruchomienie, rewizja topologii |
-| `runtime_owner_id`, `owner_epoch`, `capabilities_revision` | Tożsamość właściciela i publikacji; nie PID jako tożsamość |
+| `runtime_owner_id`, `owner_epoch`, `capabilities_revision` | W v1 stabilna tożsamość host ledgeru i epoka przypiętej polityki; nie PID ani dynamiczna epoka procesu |
 | `cpu.topology` | Socket, NUMA, core, logical IDs, SMT siblings, grupy procesorów Windows, cpuset/quota ograniczająca host |
 | `cpu.effective_capacity_millis` | Pojemność OS/cgroup; 1000 oznacza ekwiwalent jednego logical CPU, nie fizycznego rdzenia |
 | `memory.total_bytes`, `available_bytes` | Osobne wartości całkowite i bieżący pomiar; brak pomiaru to null/status |
@@ -191,6 +191,21 @@ przez maksymalnie 30 sekund; po przekroczeniu limitu jest `stale`. Czas z
 przyszłości, błąd odczytu i brak pomiaru dają jawny `unavailable` z reason,
 nigdy świeżą próbkę ani wartość zero. Ten sam limit obowiązuje przy późniejszym
 admission; odczyt inventory nie tworzy ani nie rezerwuje allocation.
+
+`compute_node_snapshot.v2` zawiera `host_owner_id` i `host_owner_epoch` dla
+wyłącznego producenta próbki fizycznego hosta, zakotwiczonego we wspólnym root
+`HostResourceLedger`. Pola te pozostają oddzielne od `RuntimeServiceOwner`,
+który nadal jest przypisany do `SessionStore`, oraz od
+`HostResourceLedgerPolicy.owner_epoch`, który fence'uje przypiętą konfigurację.
+Snapshot używany do admission musi pasować do aktywnego host-owner lease'a i jego
+epoki; przejęcie lease'a po kontrolowanym recovery unieważnia poprzednią próbkę
+niezależnie od jej wieku 30 sekund. Rezerwacje z poprzedniej epoki pozostają
+zajęte do exact reconciliation/release. `HostReservationRequest` oraz trwała
+rezerwacja przypinają osobne `compute_node_owner_id` i
+`compute_node_owner_epoch`; solver/preparation admission i launch permit
+sprawdzają tę parę wraz ze świeżym snapshotem pod wspólną blokadą ledgera.
+Ledger odczytuje v1 i zapisuje v2 po migracji. Znaczenie `runtime_owner_id` i
+`owner_epoch` z v1 snapshotu pozostaje bez zmian.
 
 Bieżące GPU oparte tylko na `index`/nazwie w telemetrii UI trzeba wzbogacić
 o UUID i wiązanie z inventory. Przekierowanie API na innego hosta/epoch
@@ -381,6 +396,21 @@ ale identyczna semantyka recovery pozostaje kontraktem.
   `OMP_NUM_THREADS`. Zagnieżdżone BLAS/OpenMP/Rayon są ograniczane przez adapter.
 - Rezerwacje są odrębne od bieżącego użycia. Nie odejmujemy jednocześnie
   całej rezerwacji i tego samego zmierzonego RSS od identycznej pojemności.
+- Gdy request przypina CPU IDs, bieżący snapshot musi zawierać topologię oraz
+  OS-allowed CPU set obejmujące zarówno politykę, jak i wybrane IDs. Przydział
+  GPU wymaga bieżącego UUID, potwierdzonego `full_device` i VRAM co najmniej
+  równego skonfigurowanemu oraz żądanemu limitowi. `last_known`, brak pomiaru
+  i `unknown` partycji nie otwierają admission. Tożsamość inventory nie
+  dowodzi jeszcze egzekwowania affinity ani maski urządzenia w workerze.
+- Dla owner-bound host admission raportowane `cpu.effective_capacity_millis`
+  ogranicza sumę rezerwacji CPU do minimum tej wartości i
+  `HostResourceLedgerPolicy.total_budget.cpu_millis`. Liczą się wszystkie
+  niezwolnione rezerwacje, również tentative i quarantined; limit jest ponownie
+  sprawdzany przy promowaniu i wydaniu/zużyciu launch permit. Brak bieżącego
+  pomiaru effective capacity nie używa wartości last-known ani zera — pozostaje
+  jawny limit operatora, który sam nie dowodzi odczytu ani egzekwowania OS/cgroup
+  quota. Obniżenie zmierzonego limitu nie zwalnia ani nie przerywa już działających
+  procesów, a ścieżka release pozostaje dostępna.
 - Oprócz bilansu jest świeży preflight wolnej RAM/VRAM/scratch. Konserwatywnie
   uwzględnia niewykorzystany jeszcze zapas z istniejących rezerwacji i obce
   procesy. Nieznana atrybucja lub pomiar blokuje automatyczne zwiększenie puli.
@@ -534,7 +564,8 @@ wykonujący solver bez durable RunSpec.
 |---|---|
 | `GET /v2/platform/runtime-service` — istnieje | Read-only stan ownera; nie lista sprzętu ani uprawnienie do mutation |
 | `GET /v2/platform/capabilities` — istnieje | Rejestr runtime; rozszerzenie o parallelism/workload qualification |
-| `GET /v2/platform/compute/nodes` i `/{node_id}` | Inventory/topologia, stronicowana lista; observed/revision/epoch |
+| `GET /v2/platform/compute/nodes` — istnieje dla lokalnego hosta; lista zdalna i stronicowanie są proponowane | Inventory/topologia, observed/revision/epoch |
+| `GET /v2/platform/compute/nodes/{node_id}` — istnieje dla skonfigurowanego lokalnego hosta | Snapshot węzła; zdalni providerzy pozostają proponowani |
 | `GET /v2/platform/compute/nodes/{node_id}/telemetry` | Bieżące bounded samples, per-resource freshness |
 | `GET/PUT /v2/platform/compute/nodes/{node_id}/policy` | Operator policy z If-Match i uprawnieniem; validation preview przed apply |
 | `GET/POST /v2/platform/compute/profiles` | Katalog; POST tworzy nową immutable wersję, nie zmienia użytej |
@@ -547,6 +578,13 @@ wykonujący solver bez durable RunSpec.
 | `POST .../batches/{batch_id}/commands` | Pause admission/resume/cancel/retry; ACK + command lifecycle |
 | `GET /v2/platform/compute/allocations/{allocation_id}` | Read-only szczegóły przydziału; bez tokenów operacyjnych |
 | `GET /v2/platform/compute/events/ws` | Proponowane platform-scoped invalidations; potrzebne bez aktywnej sesji |
+
+Pierwsza implementacja hostowa zwraca zero albo jeden lokalny węzeł. Brak
+konfiguracji lub próbki ma stan `not_probed`; niebezpieczny odczyt konfiguracji
+lub ledgeru zwraca `503`, a lookup nieobserwowalnego `node_id` zwraca `404`.
+Świeżość jest przeliczana przy każdym odczycie: próbka starsza niż 30 sekund
+ma stan `stale`. Odpowiedzi używają ETag/304. Sam zasób pozostaje read-only i
+nie stanowi jeszcze dowodu admission ani przydziału urządzenia.
 
 Preview zawiera `preview_id`, input digest, snapshot/profile/policy/capability
 revisions, predicted placement, estimate confidence i reasons. Jest orientacyjne:
@@ -1130,6 +1168,15 @@ bilans agregatów nie jest deklaracją placement/affinity. Tentative i unknown/
 quarantined konsumują zasoby tak jak committed. Exact replay nie tworzy
 drugiej rezerwacji, a zmiana tokenu/budżetu/fence nie jest replayem.
 
+Dla admission przypiętego do aktywnego host inventory ownera bieżące
+`cpu.effective_capacity_millis` jest dodatkowym limitem nad polityką: suma
+niezwolnionych rezerwacji nie może przekroczyć mniejszej z pojemności
+skonfigurowanej i zmierzonej. Kontrola obejmuje dodanie rezerwacji, przejście
+`Tentative→Committed` oraz launch solvera i preparation. Brak pola effective
+capacity nie jest interpretowany jako zero ani last-known; działa wtedy wyłącznie
+jawny limit polityki. To ograniczenie admission nie kwalifikuje affinity,
+quota enforcement ani zachowania już działających workerów po zmianie OS limitu.
+
 Ledger ma bounded document/record limits i checked arithmetic. Każdy zapis
 waliduje kompletny stan, a uszkodzony dokument blokuje admission. Nie
 odzyskujemy zasobów po wieku heartbeat ani śmierci service ownera. Początkowy
@@ -1152,6 +1199,7 @@ Nie jest to jeszcze konfiguracja działającej usługi ani dowód enforcement.
 
 Root/config/topology ownership, service scheduler/preparation wiring, owner lifecycle
 i runtime recovery są nadal otwartymi bramkami E2. Service cap pozostaje 1.
+
 
 ### 13.15 Przypięta konfiguracja usługi i wynik oczekiwania admission
 
@@ -1570,3 +1618,12 @@ określa checkpoint; ten kontrakt sam nie dowodzi wykonania.
 Ograniczony odbiór operator initialization na przypiętym pakiecie opisuje
 [raport 26 kontroli natywnych](../plans/active/compute-execution-20261004/host-initialization-check-20261007.md).
 Nie odblokowuje on guardu v2 ani pozostałych bramek wykonania.
+
+## Wspólna normalizacja authoring — ADR0057
+
+Scoped korekta ownership z E1: pure replay execution profile/layers jest współdzielony przez IR core, a application re-exportuje te same funkcje i nadal wiąże ProblemIR, rozstrzyga capability oraz steruje submit/runtime. Algorytm precedence, origins i immutable hashes pozostaje bez zmian. Authoring adaptive waliduje efektywne requested intent, zamiast stale legacy fields sceny. Nie ma zmiany wire, fizyki ani nowego GPU fallback. [ADR0057](../adr/0057-shared-execution-intent-normalization.md) określa zakres i bramki; implementacja/runtime wymagają osobnych dowodów.
+
+
+### Polityka równoległości jest obiektem — korekta po GHA38294719727
+
+Pełne authoring validation134PASS/1FAIL ujawniło serde struct sequence fallback: `[]` normalizowało się do serialdefaults. Shared `ParallelExecutionPolicyIR` Deserialize wymaga teraz mapy, zachowując canonical defaults, typy, duplicate/unknown-field rejection i validation zakresów na dotychczasowych boundary. Scene explicit null reset pozostaje wspierany przez istniejący helper; raw policy null nie staje się obiektem. JSON object wire/Serialize bez zmian, brak nowej capability lub zmiany fizyki. Dodatkowe regresje obejmują pełny roundtrip, malformed runtime metadata i duplicate rawJSON. Nowy CI pending.

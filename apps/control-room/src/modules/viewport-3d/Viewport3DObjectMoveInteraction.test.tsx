@@ -25,7 +25,11 @@ import { ObjectMoveToolController } from "@/kernel/authoring/ObjectMoveToolContr
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import {
   resetSharedResourceRuntimeStoreForTests,
+  sharedResourceRuntimeStore,
 } from "@/kernel/resources/ResourceRuntimeStore";
+import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { SESSIONS_PATH } from "@/kernel/api/apiPaths";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { RIBBON_COMMANDS } from "@/modules/ribbon/ribbonCommands";
@@ -34,6 +38,14 @@ import { Viewport3DObjectMoveResourceSurface } from "./Viewport3DObjectMoveInter
 
 const SESSION_A_SCOPE_KEY =
   "session=session-a&epoch=session-a%401&request_scope_epoch=test-api%3Asession-a";
+const SESSION_A_SCENE_KEY = sessionScopedResourceKey(
+  {
+    requestScopeEpoch: "test-api:session-a",
+    sessionEpoch: "session-a@1",
+    sessionId: "session-a",
+  },
+  MODEL_SCENE_PATH,
+);
 const SCENE_A_41 = scene(41, [
   { id: "magnet-a", role: "magnet", translation: [1e-9, 0, 0] },
   { id: "magnet-b", role: "magnet", translation: [0, 0, 0] },
@@ -110,6 +122,68 @@ describe("viewport object move staged draft", () => {
         draft: null,
         identity: null,
       });
+      expect(fixture.commitTransaction).not.toHaveBeenCalled();
+      expect(fixture.invalidate).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+  it("expires A atomically for A to B to A, removal and role change without implicit reactivation", async () => {
+    const fixture = createFixture();
+    selectObject(fixture.selection, "magnet-a");
+    const mounted = await hydrateFixture(fixture);
+    try {
+      await activateMove(fixture, SCENE_A_41);
+      expect(moveAxis(mounted.container, "x", "magnet-a")).not.toBeNull();
+
+      await act(async () => selectObject(fixture.selection, "magnet-b"));
+      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
+      await act(async () => selectObject(fixture.selection, "magnet-a"));
+      expect(mounted.container.querySelector('[name="move-gizmo:magnet-a"]')).toBeNull();
+
+      await activateMove(fixture, SCENE_A_41);
+      sharedResourceRuntimeStore.updateData(
+        SESSION_A_SCENE_KEY,
+        scene(42, [{ id: "magnet-b", role: "magnet", translation: [0, 0, 0] }]),
+        42,
+      );
+      await flushResource();
+      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
+
+      sharedResourceRuntimeStore.updateData(SESSION_A_SCENE_KEY, SCENE_A_41, 43);
+      await flushResource();
+      await activateMove(fixture, SCENE_A_41);
+      sharedResourceRuntimeStore.updateData(
+        SESSION_A_SCENE_KEY,
+        scene(44, [{ id: "magnet-a", role: "auxiliary", translation: [1e-9, 0, 0] }]),
+        44,
+      );
+      await flushResource();
+      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
+      expect(mounted.container.querySelector('[name="move-gizmo:magnet-a"]')).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("expires the active move on session identity change without staging or sending a stale move", async () => {
+    const fixture = createFixture();
+    selectObject(fixture.selection, "magnet-a");
+    const mounted = await hydrateFixture(fixture);
+    try {
+      await activateMove(fixture, SCENE_A_41);
+      expect(moveAxis(mounted.container, "x", "magnet-a")).not.toBeNull();
+      sharedResourceRuntimeStore.updateData(SESSIONS_PATH, sessionCollection("session-b"), "sessions:2");
+      sharedResourceRuntimeStore.updateData(
+        SESSION_STATUS_RESOURCE_KEY,
+        sessionStatus("session-b", "session-b@2", 42),
+        42,
+      );
+      await flushResource();
+      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
+      expect(mounted.container.querySelector('[name="move-gizmo:magnet-a"]')).toBeNull();
+      expect(surface(mounted.container).getAttribute("data-orbit-blocked")).toBe("false");
+      expect(fixture.objectEditSession.getSnapshot().dirty).toBe(false);
       expect(fixture.commitTransaction).not.toHaveBeenCalled();
       expect(fixture.invalidate).not.toHaveBeenCalled();
     } finally {

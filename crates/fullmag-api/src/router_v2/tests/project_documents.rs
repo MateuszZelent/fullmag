@@ -133,7 +133,13 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
     use fullmag_application::*;
     use fullmag_session::*;
     let (_app, _state, directory) = test_router_with_session_store_state().await;
-    let store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let open_coordinator_store = |stage: &str| {
+        let root = directory.join("coordinator-store");
+        SessionStore::open(&root).unwrap_or_else(|error| {
+            panic!("coordinator store {stage}; root={}; error={error:#}", root.display())
+        })
+    };
+    let store = open_coordinator_store("initial open");
     let mut task =
         TaskRecord::new(RunId::parse("run-coordinator").unwrap(), "a".repeat(64)).unwrap();
     task.queue().unwrap();
@@ -280,7 +286,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
         CoordinatorGenesisCommitDisposition::Replayed
     );
     let initial = coordinator.checkpoint();
-    let competing_store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let competing_store = open_coordinator_store("competing handle before deliberate conflict");
     let lock = store.write_transaction().unwrap();
     let failed = coordinator.commit_command(WorkerCommand::Start, None, |transition| {
         crate::coordinator_persistence::commit_transition(&competing_store, transition)
@@ -346,7 +352,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
         serde_json::from_slice::<WorkerCommandEnvelope>(&effect_bytes).unwrap(),
         start
     );
-    let reopened_receiver_store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let reopened_receiver_store = open_coordinator_store("receiver recovery");
     let mut restored_receiver = fullmag_runtime_control::DurableWorkerInbox::recover(
         reopened_receiver_store,
         coordinator.claim().clone(),
@@ -356,7 +362,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
         .receive(&start, |_| panic!("pending after reopen must not execute"))
         .is_err());
     restored_receiver.confirm_applied(&start).unwrap();
-    let applied_receiver_store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let applied_receiver_store = open_coordinator_store("applied receiver recovery");
     let mut applied_receiver = fullmag_runtime_control::DurableWorkerInbox::recover(
         applied_receiver_store,
         coordinator.claim().clone(),
@@ -401,7 +407,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
             Ok(())
         })
         .unwrap();
-    let reopened = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let reopened = open_coordinator_store("coordinator recovery");
     let journal = reopened
         .read_coordinator_journal("run-coordinator")
         .unwrap();
@@ -561,7 +567,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
     store.release_resource_lease(&durable_lease).unwrap();
     let stop_command = after_exit.commands[1].clone();
     let mut stale_inbox = fullmag_runtime_control::DurableWorkerInbox::recover(
-        SessionStore::open(directory.join("coordinator-store")).unwrap(),
+        open_coordinator_store("receiver restart"),
         after_exit.coordinator.claim().clone(),
     )
     .unwrap();
@@ -1106,7 +1112,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
     assert!(state.current_live_state.read().await.is_none());
     let store =
-        fullmag_session::SessionStore::open(state.submit_store_root.as_ref().unwrap()).unwrap();
+        fullmag_session::SessionStore::open_existing(state.submit_store_root.as_ref().unwrap())
+            .unwrap();
     assert!(store
         .read_run_intent(accepted["run_id"].as_str().unwrap())
         .unwrap()
@@ -3935,12 +3942,16 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
     assert_eq!(listed["batches"][0]["published_case_count"], 0);
     assert_eq!(listed["batches"][0]["expansion_state"], "pending");
 
+    let cases_route = concat!(
+        "/v2/persistence/projects/project-batch-http/batches/batch-http/cases",
+        "?limit=10",
+    );
     let cases = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v2/persistence/projects/project-batch-http/batches/batch-http/cases?limit=10")
+                .uri(cases_route)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3953,6 +3964,198 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
     assert_eq!(cases["cases"].as_array().unwrap().len(), 2);
     assert_eq!(cases["cases"][0]["state"], "pending_expansion");
     assert!(cases["cases"][0]["planned_run_id"].as_str().is_some());
+    assert!(cases["cases"][0]["published_run"].is_null());
+
+    let store = fullmag_session::SessionStore::open_existing(
+        state.submit_store_root.as_ref().unwrap(),
+    )
+    .unwrap();
+    let batch_intent = store
+        .read_batch_intent("batch-http")
+        .unwrap()
+        .expect("accepted batch intent is durable");
+    let manifest_bytes = store
+        .cas()
+        .get(&batch_intent.manifest_object_ref)
+        .unwrap()
+        .expect("accepted batch manifest is durable");
+    let mut manifest: fullmag_application::BatchExpansionManifest =
+        serde_json::from_slice(&manifest_bytes).unwrap();
+    let initial_progress = fullmag_session::FmsBatchExpansionProgress::new(
+        &batch_intent,
+        u64::try_from(manifest.cases.len()).unwrap(),
+        0,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        store.commit_batch_expansion_progress(0, &initial_progress).unwrap(),
+        fullmag_session::BatchExpansionProgressCommitDisposition::Accepted
+    );
+
+    // Recreate the publisher crash window: the child intent commits before
+    // next_case_index advances, so the first child is at the cursor boundary.
+    let source_study: StudyPlan = serde_json::from_value(body["study_plan"].clone()).unwrap();
+    let source_catalog: StudyProblemCatalog =
+        serde_json::from_value(body["study_problem_catalog"].clone()).unwrap();
+    let first_case_id = manifest.cases[0].case_id.clone();
+    let materialized_case = fullmag_application::materialize_independent_batch_case(
+        &mut manifest,
+        &first_case_id,
+        &source_study,
+        &source_catalog,
+    )
+    .unwrap();
+    let output_storage: fullmag_ir::OutputStorageIR = serde_json::from_value(
+        batch_intent.specification["output_storage"]["settings"].clone(),
+    )
+    .unwrap();
+    let materialized_case = fullmag_application::bind_batch_case_output_storage(
+        &materialized_case,
+        &output_storage,
+    )
+    .unwrap();
+    let child_identity = format!("{}\0{}", batch_intent.batch_id, first_case_id);
+    let child_intent = fullmag_application::RunIntent::new(
+        format!(
+            "batch-case-{}",
+            fullmag_session::hex_sha256(child_identity.as_bytes())
+        ),
+        materialized_case.specification,
+    );
+    let pre_cursor_receipt =
+        crate::run_intent_persistence::commit_validated_run_intent_with_backlog_limit(
+            &store,
+            &child_intent,
+            &definition,
+            &materialized_case.study,
+            &materialized_case.catalog,
+            &std::collections::BTreeMap::new(),
+            std::num::NonZeroUsize::new(8).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        pre_cursor_receipt.disposition,
+        fullmag_application::SubmitDisposition::Accepted
+    );
+    assert_eq!(
+        pre_cursor_receipt.run_id.as_str(),
+        child_intent.specification.run_id.as_str()
+    );
+
+    let pending_materialization = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(cases_route)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pending_materialization.status(), StatusCode::OK);
+    let pending_materialization = body_json(pending_materialization).await;
+    let pending_run = &pending_materialization["cases"][0]["published_run"];
+    assert_eq!(
+        pending_materialization["cases"][0]["state"],
+        "pending_materialization"
+    );
+    assert_eq!(pending_run["run_id"], cases["cases"][0]["planned_run_id"]);
+    assert_eq!(pending_run["catalog_state"], "pending_materialization");
+    assert!(pending_run["catalog_revision"].is_null());
+    assert_eq!(pending_run["tasks"].as_array().unwrap().len(), 0);
+
+    let batches_with_unadvanced_child = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/persistence/projects/project-batch-http/batches?limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batches_with_unadvanced_child.status(), StatusCode::OK);
+    let batches_with_unadvanced_child = body_json(batches_with_unadvanced_child).await;
+    assert_eq!(
+        batches_with_unadvanced_child["batches"][0]["published_case_count"],
+        0
+    );
+    assert_eq!(
+        batches_with_unadvanced_child["batches"][0]["expansion_state"],
+        "pending"
+    );
+
+    // Recovery replays the same child intent idempotently, then advances the
+    // durable cursor; the case row was already visible before that advance.
+    assert_eq!(
+        crate::run_intent_persistence::expand_pending_batch_children(
+            &store,
+            1,
+            std::num::NonZeroUsize::new(8).unwrap(),
+        )
+        .unwrap(),
+        1
+    );
+
+    let first_run_id = cases["cases"][0]["planned_run_id"].as_str().unwrap();
+    crate::run_intent_persistence::materialize_accepted_run_catalog(
+        &store,
+        first_run_id,
+        &ProjectId::parse("project-batch-http").unwrap(),
+    )
+    .unwrap();
+    drop(store);
+
+    let materialized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(concat!(
+                    "/v2/persistence/projects/project-batch-http/batches/batch-http/cases",
+                    "?limit=1",
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(materialized.status(), StatusCode::OK);
+    let materialized = body_json(materialized).await;
+    assert_eq!(materialized["cases"].as_array().unwrap().len(), 1);
+    assert_eq!(materialized["cases"][0]["state"], "materialized");
+    assert_eq!(
+        materialized["next_cursor"],
+        materialized["cases"][0]["case_id"]
+    );
+    let published_run = &materialized["cases"][0]["published_run"];
+    assert_eq!(published_run["run_id"], first_run_id);
+    assert_eq!(published_run["catalog_state"], "materialized");
+    assert_eq!(published_run["catalog_revision"], 1);
+    assert_eq!(published_run["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(published_run["tasks"][0]["lifecycle"], "accepted");
+
+    let second_page = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/persistence/projects/project-batch-http/batches/batch-http/cases?limit=1&cursor={}",
+                    materialized["next_cursor"].as_str().unwrap(),
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let second_page = body_json(second_page).await;
+    assert_eq!(second_page["cases"].as_array().unwrap().len(), 1);
+    assert_eq!(second_page["cases"][0]["state"], "pending_expansion");
+    assert!(second_page["cases"][0]["published_run"].is_null());
 
     let mut changed = body;
     changed["batch_request"]["axes"][0]["values"]["values"][0] = json!(-0.02);

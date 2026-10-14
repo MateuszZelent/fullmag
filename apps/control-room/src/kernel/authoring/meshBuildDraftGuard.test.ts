@@ -27,4 +27,19 @@ describe("mesh build draft guard", () => {
     bus.emit("mesh:build-confirm-resolved", { requestId: requestId!, confirmed: false });
     expect((await promise).confirmed).toBe(false);
   });
+  it("resolves confirmed FDM grid build when confirmed on bus", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    let requestId: string | undefined;
+    bus.on("mesh:build-confirm-requested", (request) => { requestId = request.requestId; });
+    const promise = awaitMeshBuildConfirmation({ bus, source: "ribbon" }, "grid.build-fdm");
+    expect(requestId).toBeDefined();
+    bus.emit("mesh:build-confirm-resolved", {
+      requestId: requestId!,
+      confirmed: true,
+      precondition: { scene_revision: 5 },
+    });
+    const result = await promise;
+    expect(result.confirmed).toBe(true);
+    expect(result.precondition).toEqual({ scene_revision: 5 });
+  });
 });

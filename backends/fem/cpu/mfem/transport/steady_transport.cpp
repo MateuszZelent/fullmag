@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
@@ -78,6 +79,167 @@ int marker_sum(const mfem::Array<int> &marker)
         sum += marker[i];
     }
     return sum;
+}
+
+std::vector<int> vertex_component_roots(mfem::Mesh &mesh)
+{
+    std::vector<int> parent(static_cast<std::size_t>(mesh.GetNV()));
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        parent[static_cast<std::size_t>(vertex)] = vertex;
+    }
+    const auto root = [&parent](int vertex) {
+        while (parent[static_cast<std::size_t>(vertex)] != vertex) {
+            parent[static_cast<std::size_t>(vertex)] =
+                parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(vertex)])];
+            vertex = parent[static_cast<std::size_t>(vertex)];
+        }
+        return vertex;
+    };
+    std::vector<bool> used(parent.size(), false);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        if (vertices.Size() == 0) {
+            throw std::invalid_argument("charge element has no vertices");
+        }
+        for (int local = 0; local < vertices.Size(); ++local) {
+            used[static_cast<std::size_t>(vertices[local])] = true;
+            parent[static_cast<std::size_t>(root(vertices[local]))] = root(vertices[0]);
+        }
+    }
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        parent[static_cast<std::size_t>(vertex)] =
+            used[static_cast<std::size_t>(vertex)] ? root(vertex) : -1;
+    }
+    return parent;
+}
+
+void add_unreferenced_component_gauges(
+    mfem::Mesh &mesh,
+    mfem::FiniteElementSpace &space,
+    const mfem::Array<int> &boundary_marker,
+    mfem::Array<int> &essential_true_dofs)
+{
+    const auto components = vertex_component_roots(mesh);
+    std::vector<bool> referenced(components.size(), false);
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        const int attribute = mesh.GetBdrAttribute(boundary);
+        if (boundary_marker[attribute - 1] == 0) {
+            continue;
+        }
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        if (vertices.Size() == 0) {
+            throw std::invalid_argument("charge terminal boundary has no vertices");
+        }
+        referenced[static_cast<std::size_t>(components[static_cast<std::size_t>(vertices[0])])] = true;
+    }
+    std::vector<int> essential;
+    essential.reserve(static_cast<std::size_t>(essential_true_dofs.Size()) + components.size());
+    for (int index = 0; index < essential_true_dofs.Size(); ++index) {
+        essential.push_back(essential_true_dofs[index]);
+    }
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        if (components[static_cast<std::size_t>(vertex)] != vertex ||
+            referenced[static_cast<std::size_t>(vertex)]) {
+            continue;
+        }
+        if (space.GetConformingRestriction() != nullptr) {
+            throw std::invalid_argument(
+                "unreferenced charge component gauge requires a conforming H1 mesh");
+        }
+        mfem::Array<int> vertex_dofs;
+        space.GetVertexDofs(vertex, vertex_dofs);
+        if (vertex_dofs.Size() != 1 || vertex_dofs[0] < 0) {
+            throw std::invalid_argument(
+                "unreferenced charge component has no unique H1 gauge dof");
+        }
+        essential.push_back(vertex_dofs[0]);
+    }
+    std::sort(essential.begin(), essential.end());
+    essential.erase(std::unique(essential.begin(), essential.end()), essential.end());
+    essential_true_dofs.SetSize(static_cast<int>(essential.size()));
+    for (int index = 0; index < essential_true_dofs.Size(); ++index) {
+        essential_true_dofs[index] = essential[static_cast<std::size_t>(index)];
+    }
+}
+
+class TerminalBoundaryPotential final : public mfem::Coefficient {
+public:
+    explicit TerminalBoundaryPotential(const std::vector<double> &values)
+        : values_(values)
+    {
+    }
+
+    double Eval(
+        mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &) override
+    {
+        return values_.at(static_cast<std::size_t>(transformation.Attribute - 1));
+    }
+
+private:
+    const std::vector<double> &values_;
+};
+
+std::vector<double> solve_terminal_response_block(
+    const std::vector<std::vector<double>> &response,
+    const std::vector<double> &requested,
+    const std::vector<int> &non_gauge)
+{
+    const std::size_t count = non_gauge.size();
+    std::vector<std::vector<double>> matrix(count, std::vector<double>(count));
+    std::vector<double> rhs(count);
+    double matrix_scale = 0.0;
+    for (std::size_t row = 0; row < count; ++row) {
+        rhs[row] = requested[static_cast<std::size_t>(non_gauge[row])];
+        for (std::size_t column = 0; column < count; ++column) {
+            const double value = response[static_cast<std::size_t>(non_gauge[row])]
+                [static_cast<std::size_t>(non_gauge[column])];
+            if (!std::isfinite(value)) {
+                throw std::runtime_error("terminal response matrix is non-finite");
+            }
+            matrix[row][column] = value;
+            matrix_scale = std::max(matrix_scale, std::abs(value));
+        }
+    }
+    if (count > 0 && matrix_scale == 0.0) {
+        throw std::invalid_argument("terminal response matrix is rank deficient");
+    }
+    const double pivot_threshold = 1.0e-10 * matrix_scale;
+    for (std::size_t column = 0; column < count; ++column) {
+        std::size_t pivot = column;
+        for (std::size_t row = column + 1; row < count; ++row) {
+            if (std::abs(matrix[row][column]) > std::abs(matrix[pivot][column])) {
+                pivot = row;
+            }
+        }
+        if (std::abs(matrix[pivot][column]) <= pivot_threshold) {
+            throw std::invalid_argument("terminal response matrix is rank deficient");
+        }
+        std::swap(matrix[column], matrix[pivot]);
+        std::swap(rhs[column], rhs[pivot]);
+        for (std::size_t row = column + 1; row < count; ++row) {
+            const double factor = matrix[row][column] / matrix[column][column];
+            for (std::size_t entry = column + 1; entry < count; ++entry) {
+                matrix[row][entry] -= factor * matrix[column][entry];
+            }
+            rhs[row] -= factor * rhs[column];
+            matrix[row][column] = 0.0;
+        }
+    }
+    std::vector<double> voltage(count, 0.0);
+    for (std::size_t index = count; index-- > 0;) {
+        double value = rhs[index];
+        for (std::size_t column = index + 1; column < count; ++column) {
+            value -= matrix[index][column] * voltage[column];
+        }
+        voltage[index] = value / matrix[index][index];
+        if (!std::isfinite(voltage[index])) {
+            throw std::runtime_error("terminal response voltage is non-finite");
+        }
+    }
+    return voltage;
 }
 
 class ReactionMatrixCoefficient final : public mfem::MatrixCoefficient {
@@ -459,6 +621,8 @@ public:
         mfem::Coefficient &boundary_potential,
         ChargeGauge gauge)
     {
+        last_charge_weak_residual.SetSize(0);
+        last_charge_marker.SetSize(0);
         if (parameters.constitutive_model != TransportConstitutiveModel::OneWay) {
             throw std::invalid_argument(
                 "reciprocal transport requires the monolithic solve_reciprocal entry point");
@@ -486,14 +650,16 @@ public:
         mfem::LinearForm rhs(&scalar_space);
         rhs = 0.0;
         rhs.Assemble();
+        // FormLinearSystem eliminates Dirichlet dofs and mutates rhs in place;
+        // the terminal reaction must use the original uneliminated load.
+        const mfem::Vector original_rhs(rhs);
 
         mfem::Array<int> essential_true_dofs;
         if (marked_boundaries > 0) {
             scalar_space.GetEssentialTrueDofs(marker, essential_true_dofs);
-        } else {
-            essential_true_dofs.SetSize(1);
-            essential_true_dofs[0] = 0;
         }
+        add_unreferenced_component_gauges(
+            mesh, scalar_space, marker, essential_true_dofs);
         mfem::OperatorPtr system_operator;
         mfem::Vector solution, system_rhs;
         form.FormLinearSystem(
@@ -510,6 +676,24 @@ public:
         solver.Mult(system_rhs, solution);
         const double residual = independent_relative_residual(matrix, solution, system_rhs);
         form.RecoverFEMSolution(solution, rhs, potential);
+        if (solver.GetConverged() && marked_boundaries > 0) {
+            // FullMult restores the eliminated stiffness contribution. Work
+            // in true-dof coordinates when the H1 space is nonconforming.
+            mfem::Vector true_potential, true_rhs;
+            if (const auto *restriction = scalar_space.GetConformingRestriction()) {
+                true_potential.SetSize(restriction->Height());
+                restriction->Mult(potential, true_potential);
+                true_rhs.SetSize(restriction->Height());
+                scalar_space.GetConformingProlongation()->MultTranspose(original_rhs, true_rhs);
+            } else {
+                true_potential = potential;
+                true_rhs = original_rhs;
+            }
+            last_charge_weak_residual.SetSize(true_potential.Size());
+            form.FullMult(true_potential, last_charge_weak_residual);
+            last_charge_weak_residual -= true_rhs;
+            last_charge_marker = marker;
+        }
         project_charge_current();
 
         if (gauge == ChargeGauge::ZeroMeanPotential) {
@@ -528,6 +712,161 @@ public:
         diagnostics.relative_residual = residual;
         accumulate_charge_diagnostics(diagnostics);
         return diagnostics;
+    }
+
+    ChargeTerminalCurrentSolution solve_charge_terminal_currents(
+        const std::vector<std::vector<int>> &terminal_boundary_attributes,
+        const std::vector<double> &requested_outward_current_a)
+    {
+        const std::size_t count = terminal_boundary_attributes.size();
+        if (count == 0 || count != requested_outward_current_a.size()) {
+            throw std::invalid_argument(
+                "terminal current solve requires matching nonempty terminal and current lists");
+        }
+        const auto components = vertex_component_roots(mesh);
+        const int max_attribute = mesh.bdr_attributes.Max();
+        std::vector<int> attribute_component(static_cast<std::size_t>(max_attribute + 1), -1);
+        for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+            mfem::Array<int> vertices;
+            mesh.GetBdrElementVertices(boundary, vertices);
+            if (vertices.Size() == 0) {
+                throw std::invalid_argument("terminal boundary has no vertices");
+            }
+            const int attribute = mesh.GetBdrAttribute(boundary);
+            const int component = components[static_cast<std::size_t>(vertices[0])];
+            int &assigned = attribute_component[static_cast<std::size_t>(attribute)];
+            if (assigned >= 0 && assigned != component) {
+                assigned = -2;
+            } else if (assigned == -1) {
+                assigned = component;
+            }
+        }
+        mfem::Array<int> all_terminals(max_attribute);
+        all_terminals = 0;
+        std::vector<int> attribute_owner(static_cast<std::size_t>(max_attribute + 1), -1);
+        std::vector<int> terminal_component(count, -1);
+        std::map<int, std::vector<int>> component_terminals;
+        std::map<int, int> dof_owner;
+        for (std::size_t terminal = 0; terminal < count; ++terminal) {
+            if (terminal_boundary_attributes[terminal].empty() ||
+                !std::isfinite(requested_outward_current_a[terminal])) {
+                throw std::invalid_argument("terminal current or boundary set is invalid");
+            }
+            mfem::Array<int> marker(max_attribute);
+            marker = 0;
+            for (int attribute : terminal_boundary_attributes[terminal]) {
+                if (attribute <= 0 || attribute > max_attribute ||
+                    attribute_component[static_cast<std::size_t>(attribute)] < 0 ||
+                    attribute_owner[static_cast<std::size_t>(attribute)] >= 0) {
+                    throw std::invalid_argument(
+                        "terminal attributes are absent, shared or span disconnected conductors");
+                }
+                const int component = attribute_component[static_cast<std::size_t>(attribute)];
+                if (terminal_component[terminal] >= 0 &&
+                    terminal_component[terminal] != component) {
+                    throw std::invalid_argument(
+                        "one terminal spans disconnected conductor components");
+                }
+                terminal_component[terminal] = component;
+                attribute_owner[static_cast<std::size_t>(attribute)] =
+                    static_cast<int>(terminal);
+                marker[attribute - 1] = 1;
+                all_terminals[attribute - 1] = 1;
+            }
+            mfem::Array<int> terminal_dofs;
+            scalar_space.GetEssentialTrueDofs(marker, terminal_dofs);
+            if (terminal_dofs.Size() == 0) {
+                throw std::invalid_argument("terminal has no H1 essential dofs");
+            }
+            for (int index = 0; index < terminal_dofs.Size(); ++index) {
+                if (!dof_owner.emplace(terminal_dofs[index], static_cast<int>(terminal)).second) {
+                    throw std::invalid_argument("terminal boundaries share an H1 essential dof");
+                }
+            }
+            component_terminals[terminal_component[terminal]].push_back(
+                static_cast<int>(terminal));
+        }
+        for (const auto &[component, terminals] : component_terminals) {
+            (void)component;
+            double balance = 0.0;
+            double magnitude = 0.0;
+            for (int terminal : terminals) {
+                const double current = requested_outward_current_a[
+                    static_cast<std::size_t>(terminal)];
+                balance += current;
+                magnitude += std::abs(current);
+            }
+            if (std::abs(balance) > 1.0e-10 * magnitude + 1.0e-18) {
+                throw std::invalid_argument(
+                    "requested terminal currents do not balance on a conductor component");
+            }
+        }
+
+        std::vector<double> attribute_voltage(static_cast<std::size_t>(max_attribute), 0.0);
+        TerminalBoundaryPotential boundary_potential(attribute_voltage);
+        std::vector<std::vector<double>> response(count, std::vector<double>(count, 0.0));
+        ChargeTerminalCurrentSolution result;
+        result.terminal_voltage_v.assign(count, 0.0);
+        for (const auto &[component, terminals] : component_terminals) {
+            (void)component;
+            result.gauge_terminal_indices.push_back(terminals.front());
+            for (std::size_t index = 1; index < terminals.size(); ++index) {
+                const int source = terminals[index];
+                for (int attribute : terminal_boundary_attributes[
+                        static_cast<std::size_t>(source)]) {
+                    attribute_voltage[static_cast<std::size_t>(attribute - 1)] = 1.0;
+                }
+                const auto diagnostics = solve_charge(
+                    all_terminals, boundary_potential, ChargeGauge::BoundaryReference);
+                if (!diagnostics.converged) {
+                    throw std::runtime_error("unit-terminal H1 response solve did not converge");
+                }
+                for (std::size_t terminal = 0; terminal < count; ++terminal) {
+                    for (int attribute : terminal_boundary_attributes[terminal]) {
+                        response[terminal][static_cast<std::size_t>(source)] +=
+                            boundary_weak_current_a(attribute);
+                    }
+                }
+                for (int attribute : terminal_boundary_attributes[
+                        static_cast<std::size_t>(source)]) {
+                    attribute_voltage[static_cast<std::size_t>(attribute - 1)] = 0.0;
+                }
+            }
+            std::vector<int> non_gauge(terminals.begin() + 1, terminals.end());
+            const auto voltage = solve_terminal_response_block(
+                response, requested_outward_current_a, non_gauge);
+            for (std::size_t index = 0; index < non_gauge.size(); ++index) {
+                result.terminal_voltage_v[static_cast<std::size_t>(non_gauge[index])] =
+                    voltage[index];
+            }
+        }
+        for (std::size_t terminal = 0; terminal < count; ++terminal) {
+            for (int attribute : terminal_boundary_attributes[terminal]) {
+                attribute_voltage[static_cast<std::size_t>(attribute - 1)] =
+                    result.terminal_voltage_v[terminal];
+            }
+        }
+        result.diagnostics = solve_charge(
+            all_terminals, boundary_potential, ChargeGauge::BoundaryReference);
+        if (!result.diagnostics.converged) {
+            throw std::runtime_error("prescribed terminal-current H1 solve did not converge");
+        }
+        result.measured_outward_current_a.assign(count, 0.0);
+        for (std::size_t terminal = 0; terminal < count; ++terminal) {
+            for (int attribute : terminal_boundary_attributes[terminal]) {
+                result.measured_outward_current_a[terminal] +=
+                    boundary_weak_current_a(attribute);
+            }
+        }
+        for (std::size_t terminal = 0; terminal < count; ++terminal) {
+            if (!std::isfinite(result.measured_outward_current_a[terminal]) ||
+                std::abs(result.measured_outward_current_a[terminal] -
+                    requested_outward_current_a[terminal]) >
+                    1.0e-8 * std::abs(requested_outward_current_a[terminal]) + 1.0e-18) {
+                throw std::runtime_error("prescribed signed terminal current residual exceeds tolerance");
+            }
+        }
+        return result;
     }
 
     SpinSolveDiagnostics solve_spin(
@@ -623,6 +962,8 @@ public:
         mfem::VectorCoefficient *boundary_spin_potential,
         ChargeGauge gauge)
     {
+        last_charge_weak_residual.SetSize(0);
+        last_charge_marker.SetSize(0);
         if (parameters.constitutive_model != TransportConstitutiveModel::Reciprocal) {
             throw std::invalid_argument(
                 "solve_reciprocal requires reciprocal constitutive parameters");
@@ -857,6 +1198,20 @@ public:
         }
     }
 
+    void charge_response(
+        mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &point,
+        mfem::Vector &value)
+    {
+        if (parameters.constitutive_model == TransportConstitutiveModel::OneWay) {
+            potential.GetGradient(transformation, value);
+            value *= -conductivity.Eval(transformation, point);
+            return;
+        }
+        mfem::DenseMatrix spin_current;
+        constitutive_response(transformation, point, value, spin_current);
+    }
+
     void project_charge_current()
     {
         class ChargeCurrentCoefficient final : public mfem::VectorCoefficient {
@@ -871,8 +1226,7 @@ public:
                 mfem::ElementTransformation &transformation,
                 const mfem::IntegrationPoint &point) override
             {
-                mfem::DenseMatrix spin_current;
-                owner_.constitutive_response(transformation, point, value, spin_current);
+                owner_.charge_response(transformation, point, value);
             }
 
         private:
@@ -927,8 +1281,7 @@ public:
                 const auto &point = rule.IntPoint(q);
                 transformation->SetIntPoint(&point);
                 mfem::Vector charge(3);
-                mfem::DenseMatrix spin_current;
-                constitutive_response(*transformation, point, charge, spin_current);
+                charge_response(*transformation, point, charge);
                 const double weight = point.weight * transformation->Weight();
                 volume_current.Add(weight, charge);
                 volume += weight;
@@ -952,8 +1305,7 @@ public:
                 face->Loc1.Transform(face_point, element_point);
                 face->Elem1->SetIntPoint(&element_point);
                 mfem::Vector charge(3);
-                mfem::DenseMatrix spin_current;
-                constitutive_response(*face->Elem1, element_point, charge, spin_current);
+                charge_response(*face->Elem1, element_point, charge);
                 mfem::Vector normal(3);
                 face->Face->SetIntPoint(&face_point);
                 mfem::CalcOrtho(face->Face->Jacobian(), normal);
@@ -961,6 +1313,55 @@ public:
             }
         }
         diagnostics.net_boundary_current_a = boundary_current;
+    }
+
+    double boundary_current_a(int boundary_attribute)
+    {
+        double boundary_current = 0.0;
+        for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+            if (mesh.GetBdrAttribute(boundary) != boundary_attribute) {
+                continue;
+            }
+            auto *face = mesh.GetBdrFaceTransformations(boundary);
+            if (face == nullptr || face->Elem1 == nullptr) {
+                continue;
+            }
+            const auto &rule = mfem::IntRules.Get(
+                mesh.GetBdrElementBaseGeometry(boundary), 4);
+            for (int q = 0; q < rule.GetNPoints(); ++q) {
+                const auto &face_point = rule.IntPoint(q);
+                mfem::IntegrationPoint element_point;
+                face->Loc1.Transform(face_point, element_point);
+                face->Elem1->SetIntPoint(&element_point);
+                mfem::Vector charge(3);
+                charge_response(*face->Elem1, element_point, charge);
+                mfem::Vector normal(3);
+                face->Face->SetIntPoint(&face_point);
+                mfem::CalcOrtho(face->Face->Jacobian(), normal);
+                boundary_current += (charge * normal) * face_point.weight;
+            }
+        }
+        return boundary_current;
+    }
+
+    double boundary_weak_current_a(int boundary_attribute) const
+    {
+        if (boundary_attribute <= 0 || boundary_attribute > mesh.bdr_attributes.Max() ||
+            last_charge_marker.Size() == 0 ||
+            last_charge_marker[boundary_attribute - 1] == 0) {
+            throw std::invalid_argument(
+                "weak terminal current requires a solved Dirichlet boundary attribute");
+        }
+        mfem::Array<int> terminal_marker(mesh.bdr_attributes.Max());
+        terminal_marker = 0;
+        terminal_marker[boundary_attribute - 1] = 1;
+        mfem::Array<int> terminal_dofs;
+        scalar_space.GetEssentialTrueDofs(terminal_marker, terminal_dofs);
+        double outward_current = 0.0;
+        for (int i = 0; i < terminal_dofs.Size(); ++i) {
+            outward_current -= last_charge_weak_residual[terminal_dofs[i]];
+        }
+        return outward_current;
     }
 
     void accumulate_spin_diagnostics(SpinSolveDiagnostics &diagnostics)
@@ -1170,6 +1571,8 @@ public:
     mfem::GridFunction coupled_state;
     std::vector<std::unique_ptr<SpinSourceColumnCoefficient>> source_coefficients;
     std::array<double, 3> last_spin_weak_balance{};
+    mfem::Vector last_charge_weak_residual;
+    mfem::Array<int> last_charge_marker;
 };
 
 SteadyTransportOracle::SteadyTransportOracle(
@@ -1189,6 +1592,14 @@ ChargeSolveDiagnostics SteadyTransportOracle::solve_charge(
     ChargeGauge gauge)
 {
     return impl_->solve_charge(dirichlet_boundary_marker, boundary_potential, gauge);
+}
+
+ChargeTerminalCurrentSolution SteadyTransportOracle::solve_charge_terminal_currents(
+    const std::vector<std::vector<int>> &terminal_boundary_attributes,
+    const std::vector<double> &requested_outward_current_a)
+{
+    return impl_->solve_charge_terminal_currents(
+        terminal_boundary_attributes, requested_outward_current_a);
 }
 
 SpinSolveDiagnostics SteadyTransportOracle::solve_spin(
@@ -1223,6 +1634,16 @@ const mfem::GridFunction &SteadyTransportOracle::spin_potential() const
 const mfem::GridFunction &SteadyTransportOracle::charge_current_density() const
 {
     return impl_->current;
+}
+
+double SteadyTransportOracle::boundary_current_a(int boundary_attribute)
+{
+    return impl_->boundary_current_a(boundary_attribute);
+}
+
+double SteadyTransportOracle::boundary_weak_current_a(int boundary_attribute) const
+{
+    return impl_->boundary_weak_current_a(boundary_attribute);
 }
 
 const mfem::GridFunction &SteadyTransportOracle::spin_current_tensor() const

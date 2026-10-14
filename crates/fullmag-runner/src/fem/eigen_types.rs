@@ -1,3 +1,4 @@
+use super::eigen_mass_metric::ModalMassMetric;
 use fullmag_engine::Vector3;
 use nalgebra::DMatrix;
 use num_complex::Complex64;
@@ -40,10 +41,11 @@ pub(super) struct SharedDomainLinearizationState {
 }
 
 pub(super) struct SharedDomainModeContext<'a> {
-    pub(super) reduced_tangent_mass: &'a DMatrix<f64>,
+    pub(super) reduced_tangent_mass: &'a dyn ModalMassMetric,
     pub(super) active_nodes: &'a [usize],
     pub(super) magnetic_classes: &'a [u32],
     pub(super) magnetic_class_count: usize,
+    pub(super) node_phases: Option<&'a [Complex64]>,
 }
 
 #[derive(Debug, Clone)]

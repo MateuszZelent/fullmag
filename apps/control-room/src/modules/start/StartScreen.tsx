@@ -338,6 +338,7 @@ export function StartScreen({ kernel }: ModuleProps) {
     <div className="fm-start" data-section={section}>
       <StartRail
         compute={compute}
+        nodeInventory={computeProbe.nodeInventory}
         computeError={computeProbe.error}
         refreshing={computeProbe.refreshing}
         stale={computeProbe.stale}
@@ -383,6 +384,7 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "settings" ? (
             <SettingsSection
               compute={compute}
+              nodeInventory={computeProbe.nodeInventory}
               computeError={computeProbe.error}
               refreshing={computeProbe.refreshing}
               stale={computeProbe.stale}

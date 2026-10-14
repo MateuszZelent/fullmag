@@ -10,6 +10,8 @@ import {
 
 const chartMocks = vi.hoisted(() => ({
   exportProvenance: null as Record<string, unknown> | null,
+  exportPointCounts: [] as number[],
+  displayPointCounts: [] as number[],
   onPointSelect: null as
     | ((point: { seriesId: string; point: { rowIndex: number } }) => void)
     | null,
@@ -17,18 +19,100 @@ const chartMocks = vi.hoisted(() => ({
 
 vi.mock("./EChartsSurface", () => ({
   EChartsSurface: (props: {
+    dataExportModel?: { series: readonly { points: readonly unknown[] }[] };
     exportProvenance?: Record<string, unknown>;
     onPointSelect?: (point: { seriesId: string; point: { rowIndex: number } }) => void;
+    series?: readonly { points: readonly unknown[] }[];
   }) => {
     chartMocks.exportProvenance = props.exportProvenance ?? null;
+    chartMocks.exportPointCounts.push(
+      props.dataExportModel?.series.reduce((count, series) => count + series.points.length, 0) ?? 0,
+    );
+    chartMocks.displayPointCounts.push(
+      props.series?.reduce((count, series) => count + series.points.length, 0) ?? 0,
+    );
     chartMocks.onPointSelect = props.onPointSelect ?? null;
     return null;
   },
+  tableSeriesRenderModel: (series: readonly { points: readonly unknown[] }[]) => ({
+    series: series.map((entry) => ({ points: entry.points })),
+  }),
 }));
 
 import { AnalysisResultProjectionSurface } from "./AnalysisResultProjectionSurface";
 
 describe("AnalysisResultProjectionSurface", () => {
+  it("shows requested scopes and exports the complete projection beyond the render cap", () => {
+    chartMocks.exportPointCounts.length = 0;
+    chartMocks.displayPointCounts.length = 0;
+    const pointCount = 5_001;
+    const resource = {
+      axis_labels: { x: "Wavevector", y: "Frequency" },
+      axis_mapping: { x: "k_rad_per_m", y: "frequency_hz" },
+      axis_units: { x: "rad/m", y: "Hz" },
+      dataset_id: "result:run-1:stage-1:modal-eigen",
+      dataset_revision: "revision-1",
+      fixed_coordinates: [],
+      projection_id: "field-frequency-map",
+      projection_revision: "projection-revision-1",
+      run_id: "run-1",
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      selection_index: Array.from({ length: pointCount }, (_, ordinal) => ({
+        branch_id: "branch:0",
+        item_id: `mode:${ordinal}`,
+        item_kind: "eigen_mode" as const,
+        ordinal,
+        sample_id: `sample:${ordinal}`,
+      })),
+      series: [{
+        label: "mode 0",
+        points: Array.from({ length: pointCount }, (_, ordinal) => ({
+          branch_id: "branch:0",
+          item_id: `mode:${ordinal}`,
+          ordinal,
+          sample_id: `sample:${ordinal}`,
+          status: "ready",
+          value: ordinal,
+          x: ordinal,
+          y: ordinal,
+        })),
+        series_id: "branch:0",
+      }],
+      status: {
+        completeness: "ready",
+        detail: null,
+        execution: "published",
+        qualification: "unvalidated",
+        reason_code: null,
+        resource: "ready",
+      },
+      unsupported_reason: null,
+    } as unknown as AnalysisResultProjectionResource;
+    const model = buildAnalysisResultProjectionChartModel(resource, "modal_eigen", {
+      requestedSpectrumOutputScopes: ["per_sample", "global"],
+    });
+    const html = renderToStaticMarkup(
+      <AnalysisResultProjectionSurface
+        kernel={{ bus: undefined } as unknown as KernelApi}
+        model={model}
+        onPointSelect={() => undefined}
+        onProjectionSelect={() => undefined}
+        projections={[]}
+        productKind="modal_eigen"
+        resource={resource}
+        selectedProjectionId="field-frequency-map"
+        selectedSelection={null}
+        status="ready"
+      />,
+    );
+
+    expect(html).toContain("Requested spectrum output scopes: per_sample, global.");
+    expect(html).toContain("with no averaging");
+    expect(html).toContain('aria-label="Spectrum output scope"');
+    expect(chartMocks.displayPointCounts.at(-1)).toBe(5_000);
+    expect(chartMocks.exportPointCounts.at(-1)).toBe(pointCount);
+  });
+
   it("uses the clicked projection entry item_kind instead of the previous selection", () => {
     const resource = {
       axis_labels: { x: "Wavevector", y: "Frequency" },
@@ -205,7 +289,7 @@ describe("AnalysisResultProjectionSurface", () => {
     const html = renderToStaticMarkup(
       <AnalysisResultProjectionSurface
         kernel={{ bus: undefined } as unknown as KernelApi}
-        model={{ selectionBySeriesId: {}, series: [] }}
+        model={buildAnalysisResultProjectionChartModel(resource, "time_domain_spectrum")}
         onPointSelect={() => undefined}
         onProjectionSelect={() => undefined}
         projections={[]}

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstring>
+#include <utility>
 
 namespace fullmag::fem::frequency_domain {
 namespace {
@@ -32,4 +33,5 @@ void CanonicalDigestBuilder::add_u64(std::string_view name, std::uint64_t value)
 void CanonicalDigestBuilder::add_double(std::string_view name, double value) { std::array<std::uint8_t,8> bytes{}; const std::uint64_t bits=normalized_bits(value); for(int i=0;i<8;++i) bytes[i]=static_cast<std::uint8_t>(bits>>(56-8*i)); add_field(name,4,bytes.data(),bytes.size()); }
 void CanonicalDigestBuilder::add_bytes(std::string_view name, const std::uint8_t *value, std::uint64_t size) { add_field(name,3,value,size); }
 std::string CanonicalDigestBuilder::sha256_hex() const { return sha256(payload_); }
+std::string CanonicalDigestBuilder::release_payload() && { return std::move(payload_); }
 } // namespace fullmag::fem::frequency_domain

@@ -24,7 +24,9 @@ import {
 import { MeshEditorCapabilitiesSection } from "./mesh-details/MeshEditorCapabilitiesSection";
 import { MeshViewportDeliverySection } from "./mesh-details/MeshViewportDeliverySection";
 import { MixedTopologyProvenanceSection } from "./mesh-details/MixedTopologyProvenanceSection";
+import { SharedDomainMeshPolicySection } from "./mesh-details/SharedDomainMeshPolicySection";
 import { FdmGridInspectorPanel } from "./fdm-grid/FdmGridInspectorPanel";
+import { FemMeshReadinessGuideCard } from "./mesh-guide/FemMeshReadinessGuideCard";
 import {
   type MeshDetailsLane,
   useMeshDetailsModel,
@@ -73,6 +75,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
     case "mesh.root":
       return [
         "overview",
+        "shared-policy",
         "identity",
         "pipeline",
         "mixed-topology",
@@ -86,6 +89,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
     case "mesh.shared-domain":
       return [
         "overview",
+        "shared-policy",
         "identity",
         "counts",
         "mixed-topology",
@@ -175,12 +179,18 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   }
   const sections = meshDetailsInspectorSections(selection.kind);
   const showSection = (section: string) => sections.includes(section);
+  const showGuide =
+    selection.kind === "mesh.root" ||
+    selection.kind === "mesh.shared-domain" ||
+    selection.kind === "mesh.builds" ||
+    selection.kind === "mesh.quality";
 
   return (
     <div
       key={selection.kind ?? "default"}
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
     >
+      {showGuide ? <FemMeshReadinessGuideCard /> : null}
       {showSection("overview") ? (
         <MeshOverviewSection
           activeBuildRevision={model.activeBuildRevision}
@@ -197,6 +207,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           title={model.title}
         />
       ) : null}
+      {showSection("shared-policy") ? <SharedDomainMeshPolicySection /> : null}
       {showSection("identity") ? (
         <SolverMeshIdentitySection
           badge={model.manifestStatus}

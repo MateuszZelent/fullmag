@@ -1,0 +1,72 @@
+{
+  "schema": "fullmag_authoring_audit_source_identity_v1",
+  "timestamp_utc": "2026-10-13T15:03:48.613357+00:00",
+  "checkout": "C:\\git\\fullmag\\worktrees\\simulation-mode-consistency-20261013",
+  "branch": "codex/simulation-mode-consistency-20261013",
+  "head": "f2eb8f100e706343fe379e9928c589530529bd94",
+  "main_head_at_audit": "141f21a193bc920f7d5232b7e50d24550e31ba51",
+  "pr": "https://github.com/MateuszZelent/fullmag/pull/155",
+  "qualification": "source audit; user report not reproduced against real backend",
+  "files": [
+    {
+      "path": "apps/control-room/src/kernel/layout/NewProblemDialog.tsx",
+      "sha256": "1ef308dc4cd48329cdd4fa632a69c661140ad0d724d0d7328d38b2e596cffece"
+    },
+    {
+      "path": "apps/control-room/src/kernel/resources/sessionDiscretization.ts",
+      "sha256": "2c4b4f64d46118cc6aaeeaf368ab989ada0d8ee9770fd2673524a9578b6764c8"
+    },
+    {
+      "path": "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts",
+      "sha256": "7323722a7812d30f0b24fd8e4e290e8d7c36577821447ddf26af990a549377ea"
+    },
+    {
+      "path": "apps/control-room/src/kernel/authoring/scratchAuthoringReadiness.ts",
+      "sha256": "d123a2c7cabdf7f19c28be4d59994f43bc46a1816ce7e8d1aa415928400873ac"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.tsx",
+      "sha256": "3b7e0a0565f59f341551a291c49c9aff0be5c65fe4d6a170a315180a394e9083"
+    },
+    {
+      "path": "crates/fullmag-api/src/router_v2/handlers/sessions/create.rs",
+      "sha256": "50bf4f3070c3f5c4c45d9b2739f2073141d178d20af70a69d00baacc42bf5c12"
+    },
+    {
+      "path": "crates/fullmag-api/src/router_v2/handlers/sessions/status.rs",
+      "sha256": "401560ec7f9707a183b89be954a07c73d438ce20c00b5c871d034e8ccefdf327"
+    },
+    {
+      "path": "crates/fullmag-api/src/router_v2/handlers/model/readiness.rs",
+      "sha256": "2f1cc4298b8176d0de82c54510c789c90808cd3a7a9ef65766287009a7ba699a"
+    },
+    {
+      "path": "crates/fullmag-authoring/src/geometry.rs",
+      "sha256": "55390a3597c65f5a71e4c20b9b97f3d4552f2206d95096e77285ccae906d08f6"
+    },
+    {
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "sha256": "6642a4ed63f908a9ff183da66e10090b9c5d429f94f1c27a2a20b955d32e1e23"
+    },
+    {
+      "path": "crates/fullmag-plan/src/util.rs",
+      "sha256": "8e3b40fb4c4e2191264be47697a596a5cd4bfc030d013eb0440b9b1d94c3f65a"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/ModelTreeOverviewInspectorPanels.tsx",
+      "sha256": "59f1f96f088097054e75b18b9537993f5a21dc446d415263eafa15e4fe8cadb9"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx",
+      "sha256": "ad161d22e3e426b9ef229e88987fac9549baefcccf28a2797800e3e308c865a4"
+    },
+    {
+      "path": "apps/control-room/src/modules/ribbon/ribbonContributions.tsx",
+      "sha256": "5de5225c2758bd9269c1f231a34af8d4190e3498df6a51243d2884eff55cebef"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx",
+      "sha256": "b9bb7ad7d3fb9e0b57caa20f46777ef9c2d9b35a574c6b55a890cea328fdc9cd"
+    }
+  ]
+}

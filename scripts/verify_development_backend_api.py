@@ -52,6 +52,36 @@ def _validate_start_freeze_race_scope(enabled: bool, conflicting_scope: bool) ->
         raise storage.StorageError("Start/freeze race is a separate owned native verification scope")
 
 
+def _publish_owned_store_fixture_json(store: Path, path: Path, document: dict) -> None:
+    """Publish this verifier's fixture under the existing native writer lock."""
+    store = storage.validate_path(store, store, "owned fixture store")
+    path = storage.validate_path(path, store, "owned fixture document")
+    lock_path = storage.validate_path(store / "WRITER.lock", store, "native fixture writer lock")
+    # Never create or replace the native descriptor or its owner metadata.
+    with lock_path.open("r+b", buffering=0) as descriptor:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                descriptor.seek(0)
+                msvcrt.locking(descriptor.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as error:
+                if error.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise storage.StorageError("Owned fixture writer lock remained busy") from error
+                time.sleep(0.01)
+        try:
+            descriptor.seek(0)
+            if descriptor.read(256) != b"fullmag.writer.lock.v1\n":
+                raise storage.StorageError("Owned fixture has an unsupported native writer descriptor")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            storage.atomic_json(path, document)
+        finally:
+            descriptor.seek(0)
+            msvcrt.locking(descriptor.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def _can_reuse_active_binaries(source_bin: Path, stable_bin: Path, expected: dict) -> bool:
     from windows.runtime_bundle import BINARY_NAMES, _check_path_chain, _require_directory, _require_regular_file
 
@@ -460,6 +490,13 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                     or identity["source_snapshot_sha256"] != receipt["build_snapshot_sha256"]
                     or "/v2/platform/development-backend" not in spec["paths"]):
                 raise storage.StorageError("Canonical native OpenAPI identity does not match the verified build")
+            camera_patch_schema = spec["components"]["schemas"]["VisualizationCameraPatch"]
+            scale_schema = camera_patch_schema["properties"]["orthographic_scale"]
+            if (set(scale_schema.get("type", [])) != {"number", "null"}
+                    or scale_schema.get("format") != "double"
+                    or "orthographic_scale" in camera_patch_schema.get("required", [])):
+                raise storage.StorageError("Camera scale PATCH lost its optional nullable number contract")
+            receipt["checks"].append("camera-scale-openapi-optional-nullable-double")
             storage.atomic_json(run_root / "openapi-v2.json", spec)
             receipt["openapi_sha256"] = hashlib.sha256((run_root / "openapi-v2.json").read_bytes()).hexdigest()
             receipt["checks"].append("canonical-codegen-identity")
@@ -1496,8 +1533,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                     preparation_attempt_id="fixture-preparation")),
             ):
                 lease_path = store / "runs/idle-fence-lease" / family / "outside-pool/fixture-lease.json"
-                lease_path.parent.mkdir(parents=True)
-                storage.atomic_json(lease_path, document)
+                _publish_owned_store_fixture_json(store, lease_path, document)
                 denied = control("drain_idle_confirmed", owner["owner_token"], uuid.uuid4().hex)
                 assert denied == {"status": "rejected", "reason": "idle_not_proven"}, denied
                 assert control("status", owner["owner_token"], uuid.uuid4().hex)["owner"]["state"] == "ready"
@@ -1505,7 +1541,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                 receipt["checks"].append(family + "-outside-pool-refuses-idle-drain")
                 # Keep the document to prove that terminal lease history does
                 # not prevent the eventual idle drain. No process owns it.
-                storage.atomic_json(lease_path, {**document, "state": "released",
+                _publish_owned_store_fixture_json(store, lease_path, {**document, "state": "released",
                     "released_at": "2026-10-03T00:01:00Z"})
             fence_path = store / "development/ADMISSION-FENCE.json"
             fence_path.parent.mkdir(exist_ok=True)
@@ -1824,6 +1860,20 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
         else:
             raise AssertionError("Authoring accepted a read-only future project")
         checks.append("project-authoring-rejects-read-only-before-rendering")
+        for role in ("magnet", "antenna", "conductor", "geometry"):
+            for field, missing_id in (("material_ref", "material:missing"),
+                                      ("magnetization_ref", "magnetization:missing")):
+                invalid_scene = json.loads(json.dumps(scene))
+                invalid_scene["objects"][0].update(role=role, **{field: missing_id})
+                try:
+                    get("/v2/persistence/projects/authoring", method="POST", payload={
+                        **request, "scene_document": invalid_scene}, timeout=30)
+                except urllib.error.HTTPError as error:
+                    body = error.read().decode("utf-8")
+                    assert error.code == 400 and missing_id in body, (role, field, error.code, body)
+                else:
+                    raise AssertionError(f"Authoring accepted dangling {role} {field}")
+                checks.append(f"project-authoring-rejects-dangling-{role}-{field}")
         for label, changes, expected_status in (
             ("wrong-project", {"expected_project_id": "project-wrong"}, 409),
             ("wrong-revision", {"expected_revision": created["revision"] + 1}, 409),
@@ -2554,6 +2604,27 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
     if start_freeze_race_only:
         return
 
+    incomplete_physics_scene = json.loads(json.dumps(start_race_scene))
+    incomplete_physics_scene["objects"][0].pop("physics_stack", None)
+    incomplete_physics_scene["study"].update(exchange_enabled=False, demag_enabled=False)
+
+    def incomplete_physics_render(get):
+        _, _, before = get("/v2/sessions/current/model/scene")
+        try:
+            get("/v2/sessions/current/model/syncs", method="POST", payload={})
+        except urllib.error.HTTPError as error:
+            failure = json.loads(error.read())
+            assert error.code == 400 and failure.get("code") == "scene_incomplete_physics", failure
+        else:
+            raise AssertionError("Incomplete physics render was not explicitly rejected")
+        checks.append("incomplete-physics-render-is-confirmed-input-rejection")
+        _, _, after = get("/v2/sessions/current/model/scene")
+        assert after == before, "Render rejection changed authoring data"
+        checks.append("incomplete-physics-render-preserves-scene-and-revision")
+
+    with_api("incomplete-physics-render", restore_config, incomplete_physics_render,
+             restore_input=json.dumps({**restore_envelope, "scene_document": incomplete_physics_scene}).encode())
+
     def restored(get):
         code, _, current = get("/v2/sessions/current")
         assert code == 200 and current["session_id"] not in {"old-session-fixture", "stable-model-fixture"}, current
@@ -2592,6 +2663,39 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
         assert code == 200 and edited["revision"] == 18, edited
         assert edited["scene"]["name"] == "Edited restored model", edited
         checks.append("prelisten-restored-authoring-is-editable")
+
+        # Real owned API regression: JSON null must clear a previously set scale.
+        camera_path = "/v2/sessions/current/visualization/state"
+        code, _, initial_view = get(camera_path)
+        assert code == 200, initial_view
+        original_camera = dict(initial_view["camera"])
+        previous_revision = initial_view["revision"]
+        for label, camera_patch, expected_scale in (
+            ("set", {"orthographic_scale": 2.0}, 2.0),
+            ("absent", {}, 2.0),
+            ("clear", {"orthographic_scale": None}, None),
+        ):
+            code, _, view = get(camera_path, method="PATCH", payload={"camera": camera_patch})
+            assert code == 200, view
+            assert view["revision"] > previous_revision, view
+            expected_camera = {**original_camera, "orthographic_scale": expected_scale}
+            assert view["camera"] == expected_camera, view
+            code, _, readback = get(camera_path)
+            assert code == 200 and readback["camera"] == expected_camera, readback
+            assert readback["revision"] == view["revision"], readback
+            previous_revision = view["revision"]
+            checks.append("camera-scale-patch-" + label + "-revision-and-readback")
+        for invalid_scale in (0.0, -1.0):
+            try:
+                get(camera_path, method="PATCH", payload={"camera": {"orthographic_scale": invalid_scale}})
+            except urllib.error.HTTPError as error:
+                assert error.code == 400, error.code
+            else:
+                raise AssertionError("Invalid camera scale was accepted")
+            code, _, readback = get(camera_path)
+            assert code == 200 and readback["camera"] == expected_camera, readback
+            assert readback["revision"] == previous_revision, readback
+        checks.append("camera-scale-invalid-patch-preserves-state-and-revision")
 
     with_api("restored", restore_config, restored, restore_input=json.dumps(restore_envelope).encode())
     for label, config, envelope in (

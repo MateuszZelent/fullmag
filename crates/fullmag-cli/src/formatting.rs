@@ -154,6 +154,7 @@ pub(crate) fn push_engine_log(
         timestamp_unix_ms,
         level: level.to_string(),
         message: message.into(),
+        command_id: None,
     });
     if entries.len() > MAX_ENGINE_LOG_ENTRIES {
         let overflow = entries.len() - MAX_ENGINE_LOG_ENTRIES;
@@ -170,7 +171,10 @@ pub(crate) fn upsert_engine_log_tail(
     let timestamp_unix_ms = unix_time_millis().unwrap_or(0);
     let message = message.into();
     if let Some(last) = entries.last_mut() {
-        if last.level == level && last.message.starts_with(message_prefix) {
+        if last.command_id.is_none()
+            && last.level == level
+            && last.message.starts_with(message_prefix)
+        {
             last.timestamp_unix_ms = timestamp_unix_ms;
             last.message = message;
             return;
@@ -192,6 +196,27 @@ pub(crate) fn execution_plan_log_lines(
         stage.entrypoint_kind
     )];
     match &plan.backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
+            let input = &inspection.input;
+            lines.push("Backend plan: antenna_external_lead_inspection (no LLG)".to_string());
+            lines.push(format!(
+                "Stage: {}; port: {}",
+                input.stage.id, input.port.id
+            ));
+            lines.push(format!(
+                "Conductor mesh: {} ({} nodes, {} elements)",
+                input.combined_mesh.mesh_name,
+                input.combined_mesh.nodes.len(),
+                input.combined_mesh.cell_count()
+            ));
+            lines.push(format!(
+                "Field sampling: {} / {} ({} positions)",
+                input.field_sampling.carrier_kind,
+                input.field_sampling.location,
+                input.field_sampling.positions_xyz_m.len()
+            ));
+            lines.push(format!("Field scope: {}", input.field_scope));
+        }
         BackendPlanIR::Fdm(fdm) => {
             let extent = [
                 fdm.grid.cells[0] as f64 * fdm.cell_size[0],
@@ -316,6 +341,27 @@ pub(crate) fn current_artifact_layout(
     plan: &ExecutionPlanIR,
 ) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
+            let input = &inspection.input;
+            serde_json::json!({
+                "backend": "antenna_external_lead_inspection",
+                "stage_id": input.stage.id,
+                "port_id": input.port.id,
+                "output_id": inspection.output_id,
+                "field_scope": input.field_scope,
+                "device_mesh_name": input.original_device_mesh.mesh_name,
+                "conductor_mesh_name": input.combined_mesh.mesh_name,
+                "conductor_node_count": input.combined_mesh.nodes.len(),
+                "conductor_element_count": input.combined_mesh.cell_count(),
+                "device_element_count": input.device_element_count,
+                "field_sampling_domain": input.field_sampling.domain,
+                "field_sampling_carrier_kind": input.field_sampling.carrier_kind,
+                "field_sampling_location": input.field_sampling.location,
+                "field_sampling_topology_digest": input.field_sampling.topology_digest,
+                "field_sampling_position_count": input.field_sampling.positions_xyz_m.len(),
+                "requested_execution": inspection.requested_execution,
+            })
+        }
         BackendPlanIR::Fdm(fdm) => {
             let total_cells = fdm.grid.cells[0] as usize
                 * fdm.grid.cells[1] as usize
