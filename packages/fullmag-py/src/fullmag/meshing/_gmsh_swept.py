@@ -2474,10 +2474,9 @@ def _generate_coincident_ring_airbox_mesh(
             # still extrudes its premeshed source triangulation.
             if scoped_layer_partitioning and isinstance(geometry, Box):
                 # Constrain this Box slab to one mesh layer between its exact
-                # CAD planes. The volume-scoped body/air fields are still
-                # installed before the final 3D generation and must continue
-                # to determine in-plane density (covered by the actual Gmsh
-                # regressions).
+                # CAD planes. The volume-scoped body/air fields remain
+                # installed before final 3D generation; actual density is
+                # measured by the existing Gmsh regressions.
                 extruded = gmsh.model.geo.extrude(
                     source_entities,
                     0.0,
@@ -2485,7 +2484,11 @@ def _generate_coincident_ring_airbox_mesh(
                     step,
                     numElements=[1],
                     heights=[1.0],
-                    recombine=False,
+                    # Avoid the global non-recombined Gmsh prism-to-tet pass.
+                    # The hosted regression verifies prism6 reaches the
+                    # coordinate-ranked Fullmag converter; the strict face
+                    # certificate remains decisive.
+                    recombine=True,
                 )
             elif scoped_layer_partitioning:
                 extruded = gmsh.model.geo.extrude(

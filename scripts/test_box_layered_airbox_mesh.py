@@ -20,6 +20,7 @@ from fullmag.meshing import _gmsh_swept as _gmsh_swept_module
 _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M = 5e-9 + 2e-6
 _MAX_GMSH_DIAGNOSTIC_ITEMS = 128
 _MAX_BODY_XY_DIAGNOSTIC_BYTES = 64 * 1024
+_MAX_GMSH_ELEMENT_TYPE_DIAGNOSTIC_ENTRIES = 16
 
 
 def _diagnostic_value(value):
@@ -46,6 +47,89 @@ def _diagnostic_value(value):
         "repr_prefix": rendered[:512],
         "truncated": len(rendered) > 512,
     }
+
+
+def _gmsh_element_type_counts(gmsh):
+    """Return bounded counts only; never include node or element inventories."""
+    type_names = {
+        2: "triangle3",
+        3: "quadrangle4",
+        4: "tetrahedron4",
+        6: "prism6",
+    }
+    dimensions = []
+    for dimension in (1, 2, 3):
+        element_types, element_tags, _node_tags = gmsh.model.mesh.getElements(dimension)
+        entries = [
+            {
+                "gmsh_element_type": int(element_type),
+                "name": type_names.get(int(element_type), "other"),
+                "count": len(tags),
+            }
+            for element_type, tags in zip(element_types, element_tags, strict=True)
+        ]
+        entries.sort(key=lambda item: item["gmsh_element_type"])
+        dimensions.append({
+            "dimension": dimension,
+            "element_count": sum(item["count"] for item in entries),
+            "type_count": len(entries),
+            "types": entries[:_MAX_GMSH_ELEMENT_TYPE_DIAGNOSTIC_ENTRIES],
+            "types_truncated": len(entries) > _MAX_GMSH_ELEMENT_TYPE_DIAGNOSTIC_ENTRIES,
+        })
+    return dimensions
+
+
+def _observe_subdivision_types(gmsh, subdivide, destination):
+    """Observe counts around the existing converter and preserve its behavior/errors."""
+    snapshot = {
+        "stage": "layered_prism_quad_subdivision",
+        "interpretation": "Element type counts only; no element, node, or face inventory.",
+    }
+    try:
+        snapshot["before"] = _gmsh_element_type_counts(gmsh)
+    except Exception as error:
+        snapshot["before_capture_error"] = f"{type(error).__name__}: {str(error)[:160]}"
+    try:
+        return subdivide(gmsh)
+    finally:
+        try:
+            snapshot["after"] = _gmsh_element_type_counts(gmsh)
+        except Exception as error:
+            snapshot["after_capture_error"] = f"{type(error).__name__}: {str(error)[:160]}"
+        try:
+            if len(destination) < 8:
+                destination.append(snapshot)
+        except Exception:
+            pass
+
+
+def _gmsh_type_count(snapshot, phase, dimension, element_type):
+    phase_data = snapshot.get(phase)
+    if phase_data is None:
+        return None
+    for item in phase_data:
+        if item["dimension"] == dimension:
+            return sum(
+                entry["count"]
+                for entry in item["types"]
+                if entry["gmsh_element_type"] == element_type
+            )
+    return None
+
+
+def _assert_scoped_box_prisms_were_converted(diagnostics):
+    conversions = [
+        item for item in diagnostics
+        if item.get("stage") == "layered_prism_quad_subdivision"
+    ]
+    assert len(conversions) == 1, diagnostics
+    conversion = conversions[0]
+    prism_count_before = _gmsh_type_count(conversion, "before", 3, 6)
+    assert prism_count_before is not None and prism_count_before > 0, diagnostics
+    prism_count_after = _gmsh_type_count(conversion, "after", 3, 6)
+    assert prism_count_after == 0, diagnostics
+    tetrahedron_count_after = _gmsh_type_count(conversion, "after", 3, 4)
+    assert tetrahedron_count_after is not None and tetrahedron_count_after > 0, diagnostics
 
 
 class _GmshApiConfigurationCapture:
@@ -353,7 +437,7 @@ class _GmshApiDiagnosticProxy:
 def _gmsh_realization_failure_diagnostic_line(snapshots, fixture_name, error):
     prefix = "GMSH_REALIZATION_DIAGNOSTICS: "
     payload = {
-        "evidence_kind": "configured Gmsh API values immediately before mesh.generate(3)",
+        "evidence_kind": "configured Gmsh API values and bounded mesh realization observations",
         "pointwise_field_values_evaluated": False,
         "fixture_name": str(fixture_name)[:128],
         "exception_type": type(error).__name__[:128],
@@ -450,7 +534,17 @@ def _realize_public_de_smoke_box(
         capture_snapshots = gmsh_diagnostics if gmsh_diagnostics is not None else []
         capture = _GmshApiConfigurationCapture(capture_snapshots)
         actual_import_gmsh = _gmsh_swept_module._import_gmsh
+        from fullmag.meshing import _gmsh_layered_tetrahedra
+
+        actual_subdivide = _gmsh_layered_tetrahedra.subdivide_layered_prisms
         with monkeypatch.context() as gmsh_patch:
+            gmsh_patch.setattr(
+                _gmsh_layered_tetrahedra,
+                "subdivide_layered_prisms",
+                lambda gmsh: _observe_subdivision_types(
+                    gmsh, actual_subdivide, capture_snapshots,
+                ),
+            )
             gmsh_patch.setattr(
                 _gmsh_swept_module,
                 "_import_gmsh",
@@ -621,10 +715,21 @@ def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
         problem = fm.load_problem_from_script(Path(__file__).resolve().parents[1] / "examples/fem_de_smoke_numeric.py", lightweight_assets=True).stages[-1].problem
         ir = problem.to_ir(requested_backend="fem", execution_mode="strict", execution_precision="double", include_geometry_assets=False)
         meta = ir["problem_meta"]["runtime_metadata"]
+        from fullmag.meshing import _gmsh_layered_tetrahedra
+        actual_subdivide = _gmsh_layered_tetrahedra.subdivide_layered_prisms
+        gmsh_diagnostics = []
+        monkeypatch.setattr(
+            _gmsh_layered_tetrahedra,
+            "subdivide_layered_prisms",
+            lambda gmsh: _observe_subdivision_types(
+                gmsh, actual_subdivide, gmsh_diagnostics,
+            ),
+        )
         mesh, markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
             geometries=[Box(size=(40e-9, 40e-9, 10e-9), name="film")],
             hints=fm.FEM(order=1, hmax=10e-9), study_universe=meta["study_universe"],
             mesh_workflow=meta["mesh_workflow"])
+        _assert_scoped_box_prisms_were_converted(gmsh_diagnostics)
         assert report.build_mode == "single_geometry_geo_layered_box"
         status = next(s for s in report.operation_statuses if s.kind == "thin_film")
         assert status.actual_method == "geo_layer_partitioned_tetrahedral"
@@ -775,6 +880,7 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
         fixture_name="implicit_airbox_cap.py",
         gmsh_diagnostics=candidate_gmsh_diagnostics,
     )
+    _assert_scoped_box_prisms_were_converted(candidate_gmsh_diagnostics)
     assert report.build_mode == "single_geometry_geo_layered_box"
     assert markers == [{"geometry_name": "film", "marker": 1}]
     _assert_public_box_planes(
@@ -793,6 +899,7 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
         fixture_name="body_hmax_airbox_cap.py",
         gmsh_diagnostics=reference_gmsh_diagnostics,
     )
+    _assert_scoped_box_prisms_were_converted(reference_gmsh_diagnostics)
     body_ids = np.unique(np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1])
     reference_body_ids = np.unique(
         np.asarray(reference.elements)[np.asarray(reference.element_markers) == 1]
@@ -818,11 +925,14 @@ def test_public_box_explicit_airbox_cap_below_body_hmax_is_preserved(monkeypatch
         -_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, 6,
         h_inner=cap, h_outer=cap, growth=1.3,
     )
+    gmsh_diagnostics = []
     mesh, _, report = _realize_public_de_smoke_box(
         monkeypatch, tmp_path,
         universe_mesh_call=f"study.universe.mesh(maximum_element_size={cap!r})",
         fixture_name="small_explicit_airbox_cap.py",
+        gmsh_diagnostics=gmsh_diagnostics,
     )
+    _assert_scoped_box_prisms_were_converted(gmsh_diagnostics)
     assert report.build_mode == "single_geometry_geo_layered_box"
     _assert_public_box_planes(
         mesh, layers=6, expected=expected, maximum_air_step=cap,
@@ -846,6 +956,7 @@ def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeyp
         fixture_name="explicit_airbox_minimum.py",
         gmsh_diagnostics=candidate_gmsh_diagnostics,
     )
+    _assert_scoped_box_prisms_were_converted(candidate_gmsh_diagnostics)
     assert report.build_mode == "single_geometry_geo_layered_box"
     _assert_public_box_planes(
         mesh, layers=6, expected=expected, maximum_air_step=h_outer,
@@ -857,6 +968,7 @@ def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeyp
         fixture_name="body_hmax_reference.py",
         gmsh_diagnostics=reference_gmsh_diagnostics,
     )
+    _assert_scoped_box_prisms_were_converted(reference_gmsh_diagnostics)
     body_ids = np.unique(np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1])
     reference_body_ids = np.unique(
         np.asarray(reference.elements)[np.asarray(reference.element_markers) == 1]

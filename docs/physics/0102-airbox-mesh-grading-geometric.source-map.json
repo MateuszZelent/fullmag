@@ -300,7 +300,7 @@
       "id": "ring-volume-source",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Creates exact-plane Box/ring CAD slabs. The scoped Box branch requests one extrusion mesh layer per slab; the scoped ring branch remains geometry-only. Runtime owner-field and air-sizing behavior remain unverified.",
+      "responsibility": "Creates exact-plane Box/ring CAD slabs. The scoped Box branch requests one extrusion mesh layer per slab; the scoped ring branch remains geometry-only. Runtime owner-field and air-sizing behavior remain NOT VERIFIED.",
       "evidence_status": "source_implemented_runtime_not_verified"
     },
     {
@@ -321,7 +321,14 @@
       "id": "scoped-box-layer-constraint",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "The scoped Box branch requests numElements=[1], heights=[1.0], recombine=False per CAD slab; the scoped ring branch remains geometry-only. Owner-volume field application, exact planes and independent air sizing require hosted GHA verification.",
+      "responsibility": "The scoped Box branch requests numElements=[1], heights=[1.0], recombine=True per CAD slab, leaving prism subdivision to Fullmag. Exact planes, field behavior, actual prism-to-Tet4 conversion and periodic face bijection remain runtime NOT VERIFIED; the scoped ring branch remains geometry-only.",
+      "evidence_status": "source_implemented_runtime_not_verified"
+    },
+    {
+      "id": "scoped-box-periodic-prism-split",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "The scoped Box branch requests recombine=True to avoid Gmsh native non-recombined prism-to-tet pass. Gmsh also has a separate recombined QuadToTri route, so source configuration alone does not prove prism handoff; hosted tests require prism6 before and tet4 after the existing Fullmag coordinate-ranked converter. The strict periodic certificate remains the acceptance check. This swept Tet4 path is not native mixed-prism FEM support; runtime remains NOT VERIFIED.",
       "evidence_status": "source_implemented_runtime_not_verified"
     },
     {
@@ -335,7 +342,7 @@
       "id": "box-layer-constraint-regression",
       "path": "scripts/test_box_layered_airbox_mesh.py",
       "symbol": "test_public_de_model_shared_domain_realizes_six_layers",
-      "responsibility": "Existing actual-Gmsh public Box regression checks the requested six-layer mesh; the scoped extrusion candidate still requires the full hosted field, body-XY, air-growth, quality and periodic gates.",
+      "responsibility": "The actual-Gmsh public Box regression checks the requested six-layer mesh, asserts prism6 input becomes Tet4 output in Fullmag conversion, and retains exact mapped periodic face connectivity. The scoped extrusion candidate remains runtime NOT VERIFIED until the full hosted field, body-XY, air-growth, periodic and quality gates pass.",
       "evidence_status": "source_implemented_runtime_not_verified"
     },
     {
