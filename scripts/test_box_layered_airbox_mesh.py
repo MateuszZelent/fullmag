@@ -13,14 +13,345 @@ from fullmag.meshing._gmsh_types import MeshOptions, AirboxOptions
 from fullmag.meshing._gmsh_swept import (
     _box_airbox_layer_levels, generate_swept_tetrahedral_box_airbox_mesh, should_use_swept,
 )
+from fullmag.meshing import _gmsh_swept as _gmsh_swept_module
 
 
 # Public DE fixture: 10 nm film and 2 um authored air padding per side.
 _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M = 5e-9 + 2e-6
+_MAX_GMSH_DIAGNOSTIC_ITEMS = 128
+_MAX_BODY_XY_DIAGNOSTIC_BYTES = 64 * 1024
+
+
+def _diagnostic_value(value):
+    """Keep real Gmsh API values JSON-safe and explicitly bounded."""
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else {"non_finite_value": repr(value)}
+    if isinstance(value, str):
+        if len(value) <= 512:
+            return value
+        return {"prefix": value[:512], "character_count": len(value), "truncated": True}
+    if isinstance(value, (tuple, list)):
+        limit = _MAX_GMSH_DIAGNOSTIC_ITEMS
+        items = [_diagnostic_value(item) for item in value[:limit]]
+        if len(value) > limit:
+            return {"items": items, "item_count": len(value), "truncated": True}
+        return items
+    if hasattr(value, "tolist"):
+        return _diagnostic_value(value.tolist())
+    rendered = str(value)
+    return {
+        "type": type(value).__name__,
+        "repr_prefix": rendered[:512],
+        "truncated": len(rendered) > 512,
+    }
+
+
+class _GmshApiConfigurationCapture:
+    """Observe actual Gmsh setters and topology without changing their calls."""
+
+    def __init__(self, destination):
+        self.destination = destination
+        self.fields = {}
+        self.field_registration_call_count = 0
+        self.field_registration_truncated = False
+        self.field_setter_count = 0
+        self.field_options_truncated = False
+        self.background_field_tags = []
+        self.background_field_tags_truncated = False
+        self.mesh_option_set_calls = []
+        self.mesh_option_set_count = 0
+        self.mesh_option_number_names = set()
+
+    def field_added(self, field_tag, field_type):
+        self.field_registration_call_count += 1
+        field_tag = int(field_tag)
+        if field_tag not in self.fields and len(self.fields) >= _MAX_GMSH_DIAGNOSTIC_ITEMS:
+            self.field_registration_truncated = True
+            return
+        self.fields[field_tag] = {
+            "field_tag": field_tag,
+            "field_type": _diagnostic_value(field_type),
+            "configured_options": {},
+        }
+
+    def field_option_set(self, method, args):
+        self.field_setter_count += 1
+        if len(args) < 2:
+            return
+        field_tag, option_name = int(args[0]), str(args[1])
+        field = self.fields.get(field_tag)
+        if field is None:
+            if len(self.fields) >= _MAX_GMSH_DIAGNOSTIC_ITEMS:
+                self.field_options_truncated = True
+                return
+            field = {"field_tag": field_tag, "field_type": None, "configured_options": {}}
+            self.fields[field_tag] = field
+        if option_name not in field["configured_options"] and len(field["configured_options"]) >= 32:
+            self.field_options_truncated = True
+            return
+        raw_value = args[2] if len(args) > 2 else None
+        field["configured_options"][option_name] = {
+            "setter": method,
+            "value": _diagnostic_value(raw_value),
+        }
+
+    def mesh_option_set(self, method, args):
+        if len(args) < 2 or not str(args[0]).startswith("Mesh."):
+            return
+        self.mesh_option_set_count += 1
+        if method == "setNumber":
+            self.mesh_option_number_names.add(str(args[0]))
+        if len(self.mesh_option_set_calls) < _MAX_GMSH_DIAGNOSTIC_ITEMS:
+            self.mesh_option_set_calls.append({
+                "setter": method,
+                "name": str(args[0]),
+                "value": _diagnostic_value(args[1]),
+            })
+
+    @staticmethod
+    def _surface_tags(boundary):
+        return sorted({abs(int(tag)) for dim, tag in boundary if int(dim) == 2})
+
+    def before_generate_3(self, gmsh):
+        snapshot = {
+            "stage": "immediately_before_gmsh_model_mesh_generate_3",
+            "pointwise_field_values_evaluated": False,
+            "interpretation": (
+                "Configured values recorded after successful real Gmsh API calls; this is not "
+                "a pointwise evaluation of any size field."
+            ),
+            "field_registration_call_count": self.field_registration_call_count,
+            "field_setter_call_count": self.field_setter_count,
+            "registered_field_count": 0,
+            "registered_fields": [],
+            "field_registrations_truncated": False,
+            "field_options_truncated": self.field_options_truncated,
+            "background_field_tags": list(self.background_field_tags),
+            "background_field_tags_truncated": self.background_field_tags_truncated,
+            "mesh_option_set_call_count": self.mesh_option_set_count,
+            "mesh_option_set_calls": list(self.mesh_option_set_calls),
+            "mesh_option_set_calls_truncated": (
+                self.mesh_option_set_count > len(self.mesh_option_set_calls)
+            ),
+            "effective_mesh_options": {},
+            "volumes": [],
+            "volume_count": 0,
+            "volume_bbox_coordinates": "Gmsh model units; this route scales SI lengths by 1e6",
+            "gmsh_model_units_per_meter": 1.0e6,
+            "volumes_truncated": False,
+            "physical_groups": [],
+            "body_volume_tags": [],
+            "air_volume_tags": [],
+            "body_air_shared_surface_tags": [],
+            "body_air_connectivity_error": None,
+        }
+        try:
+            field_api = gmsh.model.mesh.field
+            field_ids = sorted(int(tag) for tag in field_api.list())
+            snapshot["registered_field_count"] = len(field_ids)
+            for field_tag in field_ids[:_MAX_GMSH_DIAGNOSTIC_ITEMS]:
+                tracked = self.fields.get(field_tag, {
+                    "field_tag": field_tag,
+                    "field_type": None,
+                    "configured_options": {},
+                })
+                snapshot["registered_fields"].append(tracked)
+            snapshot["field_registrations_truncated"] = (
+                self.field_registration_truncated
+                or len(field_ids) > len(snapshot["registered_fields"])
+            )
+
+            option_api = gmsh.option
+            for name in sorted(self.mesh_option_number_names):
+                try:
+                    snapshot["effective_mesh_options"][name] = _diagnostic_value(
+                        option_api.getNumber(name)
+                    )
+                except Exception as error:
+                    snapshot["effective_mesh_options"][name] = {
+                        "unavailable": f"{type(error).__name__}: {str(error)[:160]}"
+                    }
+
+            model = gmsh.model
+            volume_tags = sorted(
+                int(tag) for dim, tag in model.getEntities(3) if int(dim) == 3
+            )
+            snapshot["volume_count"] = len(volume_tags)
+            group_entities = {}
+            for dim, group_tag in model.getPhysicalGroups():
+                dim, group_tag = int(dim), int(group_tag)
+                if dim not in (2, 3):
+                    continue
+                name = str(model.getPhysicalName(dim, group_tag))
+                entity_tags = sorted(
+                    int(tag) for tag in model.getEntitiesForPhysicalGroup(dim, group_tag)
+                )
+                group = {
+                    "dimension": dim,
+                    "physical_tag": group_tag,
+                    "name": name,
+                    "entity_tags": entity_tags[:_MAX_GMSH_DIAGNOSTIC_ITEMS],
+                    "entities_truncated": len(entity_tags) > _MAX_GMSH_DIAGNOSTIC_ITEMS,
+                }
+                if len(snapshot["physical_groups"]) < _MAX_GMSH_DIAGNOSTIC_ITEMS:
+                    snapshot["physical_groups"].append(group)
+                if dim == 3:
+                    group_entities[name] = entity_tags
+
+            body_tags = group_entities.get("magnetic", [])
+            air_tags = group_entities.get("air", [])
+            snapshot["body_volume_tags"] = body_tags[:_MAX_GMSH_DIAGNOSTIC_ITEMS]
+            snapshot["air_volume_tags"] = air_tags[:_MAX_GMSH_DIAGNOSTIC_ITEMS]
+            snapshot["body_volume_tags_truncated"] = len(body_tags) > _MAX_GMSH_DIAGNOSTIC_ITEMS
+            snapshot["air_volume_tags_truncated"] = len(air_tags) > _MAX_GMSH_DIAGNOSTIC_ITEMS
+            body_and_air = set(body_tags) | set(air_tags)
+
+            volumes = []
+            for volume_tag in volume_tags[:_MAX_GMSH_DIAGNOSTIC_ITEMS]:
+                bbox = [float(value) for value in model.getBoundingBox(3, volume_tag)]
+                role = (
+                    "magnetic" if volume_tag in body_tags
+                    else "air" if volume_tag in air_tags
+                    else "unclassified"
+                )
+                volumes.append({
+                    "volume_tag": volume_tag,
+                    "role": role,
+                    "bbox_gmsh_model_units": bbox,
+                    "bbox_m": [value * 1.0e-6 for value in bbox],
+                })
+            snapshot["volumes"] = volumes
+            snapshot["volumes_truncated"] = len(volume_tags) > len(volumes)
+            snapshot["unclassified_volume_tags"] = sorted(set(volume_tags) - body_and_air)[
+                :_MAX_GMSH_DIAGNOSTIC_ITEMS
+            ]
+
+            if body_tags and air_tags:
+                body_boundary = self._surface_tags(model.getBoundary(
+                    [(3, tag) for tag in body_tags], combined=True, oriented=False,
+                ))
+                air_boundary = self._surface_tags(model.getBoundary(
+                    [(3, tag) for tag in air_tags], combined=True, oriented=False,
+                ))
+                shared = sorted(set(body_boundary) & set(air_boundary))
+                snapshot["body_air_shared_surface_tags"] = shared[:_MAX_GMSH_DIAGNOSTIC_ITEMS]
+                snapshot["body_air_shared_surface_count"] = len(shared)
+                snapshot["body_air_shared_surfaces_truncated"] = (
+                    len(shared) > _MAX_GMSH_DIAGNOSTIC_ITEMS
+                )
+            else:
+                snapshot["body_air_connectivity_error"] = (
+                    "physical groups named 'magnetic' and 'air' were not both found"
+                )
+        except Exception as error:
+            snapshot["capture_error"] = f"{type(error).__name__}: {str(error)[:240]}"
+        self.destination.append(snapshot)
+
+
+class _GmshFieldApiDiagnosticProxy:
+    def __init__(self, actual, capture):
+        self._actual = actual
+        self._capture = capture
+
+    def __getattr__(self, name):
+        method = getattr(self._actual, name)
+        if name == "add":
+            def add(*args, **kwargs):
+                field_tag = method(*args, **kwargs)
+                field_type = args[0] if args else kwargs.get("field_type")
+                self._capture.field_added(field_tag, field_type)
+                return field_tag
+            return add
+        if name in ("setNumber", "setNumbers", "setString"):
+            def set_option(*args, **kwargs):
+                result = method(*args, **kwargs)
+                self._capture.field_option_set(name, args)
+                return result
+            return set_option
+        if name == "setAsBackgroundMesh":
+            def set_background(*args, **kwargs):
+                result = method(*args, **kwargs)
+                if args:
+                    if len(self._capture.background_field_tags) < _MAX_GMSH_DIAGNOSTIC_ITEMS:
+                        self._capture.background_field_tags.append(int(args[0]))
+                    else:
+                        self._capture.background_field_tags_truncated = True
+                return result
+            return set_background
+        return method
+
+
+class _GmshMeshApiDiagnosticProxy:
+    def __init__(self, actual, gmsh, capture):
+        self._actual = actual
+        self._gmsh = gmsh
+        self._capture = capture
+
+    def __getattr__(self, name):
+        if name == "field":
+            return _GmshFieldApiDiagnosticProxy(self._actual.field, self._capture)
+        if name == "generate":
+            def generate(*args, **kwargs):
+                dimension = args[0] if args else kwargs.get("dim")
+                if dimension == 3:
+                    try:
+                        self._capture.before_generate_3(self._gmsh)
+                    except Exception as error:
+                        self._capture.destination.append({
+                            "stage": "immediately_before_gmsh_model_mesh_generate_3",
+                            "pointwise_field_values_evaluated": False,
+                            "capture_error": f"{type(error).__name__}: {str(error)[:240]}",
+                        })
+                return getattr(self._actual, name)(*args, **kwargs)
+            return generate
+        return getattr(self._actual, name)
+
+
+class _GmshModelApiDiagnosticProxy:
+    def __init__(self, actual, gmsh, capture):
+        self._actual = actual
+        self._gmsh = gmsh
+        self._capture = capture
+
+    def __getattr__(self, name):
+        if name == "mesh":
+            return _GmshMeshApiDiagnosticProxy(self._actual.mesh, self._gmsh, self._capture)
+        return getattr(self._actual, name)
+
+
+class _GmshOptionApiDiagnosticProxy:
+    def __init__(self, actual, capture):
+        self._actual = actual
+        self._capture = capture
+
+    def __getattr__(self, name):
+        method = getattr(self._actual, name)
+        if name in ("setNumber", "setString"):
+            def set_option(*args, **kwargs):
+                result = method(*args, **kwargs)
+                self._capture.mesh_option_set(name, args)
+                return result
+            return set_option
+        return method
+
+
+class _GmshApiDiagnosticProxy:
+    def __init__(self, actual, capture):
+        self._actual = actual
+        self._capture = capture
+
+    def __getattr__(self, name):
+        if name == "model":
+            return _GmshModelApiDiagnosticProxy(self._actual.model, self._actual, self._capture)
+        if name == "option":
+            return _GmshOptionApiDiagnosticProxy(self._actual.option, self._capture)
+        return getattr(self._actual, name)
 
 
 def _realize_public_de_smoke_box(
-    monkeypatch, tmp_path, *, universe_mesh_call, fixture_name,
+    monkeypatch, tmp_path, *, universe_mesh_call, fixture_name, gmsh_diagnostics=None,
 ):
     source_path = Path(__file__).resolve().parents[1] / "examples/fem_de_smoke_numeric.py"
     source = source_path.read_text(encoding="utf-8")
@@ -59,12 +390,23 @@ def _realize_public_de_smoke_box(
             execution_precision="double", include_geometry_assets=False,
         )
         meta = ir["problem_meta"]["runtime_metadata"]
-        return realize_fem_domain_mesh_asset_from_components_with_report(
+        realize = lambda: realize_fem_domain_mesh_asset_from_components_with_report(
             geometries=[Box(size=(40e-9, 40e-9, 10e-9), name="film")],
             hints=fm.FEM(order=1, hmax=10e-9),
             study_universe=meta["study_universe"],
             mesh_workflow=meta["mesh_workflow"],
         )
+        if gmsh_diagnostics is None:
+            return realize()
+        capture = _GmshApiConfigurationCapture(gmsh_diagnostics)
+        actual_import_gmsh = _gmsh_swept_module._import_gmsh
+        with monkeypatch.context() as gmsh_patch:
+            gmsh_patch.setattr(
+                _gmsh_swept_module,
+                "_import_gmsh",
+                lambda: _GmshApiDiagnosticProxy(actual_import_gmsh(), capture),
+            )
+            return realize()
     finally:
         fm.reset()
 
@@ -225,18 +567,19 @@ def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
 
 
 def _body_xy_failure_diagnostics(mesh, report, reference, reference_report,
-                                 body_xy, reference_body_xy):
+                                 body_xy, reference_body_xy, gmsh_diagnostics=None):
     # Diagnostics must never replace the original strict comparison failure.
     try:
         return _body_xy_failure_diagnostics_impl(
             mesh, report, reference, reference_report, body_xy, reference_body_xy,
+            gmsh_diagnostics,
         )
     except Exception as error:
         return f"BODY_XY_DIAGNOSTICS unavailable: {type(error).__name__}: {str(error)[:300]}"
 
 
 def _body_xy_failure_diagnostics_impl(mesh, report, reference, reference_report,
-                                      body_xy, reference_body_xy):
+                                      body_xy, reference_body_xy, gmsh_diagnostics=None):
     """Describe existing meshes only; hashes are diagnostics, not provenance."""
     def metrics(candidate, candidate_report, xy):
         nodes = np.asarray(candidate.nodes)
@@ -280,7 +623,65 @@ def _body_xy_failure_diagnostics_impl(mesh, report, reference, reference_report,
         "extra_xy_first_12_m": [list(map(float, point)) for point in extra[:12]],
         "missing_xy_first_12_m": [list(map(float, point)) for point in missing[:12]],
     }
-    return "BODY_XY_DIAGNOSTICS: " + json.dumps(diagnostic, sort_keys=True, allow_nan=False)
+    if gmsh_diagnostics is not None:
+        configuration = {
+            "evidence_kind": "configured Gmsh API values immediately before mesh.generate(3)",
+            "pointwise_field_values_evaluated": False,
+            "snapshots": gmsh_diagnostics,
+        }
+        encoded_configuration = json.dumps(
+            configuration, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+        if len(encoded_configuration.encode("utf-8")) <= 48 * 1024:
+            diagnostic["gmsh_api_configuration"] = configuration
+        else:
+            diagnostic["gmsh_api_configuration"] = {
+                "evidence_kind": configuration["evidence_kind"],
+                "pointwise_field_values_evaluated": False,
+                "truncated": True,
+                "serialized_bytes_before_truncation": len(encoded_configuration.encode("utf-8")),
+                "capture_summaries": [
+                    {
+                        "fixture_role": role,
+                        "snapshot_count": len(snapshots),
+                        "snapshot_counts": [
+                            {
+                                "stage": snapshot.get("stage"),
+                                "registered_field_count": snapshot.get("registered_field_count"),
+                                "mesh_option_set_call_count": snapshot.get("mesh_option_set_call_count"),
+                                "volume_count": snapshot.get("volume_count"),
+                                "body_air_shared_surface_count": snapshot.get(
+                                    "body_air_shared_surface_count"
+                                ),
+                                "capture_error": snapshot.get("capture_error"),
+                            }
+                            for snapshot in snapshots[:8]
+                        ],
+                    }
+                    for role, snapshots in gmsh_diagnostics.items()
+                ],
+            }
+    encoded_diagnostic = json.dumps(diagnostic, sort_keys=True, allow_nan=False)
+    if len(encoded_diagnostic.encode("utf-8")) > _MAX_BODY_XY_DIAGNOSTIC_BYTES:
+        diagnostic = {
+            "diagnostic_truncated": True,
+            "serialized_bytes_before_truncation": len(encoded_diagnostic.encode("utf-8")),
+            "candidate": {
+                key: diagnostic["candidate"].get(key)
+                for key in ("body_tet_count", "body_node_count", "body_xy_count", "rounded_body_xy_sha256")
+            },
+            "reference": {
+                key: diagnostic["reference"].get(key)
+                for key in ("body_tet_count", "body_node_count", "body_xy_count", "rounded_body_xy_sha256")
+            },
+            "extra_xy_count": diagnostic["extra_xy_count"],
+            "missing_xy_count": diagnostic["missing_xy_count"],
+            "gmsh_api_configuration": diagnostic.get("gmsh_api_configuration", {
+                "unavailable": "configuration was not supplied"
+            }),
+        }
+        encoded_diagnostic = json.dumps(diagnostic, sort_keys=True, allow_nan=False)
+    return "BODY_XY_DIAGNOSTICS: " + encoded_diagnostic
 
 
 def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkeypatch, tmp_path):
@@ -293,9 +694,11 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
         -_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, 6,
         h_inner=h_inner, h_outer=h_outer, growth=growth,
     )
+    candidate_gmsh_diagnostics = []
     mesh, markers, report = _realize_public_de_smoke_box(
         monkeypatch, tmp_path, universe_mesh_call="study.universe.mesh()",
         fixture_name="implicit_airbox_cap.py",
+        gmsh_diagnostics=candidate_gmsh_diagnostics,
     )
     assert report.build_mode == "single_geometry_geo_layered_box"
     assert markers == [{"geometry_name": "film", "marker": 1}]
@@ -308,10 +711,12 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
     assert np.max(positive_steps) > h_inner
 
     # Raising only the implicit airbox cap must not coarsen the body source face.
+    reference_gmsh_diagnostics = []
     reference, _, reference_report = _realize_public_de_smoke_box(
         monkeypatch, tmp_path,
         universe_mesh_call="study.universe.mesh(maximum_element_size=10e-9)",
         fixture_name="body_hmax_airbox_cap.py",
+        gmsh_diagnostics=reference_gmsh_diagnostics,
     )
     body_ids = np.unique(np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1])
     reference_body_ids = np.unique(
@@ -323,6 +728,10 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
     )
     assert body_xy == reference_body_xy, _body_xy_failure_diagnostics(
         mesh, report, reference, reference_report, body_xy, reference_body_xy,
+        gmsh_diagnostics={
+            "candidate": candidate_gmsh_diagnostics,
+            "reference": reference_gmsh_diagnostics,
+        },
     )
 
 
@@ -355,19 +764,23 @@ def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeyp
         -_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, 6,
         h_inner=h_inner, h_outer=h_outer, growth=growth,
     )
+    candidate_gmsh_diagnostics = []
     mesh, _, report = _realize_public_de_smoke_box(
         monkeypatch, tmp_path,
         universe_mesh_call="study.universe.mesh(minimum_element_size=15e-9)",
         fixture_name="explicit_airbox_minimum.py",
+        gmsh_diagnostics=candidate_gmsh_diagnostics,
     )
     assert report.build_mode == "single_geometry_geo_layered_box"
     _assert_public_box_planes(
         mesh, layers=6, expected=expected, maximum_air_step=h_outer,
     )
+    reference_gmsh_diagnostics = []
     reference, _, reference_report = _realize_public_de_smoke_box(
         monkeypatch, tmp_path,
         universe_mesh_call="study.universe.mesh(maximum_element_size=10e-9)",
         fixture_name="body_hmax_reference.py",
+        gmsh_diagnostics=reference_gmsh_diagnostics,
     )
     body_ids = np.unique(np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1])
     reference_body_ids = np.unique(
@@ -379,6 +792,10 @@ def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeyp
     )
     assert body_xy == reference_body_xy, _body_xy_failure_diagnostics(
         mesh, report, reference, reference_report, body_xy, reference_body_xy,
+        gmsh_diagnostics={
+            "candidate": candidate_gmsh_diagnostics,
+            "reference": reference_gmsh_diagnostics,
+        },
     )
 
 
