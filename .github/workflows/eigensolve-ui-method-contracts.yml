@@ -29,6 +29,9 @@ on:
       - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
       - 'apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec*'
       - 'apps/control-room/src/kernel/persistence/ProjectDocumentController*'
+      - 'apps/control-room/src/modules/field-map/renderer/planarRenderer*'
+      - 'apps/control-room/scripts/check-planar-color-browser.mjs'
+      - 'apps/control-room/scripts/fixtures/planar-color-browser.ts'
       - 'apps/control-room/src/modules/analysis-plots/components/sharedAnalysisImportBoundary.test.ts'
       - 'apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts'
       - 'apps/control-room/scripts/typecheck-control-room.mjs'
@@ -92,6 +95,9 @@ on:
       - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
       - 'apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec*'
       - 'apps/control-room/src/kernel/persistence/ProjectDocumentController*'
+      - 'apps/control-room/src/modules/field-map/renderer/planarRenderer*'
+      - 'apps/control-room/scripts/check-planar-color-browser.mjs'
+      - 'apps/control-room/scripts/fixtures/planar-color-browser.ts'
       - 'apps/control-room/src/modules/analysis-plots/components/sharedAnalysisImportBoundary.test.ts'
       - 'apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts'
       - 'apps/control-room/scripts/typecheck-control-room.mjs'
@@ -190,6 +196,7 @@ jobs:
           src/kernel/api/fieldQueryIdentity.test.ts
           src/kernel/api/codecs/fdmRegionMembershipCodec.test.ts
           src/kernel/persistence/ProjectDocumentController.test.ts
+          src/modules/field-map/renderer/planarRenderer.test.ts
           src/modules/analysis-plots/components/sharedAnalysisImportBoundary.test.ts
           src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts
           src/kernel/resources/studyRuntimeResources.provider.test.tsx
@@ -225,6 +232,15 @@ jobs:
       - name: Check complete frontend types
         if: always()
         run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm --dir apps/control-room typecheck
+      - name: Provision hosted Chrome for production planar proof
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir apps/control-room exec playwright install chrome
+      - name: Verify production planar colors and sliced raster in real canvas
+        run: |
+          set -euo pipefail
+          google-chrome --version
+          python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm --dir apps/control-room exec node scripts/check-planar-color-browser.mjs | tee "$FULLMAG_CI_FRONTEND_WORKSPACE_ROOT/planar-color-browser.log"
       - name: Scan changed React surface with pinned doctor
         if: always()
         env:
@@ -241,5 +257,6 @@ jobs:
           path: |
             ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/builds/**/build-status.json
             ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/pnpm-workspace-manifests.json
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/planar-color-browser.log
             ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/tmp/**/react-doctor-*/**
           if-no-files-found: error

@@ -240,6 +240,68 @@ describe("planar renderer lifecycle", () => {
     }
   });
 
+  it("preserves ArrayBuffer views and snapshots shared-backed pixels for ImageData", () => {
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      imageSmoothingEnabled: true,
+      putImageData: vi.fn(),
+    };
+    const canvas = {
+      getContext: vi.fn(() => context),
+      height: 0,
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const originalImageData = Object.getOwnPropertyDescriptor(globalThis, "ImageData");
+    const imagePixels: Uint8ClampedArray[] = [];
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: { createElement: vi.fn(() => ({ getContext: vi.fn(() => context), height: 0, width: 0 })) },
+    });
+    Object.defineProperty(globalThis, "ImageData", {
+      configurable: true,
+      value: class {
+        constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {
+          imagePixels.push(data);
+        }
+      },
+    });
+    const renderer = createPlanarRenderer(canvas);
+    const backing = new Uint8ClampedArray([99, 11, 22, 33, 44, 88]);
+    const visiblePixels = backing.subarray(1, 5);
+
+    try {
+      renderer.draw(visiblePixels, 1, 1);
+
+      expect(imagePixels).toHaveLength(1);
+      expect(Array.from(imagePixels[0])).toEqual([11, 22, 33, 44]);
+      expect(imagePixels[0].buffer).toBe(backing.buffer);
+      expect(imagePixels[0].byteOffset).toBe(visiblePixels.byteOffset);
+
+      const SharedArrayBufferConstructor = globalThis.SharedArrayBuffer;
+      if (typeof SharedArrayBufferConstructor !== "undefined") {
+        const sharedBacking = new Uint8ClampedArray(new SharedArrayBufferConstructor(6));
+        sharedBacking.set([99, 51, 62, 73, 84, 88]);
+        const sharedPixels = sharedBacking.subarray(1, 5);
+
+        renderer.draw(sharedPixels, 1, 1);
+
+        expect(imagePixels).toHaveLength(2);
+        expect(Array.from(imagePixels[1])).toEqual([51, 62, 73, 84]);
+        expect(imagePixels[1].buffer).toBeInstanceOf(ArrayBuffer);
+        expect(imagePixels[1].buffer).not.toBe(sharedBacking.buffer);
+        expect(imagePixels[1].byteOffset).toBe(0);
+      }
+    } finally {
+      renderer.dispose();
+      if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+      else Reflect.deleteProperty(globalThis, "document");
+      if (originalImageData) Object.defineProperty(globalThis, "ImageData", originalImageData);
+      else Reflect.deleteProperty(globalThis, "ImageData");
+    }
+  });
+
   it("clears and forgets the owned raster when the scalar layer is disabled", () => {
     const context = {
       clearRect: vi.fn(),

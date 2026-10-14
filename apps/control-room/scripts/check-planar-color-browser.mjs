@@ -35,7 +35,10 @@ try {
     const { colorizeScalarRaster, createPlanarRenderer } = globalThis.PlanarColorProof;
     const renderer = createPlanarRenderer(canvas);
     const pixels = colorizeScalarRaster([0, 0.5, 1, 99], { min: 0, max: 1 }, [0, 0, 0, 1]);
-    renderer.draw(pixels, 4, 1);
+    const backing = new Uint8ClampedArray(pixels.length + 8).fill(99);
+    backing.set(pixels, 4);
+    const visiblePixels = backing.subarray(4, 4 + pixels.length);
+    renderer.draw(visiblePixels, 4, 1);
     const context = canvas.getContext("2d");
     const read = () => [50, 150, 250, 350].map((x) => Array.from(context.getImageData(x, 50, 1, 1).data));
     const painted = read();
@@ -47,6 +50,7 @@ try {
     renderer.dispose();
     return {
       dimensions,
+      inputByteOffset: visiblePixels.byteOffset,
       disposed: [canvas.width, canvas.height],
       painted,
       settled,
@@ -55,6 +59,7 @@ try {
   });
   assert.deepEqual(errors, []);
   assert.equal(result.visible, true);
+  assert.equal(result.inputByteOffset, 4);
   assert.deepEqual(result.dimensions, [400, 100]);
   assert.deepEqual(result.painted, [[68, 1, 84, 255], [51, 144, 132, 255], [253, 231, 37, 255], [0, 0, 0, 0]]);
   assert.deepEqual(result.settled, result.painted);
