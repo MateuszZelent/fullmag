@@ -1556,7 +1556,7 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   await expandExplorerNode(hysteresisRootId);
   const secondPageNodeId = `${hysteresisRootId}:catalog-dataset-0500`;
   const secondPageNode = page.locator(`[data-node-id="${secondPageNodeId}"]`);
-  await scrollExplorerTreeToEnd();
+  await scrollExplorerTreeToEnd(secondPageNodeId);
 
   if (
     (await readExplorerTreeRowLabel(
@@ -1596,7 +1596,7 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
 
   const refreshedNodeId = `${hysteresisRootId}:catalog-dataset-0501`;
   const refreshedNode = page.locator(`[data-node-id="${refreshedNodeId}"]`);
-  await scrollExplorerTreeToEnd();
+  await scrollExplorerTreeToEnd(refreshedNodeId);
 
   if (
     (await readExplorerTreeRowLabel(
@@ -1912,12 +1912,105 @@ function assertCatalogPagePair(pages, totalCount, label) {
   }
 }
 
-async function scrollExplorerTreeToEnd() {
+async function scrollExplorerTreeToEnd(expectedNodeId) {
   const tree = page.locator(".fm-explorer-tree");
-  await tree.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
-  });
-  await page.waitForTimeout(50);
+  const deadline = Date.now() + timeoutMs;
+  const geometrySnapshots = [];
+  let previousPostcondition = null;
+  let stablePostconditionSamples = 0;
+
+  const appendSnapshot = (phase, snapshot) => {
+    geometrySnapshots.push({ phase, ...snapshot });
+    if (geometrySnapshots.length > 6) {
+      geometrySnapshots.splice(1, geometrySnapshots.length - 6);
+    }
+  };
+
+  const readGeometry = () =>
+    tree.evaluate((element, requestedNodeId) => {
+      const treeBounds = element.getBoundingClientRect();
+      const renderedNodes = Array.from(
+        element.querySelectorAll("[data-node-id]"),
+      );
+      const target = renderedNodes.find(
+        (candidate) =>
+          candidate.getAttribute("data-node-id") === requestedNodeId,
+      );
+      const targetBounds = target?.getBoundingClientRect() ?? null;
+      const targetStyle = target ? window.getComputedStyle(target) : null;
+      const maxTop = Math.max(0, element.scrollHeight - element.clientHeight);
+      const targetIntersectsViewport =
+        targetBounds !== null &&
+        targetBounds.width > 0 &&
+        targetBounds.height > 0 &&
+        targetBounds.bottom > treeBounds.top &&
+        targetBounds.top < treeBounds.bottom &&
+        targetStyle?.display !== "none" &&
+        targetStyle?.visibility !== "hidden";
+
+      return {
+        clientHeight: element.clientHeight,
+        maxTop,
+        renderedNodeCount: renderedNodes.length,
+        renderedNodeIds: {
+          first: renderedNodes
+            .slice(0, 3)
+            .map((node) => node.getAttribute("data-node-id")),
+          last: renderedNodes
+            .slice(-3)
+            .map((node) => node.getAttribute("data-node-id")),
+        },
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+        target: target
+          ? {
+              intersectsViewport: targetIntersectsViewport,
+              nodeId: target.getAttribute("data-node-id"),
+              topFromViewport: targetBounds.top - treeBounds.top,
+              bottomFromViewport: targetBounds.bottom - treeBounds.top,
+            }
+          : null,
+      };
+    }, expectedNodeId);
+
+  appendSnapshot("before-scroll", await readGeometry());
+  while (Date.now() < deadline) {
+    await tree.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await page.waitForTimeout(Math.min(50, remainingMs));
+
+    const geometry = await readGeometry();
+    appendSnapshot("after-scroll-and-reflow", geometry);
+    const atEnd = geometry.maxTop - geometry.scrollTop <= 1;
+    const targetVisible =
+      geometry.target?.nodeId === expectedNodeId &&
+      geometry.target.intersectsViewport;
+    const postcondition =
+      atEnd && targetVisible
+        ? JSON.stringify({
+            clientHeight: geometry.clientHeight,
+            maxTop: geometry.maxTop,
+            scrollHeight: geometry.scrollHeight,
+            target: geometry.target,
+          })
+        : null;
+
+    if (postcondition !== null && postcondition === previousPostcondition) {
+      stablePostconditionSamples += 1;
+    } else {
+      stablePostconditionSamples = postcondition === null ? 0 : 1;
+    }
+    previousPostcondition = postcondition;
+
+    if (stablePostconditionSamples >= 3) return;
+  }
+
+  throw new Error(
+    `Explorer tree did not settle at the end with ${expectedNodeId} visible within the existing ${timeoutMs} ms timeout. Geometry snapshots: ${JSON.stringify(geometrySnapshots)}.`,
+  );
 }
 
 async function verifyFrequencyDomainDrivenResults() {
