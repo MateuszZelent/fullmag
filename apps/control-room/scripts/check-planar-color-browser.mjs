@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
@@ -23,7 +23,19 @@ const output = Array.isArray(bundle) ? bundle[0].output : bundle.output;
 const script = output.find((item) => item.type === "chunk" && item.isEntry);
 assert.ok(script, "Browser fixture must bundle production renderer exports");
 
-const browser = await chromium.launch({ channel: "chrome" });
+const buildStorageRoot = process.env.FULLMAG_BUILD_STORAGE_ROOT;
+assert.ok(buildStorageRoot && isAbsolute(buildStorageRoot), "Planar browser proof requires resolved managed storage");
+// Chrome's Linux SingletonSocket has a smaller path limit than the profile path.
+// Use the existing canonical tmp parent; Chrome creates and cleans its own unique directory.
+const browserTempRoot = resolve(buildStorageRoot, "tmp");
+if (process.platform === "linux") {
+  assert.ok(Buffer.byteLength(`${browserTempRoot}/com.google.Chrome.XXXXXX/SingletonSocket`, "utf8") < 108,
+    "Managed browser temp path exceeds the Linux Unix-domain socket limit");
+}
+const browser = await chromium.launch({
+  channel: "chrome",
+  env: { ...process.env, TMPDIR: browserTempRoot, TMP: browserTempRoot, TEMP: browserTempRoot },
+});
 try {
   const page = await browser.newPage();
   const errors = [];
@@ -34,6 +46,7 @@ try {
     const canvas = document.querySelector("canvas");
     const { colorizeScalarRaster, createPlanarRenderer } = globalThis.PlanarColorProof;
     const renderer = createPlanarRenderer(canvas);
+    renderer.setViewport([0, 4, 0, 1], [0, 4, 0, 1]);
     const pixels = colorizeScalarRaster([0, 0.5, 1, 99], { min: 0, max: 1 }, [0, 0, 0, 1]);
     const backing = new Uint8ClampedArray(pixels.length + 8).fill(99);
     backing.set(pixels, 4);
@@ -64,7 +77,7 @@ try {
   assert.deepEqual(result.painted, [[68, 1, 84, 255], [51, 144, 132, 255], [253, 231, 37, 255], [0, 0, 0, 0]]);
   assert.deepEqual(result.settled, result.painted);
   assert.deepEqual(result.disposed, [0, 0]);
-  console.log(JSON.stringify({ status: "PASS", ...result }));
+  console.log(JSON.stringify({ status: "PASS", browserVersion: browser.version(), browserTempRelativePath: "tmp", ...result }));
 } finally {
   await browser.close();
 }
