@@ -46,3 +46,28 @@ Retencja: zachowano zainstalowane biblioteki, potrzebny cache przyrostowy,
 Skill `fullmag-build-stage-cleanup` nie jest dostępny; zastosowano reguły retencji
 build-storage governance. Wolne C: po etapie: 7961288704 bajty. Ponowna ocena
 po terminalnym wyniku kolejnego buildu i ustaleniu zależności rollbacku.
+
+## Uzupełnienie: eksport MPI i powtarzalność konfiguracji
+
+Późniejsza próba z frozen source
+`c1a95011711afb2074d13f25a671d8b868a48c52d061e757f067ec1b17b98c8b`
+ponownie zbudowała i zainstalowała providery. Konsument Fullmag zatrzymał się
+jednak na parsowaniu `MFEMConfig.cmake`: ścieżka Microsoft MPI zawierała
+nieescapowane separatory Windows. Log:
+`logs/native-build-f85e80b5bd6245a2ab058e722cc17dec.log`, exit 1.
+
+Bootstrap normalizuje teraz ścieżki MPI do separatorów CMake przed konfiguracją
+i eksportem; inventory nadal używa rzeczywistych ścieżek plików Windows.
+Adapter HYPRE uruchamia configure z katalogu `src/seq_mv` i zachowuje mtime
+niezmienionych dwudziestu wygenerowanych źródeł CUDA. Zmiana template'u powoduje
+ich regenerację. Nie zmieniono przypiętych commitów ani śledzonych plików upstream.
+
+Natywna weryfikacja bez kompilacji providerów: **8 PASS, 12.26 s**.
+Obejmuje rzeczywiste przekazanie argumentów przez PowerShell, konsumowanie
+konfiguracji CMake ze spacjami w ścieżce MPI oraz kolejne configure z zachowaniem
+mtime i regeneracją po zmianie template'u. Pierwsze uruchomienie fixture'ów
+wykryło dwa błędy samych testów; powyższy wynik dotyczy ich poprawionej wersji.
+
+Pełny build produktu, symulacja FEM GPU i UI nadal wymagają oddzielnych dowodów.
+Tabela hashy powyżej jest historycznym inventory pierwszego wskazanego attemptu;
+nie poświadcza plików zastąpionych przez późniejsze buildy tego profilu.

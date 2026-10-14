@@ -20,6 +20,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "scripts/windows/native_fem_dependencies.ps1"
 MFEM_CUDA_OPTIONS_HOOK = ROOT / "scripts/windows/native_fem/mfem_windows_cuda_options.cmake"
+HYPRE_CMAKE_COMPAT_HOOK = ROOT / "scripts/windows/native_fem/hypre_cmake_compat.cmake"
 REQUIREMENTS = ROOT / "windows_build_requirements.json"
 RUN_NATIVE_WINDOWS_POWERSHELL = os.environ.get("FULLMAG_RUN_NATIVE_WINDOWS_POWERSHELL") == "1"
 PS = shutil.which("powershell.exe") or shutil.which("pwsh")
@@ -182,7 +183,7 @@ function clang-cl.exe {
 }
 
 function Invoke-FullmagProviderCommand {
-  param([string]$Command, [string[]]$Arguments)
+  param([string]$Command, [string[]]$Arguments, [string]$WorkingDirectory)
   $global:LASTEXITCODE = 0
   if ($Command -eq "mock-cmake") {
     if ($Arguments -contains "--build") { return }
@@ -223,6 +224,9 @@ function Invoke-FullmagProviderCommand {
         provider = $provider
         build = $build
         arguments = @($Arguments)
+        working_directory = $WorkingDirectory
+        mpi_include_environment = $env:MSMPI_INC
+        mpi_library_environment = $env:MSMPI_LIB64
         cache_before = $cacheBefore
         requested_architecture = $requested
         effective_architecture = $effective
@@ -234,6 +238,9 @@ function Invoke-FullmagProviderCommand {
         provider = $provider
         build = $build
         arguments = @($Arguments)
+        working_directory = $WorkingDirectory
+        mpi_include_environment = $env:MSMPI_INC
+        mpi_library_environment = $env:MSMPI_LIB64
       }) | Out-Null
     }
     return
@@ -510,6 +517,8 @@ def test_mocked_bootstrap_overrides_cached_architecture_and_scans_outputs(tmp_pa
     source_hook = source_root / "scripts/windows/native_fem/mfem_windows_cuda_options.cmake"
     source_hook.parent.mkdir(parents=True, exist_ok=True)
     source_hook.write_text(MFEM_CUDA_OPTIONS_HOOK.read_text(encoding="utf-8"), encoding="utf-8")
+    source_hypre_hook = source_root / "scripts/windows/native_fem/hypre_cmake_compat.cmake"
+    source_hypre_hook.write_text(HYPRE_CMAKE_COMPAT_HOOK.read_text(encoding="utf-8"), encoding="utf-8")
     result = subprocess.run(
         [
             PS,
@@ -562,6 +571,21 @@ def test_mocked_bootstrap_overrides_cached_architecture_and_scans_outputs(tmp_pa
         for argument in hypre["arguments"]
         if argument.startswith("-DCMAKE_CUDA_FLAGS=")
     )
+    assert hypre["working_directory"].replace("\\", "/").endswith(
+        "/sources/hypre/src/seq_mv"
+    )
+    hypre_hooks = [
+        argument
+        for argument in hypre["arguments"]
+        if argument.startswith("-DCMAKE_PROJECT_INCLUDE_BEFORE=")
+    ]
+    assert len(hypre_hooks) == 1
+    assert hypre_hooks[0].replace("\\", "/").endswith(
+        "/scripts/windows/native_fem/hypre_cmake_compat.cmake"
+    )
+    assert "-DFULLMAG_HYPRE_COMPAT_ENABLE=ON" in hypre["arguments"]
+    expected_hypre_source = native_path(build_root / "fem-dependencies" / "sources" / "hypre").replace("\\", "/")
+    assert f"-DFULLMAG_HYPRE_COMPAT_SOURCE_ROOT={expected_hypre_source}" in hypre["arguments"]
     assert "-Xcompiler=/Zc:preprocessor" in hypre_flags
     assert '--pre-include="' in hypre_flags
     assert r'\"' not in hypre_flags
@@ -696,6 +720,11 @@ def test_mocked_bootstrap_overrides_cached_architecture_and_scans_outputs(tmp_pa
         argument.startswith("-DMPI_C_ADDITIONAL_INCLUDE_DIRS=")
         for argument in hypre["arguments"]
     )
+    assert all(
+        "\\" not in argument
+        for argument in hypre["arguments"]
+        if argument.startswith("-DMPI_")
+    )
 
     mfem = next(
         command
@@ -708,6 +737,16 @@ def test_mocked_bootstrap_overrides_cached_architecture_and_scans_outputs(tmp_pa
         argument.startswith("-DMPI_CXX_ADDITIONAL_INCLUDE_DIRS=")
         for argument in mfem["arguments"]
     )
+    assert all(
+        "\\" not in argument
+        for argument in mfem["arguments"]
+        if argument.startswith("-DMPI_")
+    )
+    for configure in (hypre, mfem):
+        assert configure["mpi_include_environment"]
+        assert configure["mpi_library_environment"]
+        assert "\\" not in configure["mpi_include_environment"]
+        assert "\\" not in configure["mpi_library_environment"]
     assert "-DCMAKE_CUDA_ARCHITECTURES=89" in first["arguments"]
     assert "-DCMAKE_CUDA_ARCHITECTURES=90" in second["arguments"]
     assert second["cache_before"] == "89"

@@ -39,7 +39,7 @@ function Assert-FullmagNativeFemProviderTree {
 }
 
 function Invoke-FullmagProviderCommand {
-  param([string]$Command, [string[]]$Arguments)
+  param([string]$Command, [string[]]$Arguments, [string]$WorkingDirectory)
   # Windows PowerShell 5.1 removes embedded double quotes while flattening
   # native arguments. Preserve them as literal backslash-quote pairs so a
   # nested flag such as --pre-include="C:\source root\compat.h" remains one
@@ -53,8 +53,26 @@ function Invoke-FullmagProviderCommand {
       }
     )
   }
-  & $Command @nativeArguments | Out-Host
-  if ($LASTEXITCODE -ne 0) { throw "Native FEM provider command failed ($LASTEXITCODE): $Command" }
+  $locationPushed = $false
+  $exitCode = 0
+  try {
+    if ($WorkingDirectory) {
+      Push-Location -LiteralPath $WorkingDirectory
+      $locationPushed = $true
+    }
+    & $Command @nativeArguments | Out-Host
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    if ($locationPushed) { Pop-Location }
+  }
+  if ($exitCode -ne 0) { throw "Native FEM provider command failed ($exitCode): $Command" }
+}
+
+function ConvertTo-FullmagCMakePath {
+  param([Parameter(Mandatory=$true)][string]$Path)
+  if ([string]::IsNullOrWhiteSpace($Path)) { throw "CMake path cannot be empty" }
+  return ([IO.Path]::GetFullPath($Path)).Replace('\', '/')
 }
 
 function Get-FullmagPinnedDownload {
@@ -346,8 +364,15 @@ function Invoke-FullmagNativeFemDependencies {
   if ($mpiHeaders.Count -ne 1 -or $mpiLibraries.Count -ne 1) { throw "Microsoft MPI x64 SDK extraction is incomplete or ambiguous" }
   $mpiInclude = $mpiHeaders[0].Directory.FullName
   $mpiLibrary = $mpiLibraries[0].FullName
-  $env:MSMPI_INC = $mpiInclude
-  $env:MSMPI_LIB64 = $mpiLibraries[0].Directory.FullName
+  # CMake serializes these values into MFEMConfig.cmake.  A native Windows
+  # path such as C:\git\fullmag\Microsoft SDKs\MPI\Include is parsed as
+  # CMake escape syntax (for example, \g), so keep the filesystem paths for
+  # receipts/tool hashing but pass forward-slash paths at the CMake boundary.
+  $mpiIncludeCMake = ConvertTo-FullmagCMakePath $mpiInclude
+  $mpiLibraryCMake = ConvertTo-FullmagCMakePath $mpiLibrary
+  $mpiLibraryDirectoryCMake = ConvertTo-FullmagCMakePath $mpiLibraries[0].Directory.FullName
+  $env:MSMPI_INC = $mpiIncludeCMake
+  $env:MSMPI_LIB64 = $mpiLibraryDirectoryCMake
   $sourceRoots = @{}
   foreach ($provider in $plan.providers) {
     $sourceRoots[$provider.name] = Get-FullmagPinnedProviderSource -Provider $provider -SourcesRoot (Join-Path $plan.root "sources")
@@ -387,11 +412,24 @@ function Invoke-FullmagNativeFemDependencies {
   $mpiCacheReset = @("-UMPI_*", "-UHYPRE_HAVE_MPI*")
   $mpiFind = @("-DMPI_ASSUME_NO_BUILTIN_MPI=ON", "-DMPI_SKIP_COMPILER_WRAPPER=ON")
   $hypreBuild = Join-Path $plan.root "builds\hypre"
-  Invoke-FullmagProviderCommand $cmake (@("-S", (Join-Path $sourceRoots.hypre "src"), "-B", $hypreBuild, "-UHYPRE_*UMPIRE*") + $mpiCacheReset + $common + $hypreCudaProvider + $mpiFind + @(
+  $hypreSource = Join-Path $sourceRoots.hypre "src"
+  $hypreCmakeCompat = Join-Path $SourceRoot "scripts\windows\native_fem\hypre_cmake_compat.cmake"
+  if (-not (Test-Path -LiteralPath $hypreCmakeCompat -PathType Leaf)) {
+    throw "Native HYPRE CMake compatibility hook is missing: $hypreCmakeCompat"
+  }
+  $hypreCmakeCompatCMake = ConvertTo-FullmagCMakePath $hypreCmakeCompat
+  $hypreSourceCMake = ConvertTo-FullmagCMakePath $sourceRoots.hypre
+  $hypreCmakeCompatArgs = @(
+    "-DCMAKE_PROJECT_INCLUDE_BEFORE=$hypreCmakeCompatCMake",
+    "-DFULLMAG_HYPRE_COMPAT_ENABLE=ON",
+    "-DFULLMAG_HYPRE_COMPAT_SOURCE_ROOT=$hypreSourceCMake"
+  )
+  $hypreConfigureArguments = @("-S", $hypreSource, "-B", $hypreBuild, "-UHYPRE_*UMPIRE*") + $mpiCacheReset + $common + $hypreCudaProvider + $mpiFind + $hypreCmakeCompatArgs + @(
     "-DHYPRE_ENABLE_CUDA=$cudaFlag", "-DHYPRE_ENABLE_MPI=ON", "-DHYPRE_ENABLE_UMPIRE=OFF",
-    "-DMPI_C_HEADER_DIR=$mpiInclude", "-DMPI_C_INCLUDE_DIR=$mpiInclude", "-DMPI_C_INCLUDE_DIRS=$mpiInclude", "-DMPI_C_ADDITIONAL_INCLUDE_DIRS=$mpiInclude",
-    "-DMPI_C_LIB_NAMES=msmpi", "-DMPI_msmpi_LIBRARY=$mpiLibrary", "-DMPI_C_LIBRARIES=$mpiLibrary",
-    "-DHYPRE_ENABLE_FORTRAN=OFF", "-DHYPRE_BUILD_TESTS=OFF", "-DHYPRE_BUILD_EXAMPLES=OFF", "-DHYPRE_ENABLE_SINGLE=OFF", "-DHYPRE_ENABLE_BIGINT=OFF", "-DHYPRE_ENABLE_MIXEDINT=OFF"))
+    "-DMPI_C_HEADER_DIR=$mpiIncludeCMake", "-DMPI_C_INCLUDE_DIR=$mpiIncludeCMake", "-DMPI_C_INCLUDE_DIRS=$mpiIncludeCMake", "-DMPI_C_ADDITIONAL_INCLUDE_DIRS=$mpiIncludeCMake",
+    "-DMPI_C_LIB_NAMES=msmpi", "-DMPI_msmpi_LIBRARY=$mpiLibraryCMake", "-DMPI_C_LIBRARIES=$mpiLibraryCMake",
+    "-DHYPRE_ENABLE_FORTRAN=OFF", "-DHYPRE_BUILD_TESTS=OFF", "-DHYPRE_BUILD_EXAMPLES=OFF", "-DHYPRE_ENABLE_SINGLE=OFF", "-DHYPRE_ENABLE_BIGINT=OFF", "-DHYPRE_ENABLE_MIXEDINT=OFF")
+  Invoke-FullmagProviderCommand -Command $cmake -Arguments $hypreConfigureArguments -WorkingDirectory (Join-Path $sourceRoots.hypre "src\seq_mv")
   Invoke-FullmagProviderCommand $cmake @("--build", $hypreBuild, "--target", "HYPRE", "--parallel", "8")
   Invoke-FullmagProviderCommand $cmake @("--install", $hypreBuild, "--config", "Release")
 
@@ -448,8 +486,8 @@ function Invoke-FullmagNativeFemDependencies {
     $mfemConfigure += "-DCMAKE_PROJECT_INCLUDE_BEFORE=$mfemCudaOptionsHook"
   }
   Invoke-FullmagProviderCommand $cmake ($mfemConfigure + $mpiCacheReset + $common + $cudaProvider + $mpiFind + @(
-    "-DMFEM_USE_MPI=ON", "-DMPI_CXX_HEADER_DIR=$mpiInclude", "-DMPI_CXX_INCLUDE_DIR=$mpiInclude", "-DMPI_CXX_INCLUDE_DIRS=$mpiInclude", "-DMPI_CXX_ADDITIONAL_INCLUDE_DIRS=$mpiInclude",
-    "-DMPI_CXX_LIB_NAMES=msmpi", "-DMPI_msmpi_LIBRARY=$mpiLibrary", "-DMPI_CXX_LIBRARIES=$mpiLibrary", "-DMFEM_USE_CUDA=$cudaFlag", "-DMFEM_USE_DOUBLE=ON", "-DMFEM_USE_SINGLE=OFF",
+    "-DMFEM_USE_MPI=ON", "-DMPI_CXX_HEADER_DIR=$mpiIncludeCMake", "-DMPI_CXX_INCLUDE_DIR=$mpiIncludeCMake", "-DMPI_CXX_INCLUDE_DIRS=$mpiIncludeCMake", "-DMPI_CXX_ADDITIONAL_INCLUDE_DIRS=$mpiIncludeCMake",
+    "-DMPI_CXX_LIB_NAMES=msmpi", "-DMPI_msmpi_LIBRARY=$mpiLibraryCMake", "-DMPI_CXX_LIBRARIES=$mpiLibraryCMake", "-DMFEM_USE_CUDA=$cudaFlag", "-DMFEM_USE_DOUBLE=ON", "-DMFEM_USE_SINGLE=OFF",
     "-DMFEM_USE_CEED=ON", "-DCEED_DIR=$($plan.prefix)", "-DHYPRE_DIR=$($plan.prefix)", "-DMFEM_USE_METIS=OFF", "-DMFEM_ENABLE_TESTING=OFF", "-DMFEM_ENABLE_EXAMPLES=OFF", "-DMFEM_ENABLE_MINIAPPS=OFF"))
   Invoke-FullmagProviderCommand $cmake @("--build", $mfemBuild, "--target", "mfem", "--parallel", "8")
   Invoke-FullmagProviderCommand $cmake @("--install", $mfemBuild, "--config", "Release")
