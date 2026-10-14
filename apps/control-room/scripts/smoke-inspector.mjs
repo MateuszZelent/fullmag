@@ -23,6 +23,7 @@ const INSPECTOR_SCENE_TRACE_LIMIT = 20;
 const INSPECTOR_MODAL_FIELD_ID = "analysis:eigen:sample-0001:mode-0002";
 const INSPECTOR_MODAL_FIELD_ARRAY_PATH =
   "eigen/mode_fields.zarr/sample_0001/mode_0002/vector_xyz_complex";
+const INSPECTOR_MODAL_TOPOLOGY_COORDINATE_SCALE_M = 100e-9;
 const INSPECTOR_MODAL_FIELD_PAYLOAD_PATH =
   `${INSPECTOR_MODAL_FIELD_ARRAY_PATH}/0.0.0`;
 const INSPECTOR_DRIVEN_RESPONSE_FIELD_ID =
@@ -3804,6 +3805,12 @@ function createInspectorFixture() {
     },
   };
   const requestBudget = createInspectorRequestBudgetState();
+  const topology = inspectorTopologyBuffer();
+  assertInspectorTopologyGeometry(
+    topology,
+    scene.objects[0].geometry.geometry_params.size,
+    scene.universe.size,
+  );
   return {
     fdmBuildGridMode,
     gridCommandBodies: [],
@@ -3845,7 +3852,7 @@ function createInspectorFixture() {
     unknownGetPaths: [],
     revision,
     scene,
-    topology: inspectorTopologyBuffer(),
+    topology,
     texturePatchDelayMs: 0,
     geometryPatchDelayMs: 0,
     geometryPatchPending: false,
@@ -5359,6 +5366,29 @@ async function fulfillTopology(route, topology, manifest) {
   });
 }
 
+function assertInspectorTopologyGeometry(topology, filmSize, universeSize) {
+  const values = Array.from(new Float64Array(topology, 32, 12 * 3));
+  const spans = [0, 1, 2].map((axis) => {
+    const axisValues = values.filter((_, index) => index % 3 === axis);
+    return Math.max(...axisValues) - Math.min(...axisValues);
+  });
+  const largestSpan = Math.max(...spans);
+  const filmLargestAxis = Math.max(...filmSize);
+  const universeLargestAxis = Math.max(...universeSize);
+  assert(
+    values.every((value) => Number.isFinite(value)) &&
+      spans.every((span) => Number.isFinite(span) && span > 0) &&
+      largestSpan <= filmLargestAxis * 2 &&
+      largestSpan <= universeLargestAxis,
+    `The Inspector topology fixture must stay in finite SI scene scale: ${JSON.stringify({
+      filmLargestAxis,
+      largestSpan,
+      spans,
+      universeLargestAxis,
+    })}`,
+  );
+}
+
 function inspectorTopologyBuffer() {
   const nodeCount = 12;
   const elementCount = 3;
@@ -5376,10 +5406,14 @@ function inspectorTopologyBuffer() {
   view.setUint32(20, elementCount, true);
   view.setUint32(24, elementCount, true);
   let offset = 32;
+  const scale = INSPECTOR_MODAL_TOPOLOGY_COORDINATE_SCALE_M;
   new Float64Array(buffer, offset, nodeCount * 3).set([
-    0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
-    -1, -1, -1, 2, -1, -1, -1, 2, -1, -1, -1, 2,
-    0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 2,
+    // The synthetic topology remains structurally identical, but its node
+    // coordinates are expressed in the scene's SI metre scale.
+    0, 0, 0, scale, 0, 0, 0, scale, 0, 0, 0, scale,
+    -scale, -scale, -scale, 2 * scale, -scale, -scale,
+    -scale, 2 * scale, -scale, -scale, -scale, 2 * scale,
+    0, 0, scale, scale, 0, scale, 0, scale, scale, 0, 0, 2 * scale,
   ]);
   offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, elementCount * 4).set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);

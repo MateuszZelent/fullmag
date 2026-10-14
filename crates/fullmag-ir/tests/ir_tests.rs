@@ -1926,18 +1926,33 @@ fn antenna_study_selection_is_optional_and_typed() {
 }
 
 #[test]
-fn both_ir_versions_reject_a_missing_antenna_selection_reference() {
+fn legacy_ir_rejects_a_missing_antenna_selection_reference() {
     let study: StudyIR = serde_json::from_value(serde_json::json!({
         "kind": "antenna_field_solve", "sampling": {"outputs": []},
         "selection": {"stage_id": "missing", "port_mode_id": "port"}
     })).unwrap();
     let mut legacy = ProblemIR::bootstrap_example();
-    legacy.study = study.clone();
-    let mut objects = fullmag_ir::ProblemIRV04::bootstrap_example();
-    objects.study = study;
-    for errors in [legacy.validate().unwrap_err(), objects.validate().unwrap_err()] {
-        assert!(errors.iter().any(|error| error.contains("antenna_field_solve.selection")));
-    }
+    legacy.study = study;
+
+    let errors = legacy.validate().unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("antenna_field_solve.selection")));
+}
+
+#[test]
+fn v04_rejects_antenna_field_solve_as_an_unsupported_study() {
+    let mut document = serde_json::to_value(fullmag_ir::ProblemIRV04::bootstrap_example()).unwrap();
+    document["study"] = serde_json::json!({
+        "kind": "antenna_field_solve", "sampling": {"outputs": []},
+        "selection": {"stage_id": "missing", "port_mode_id": "port"}
+    });
+
+    let error = serde_json::from_value::<fullmag_ir::ProblemIRV04>(document)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("/study/kind: unsupported study kind 'antenna_field_solve'"),
+        "{error}"
+    );
 }
 
 #[test]
