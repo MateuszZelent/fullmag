@@ -5299,7 +5299,27 @@ mod tests {
             current.metadata = Some(json!({
                 "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
             }));
-            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+            // Readiness requires m to be tied to an accepted physical frame,
+            // not merely present in the preview cache.
+            let mut physical = live_state_with_magnetization(1, vec![1.0, 0.0, 0.0]);
+            physical.latest_step.grid = [1, 1, 1];
+            let mut magnetization = preview_field("m");
+            magnetization.source_step = physical.latest_step.step;
+            magnetization.source_time_seconds = Some(physical.latest_step.time);
+            physical.latest_step.preview_field = Some(magnetization);
+            let session_id = current.session.session_id.clone();
+            apply_current_live_runtime_frame(
+                &mut current,
+                CurrentLiveRuntimeFrameRequest {
+                    session_id,
+                    live_state: Some(physical),
+                    frozen_spins_runtime_status: None,
+                    engine_log: None,
+                    solver_profile: None,
+                    fem_mesh: None,
+                },
+            )
+            .expect("physical observation should publish its m preview");
             let mut record = tracked_command("cmd-target", kind);
             if kind == "compute_fields" {
                 record.command.field_materialization_requirements =
@@ -6925,7 +6945,12 @@ mod tests {
             "execution_plan": { "backend_plan": { "kind": "antenna_external_lead_inspection" } }
         }));
         let mut late = live_state_with_magnetization(5, vec![1.0, 0.0, 0.0]);
-        late.latest_step.preview_field = Some(preview_field("H_eff"));
+        // Bind the late field to the physical observation carrying it so the
+        // source-admission gate is exercised before the nonmagnetic filter.
+        let mut effective_field = preview_field("H_eff");
+        effective_field.source_step = late.latest_step.step;
+        effective_field.source_time_seconds = Some(late.latest_step.time);
+        late.latest_step.preview_field = Some(effective_field);
         apply_current_live_runtime_frame(
             &mut current,
             CurrentLiveRuntimeFrameRequest {
