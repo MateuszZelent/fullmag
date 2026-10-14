@@ -12879,8 +12879,8 @@ fn fem_eigen_robin_beta_modes_resolve_defaults_overrides_and_invalid_policy() {
         mode_tracking: None,
     };
 
-    let plan = plan(&ir).expect("shared-domain FEM eigen mesh should now plan");
-    match plan.backend_plan {
+    let execution_plan = plan(&ir).expect("shared-domain FEM eigen mesh should now plan");
+    match execution_plan.backend_plan {
         BackendPlanIR::FemEigen(fem) => {
             assert_eq!(
                 fem.domain_mesh_mode,

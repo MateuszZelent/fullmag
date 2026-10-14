@@ -2715,7 +2715,7 @@ mod tests {
                 factor: 1.5,
                 grading: 1.0,
                 boundary_marker: 99,
-                bc_kind: Some("dirichlet".to_string()),
+                bc_kind: Some("robin".to_string()),
                 robin_beta_mode: None,
                 robin_beta_factor: None,
                 shape: Some("bbox".to_string()),

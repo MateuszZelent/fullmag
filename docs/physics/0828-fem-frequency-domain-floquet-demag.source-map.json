@@ -805,7 +805,7 @@
       "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
       "symbol": "DOC-ANCHOR:robin-beta-mode-and-geometry-contract",
       "responsibility": "Define dimensionless c_R modes separately from the two non-equivalent geometry reference scales; leave the geometry divergence open.",
-      "evidence_status": "planned_contract / geometry equivalence NOT VERIFIED"
+      "evidence_status": "planned_contract"
     },
     {
       "id": "source-robin-ir-resolver",
@@ -831,7 +831,7 @@
     {
       "id": "source-robin-reference-scale",
       "path": "crates/fullmag-engine/src/fem.rs",
-      "symbol": "MeshTopology::from_ir",
+      "symbol": "from_ir",
       "responsibility": "Set the reference baseline beta scale to 1/R_eq from total mesh volume; this differs from the modal extent scale.",
       "evidence_status": "source_visible / geometry equivalence NOT VERIFIED"
     },
@@ -859,7 +859,7 @@
     {
       "id": "source-robin-cli-plan-chain",
       "path": "crates/fullmag-cli/src/main.rs",
-      "symbol": "Command::RunProblemJsonDirect",
+      "symbol": "main",
       "responsibility": "Call fullmag_plan::plan before passing the execution plan to initial-state diagnostics, so the diagnostic's FemPlanIR input has normalized Robin values.",
       "evidence_status": "source trace at pinned source / runtime NOT VERIFIED"
     },

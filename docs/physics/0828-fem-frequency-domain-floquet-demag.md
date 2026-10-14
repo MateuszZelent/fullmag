@@ -283,13 +283,13 @@ wykonanie w runtime wymagają oddzielnych dowodów.
 | $\delta\mathbf M_\perp$, $\delta M_z$ | transverse and longitudinal waveguide magnetization components | $\mathrm{A\,m^{-1}}$ |
 | $\Omega$, $\Omega_m$, $\Omega_a$ | full cell, magnetic and air subdomains | $\mathrm{m^3}$ |
 | $\mathrm dV$ | volume measure | $\mathrm{m^3}$ |
-| $\beta_R$ | Robin boundary coefficient multiplying the open-boundary mass term | $\mathrm{m^{-1}}$ |
-| $c_R$ | dimensionless Robin coefficient selected by the named mode or explicit user value | $1$ |
-| $\beta_{0,R}$ | geometry-dependent reference scale in $\beta_R=c_R\beta_{0,R}$ | $\mathrm{m^{-1}}$ |
-| $R_*$ | reference length used by a Robin geometry realization | $\mathrm{m}$ |
-| $L_\mathrm{open}$ | largest open-axis extent in the shared-domain modal scale | $\mathrm{m}$ |
-| $R_\mathrm{eq}$ | equivalent-radius scale derived from reference-mesh volume | $\mathrm{m}$ |
-| $V_\mathrm{mesh}$ | total mesh volume used by the FEM reference equivalent radius | $\mathrm{m^3}$ |
+| $\beta_R$ | Robin boundary coefficient | $\mathrm{m^{-1}}$ |
+| $c_R$ | dimensionless mode-resolved Robin coefficient | $1$ |
+| $\beta_{0,R}$ | geometry-dependent Robin reference scale | $\mathrm{m^{-1}}$ |
+| $R_*$ | reference length in a Robin geometry realization | $\mathrm{m}$ |
+| $L_{\mathrm{open}}$ | largest open-axis extent used by shared-domain modal geometry | $\mathrm{m}$ |
+| $R_{\mathrm{eq}}$ | equivalent radius derived from reference mesh volume | $\mathrm{m}$ |
+| $V_{\mathrm{mesh}}$ | total volume of the mesh used by the FEM reference baseline | $\mathrm{m^3}$ |
 | $\omega$, $\omega_r$, $\Gamma$ | complex angular frequency, oscillation and decay rates | $\mathrm{rad\,s^{-1}}$ |
 | $\lambda$ | generalized eigenvalue | $\mathrm{s^{-1}}$ |
 | $f$ | cyclic frequency | $\mathrm{Hz}$ |
@@ -640,6 +640,27 @@ pełnego benchmarku COMSOL. Bieżące kryteria wykonania B0–B6 zapisano w
 | Reference baseline Robin scale | FEM reference | crates/fullmag-engine/src/fem.rs + MeshTopology::from_ir | Derive the baseline scale from the equivalent radius of mesh volume. | source-visible only; scale equivalence NOT VERIFIED |
 | Native Robin ABI mapping | FEM native | crates/fullmag-runner/src/native_fem.rs + native_robin_beta_abi_parameters; backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp + initialize_demag_poisson_boundary_operator | Encode normalized modes 1/2/3; C++ mode 0 passes through the factor, and the resolved demag realization separately controls Robin activation. | source contract regression; native runtime NOT VERIFIED |
 | CLI initial-state diagnostics | CLI | crates/fullmag-cli/src/main.rs + Command::RunProblemJsonDirect; crates/fullmag-cli/src/diagnostics.rs + diagnose_initial_fem_plan | The direct command plans the IR before passing its backend plan to diagnostics; this is a source call-chain trace, not runtime evidence. | source trace at pinned source | source visible; runtime NOT VERIFIED |
+
+### Robin: exhaustive source identities
+
+The method `from_ir` below belongs to `MeshTopology`; `main` includes the `Command::RunProblemJsonDirect` planning branch. These are declaration identities accepted by the source validator, not runtime evidence.
+
+| Source ID | Path | Declaration identity | Responsibility | Evidence |
+|---|---|---|---|---|
+| source-robin-beta-contract | docs/physics/0828-fem-frequency-domain-floquet-demag.md | DOC-ANCHOR:robin-beta-mode-and-geometry-contract | Define dimensionless c_R modes separately from the two non-equivalent geometry reference scales; leave the geometry divergence open. | planned_contract |
+| source-robin-ir-resolver | crates/fullmag-ir/src/plan.rs | resolve_robin_beta_factor | Resolve the common positive finite dimensionless mode coefficient and reject invalid mode/factor inputs. | source_visible / runner CI pending |
+| source-robin-planner-normalization | crates/fullmag-plan/src/mesh.rs | build_air_box_config | Normalize missing mode plus explicit factor to user and the empty policy to dipole before creating the FEM air-box plan. | source_visible / runner CI pending |
+| source-robin-shared-domain-scale | crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs | shared_domain_robin_beta_for_extent | Apply the common coefficient to 1/(L_open/2) for Robin or omitted-kind raw configs, return no Robin scale for Dirichlet/pure-Neumann, and reject unknown kinds; cross-realization equivalence is not established. | source_visible / runtime NOT VERIFIED |
+| source-robin-reference-scale | crates/fullmag-engine/src/fem.rs | from_ir | Set the reference baseline beta scale to 1/R_eq from total mesh volume; this differs from the modal extent scale. | source_visible / geometry equivalence NOT VERIFIED |
+| source-robin-reference-consumer | crates/fullmag-runner/src/fem_reference.rs | resolved_reference_robin_beta_factor | Resolve raw PoissonRobin mode/factor inputs through the shared fullmag-ir policy before constructing the reference problem; absent config uses c=2 and explicit contradictory boundary kinds fail closed. | source_visible / runtime NOT VERIFIED |
+| source-robin-native-abi | crates/fullmag-runner/src/native_fem.rs | native_robin_beta_abi_parameters | Use the shared resolver for active PoissonRobin plans, including a missing air-box config or bc_kind; preserve mode 0 and the supplied factor when the resolved demag realization is not Robin, and reject contradictory explicit boundary kinds. | source_visible / native runtime NOT VERIFIED |
+| source-robin-cpp-boundary-mode | backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp | initialize_demag_poisson_boundary_operator | Enter Robin assembly only for AIRBOX_ROBIN; modes 1 and 2 force c=1 and c=2, while mode 0 passes through the factor field and does not disable the boundary. | source-visible / native runtime NOT VERIFIED |
+| source-robin-cli-plan-chain | crates/fullmag-cli/src/main.rs | main | Call fullmag_plan::plan before passing the execution plan to initial-state diagnostics, so the diagnostic's FemPlanIR input has normalized Robin values. | source trace at pinned source / runtime NOT VERIFIED |
+| source-robin-cli-diagnostic-consumer | crates/fullmag-cli/src/diagnostics.rs | diagnose_initial_fem_plan | Consume the planner-produced FEM plan for the direct CLI initial-state warning path; no second Robin policy is defined here. | source trace at pinned source / runtime NOT VERIFIED |
+| source-robin-mode-tests | crates/fullmag-ir/src/plan.rs | robin_beta_mode_factor_resolver_preserves_named_modes_and_unspecified_factor | Exercise the IR resolver's named-mode forcing, explicit user factor, and malformed-input refusal. | source test; CI pending |
+| source-robin-planner-tests | crates/fullmag-plan/src/tests.rs | fem_eigen_robin_beta_modes_resolve_defaults_overrides_and_invalid_policy | Exercise planner normalization, forced named values, and invalid mode/factor combinations. | source test; CI pending |
+| source-robin-native-abi-tests | crates/fullmag-runner/src/native_fem.rs | native_robin_abi_uses_the_shared_mode_factor_contract | Exercise missing config and bc_kind for active Robin defaults/modes, invalid or contradictory inputs, and preservation of a non-Robin realization. | source test; CI pending |
+| source-robin-reference-tests | crates/fullmag-runner/src/fem_reference.rs | reference_runner_resolves_raw_robin_mode_and_factor_with_shared_contract | Exercise the reference runner's raw-plan forwarding through the shared IR resolver. | source test; CI pending |
 
 (validation)=
 ## 9. Validation strategy

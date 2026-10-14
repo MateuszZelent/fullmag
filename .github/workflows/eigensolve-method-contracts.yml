@@ -21,6 +21,8 @@ jobs:
   source-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -37,4 +39,4 @@ jobs:
       - name: Run complete default-feature runner contracts
         env:
           RUST_MIN_STACK: 16777216
-        run: cargo test -p fullmag-runner --lib --no-fail-fast
+        run: python -B scripts/fullmag_storage.py run --profile linux-host -- cargo test --locked -p fullmag-runner --lib --no-fail-fast
