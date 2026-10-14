@@ -1771,6 +1771,9 @@ mod tests {
         problem.antenna_field_solve_stages[0].field_sampling_domain = FieldTargetIR::Object {
             object_id: "signal-object".into(),
         };
+        problem.antenna_field_solve_stages[0].target_refs = vec![FieldTargetIR::Object {
+            object_id: "signal-object".into(),
+        }];
         let fullmag_ir::CurrentModuleIR::CurrentTransport {
             definition: Some(definition),
             ..

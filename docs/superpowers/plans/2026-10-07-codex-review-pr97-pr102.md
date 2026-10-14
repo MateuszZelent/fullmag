@@ -4294,3 +4294,12 @@ Scope373 fullIR i cztery named antenowe negativecontracts przeszły; pełny plan
 Dwa spin/charge testy oczekiwały tylko markerów bottom/back, mimo że fixture jawnie deklaruje także left/right VoltageElectrode. Oczekiwania zachowują komplet authored boundary attributes11/12/13/15 z0/.1/.1/0 i insulation14/16. To markery facetów, nie vertexDOFs; runtime dopiero mapuje je naH1. Resolver/fizyka pozostają bez zmian. Poprawka nie kwalifikuje realnego electricalsolve ani zgodności napięć na współdzielonych narożnikach. Existingstrictplannerpositive/negative tests pozostają pełną bramką, hostedexecution pending.
 
 UI38488385823 exact7013 SUCCESS:56files/1205tests, completeTypecheck, architecture, nativeChrome155 canvas400x100/offset4/exactcolors/settled/dispose0. Artifact11860926256 pobrany, pełnylogSHA256 E263638F5C1DAA44DA1F393B6D9A7F06717FF448B65AC97C67F3FB6FCEF426C2. Jest to konkretny planar renderer proof; fullworkspace/API/liveExplorer/FEM/GPU nie są nim kwalifikowane. Nowe sourcebackendrepairs a72 wCI38489057227:LinuxjobSUCCESS, Windows przy ostatniejobserwacji wnamedintegritystep; pełnygatejeszczeobserwowany.
+
+
+### 2026-10-14 — pełne CI i dwa pozostałe antenowe fixture
+
+CI38515741991 exactf14: planner580PASS/1FAIL. Dziesięć pierwotnych planner failures usunięto; pozostały test multi-object zmienia source/sampling identity na signal-object, ale zachowywał stary target device-object. Aktualizacja targetu wiąże istniejący authored signal-object i pozwala dotrzeć do zamierzonej odmowy multi-object przed mesh loading. Guard i negatywna asercja pozostają bez zmian.
+
+Osobny IR balanced_port_mode test miał pusty charge domain/materials; rzeczywisty validate_v2_port_structure wymaga terminala na obiekcie należącym do domain. Fixture deklaruje antenna_1 z dodatnią izotropową przewodnością i pełnym przypisaniem materiału; nie zmieniono validatora, port normalization ani negative balance/missing terminal guards. Positive assertion wypisuje rzeczywiste errors. To test strukturalny, nie dowód electrical solve lub kwalifikacji anteny.
+
+CI38489057227 exacta72 zakończone SUCCESS Linux/Windows. Linux full runner1786PASS/0FAIL/1ignored; Windows named writer/admission/integrity/cancel PASS, full suite skipped zgodnie z workflow. Nie przypisuje się temu dowodu pełnego Windows runner parity ani scientific qualification. Lokalny Git/index i Cargo.lock bez mutacji; testy wyłącznie GHA.

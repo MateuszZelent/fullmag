@@ -1,8 +1,9 @@
 use fullmag_ir::{
     AntennaPortBranchV2IR, AntennaPortModeIR, ChargeBoundaryIR, ChargePotentialGaugeIR,
-    ChargeSolverPolicyIR, ChargeTransportDefinitionIR, CurrentModuleIR, CurrentTransportModelIR,
+    ChargeSolverPolicyIR, ChargeTransportDefinitionIR, ChargeTransportMaterialAssignmentIR,
+    ChargeTransportMaterialIR, CurrentModuleIR, CurrentTransportModelIR,
     LinearTransportSolverPolicyIR, PhysicsObjectIR, PhysicsObjectTypeIR, ProblemIRV04,
-    SurfaceRefIR, TransportCouplingIR,
+    RegionRefIR, SurfaceRefIR, TransportCouplingIR,
 };
 
 fn problem_with_charge_transport() -> ProblemIRV04 {
@@ -30,8 +31,22 @@ fn problem_with_charge_transport() -> ProblemIRV04 {
             coupling: TransportCouplingIR::OneWay,
             time_envelope: None,
             definition: Some(ChargeTransportDefinitionIR {
-                domain: Vec::new(),
-                materials: Vec::new(),
+                domain: vec![RegionRefIR {
+                    object_id: "antenna_1".to_string(),
+                    region_id: None,
+                }],
+                materials: vec![ChargeTransportMaterialAssignmentIR {
+                    region: RegionRefIR {
+                        object_id: "antenna_1".to_string(),
+                        region_id: None,
+                    },
+                    material: ChargeTransportMaterialIR {
+                        sigma_spm: 4.0e7,
+                        sigma_parallel_spm: None,
+                        sigma_perpendicular_spm: None,
+                        sigma_ahe_spm: None,
+                    },
+                }],
                 boundaries: vec![
                     ChargeBoundaryIR::VoltageElectrode {
                         id: "signal_in".to_string(),
@@ -99,7 +114,7 @@ fn balanced_port_mode_is_composition_only_and_round_trips() {
         normalization_current_a: 1.0,
     });
 
-    assert!(problem.validate().is_ok());
+    assert!(problem.validate().is_ok(), "{:?}", problem.validate());
     let value = serde_json::to_value(&problem).unwrap();
     let port = &value["antenna_port_modes"][0];
     assert!(port.get("geometry").is_none());
