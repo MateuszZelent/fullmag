@@ -18,6 +18,7 @@ import { VisualizationDebugController } from "@/kernel/visualization/Visualizati
 
 import type { ExplorerNode } from "./explorerTypes";
 import {
+  EXPLORER_ROW_HEIGHT,
   contextCommandItemsForNode,
   flattenVisibleExplorerRows,
   resolveExplorerFocusableRowId,
@@ -108,22 +109,67 @@ describe("flattenVisibleExplorerRows", () => {
     });
   });
 
+  it("keeps virtualized ranges aligned with the compact rendered row height", () => {
+    const tokensCssUrl = new URL(
+      "../../design/styles/tokens.css",
+      import.meta.url,
+    );
+    const tokensCss = readSource(fileURLToPath(tokensCssUrl));
+    const compactHeight = Number(
+      tokensCss.match(/--fm-control-height-compact:\s*(\d+)px;/)?.[1],
+    );
+    expect(Number.isFinite(compactHeight)).toBe(true);
+
+    const explorerCssUrl = new URL(
+      "../../design/styles/explorer.css",
+      import.meta.url,
+    );
+    const explorerCss = readSource(fileURLToPath(explorerCssUrl));
+    const treeRowRule =
+      explorerCss.match(/\.fm-explorer-tree-row \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(treeRowRule).toContain("min-height: var(--fm-control-height-compact);");
+    expect(EXPLORER_ROW_HEIGHT).toBe(compactHeight);
+
+    const rows = Array.from({ length: 501 }, (_, index) => ({
+      depth: 0,
+      expanded: false,
+      hasChildren: false,
+      node: {
+        id: `node-${index}`,
+        kind: "object.root" as const,
+        label: `Node ${index}`,
+        parentId: null,
+      },
+    }));
+    const viewportHeight = 95;
+    const scrollTop = rows.length * compactHeight - viewportHeight;
+    const slice = sliceVisibleExplorerRows({
+      overscan: 8,
+      rowHeight: EXPLORER_ROW_HEIGHT,
+      rows,
+      scrollTop,
+      viewportHeight,
+    });
+
+    expect(slice.rows.map((row) => row.node.id)).toContain("node-500");
+  });
+
   it("scrolls an offscreen active node into the visible tree window", () => {
     const rowIds = Array.from({ length: 100 }, (_, index) => `node-${index}`);
 
     expect(
       resolveExplorerRevealScrollTop({
         activeNodeId: "node-50",
-        rowHeight: 28,
+        rowHeight: EXPLORER_ROW_HEIGHT,
         rowIds,
         scrollTop: 0,
         viewportHeight: 280,
       }),
-    ).toBe(1148);
+    ).toBe(1046);
     expect(
       resolveExplorerRevealScrollTop({
         activeNodeId: "node-5",
-        rowHeight: 28,
+        rowHeight: EXPLORER_ROW_HEIGHT,
         rowIds,
         scrollTop: 0,
         viewportHeight: 280,

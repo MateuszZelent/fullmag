@@ -90,7 +90,7 @@ const ICONS: Record<ExplorerIconToken, ReactNode> = {
   wave: <Waves size={14} />,
 };
 
-const EXPLORER_ROW_HEIGHT = 28;
+export const EXPLORER_ROW_HEIGHT = 26;
 const EXPLORER_ROW_OVERSCAN = 8;
 const EXPLORER_VIRTUALIZATION_THRESHOLD = 200;
 
