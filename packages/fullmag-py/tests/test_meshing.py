@@ -9877,9 +9877,23 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             {"left"},
         )
 
-        generated: list[tuple[str, float, list[dict[str, object]]]] = []
+        owner_object_ids = {
+            "left": "owner-left-001",
+            "left_geom": "owner-left-geom-002",
+        }
 
-        def generate(_geometry, *, hmax, order, options):
+        generated: list[tuple[str, float, list[dict[str, object]]]] = []
+        generated_owner_ids: dict[str, str | None] = {}
+
+        def generate(
+            _geometry,
+            *,
+            hmax,
+            order,
+            options,
+            object_id: str | None,
+        ):
+            generated_owner_ids[_geometry.geometry_name] = object_id
             generated.append(
                 (
                     _geometry.geometry_name,
@@ -9911,8 +9925,10 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 discretization=fm.DiscretizationHints(fem=hints),
                 mesh_workflow=mesh_workflow,
                 per_object_recipes=recipes,
+                geometry_object_ids=owner_object_ids,
             )
 
+        self.assertEqual(generated_owner_ids, owner_object_ids)
         self.assertEqual(
             [(name, hmax) for name, hmax, _lower_bounds in generated],
             [("left", 5e-9), ("left_geom", 20e-9)],
@@ -9983,12 +9999,26 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             },
         }
         recipes = {"left": PerObjectMeshRecipe(hmax=20e-9, hmin=2e-9)}
+        owner_object_ids = {
+            "left": "owner-left-001",
+            "left_geom": "owner-left-geom-002",
+        }
+
         generated: dict[
             str,
             tuple[float, list[dict[str, object]], list[dict[str, object]]],
         ] = {}
+        generated_owner_ids: dict[str, str | None] = {}
 
-        def generate(_geometry, *, hmax, order, options):
+        def generate(
+            _geometry,
+            *,
+            hmax,
+            order,
+            options,
+            object_id: str | None,
+        ):
+            generated_owner_ids[_geometry.geometry_name] = object_id
             generated[_geometry.geometry_name] = (
                 float(hmax),
                 list(options.size_fields),
@@ -10018,8 +10048,10 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 discretization=fm.DiscretizationHints(fem=hints),
                 mesh_workflow=mesh_workflow,
                 per_object_recipes=recipes,
+                geometry_object_ids=owner_object_ids,
             )
 
+        self.assertEqual(generated_owner_ids, owner_object_ids)
         left_hmax, left_fields, left_lower_bounds = generated["left"]
         self.assertEqual(left_hmax, 20e-9)
         self.assertFalse(
