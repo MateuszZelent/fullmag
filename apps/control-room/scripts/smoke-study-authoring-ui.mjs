@@ -26,6 +26,7 @@ const catalogSessionId = "study-authoring-smoke";
 const catalogSessionEpoch = "study-authoring-smoke-session-epoch";
 const catalogRequestScopeEpoch = "study-authoring-smoke-request-scope";
 const catalogCursorAfter500 = "catalog-after-500";
+const MISSING_EXPLORER_FIXTURE = Symbol("missing-explorer-fixture");
 const workflowAntennaScreenshot =
   process.env.CONTROL_ROOM_STUDY_WORKFLOW_ANTENNA_SCREENSHOT ?? null;
 const workflowRunScreenshot =
@@ -55,6 +56,7 @@ let sceneRevision = 1;
 const transactions = [];
 const scriptSyncs = [];
 const fixtureRequests = [];
+const missingExplorerFixturePaths = [];
 const fieldVectorRequests = [];
 const responseFieldVectorRequests = [];
 const datasetCatalogRequests = [];
@@ -434,7 +436,17 @@ await page.route("**/v2/**", async (route) => {
     return;
   }
 
-  await fulfillJson(route, resourceForPath(pathname));
+  const resource = resourceForPath(pathname);
+  if (resource === MISSING_EXPLORER_FIXTURE) {
+    const missingPath = `${request.method()} ${pathname}`;
+    if (!missingExplorerFixturePaths.includes(missingPath)) {
+      missingExplorerFixturePaths.push(missingPath);
+      console.error(`Explorer browser fixture gap: ${missingPath}`);
+    }
+    await route.abort("failed");
+    return;
+  }
+  await fulfillJson(route, resource);
 });
 
 try {
@@ -617,13 +629,19 @@ try {
   }
   }
 
+  if (missingExplorerFixturePaths.length > 0) {
+    throw new Error(
+      `Explorer browser fixture has no typed response for: ${missingExplorerFixturePaths.join(", ")}. Actual requests: ${JSON.stringify(fixtureRequests)}.`,
+    );
+  }
+
   if (errors.length > 0) {
     throw new Error(`Browser errors:\n${errors.join("\n")}`);
   }
 
   console.log(
     explorerCatalogOnly
-      ? `Explorer complete analysis result catalog browser proof passed. Actual HTTP pages: ${JSON.stringify(datasetCatalogRequests)}. Production-client WebSocket handshakes: ${JSON.stringify(realtimeConnections.map(({ path, protocolOffer }) => ({ path, protocolOffer })))}. Fixture events: ${JSON.stringify(realtimeFixtureEvents.map((event) => ({ type: event.type, sessionId: event.session_id, seq: event.seq, recommendedFetch: event.payload?.changes?.[0]?.recommended_fetch ?? null })))}. Foreign-scope socket closures: ${JSON.stringify(realtimeSocketCloses)}. This uses a fixture API backend; it is not a live FEM/API or scientific qualification.`
+      ? `Explorer complete analysis result catalog browser proof passed. Actual HTTP pages: ${JSON.stringify(datasetCatalogRequests)}. Fixture API requests: ${JSON.stringify(summarizeFixtureRequests())}. Production-client WebSocket handshakes: ${JSON.stringify(realtimeConnections.map(({ path, protocolOffer }) => ({ path, protocolOffer })))}. Fixture events: ${JSON.stringify(realtimeFixtureEvents.map((event) => ({ type: event.type, sessionId: event.session_id, seq: event.seq, recommendedFetch: event.payload?.changes?.[0]?.recommended_fetch ?? null })))}. Foreign-scope socket closures: ${JSON.stringify(realtimeSocketCloses)}. This uses a fixture API backend; it is not a live FEM/API or scientific qualification.`
       : workflowActionsOnly
       ? `Study workflow action inspectors smoke passed at ${workspaceUrl}.`
       : `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions and ${scriptSyncs.length} authoring script syncs.`,
@@ -1065,6 +1083,13 @@ function resourceForPath(pathname) {
       revision: sceneRevision,
     };
   }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/data/quantities"
+  ) {
+    // This fixture does not claim a resolved runtime provider or field availability.
+    return { schema_version: "1.0.0", quantities: [] };
+  }
   if (pathname === "/v2/sessions/current/data/artifacts") {
     return [];
   }
@@ -1146,6 +1171,7 @@ function resourceForPath(pathname) {
   if (pathname === "/v2/sessions/current/simulation/solver/energies/history") {
     return { returned_rows: 0, revision: sceneRevision, rows: [], total_rows: 0 };
   }
+  if (explorerCatalogOnly) return MISSING_EXPLORER_FIXTURE;
   return { revision: sceneRevision };
 }
 
