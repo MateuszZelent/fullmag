@@ -1,7 +1,7 @@
 export interface PlanarRenderer {
   clearBase(): void;
   dispose(): void;
-  draw(pixels: Uint8ClampedArray<ArrayBuffer>, width: number, height: number): void;
+  draw(pixels: Uint8ClampedArray<ArrayBufferLike>, width: number, height: number): void;
   resolveViewport(
     bounds: readonly [number, number, number, number],
     interaction: { panU: number; panV: number; zoom: number },
