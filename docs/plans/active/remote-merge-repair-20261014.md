@@ -38,11 +38,11 @@ Naprawić potwierdzone błędy po merge PR, zachować lokalną dokumentację i c
 
 Build, rzeczywisty typecheck/lint, browser/WebGL, runtime i kwalifikacja physics: **NOT VERIFIED**. Nie kompilowano testów jednostkowych. Pre-commit React Doctor przy pierwszych trzech commitach odmówił skanowania z powodu unstaged package.json; exit hooka 0 nie jest dowodem skanu.
 
-Przed push/PR potrzebna decyzja użytkownika o wyjątku dla CI kompilującego testy (AGENTS.md utrzymuje zakaz). Repo uruchamia takie workflow również po push na codex/**, więc sam branch push nie jest neutralny względem tego zakazu.
+Użytkownik zezwolił na wymagane CI tej naprawy kompilujące testy Rust/C++. Zgoda dotyczy CI, nie znosi ogólnego zakazu lokalnej kompilacji testów. Zezwolił również na scoped stash kolidujących lokalnych zmian i ich odtworzenie po fast-forward, po kontroli stabilności plików. Repo uruchamia CI również po push na codex/**.
 
 Aktualizacja głównego checkoutu wymaga zachowania kolidujących lokalnych zmian. W audycie było 59 zmienionych śledzonych plików, 17 pokrywało się z remote; stan trzeba odczytać ponownie przed synchronizacją. Użytkownik wcześniej wymagał utrzymania równoległej pracy. Nie wykonano reset, stash ani podmiany cudzych plików.
 
-Następny krok: konkretne zezwolenie na CI oraz okno na zachowanie lokalnych zmian, push/PR, zielone wymagane kontrole, merge, fast-forward main, weryfikacja i bezpieczny cleanup wyłącznie worktree tego zadania.
+Następny krok: push/PR, zielone wymagane kontrole, merge, fast-forward main, weryfikacja i bezpieczny cleanup wyłącznie worktree tego zadania.
 
 ## Retencja
 
