@@ -65,6 +65,7 @@ const realtimeFixtureEvents = [];
 const realtimeSocketCloses = [];
 let latestRealtimeFixtureEvent = null;
 const failedResponses = [];
+const observationFrameResponses = [];
 let datasetCatalogGeneration = 0;
 let activeCatalogRealtimeRoute = null;
 
@@ -263,7 +264,9 @@ page.on("console", (message) => {
 page.on("pageerror", (error) => errors.push(error.stack ?? error.message));
 page.on("response", (response) => {
   const status = response.status();
-  if (status >= 400) failedResponses.push(`${status} ${response.url()}`);
+  if (status >= 400) {
+    failedResponses.push(`${status} ${response.url()}`);
+  }
 });
 page.on("websocket", (socket) => {
   if (new URL(socket.url()).pathname === "/v2/sessions/current/events/ws") {
@@ -433,6 +436,22 @@ await page.route("**/v2/**", async (route) => {
 
   if (request.method() !== "GET") {
     await fulfillJson(route, { ok: true, revision: sceneRevision });
+    return;
+  }
+
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/data/observation-frames"
+  ) {
+    // The active run has a durable identity but no published observation manifests.
+    observationFrameResponses.push({ runId: catalogRunId, status: 200 });
+    await fulfillJson(
+      route,
+      {
+        frames: [],
+        run_id: catalogRunId,
+      },
+    );
     return;
   }
 
@@ -635,13 +654,26 @@ try {
     );
   }
 
+  if (explorerCatalogOnly) {
+    if (observationFrameResponses.length === 0) {
+      throw new Error(
+        "Explorer fixture did not exercise the active run's observation-frame list.",
+      );
+    }
+    if (failedResponses.length > 0) {
+      throw new Error(
+        `Explorer fixture received unexpected HTTP failures: ${JSON.stringify(failedResponses)}.`,
+      );
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(`Browser errors:\n${errors.join("\n")}`);
   }
 
   console.log(
     explorerCatalogOnly
-      ? `Explorer complete analysis result catalog browser proof passed. Actual HTTP pages: ${JSON.stringify(datasetCatalogRequests)}. Fixture API requests: ${JSON.stringify(summarizeFixtureRequests())}. Production-client WebSocket handshakes: ${JSON.stringify(realtimeConnections.map(({ path, protocolOffer }) => ({ path, protocolOffer })))}. Fixture events: ${JSON.stringify(realtimeFixtureEvents.map((event) => ({ type: event.type, sessionId: event.session_id, seq: event.seq, recommendedFetch: event.payload?.changes?.[0]?.recommended_fetch ?? null })))}. Foreign-scope socket closures: ${JSON.stringify(realtimeSocketCloses)}. This uses a fixture API backend; it is not a live FEM/API or scientific qualification.`
+      ? `Explorer complete analysis result catalog browser proof passed. Actual HTTP pages: ${JSON.stringify(datasetCatalogRequests)}. Fixture API requests: ${JSON.stringify(summarizeFixtureRequests())}. Typed empty active-run observation-frame responses: ${JSON.stringify(observationFrameResponses)}. Production-client WebSocket handshakes: ${JSON.stringify(realtimeConnections.map(({ path, protocolOffer }) => ({ path, protocolOffer })))}. Fixture events: ${JSON.stringify(realtimeFixtureEvents.map((event) => ({ type: event.type, sessionId: event.session_id, seq: event.seq, recommendedFetch: event.payload?.changes?.[0]?.recommended_fetch ?? null })))}. Foreign-scope socket closures: ${JSON.stringify(realtimeSocketCloses)}. This uses a fixture API backend; it is not a live FEM/API or scientific qualification.`
       : workflowActionsOnly
       ? `Study workflow action inspectors smoke passed at ${workspaceUrl}.`
       : `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions and ${scriptSyncs.length} authoring script syncs.`,
@@ -852,6 +884,274 @@ async function discardDirtyInspectorSelection() {
 }
 
 function resourceForPath(pathname) {
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/platform/development-backend"
+  ) {
+    return {
+      build_available: false,
+      build_request_id: null,
+      configured: false,
+      current_build: null,
+      ready_build: null,
+      reason: "disabled",
+      restart_available: false,
+      revision: 0,
+      schema_version: "1.0.0",
+      state: "disabled",
+      workspace_identity: null,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/model/geometry/capabilities"
+  ) {
+    return {
+      csg_capabilities: [
+        {
+          dsl: false,
+          fdm: false,
+          fem: false,
+          notes:
+            "Union is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+          op: "union",
+          status: "unsupported",
+        },
+        {
+          dsl: true,
+          fdm: true,
+          fem: true,
+          notes:
+            "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings.",
+          op: "subtract",
+          status: "production",
+        },
+        {
+          dsl: false,
+          fdm: false,
+          fem: false,
+          notes:
+            "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+          op: "intersect",
+          status: "unsupported",
+        },
+      ],
+      primitive_capabilities: [
+        { id: "box", label: "Box", category: "core", fem: true, fdm: true, dsl: true, boolean: true, status: "production" },
+        { id: "cylinder", label: "Cylinder", category: "core", fem: true, fdm: true, dsl: true, boolean: true, status: "production" },
+        { id: "sphere", label: "Sphere", category: "mumax", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+        { id: "ellipsoid", label: "Ellipsoid", category: "mumax", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+        { id: "disk", label: "Disk", category: "core", fem: true, fdm: true, dsl: true, boolean: true, status: "production" },
+        { id: "thin_film", label: "Thin Film", category: "mumax", fem: true, fdm: true, dsl: true, boolean: true, status: "production" },
+        { id: "pillar", label: "Pillar", category: "mumax", fem: true, fdm: true, dsl: true, boolean: true, status: "production" },
+        { id: "nanowire", label: "Nanowire", category: "mumax", fem: true, fdm: true, dsl: true, boolean: true, status: "production" },
+        { id: "ring", label: "Ring", category: "mumax", fem: true, fdm: true, dsl: true, boolean: true, status: "production" },
+        { id: "arch_waveguide", label: "Arch Waveguide", category: "core", fem: true, fdm: true, dsl: true, boolean: false, status: "production" },
+        { id: "microstrip_antenna_layout", label: "Microstrip Antenna Layout", category: "antenna", fem: true, fdm: false, dsl: true, boolean: false, status: "preview" },
+        { id: "cpw_antenna_layout", label: "CPW Antenna Layout", category: "antenna", fem: true, fdm: false, dsl: true, boolean: false, status: "preview" },
+        { id: "triangular_prism", label: "Triangular Prism", category: "core", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+        { id: "cone", label: "Cone", category: "dcc", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+        { id: "capsule", label: "Capsule", category: "dcc", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+        { id: "tube", label: "Tube", category: "dcc", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+        { id: "wedge", label: "Wedge", category: "dcc", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+        { id: "polygon_prism", label: "Polygon Prism", category: "dcc", fem: false, fdm: false, dsl: false, boolean: true, status: "preview" },
+      ],
+      revision: sceneRevision,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/meshing/capabilities"
+  ) {
+    // The smoke fixture has no published mesh workspace or resolved mesh capabilities.
+    return {
+      mesh_adaptivity_state: null,
+      mesh_capabilities: null,
+      revision: 0,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/meshing/semantics"
+  ) {
+    return {
+      mesh_build_diagnostics: null,
+      object_configs: scene.objects.map((object) => ({
+        config: null,
+        object_id: object.id,
+        object_name: object.name,
+      })),
+      render_only_controls_do_not_change_solver_domain: true,
+      revision: 0,
+      shared_domain_config: {
+        adaptive_enabled: false,
+        adaptive_error_tolerance: "",
+        adaptive_h_max: "",
+        adaptive_h_min: "",
+        adaptive_max_passes: 5,
+        adaptive_policy: "manual",
+        adaptive_theta: 0.3,
+        algorithm_2d: 6,
+        algorithm_3d: 1,
+        compute_quality: true,
+        growth_rate: "",
+        hmax: "",
+        hmin: "",
+        narrow_regions: 0,
+        optimize: "",
+        optimize_iterations: 1,
+        per_element_quality: true,
+        size_factor: 1,
+        size_from_curvature: 0,
+        smoothing_steps: 1,
+      },
+      solver_mesh: null,
+      universe_config: null,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/model/planar-monitors"
+  ) {
+    return { count: 0, monitors: [], scene_revision: sceneRevision };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/model/frozen-spins"
+  ) {
+    return {
+      count: 0,
+      definitions: [],
+      revision: sceneRevision,
+      runtime_application: null,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/meshing/policies/universe"
+  ) {
+    return {
+      config: null,
+      effective_config: {
+        airbox_grading: "geometric",
+        airbox_growth_rate: 1.3,
+        mode: "auto",
+        padding: [0, 0, 0],
+      },
+      revision: 0,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/model/physics-graph"
+  ) {
+    return {
+      edges: [],
+      modules: [
+        {
+          activation: "active",
+          applies_to: [{ kind: "global" }],
+          authored_state: "authored",
+          capability: "semantic_only",
+          depends_on: [],
+          id: "field:external:global",
+          kind: "external_field",
+          presentation: {
+            family: "external_field",
+            label: "External magnetic field",
+          },
+          solve_domain: [],
+          source_path: "/study/external_field",
+        },
+      ],
+      provenance: { normalizer: "physics_graph.v1" },
+      scene_revision: sceneRevision,
+      schema_version: "physics_graph.v1",
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/model/current-transports"
+  ) {
+    return { items: [], scene_revision: sceneRevision };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/response/progress.v1"
+  ) {
+    const progress = {
+      complete: false,
+      completed_frequency_points: 0,
+      current_frequency_hz: null,
+      frequency_max_hz: null,
+      frequency_min_hz: null,
+      latest_artifact_manifest_path: null,
+      partial_artifacts_available: false,
+      schema_version: "frequency_domain_sweep_progress.v1",
+      state: "not_started",
+      status: "missing",
+      total_frequency_points: 0,
+      written_frequency_point_artifacts: 0,
+    };
+    return {
+      ...progress,
+      demag_mode: null,
+      missing_reason: "response sweep progress artifacts are not present",
+      progress_json: JSON.stringify(progress),
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/meshing/builds/current"
+  ) {
+    return {
+      active_build: null,
+      effective_airbox_target: null,
+      effective_per_object_targets: null,
+      geometry_realization_revision: null,
+      last_build_error: null,
+      last_build_summary: null,
+      mesh_pipeline_status: null,
+      mixed_layer_topology_rejection: null,
+      policy_diff: null,
+      provenance: {
+        build_id: null,
+        command_id: null,
+        completed_at_unix_ms: null,
+        duration_ms: null,
+        geometry_realization_revision: null,
+        mesh_revision: 0,
+        requested_policy_revision: null,
+        source_scene_revision: null,
+      },
+      published_resources: null,
+      resolved_policy: null,
+      revision: 0,
+      shared_domain_build_report: null,
+      source_scene_revision: null,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/model/universe"
+  ) {
+    return {
+      mesh_dirty: false,
+      object_bounds_max: [1e-7, 4e-8, 2.5e-9],
+      object_bounds_min: [-1e-7, -4e-8, -2.5e-9],
+      scene_revision: sceneRevision,
+      study_universe_mesh: null,
+      universe: null,
+    };
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname ===
+      "/v2/sessions/current/analysis/postprocessing/definitions"
+  ) {
+    return { count: 0, definitions: [], scene_revision: sceneRevision };
+  }
   if (explorerCatalogOnly && pathname === "/v2/sessions") {
     return {
       sessions: [
