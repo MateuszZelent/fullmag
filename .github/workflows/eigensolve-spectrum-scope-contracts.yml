@@ -9,6 +9,7 @@ on:
       - 'crates/fullmag-application/**'
       - 'crates/fullmag-runner/**'
       - 'crates/fullmag-cli/**'
+      - 'crates/fullmag-api/**'
       - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-spectrum-scope-contracts.yml'
 permissions:
@@ -89,6 +90,11 @@ jobs:
           done
       - name: Run complete runner contracts
         run: cargo test --locked -p fullmag-runner --lib --no-fail-fast
+      - name: Verify typed committed scene on the authoring transaction route
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::authoring_transactions_create_transform_and_delete_objects -- --exact --nocapture | tee "$RUNNER_TEMP/authoring-transaction-resource.log"
+          grep -F "router_v2::tests::authoring_transactions_create_transform_and_delete_objects ... ok" "$RUNNER_TEMP/authoring-transaction-resource.log"
       - name: Compile integration callers and API CLI binaries
         run: |
           cargo check --locked -p fullmag-runner --tests
