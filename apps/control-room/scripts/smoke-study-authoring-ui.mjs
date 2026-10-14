@@ -3584,7 +3584,9 @@ async function waitForTransactionCount(count) {
 }
 
 async function assertStatusBarFallbackReadback() {
-  const engine = page.locator(".fm-status-bar__engine");
+  const engine = page.locator(
+    '.fm-status-bar__engine--clickable[role="button"]',
+  );
   await engine.waitFor({ state: "visible", timeout: timeoutMs });
   await engine
     .getByText("FEM CPU", { exact: true })
