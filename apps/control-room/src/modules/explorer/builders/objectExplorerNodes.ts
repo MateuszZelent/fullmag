@@ -139,6 +139,13 @@ export function buildObjectExplorerNode(
           objectRole: "antenna",
           status: "ready",
           contextCommands: ["workspace.focus-selection"],
+          children: [
+            visualizationDebugNode({
+              kind: "object.visualization.debug",
+              objectId,
+              parentId: `${parentId}:visualization`,
+            }),
+          ],
         },
         ...physicsGraphObjectChildren(object, physicsGraph, resources.currentTransports),
       ],
