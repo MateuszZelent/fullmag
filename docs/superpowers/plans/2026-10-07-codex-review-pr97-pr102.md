@@ -4274,3 +4274,7 @@ Renderer/browser proof b7ffc7e5b900c757c295d5a839002371bcac7fbf opublikowane; we
 ### 2026-10-14 — diagnoza hosted Chrome Unix socket boundary
 
 UI38487637462 exactb7ffc7e5:56files/1205testsPASS, pełny typecheck i architecturePASS. Browser proof nie wystartował: Chrome155 FATAL Socket path too long w deep managed temp/profile. Nowy proof zachowuje canonical buildstorage i profile; wyłącznie child Chrome TMPDIR/TMP/TEMP używa istniejącego krótszego storage/tmp parent, nadal Chrome-owned unique tempnames/cleanup. Jawny Linuxsockaddr_un length preflight, bez fallbacku do /tmp. Raport dodaje rzeczywistą browserVersion i relative tmp path. Source trace paint wymaga view; fixture teraz wywołuje setViewport tak jak produkcyjny caller przed draw, bez zmiany oczekiwanych kolorów/dispose/settled assertions. Produkcyjny renderer nie został ponownie zmieniony. Hosted browser outcome pending.
+
+### 2026-10-14 — publiczna klasyfikacja odrzucenia v04 wire
+
+Scope38487954642 exactc928: legacy scope, strictv04scope i V03 antenna selection named checks przeszły; V04 typed rejection działa, lecz nowy test oczekiwał późniejszego serde unknown-variant. Actual ProblemIRV04::deserialize najpierw wywołuje validate_v04_study_wire, która zwraca publiczny /study/kind: unsupported study kind 'antenna_field_solve'. Poprawiono asercję na tę konkretną klasyfikację/pointer, zachowując obowiązkowe odrzucenie i pozostałe trzy regresje. Nie zmieniono productionvalidator ani zakresu wsparcia. Ponowne hostedexecution pending.

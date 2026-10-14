@@ -1955,8 +1955,10 @@ fn v04_typed_study_deserialization_rejects_unsupported_antenna_field_solve() {
     let error = serde_json::from_value::<fullmag_ir::ProblemIRV04>(value)
         .expect_err("V04 typed wire must reject a study kind it does not model")
         .to_string();
-    assert!(error.contains("unknown variant"), "{error}");
-    assert!(error.contains("antenna_field_solve"), "{error}");
+    assert!(
+        error.contains("/study/kind: unsupported study kind 'antenna_field_solve'"),
+        "{error}"
+    );
 }
 
 #[test]
