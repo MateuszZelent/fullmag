@@ -1,0 +1,239 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Fullmag.Setup.UI.MainWindow"
+        Title="Fullmag Setup"
+        Width="1180"
+        Height="760"
+        MinWidth="800"
+        MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Closing="OnClosing">
+  <Grid Background="{DynamicResource SetupWindowBackgroundBrush}" ColumnDefinitions="292,*">
+    <Border Grid.Column="0" Background="{DynamicResource SetupSidebarBackgroundBrush}" Padding="24,28,20,24">
+      <Grid RowDefinitions="Auto,*,Auto">
+        <StackPanel Spacing="5">
+          <TextBlock Text="FULLMAG" Foreground="{DynamicResource SetupSidebarForegroundBrush}" FontSize="13" FontWeight="Bold" />
+          <TextBlock Text="Setup" Foreground="{DynamicResource SetupSidebarForegroundBrush}" FontSize="26" FontWeight="SemiBold" />
+          <TextBlock Text="Prepare Fullmag and its build environment." Classes="caption" Foreground="{DynamicResource SetupSidebarMutedBrush}" Margin="0,8,0,0" />
+        </StackPanel>
+
+        <ListBox Grid.Row="1"
+                 Margin="0,30,0,20"
+                 ItemsSource="{Binding Steps}"
+                 SelectedItem="{Binding SelectedStep, Mode=TwoWay}"
+                 Classes="sidebar-listbox"
+                 AutomationProperties.AutomationId="wizard-steps">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <Grid ColumnDefinitions="34,*" RowDefinitions="Auto,Auto" Margin="0,1" AutomationProperties.AutomationId="{Binding AutomationId}">
+                <Border Grid.RowSpan="2"
+                        Width="28"
+                        Height="28"
+                        CornerRadius="14"
+                        Background="{DynamicResource SetupSidebarBadgeBrush}"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top">
+                  <TextBlock Text="{Binding Number}"
+                             Foreground="{DynamicResource SetupSidebarBadgeForegroundBrush}"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Center"
+                             FontWeight="SemiBold" />
+                </Border>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding Title}"
+                           Foreground="{DynamicResource SetupSidebarForegroundBrush}"
+                           FontWeight="SemiBold"
+                           FontSize="14" />
+                <TextBlock Grid.Column="1"
+                           Grid.Row="1"
+                           Text="{Binding Description}"
+                           Foreground="{DynamicResource SetupSidebarMutedBrush}"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Margin="0,3,0,0" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+
+        <Expander Grid.Row="2" Header="Technical details" Foreground="{DynamicResource SetupSidebarForegroundBrush}">
+          <StackPanel Spacing="4" Margin="0,8,0,0">
+            <TextBlock Text="Operation state" Classes="caption" Foreground="{DynamicResource SetupSidebarMutedBrush}" />
+            <TextBlock Text="{Binding BrokerState}" Foreground="{DynamicResource SetupSidebarForegroundBrush}" FontSize="13" AutomationProperties.AutomationId="broker-state" />
+          </StackPanel>
+        </Expander>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Column="1" RowDefinitions="*,Auto" Margin="42,34,42,26">
+      <Border Grid.Row="0" Background="{DynamicResource SetupCardBackgroundBrush}" CornerRadius="12" Padding="38,34,38,28">
+        <ContentControl Content="{Binding CurrentPage}">
+          <ContentControl.ContentTemplate>
+            <DataTemplate>
+              <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="20">
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding Title}" Classes="heading" />
+                    <TextBlock Text="{Binding Subtitle}" Classes="subheading" />
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsWelcome}" Spacing="18">
+                    <Border Background="{DynamicResource SetupAccentPanelBackgroundBrush}" CornerRadius="10" Padding="20">
+                      <StackPanel Spacing="9">
+                        <TextBlock Text="Install Fullmag and prepare your build environment" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource SetupAccentHeadingBrush}" />
+                        <TextBlock Text="Choose your source folder and storage location, review the proposed settings, then approve each setup step." Classes="status" />
+                        <TextBlock Text="The installer checks the selected folders before the next step becomes available." Classes="status" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="Use the sidebar to return to completed steps. A later step becomes available after the previous check finishes." Classes="caption" />
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsLicense}" Spacing="14">
+                    <TextBlock Text="Review the license included with this setup package." Classes="status" />
+                    <Border BorderBrush="{DynamicResource SetupBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12">
+                      <TextBox Text="{Binding Owner.LicenseText}"
+                               IsReadOnly="True"
+                               AcceptsReturn="True"
+                               TextWrapping="Wrap"
+                               ScrollViewer.VerticalScrollBarVisibility="Auto"
+                               Height="290"
+                               AutomationProperties.AutomationId="license-text" />
+                    </Border>
+                    <CheckBox Content="I accept the supplied license terms"
+                              IsChecked="{Binding Owner.LicenseAccepted}"
+                              IsEnabled="{Binding Owner.LicenseAvailable}"
+                              AutomationProperties.AutomationId="license-accept" />
+                    <TextBlock Text="The license could not be loaded." Classes="caption" IsVisible="{Binding Owner.LicenseAvailable, Converter={StaticResource InverseBoolean}}" />
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsPaths}" Spacing="16">
+                    <TextBlock Text="Choose your Fullmag source folder and where to store builds and results." Classes="status" />
+                    <TextBlock Text="Continuing from this step installs Git and Python when needed to read the project settings. Your .env file is saved only after you review and approve it." Classes="status" />
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="Fullmag source folder" VerticalAlignment="Center" FontWeight="SemiBold" />
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Text="{Binding Owner.CheckoutPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 IsEnabled="{Binding Owner.CanEditInputs}"
+                                 Watermark="C:\path\to\fullmag"
+                                 AutomationProperties.AutomationId="checkout-path" />
+                        <Button Grid.Column="1"
+                                Content="Browse..."
+                                Click="BrowseCheckout"
+                                IsEnabled="{Binding Owner.CanEditInputs}"
+                                AutomationProperties.AutomationId="browse-checkout" />
+                      </Grid>
+                      <TextBlock Text="The installer checks this folder before continuing." Classes="caption" />
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="Build and results storage" VerticalAlignment="Center" FontWeight="SemiBold" />
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Text="{Binding Owner.StorageRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 IsEnabled="{Binding Owner.CanEditInputs}"
+                                 Watermark="C:\path\to\storage"
+                                 AutomationProperties.AutomationId="storage-root" />
+                        <Button Grid.Column="1"
+                                Content="Browse..."
+                                Click="BrowseStorage"
+                                IsEnabled="{Binding Owner.CanEditInputs}"
+                                AutomationProperties.AutomationId="browse-storage" />
+                      </Grid>
+                      <TextBlock Text="Choose a private folder with enough space for builds and run results." Classes="caption" />
+                    </StackPanel>
+                    <StackPanel Spacing="7">
+                      <TextBlock Text="Simulation backend" FontWeight="SemiBold" />
+                      <ComboBox ItemsSource="{Binding Owner.LaneOptions}"
+                                SelectedItem="{Binding Owner.Lane, Mode=TwoWay}"
+                                IsEnabled="{Binding Owner.CanEditInputs}"
+                                HorizontalAlignment="Stretch"
+                                MinWidth="240"
+                                PlaceholderText="Choose a simulation backend"
+                                AutomationProperties.AutomationId="runtime-lane" />
+                    </StackPanel>
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsEnvironment}" Spacing="14">
+                    <TextBlock Text="These settings come from the selected Fullmag source package. Passwords and tokens stay protected and are sent only when you approve the next step." Classes="status" />
+                    <ItemsControl ItemsSource="{Binding Owner.EnvironmentFields}" AutomationProperties.AutomationId="environment-fields">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" RowSpacing="3" Margin="0,2,0,9">
+                            <TextBlock Text="{Binding Label}" FontWeight="SemiBold" VerticalAlignment="Center" MinWidth="120" MaxWidth="220" TextWrapping="Wrap" />
+                            <TextBlock Grid.Column="0" Grid.Row="1" Text="{Binding Key}" Classes="caption" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding DataContext.CanEditInputs, RelativeSource={RelativeSource AncestorType=Window}}"
+                                     PasswordChar="●"
+                                     IsVisible="{Binding IsSecret}"
+                                     AutomationProperties.AutomationId="{Binding AutomationId}" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding DataContext.CanEditInputs, RelativeSource={RelativeSource AncestorType=Window}}"
+                                     IsVisible="{Binding IsSecret, Converter={StaticResource InverseBoolean}}"
+                                     AutomationProperties.AutomationId="{Binding AutomationId}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="No editable fields were returned yet. Re-check the selected checkout if this list is empty." Classes="caption" IsVisible="{Binding Owner.HasEnvironmentFields, Converter={StaticResource InverseBoolean}}" />
+                    <Border Background="{DynamicResource SetupSubtlePanelBackgroundBrush}" CornerRadius="8" Padding="14" IsVisible="{Binding Owner.PreviewReady}">
+                      <StackPanel Spacing="8">
+                        <TextBlock Text="Settings preview" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Owner.RedactedDiff}" TextWrapping="Wrap" AutomationProperties.AutomationId="redacted-preview" />
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsRequirements}" Spacing="14">
+                    <TextBlock Text="Check Git, Python, Windows build tools and the selected Fullmag lane before setup begins." Classes="status" />
+                    <ItemsControl ItemsSource="{Binding Owner.Requirements}" AutomationProperties.AutomationId="requirements-list">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Border BorderBrush="{DynamicResource SetupBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,8">
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                              <TextBlock Grid.Column="1" Text="{Binding State}" Foreground="{DynamicResource SetupAccentBrush}" FontWeight="SemiBold" />
+                              <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding Details}" Classes="caption" Margin="0,5,0,0" />
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="No dependency report is available yet." Classes="caption" IsVisible="{Binding Owner.HasRequirements, Converter={StaticResource InverseBoolean}}" />
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsProgress}" Spacing="16">
+                    <TextBlock Text="Installing dependencies and building Fullmag. This may take several minutes." Classes="status" />
+                    <ProgressBar Minimum="0" Maximum="100" Value="{Binding Owner.ProgressPercent}" IsVisible="{Binding Owner.HasProgress}" Height="10" AutomationProperties.AutomationId="setup-progress" />
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding Owner.IsProgressIndeterminate}" Height="10" AutomationProperties.AutomationId="setup-progress-indeterminate" />
+                    <TextBlock Text="{Binding Owner.StatusMessage}" Classes="status" AutomationProperties.AutomationId="setup-status" />
+                    <Border Background="{DynamicResource SetupWarningBackgroundBrush}" CornerRadius="8" Padding="14">
+                      <TextBlock Text="Canceling before you approve the settings leaves the environment unchanged. A confirmed save is included in the setup result." Classes="caption" />
+                    </Border>
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsReady}" Spacing="16">
+                    <Border Background="{DynamicResource SetupSuccessBackgroundBrush}" CornerRadius="10" Padding="20">
+                      <StackPanel Spacing="8">
+                        <TextBlock Text="{Binding Owner.ReadyHeading}" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource SetupSuccessForegroundBrush}" />
+                        <TextBlock Text="{Binding Owner.StatusMessage}" Classes="status" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="{Binding Owner.LaunchMessage}" Classes="status" AutomationProperties.AutomationId="launch-status" />
+                    <TextBlock Text="{Binding Owner.ReadyDescription}" Classes="caption" />
+                  </StackPanel>
+                </StackPanel>
+              </ScrollViewer>
+            </DataTemplate>
+          </ContentControl.ContentTemplate>
+        </ContentControl>
+      </Border>
+
+      <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12" Margin="0,18,0,0">
+        <Button Grid.Column="0" Content="Cancel" Command="{Binding CancelCommand}" IsEnabled="{Binding CanCancel}" Classes="secondary-action" AutomationProperties.AutomationId="cancel" />
+        <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" Classes="status" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.AutomationId="status-message" />
+        <Button Grid.Column="2" Content="Back" Command="{Binding BackCommand}" IsEnabled="{Binding CanGoBack}" Classes="secondary-action" AutomationProperties.AutomationId="back" />
+        <Button Grid.Column="3" Content="{Binding PrimaryActionLabel}" Command="{Binding PrimaryCommand}" IsEnabled="{Binding CanPrimaryAction}" Classes="primary-action" AutomationProperties.AutomationId="primary-action" />
+      </Grid>
+    </Grid>
+  </Grid>
+</Window>
