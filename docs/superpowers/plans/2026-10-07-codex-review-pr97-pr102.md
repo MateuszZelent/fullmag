@@ -4342,3 +4342,22 @@ Browser38546600062 exactba20:1205tests/56files/typecheck/architecture/planar PAS
 Retencja: nie generowano lokalnego execution/runtime/cache; kandydaty, logi, receipty i manifesty zachowano jako dowody otwartego review/rollback. Nie usuwano danych. Chroniony lokalny worktree/head/index pozostają nietknięte. Wszystkie nowe testy wykonywane tylko GitHub Actions.
 
 Mixed native topology/ownership, niezależny weak-JVP i operator/Poisson/gauge/m0/signed-k verifier oraz COMSOL/FEM/GPU kwalifikacja pozostają otwarte. Hosted source/browser fixtures nie zastępują rzeczywistej symulacji.
+
+## Kontynuacja napraw review — 2026-10-14, źródła e0c8c74
+
+Ten wpis uzupełnia wcześniejsze statusy; zielona bramka źródłowa nie oznacza kwalifikacji fizycznej ani zakończenia wszystkich uwag.
+
+| Zakres | Zmiana i dowód | Bieżąca granica |
+|---|---|---|
+| Kontrakty spectrum_scope / API compile | [CI38559915159](https://github.com/MateuszZelent/fullmag/actions/runs/38559915159), exact a7bbc35c8174147d8deea2e17fb3d54dfa0447d8, SUCCESS: named authoring/hysteresis/topology/PBC round-trip, runner i API/CLI compile | Scoped source/contracts PASS; FEM/GPU/scientific NOT VERIFIED |
+| Konsumenci artefaktów | CI38560230108 exact3b i CI38564730775 exact645 SUCCESS | Nie zastępują meshera i native runtime |
+| Public Box — PBC | Commit645b21feedc4e96c5bdb7998971ba0a330eaaf33 dodaje diagnostykę bez zmiany twardej certyfikacji; [CI38564730745](https://github.com/MateuszZelent/fullmag/actions/runs/38564730745) FAIL | Mapped source triangle(0,3,7)->(1,2,6), destination triangles(1,2,5)/(2,5,6): brak odpowiadającej ściany mimo mapowania jej węzłów. Naprawa łączności nadal otwarta; exactlayers/XY/fields/quality niezaliczone |
+| Sesja — fizyczne źródła pól | Szersze API38559915247:85PASS/2FAIL. Commit408c6e4926f76feb74dc6e1825cf160006f97ef1 wiąże dwa fixture previews z accepted physical observations; produkcyjny gate oraz negatywne identity/staleness asercje zachowane | [API38565684038](https://github.com/MateuszZelent/fullmag/actions/runs/38565684038) i scope38565684032 przy ostatnim odczycie aktywne; nie deklarować PASS przed końcowym logiem |
+| Generator API / TypeScript | Commit7a4a1d1f420bb86868da9809e94440e5ae6dc5ff izoluje istniejący JavaScript compiler API dla upstream OpenAPI CLI; TypeScript7 typechecker i lockfile bez zmian | Job115855905281 oraz generated job CI38565684038 SUCCESS: real AST regression, normal import isolation, canonical generated API i artifact source identity. Całe starsze API38565174568 FAIL z powodu session fixtures, nie generatora |
+| Explorer browser | Commite0c8c74cb0d8aab7b51f2aa9f9a613eb84396dc4 uzupełnia14 resource fixtures zgodnie z producentami. Observation frames200 z tym samym durable run_id, bez wyjątku dopuszczającego404; pusty physics graph objects pominięty zgodnie z DTO dla magnet film | [CI38566314379](https://github.com/MateuszZelent/fullmag/actions/runs/38566314379) aktywne; wcześniejsze scroll196/second-page FAIL nie są jeszcze naprawą kwalifikowaną. Zachowane501/502, realtime refetch, foreign-session fencing, sentinel i wszystkie HTTP/pageerror gates |
+
+PR97 aktualnie closed/merged, merge commit911902d6d545d1471c77290eedef1a1b6937fb62; PR102 closed/unmerged. Powyższe późniejsze naprawy są na branchu zadania, nie dowodzą integracji z masterem. Historyczna inwentaryzacja398 Codex comment IDs pozostaje tylko dowodem kompletności rejestru, a nie kompletnego rozwiązania uwag.
+
+W tej kontynuacji chroniony lokalny worktree pozostaje HEAD1827c3436f80ff17396c285d13c0e269eecf4b25 z336 dirty rows. Przed każdym remote commitem kontrolowano niezmienione staged paths; użyto exact parent, exact changed-file compare, expected-SHA lease i force:false. Brak lokalnych testów, buildów, Node, aplikacji, Gmsh lub browser execution; weryfikacja tylko GitHub Actions. Nie usuwano danych.
+
+Nadal wymagane: poprawna realizacja siatki/PBC/XY/owner fields/quality; niezależny dodatni verifier Poisson/gauge i kompletne wejścia odtwarzania operatora; native-owned mixed topology/equilibrium; nonuniform nonlinear JVP oracle; fizyczna identyfikacja modów; pozytywna równoważność A1 i porównanie COMSOL0.5% z dowodami operatora/stanu; zbieżność i runtime FEM/GPU. Brak tych dowodów oznacza NOT VERIFIED, nie zakończenie całego celu.
