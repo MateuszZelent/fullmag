@@ -10,7 +10,13 @@ import pytest
 import fullmag as fm
 
 
-def _problem(*, constraints=(), region_constraints=True, selections=()):
+def _problem(
+    *,
+    constraints=(),
+    region_constraints=True,
+    selections=(),
+    runtime_metadata=None,
+):
     region = fm.ObjectRegion(
         owner_object="free_layer",
         name="Pinned edge",
@@ -30,14 +36,8 @@ def _problem(*, constraints=(), region_constraints=True, selections=()):
         material=fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01),
         object_regions=(region,),
     )
-    return fm.Problem(
-        name="frozen-spins-contract",
-        magnets=[magnet],
-        energy=[fm.Exchange()],
-        study=fm.Relaxation(outputs=[], max_steps=1),
-        selections=selections,
-        magnetization_constraints=constraints,
-        runtime_metadata={
+    if runtime_metadata is None:
+        runtime_metadata = {
             "study_pipeline": {
                 "version": "study_pipeline.v1",
                 "nodes": [
@@ -49,7 +49,15 @@ def _problem(*, constraints=(), region_constraints=True, selections=()):
                     }
                 ],
             }
-        },
+        }
+    return fm.Problem(
+        name="frozen-spins-contract",
+        magnets=[magnet],
+        energy=[fm.Exchange()],
+        study=fm.Relaxation(outputs=[], max_steps=1),
+        selections=selections,
+        magnetization_constraints=constraints,
+        runtime_metadata=runtime_metadata,
     )
 
 
@@ -81,6 +89,179 @@ def test_region_convenience_and_explicit_api_emit_identical_canonical_json() -> 
     assert "frozen" not in region_ir
     assert region_ir["material_overrides"] == []
     assert convenience["materials"][0]["damping"] == 0.01
+
+
+def test_nested_stage_ids_include_disabled_nodes_in_public_ir() -> None:
+    runtime_metadata = {
+        "study_pipeline": {
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "id": "outer-group",
+                    "node_kind": "group",
+                    "enabled": True,
+                    "children": [
+                        {
+                            "id": "nested-relax",
+                            "node_kind": "primitive",
+                            "stage_kind": "relax",
+                            "enabled": True,
+                            "payload": {},
+                        },
+                        {
+                            "id": "disabled-stage",
+                            "node_kind": "primitive",
+                            "stage_kind": "run",
+                            "enabled": False,
+                            "payload": {},
+                        },
+                        {
+                            "id": "disabled-group",
+                            "node_kind": "group",
+                            "enabled": False,
+                            "children": [
+                                {
+                                    "id": "nested-under-disabled-group",
+                                    "node_kind": "primitive",
+                                    "stage_kind": "run",
+                                    "enabled": True,
+                                    "payload": {},
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+    }
+    declared_ids = [
+        "outer-group",
+        "nested-relax",
+        "disabled-stage",
+        "disabled-group",
+        "nested-under-disabled-group",
+    ]
+    problem = _problem(
+        region_constraints=False,
+        constraints=[
+            fm.FrozenSpins(
+                id="nested-frozen",
+                selector=fm.select.in_object("free_layer"),
+                stage_ids=declared_ids,
+            )
+        ],
+        runtime_metadata=runtime_metadata,
+    )
+
+    ir = problem.to_ir(include_geometry_assets=False)
+
+    assert ir["magnetization_constraints"][0]["activation"] == {
+        "kind": "stage_ids",
+        "stage_ids": declared_ids,
+    }
+    assert (
+        ir["problem_meta"]["runtime_metadata"]["study_pipeline"]
+        == runtime_metadata["study_pipeline"]
+    )
+
+
+def test_missing_pipeline_keeps_authored_stage_ids_in_public_ir() -> None:
+    problem = _problem(
+        region_constraints=False,
+        constraints=[
+            fm.FrozenSpins(
+                id="legacy-frozen",
+                selector=fm.select.in_object("free_layer"),
+                stage_ids=["unresolved-legacy-stage"],
+            )
+        ],
+        runtime_metadata={},
+    )
+
+    ir = problem.to_ir(include_geometry_assets=False)
+
+    assert ir["magnetization_constraints"][0]["activation"] == {
+        "kind": "stage_ids",
+        "stage_ids": ["unresolved-legacy-stage"],
+    }
+
+
+def test_declared_empty_pipeline_still_rejects_unknown_stage_ids() -> None:
+    with pytest.raises(
+        ValueError,
+        match="activation stage id 'missing' does not exist",
+    ):
+        _problem(
+            region_constraints=False,
+            constraints=[
+                fm.FrozenSpins(
+                    id="empty-pipeline-frozen",
+                    selector=fm.select.in_object("free_layer"),
+                    stage_ids=["missing"],
+                )
+            ],
+            runtime_metadata={
+                "study_pipeline": {
+                    "version": "study_pipeline.v1",
+                    "nodes": [],
+                }
+            },
+        )
+
+
+def test_non_string_pipeline_ids_do_not_satisfy_stage_references() -> None:
+    with pytest.raises(
+        ValueError,
+        match="activation stage id '7' does not exist",
+    ):
+        _problem(
+            region_constraints=False,
+            constraints=[
+                fm.FrozenSpins(
+                    id="malformed-id-frozen",
+                    selector=fm.select.in_object("free_layer"),
+                    stage_ids=["7"],
+                )
+            ],
+            runtime_metadata={
+                "study_pipeline": {
+                    "version": "study_pipeline.v1",
+                    "nodes": [
+                        {"id": 7, "node_kind": "primitive", "stage_kind": "run"}
+                    ],
+                }
+            },
+        )
+
+
+def test_only_group_children_contribute_nested_stage_ids() -> None:
+    with pytest.raises(
+        ValueError,
+        match="activation stage id 'hidden-child' does not exist",
+    ):
+        _problem(
+            region_constraints=False,
+            constraints=[
+                fm.FrozenSpins(
+                    id="untyped-child-frozen",
+                    selector=fm.select.in_object("free_layer"),
+                    stage_ids=["hidden-child"],
+                )
+            ],
+            runtime_metadata={
+                "study_pipeline": {
+                    "version": "study_pipeline.v1",
+                    "nodes": [
+                        {
+                            "id": "primitive-parent",
+                            "node_kind": "primitive",
+                            "stage_kind": "run",
+                            "children": [{"id": "hidden-child"}],
+                        }
+                    ],
+                }
+            },
+        )
 
 
 def test_ferromagnet_convenience_uses_object_id_not_name() -> None:

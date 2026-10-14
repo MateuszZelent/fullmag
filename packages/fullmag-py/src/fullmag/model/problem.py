@@ -2392,6 +2392,24 @@ def _normalize_study_pipeline_value(value: object) -> dict[str, object] | None:
     return copy.deepcopy(value)
 
 
+def _collect_declared_study_pipeline_stage_ids(nodes: Any) -> set[str]:
+    """Collect authored node IDs, following children only on typed groups."""
+    stage_ids: set[str] = set()
+    pending = list(nodes)
+    while pending:
+        node = pending.pop()
+        if not isinstance(node, Mapping):
+            continue
+        node_id = node.get("id")
+        if isinstance(node_id, str):
+            stage_ids.add(node_id)
+        if node.get("node_kind") == "group":
+            children = node.get("children")
+            if isinstance(children, list):
+                pending.extend(children)
+    return stage_ids
+
+
 def _validate_constraint_frame_reference(
     frame: object, object_ids: set[str]
 ) -> None:
@@ -3245,17 +3263,10 @@ class Problem:
             (region.owner_object, region.region_id)
             for region in self._collect_object_regions()
         }
-        stage_ids = {
-            str(node.get("id"))
-            for node in (
-                self.runtime_metadata.get("study_pipeline", {}).get("nodes", [])
-                if isinstance(self.runtime_metadata.get("study_pipeline"), Mapping)
-                else []
-            )
-            if isinstance(node, Mapping) and isinstance(node.get("id"), str)
-        }
-        has_study_pipeline = isinstance(
-            self.runtime_metadata.get("study_pipeline"), Mapping
+        study_pipeline = self.runtime_metadata.get("study_pipeline")
+        has_study_pipeline = isinstance(study_pipeline, Mapping)
+        stage_ids = _collect_declared_study_pipeline_stage_ids(
+            study_pipeline.get("nodes", []) if has_study_pipeline else []
         )
         definitions = {selection.selection_id: selection.to_ir() for selection in self.selections}
         for selection in self.selections:
