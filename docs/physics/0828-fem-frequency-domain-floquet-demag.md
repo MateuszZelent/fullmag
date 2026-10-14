@@ -283,6 +283,13 @@ wykonanie w runtime wymagają oddzielnych dowodów.
 | $\delta\mathbf M_\perp$, $\delta M_z$ | transverse and longitudinal waveguide magnetization components | $\mathrm{A\,m^{-1}}$ |
 | $\Omega$, $\Omega_m$, $\Omega_a$ | full cell, magnetic and air subdomains | $\mathrm{m^3}$ |
 | $\mathrm dV$ | volume measure | $\mathrm{m^3}$ |
+| $\beta_R$ | Robin boundary coefficient multiplying the open-boundary mass term | $\mathrm{m^{-1}}$ |
+| $c_R$ | dimensionless Robin coefficient selected by the named mode or explicit user value | $1$ |
+| $\beta_{0,R}$ | geometry-dependent reference scale in $\beta_R=c_R\beta_{0,R}$ | $\mathrm{m^{-1}}$ |
+| $R_*$ | reference length used by a Robin geometry realization | $\mathrm{m}$ |
+| $L_\mathrm{open}$ | largest open-axis extent in the shared-domain modal scale | $\mathrm{m}$ |
+| $R_\mathrm{eq}$ | equivalent-radius scale derived from reference-mesh volume | $\mathrm{m}$ |
+| $V_\mathrm{mesh}$ | total mesh volume used by the FEM reference equivalent radius | $\mathrm{m^3}$ |
 | $\omega$, $\omega_r$, $\Gamma$ | complex angular frequency, oscillation and decay rates | $\mathrm{rad\,s^{-1}}$ |
 | $\lambda$ | generalized eigenvalue | $\mathrm{s^{-1}}$ |
 | $f$ | cyclic frequency | $\mathrm{Hz}$ |
@@ -374,6 +381,69 @@ FFT peak is not a modal eigenvalue.
 | FEM | GPU | source_visible / unvalidated | Shared physics is specified; device operator, residency, parity and runtime are not qualified. |
 | FDM | CPU | not-applicable | This page owns an FEM scalar-potential realization; FDM needs a separate convolution-k owner. |
 | FDM | GPU | not-applicable | This page owns an FEM scalar-potential realization; FDM needs a separate convolution-k owner. |
+
+(robin-beta-mode-and-geometry-contract)=
+### 4.5 Robin coefficient modes and geometry scale
+
+The existing air-box policy resolves a dimensionless coefficient $c_R$ in
+$\beta_R=c_R\beta_{0,R}$. The modes are `legacy` ($c_R=1$), `dipole`
+($c_R=2$), and `user` (an explicit positive finite factor is required). A
+provided factor is validated even when a named mode forces its own value. With
+no mode, an explicit factor is used; with neither mode nor factor, the default
+is $c_R=2$. Invalid modes, non-finite or non-positive factors, and `user`
+without a factor fail during planning. The planner normalizes no-mode plus an
+explicit factor to `user`, and no-mode plus no factor to `dipole`, so the native
+ABI receives the resolved choice rather than applying a different fallback.
+
+```{math}
+:label: eq-0828-robin-beta-mode-factor
+\beta_R=c_R\beta_{0,R}, \qquad
+c_R=\begin{cases}
+1 & \text{legacy},\\
+2 & \text{dipole},\\
+c_{\mathrm{user}} & \text{user with an explicit factor}.
+\end{cases}
+```
+
+This does not add a public Python field. The existing Rust
+`AirBoxPolicyIR.robin_beta_mode` and `AirBoxPolicyIR.robin_beta_factor` are
+resolved into `FemEigenPlanIR.air_box_config`; the shared IR resolver is used by
+planning and raw-plan consumers. The direct CLI diagnostic first calls
+`fullmag_plan::plan` in `Command::RunProblemJsonDirect`, then passes that plan to
+`emit_initial_state_warnings`; its `diagnose_initial_fem_plan` consumer therefore
+sees planner-normalized values.
+
+The dimensionless mode policy is common, but the current code has two different
+geometry scales. Shared-domain modal assembly uses
+$\beta_{0,R}=1/(L_\mathrm{open}/2)$, where $L_\mathrm{open}$ is the largest
+open-axis extent (with a deterministic largest-axis fallback when all axes are
+periodic):
+
+```{math}
+:label: eq-0828-robin-shared-domain-scale
+\beta_{0,R}^{\mathrm{modal}}=\frac{1}{L_{\mathrm{open}}/2}.
+```
+
+The internal FEM reference baseline instead uses an equivalent-volume radius:
+
+```{math}
+:label: eq-0828-robin-reference-scale
+\beta_{0,R}^{\mathrm{reference}}=\frac{1}{R_{\mathrm{eq}}},
+\qquad R_{\mathrm{eq}}=\left(\frac{3V_{\mathrm{mesh}}}{4\pi}\right)^{1/3}.
+```
+
+These definitions are not shown to be equivalent and must not be
+treated as the same Robin boundary condition. The geometry-scale divergence is
+an open audit; matched-boundary equivalence and runtime behavior remain
+`NOT VERIFIED`.
+
+The native ABI's integer mode is not a boundary on/off switch. The C++ Robin
+operator is entered only when the separately resolved demag realization is
+`AIRBOX_ROBIN`; within that branch, modes 1 and 2 force $c_R=1$ and $c_R=2$,
+while other modes use the transmitted factor. The runner keeps mode 0 for a
+non-Robin realization and transmits the factor without changing that physical
+realization. For an active Robin plan with no air-box config, both native and
+reference consumers resolve the shared no-mode/no-factor default $c_R=2$.
 
 (python-api)=
 ## 5. Python API
@@ -565,6 +635,11 @@ pełnego benchmarku COMSOL. Bieżące kryteria wykonania B0–B6 zapisano w
 | Full Bloch tangent prolongation | FEM CPU | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetTangentProlongation | Apply phase and tangent-frame transport with the interleaved local layout. | integrated in native CPU Floquet source; managed execution and physics unverified |
 | Full Bloch reduced action | FEM CPU | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetReducedMagneticOperator | Define the matrix-free C^H A C boundary. | integrated in native CPU Floquet source; managed execution and physics unverified |
 | Contract regression | documentation | scripts/test_frequency_domain_math_contract_docs.py + test_dynamic_demag_and_response_observables_use_si_contract | Freeze algebra, units and honest support wording. | source visible; not numerical evidence |
+| Robin coefficient mode contract | FEM common | crates/fullmag-ir/src/plan.rs + resolve_robin_beta_factor | Resolve legacy=1, dipole=2, user=explicit positive finite; planner-normalized defaults preserve native selection. | resolver and planner regressions; runtime NOT VERIFIED |
+| Shared-domain modal Robin scale | FEM modal | crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs + shared_domain_robin_beta_for_extent | Apply c_R to the largest open-axis reference extent. | geometry/mode regression; boundary equivalence NOT VERIFIED |
+| Reference baseline Robin scale | FEM reference | crates/fullmag-engine/src/fem.rs + MeshTopology::from_ir | Derive the baseline scale from the equivalent radius of mesh volume. | source-visible only; scale equivalence NOT VERIFIED |
+| Native Robin ABI mapping | FEM native | crates/fullmag-runner/src/native_fem.rs + native_robin_beta_abi_parameters; backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp + initialize_demag_poisson_boundary_operator | Encode normalized modes 1/2/3; C++ mode 0 passes through the factor, and the resolved demag realization separately controls Robin activation. | source contract regression; native runtime NOT VERIFIED |
+| CLI initial-state diagnostics | CLI | crates/fullmag-cli/src/main.rs + Command::RunProblemJsonDirect; crates/fullmag-cli/src/diagnostics.rs + diagnose_initial_fem_plan | The direct command plans the IR before passing its backend plan to diagnostics; this is a source call-chain trace, not runtime evidence. | source trace at pinned source | source visible; runtime NOT VERIFIED |
 
 (validation)=
 ## 9. Validation strategy
@@ -686,6 +761,11 @@ visibility into runtime or physical qualification.
 | Transport residuali ścieżki | FEM CPU/GPU | crates/fullmag-runner/src/eigen/types.rs + SingleKModeResult | source-path-residual-data: brak względnego nie jest zerem | regresje transportu | runtime NOT VERIFIED |
 | Podsumowanie residuali | FEM CPU/GPU | crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs + summarize_mode | source-path-residual-summary: zachowanie odrębnych wartości | regresje eksportu | runtime NOT VERIFIED |
 | Kontrola CSV DE-SMOKE | FEM CPU postprocessing | scripts/validate_de_smoke_rows.py + validate_rows | source-de-row-preflight: skończony, nieujemny residual bezwzględny | test_validate_de_smoke_rows.py | źródłowe testy przeszły; bez kwalifikacji naukowej |
+| Resolver trybu Robin | FEM common | crates/fullmag-ir/src/plan.rs + resolve_robin_beta_factor | Wspólne c_R: legacy wymusza 1, dipole 2, user wymaga jawnego dodatniego skończonego czynnika. | testy resolvera i planera | źródło widoczne; runtime NOT VERIFIED |
+| Normalizacja planera Robin | FEM common | crates/fullmag-plan/src/mesh.rs + build_air_box_config | Brak trybu z czynnikiem staje się user; brak obu wartości staje się dipole. | fem_eigen_robin_beta_modes_resolve_defaults_overrides_and_invalid_policy | źródło widoczne; runtime NOT VERIFIED |
+| Skala Robin shared-domain | FEM modal | crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs + shared_domain_robin_beta_for_extent | β0=1/(L_open/2), z największym otwartym wymiarem geometrii. | shared_domain_robin_beta_resolves_mode_and_open_axis_extent | źródło widoczne; równoważność geometrii NOT VERIFIED |
+| Skala Robin referencyjna | FEM reference | crates/fullmag-engine/src/fem.rs + MeshTopology::from_ir | β0=1/R_eq, z równoważnego promienia objętości całej siatki. | source trace; testy runnera | różnica skali względem modalnego shared-domain pozostaje otwartym audytem |
+| CLI diagnostyki początkowej | CLI | crates/fullmag-cli/src/main.rs + Command::RunProblemJsonDirect; crates/fullmag-cli/src/diagnostics.rs + diagnose_initial_fem_plan | Planer jest wywołany przed przekazaniem planu do diagnostyki, więc wejście tej ścieżki ma znormalizowany tryb Robin. | source trace na przypiętym źródle | runtime NOT VERIFIED |
 
 ## Bramka zbieżności benchmarku — korekta audytu 2026-09-14
 

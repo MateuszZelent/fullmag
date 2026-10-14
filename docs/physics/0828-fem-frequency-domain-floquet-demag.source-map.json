@@ -219,6 +219,27 @@
         "source-n0-projection-contract",
         "source-n0-projection"
       ]
+    },
+    {
+      "id": "eq-0828-robin-beta-mode-factor",
+      "symbols": ["robin_beta", "robin_beta_factor", "robin_reference_scale"],
+      "sources": [
+        "source-robin-beta-contract",
+        "source-robin-ir-resolver",
+        "source-robin-planner-normalization",
+        "source-robin-native-abi",
+        "source-robin-cpp-boundary-mode"
+      ]
+    },
+    {
+      "id": "eq-0828-robin-shared-domain-scale",
+      "symbols": ["robin_reference_scale", "robin_open_extent"],
+      "sources": ["source-robin-beta-contract", "source-robin-shared-domain-scale"]
+    },
+    {
+      "id": "eq-0828-robin-reference-scale",
+      "symbols": ["robin_reference_scale", "robin_equivalent_radius", "mesh_volume"],
+      "sources": ["source-robin-beta-contract", "source-robin-reference-scale"]
     }
   ],
   "symbols": [
@@ -491,6 +512,48 @@
       "latex": "$\\eta_0$, $\\eta_\\parallel$",
       "meaning": "względne kwadraty norm",
       "si_unit": "$1$"
+    },
+    {
+      "id": "robin_beta",
+      "latex": "$\\beta_R$",
+      "meaning": "Robin boundary coefficient",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "robin_beta_factor",
+      "latex": "$c_R$",
+      "meaning": "dimensionless mode-resolved Robin coefficient",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "robin_reference_scale",
+      "latex": "$\\beta_{0,R}$",
+      "meaning": "geometry-dependent Robin reference scale",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "robin_reference_length",
+      "latex": "$R_*$",
+      "meaning": "reference length in a Robin geometry realization",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "robin_open_extent",
+      "latex": "$L_{\\mathrm{open}}$",
+      "meaning": "largest open-axis extent used by shared-domain modal geometry",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "robin_equivalent_radius",
+      "latex": "$R_{\\mathrm{eq}}$",
+      "meaning": "equivalent radius derived from reference mesh volume",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "mesh_volume",
+      "latex": "$V_{\\mathrm{mesh}}$",
+      "meaning": "total volume of the mesh used by the FEM reference baseline",
+      "si_unit": "$\\mathrm{m^3}$"
     }
   ],
   "sources": [
@@ -736,6 +799,104 @@
       "symbol": "test_zero_error_and_declared_verified_proof_still_cannot_qualify",
       "responsibility": "Zero-error and forged pass claims cannot substitute external operator/equilibrium/phase proof.",
       "evidence_status": "source_prepared_ci_pending"
+    },
+    {
+      "id": "source-robin-beta-contract",
+      "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
+      "symbol": "DOC-ANCHOR:robin-beta-mode-and-geometry-contract",
+      "responsibility": "Define dimensionless c_R modes separately from the two non-equivalent geometry reference scales; leave the geometry divergence open.",
+      "evidence_status": "planned_contract / geometry equivalence NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-ir-resolver",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "resolve_robin_beta_factor",
+      "responsibility": "Resolve the common positive finite dimensionless mode coefficient and reject invalid mode/factor inputs.",
+      "evidence_status": "source_visible / runner CI pending"
+    },
+    {
+      "id": "source-robin-planner-normalization",
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "build_air_box_config",
+      "responsibility": "Normalize missing mode plus explicit factor to user and the empty policy to dipole before creating the FEM air-box plan.",
+      "evidence_status": "source_visible / runner CI pending"
+    },
+    {
+      "id": "source-robin-shared-domain-scale",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs",
+      "symbol": "shared_domain_robin_beta_for_extent",
+      "responsibility": "Apply the common coefficient to 1/(L_open/2) for Robin or omitted-kind raw configs, return no Robin scale for Dirichlet/pure-Neumann, and reject unknown kinds; cross-realization equivalence is not established.",
+      "evidence_status": "source_visible / runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-reference-scale",
+      "path": "crates/fullmag-engine/src/fem.rs",
+      "symbol": "MeshTopology::from_ir",
+      "responsibility": "Set the reference baseline beta scale to 1/R_eq from total mesh volume; this differs from the modal extent scale.",
+      "evidence_status": "source_visible / geometry equivalence NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-reference-consumer",
+      "path": "crates/fullmag-runner/src/fem_reference.rs",
+      "symbol": "resolved_reference_robin_beta_factor",
+      "responsibility": "Resolve raw PoissonRobin mode/factor inputs through the shared fullmag-ir policy before constructing the reference problem; absent config uses c=2 and explicit contradictory boundary kinds fail closed.",
+      "evidence_status": "source_visible / runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-native-abi",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_robin_beta_abi_parameters",
+      "responsibility": "Use the shared resolver for active PoissonRobin plans, including a missing air-box config or bc_kind; preserve mode 0 and the supplied factor when the resolved demag realization is not Robin, and reject contradictory explicit boundary kinds.",
+      "evidence_status": "source_visible / native runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-cpp-boundary-mode",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "initialize_demag_poisson_boundary_operator",
+      "responsibility": "Enter Robin assembly only for AIRBOX_ROBIN; modes 1 and 2 force c=1 and c=2, while mode 0 passes through the factor field and does not disable the boundary.",
+      "evidence_status": "source-visible / native runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-cli-plan-chain",
+      "path": "crates/fullmag-cli/src/main.rs",
+      "symbol": "Command::RunProblemJsonDirect",
+      "responsibility": "Call fullmag_plan::plan before passing the execution plan to initial-state diagnostics, so the diagnostic's FemPlanIR input has normalized Robin values.",
+      "evidence_status": "source trace at pinned source / runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-cli-diagnostic-consumer",
+      "path": "crates/fullmag-cli/src/diagnostics.rs",
+      "symbol": "diagnose_initial_fem_plan",
+      "responsibility": "Consume the planner-produced FEM plan for the direct CLI initial-state warning path; no second Robin policy is defined here.",
+      "evidence_status": "source trace at pinned source / runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-robin-mode-tests",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "robin_beta_mode_factor_resolver_preserves_named_modes_and_unspecified_factor",
+      "responsibility": "Exercise the IR resolver's named-mode forcing, explicit user factor, and malformed-input refusal.",
+      "evidence_status": "source test; CI pending"
+    },
+    {
+      "id": "source-robin-planner-tests",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "fem_eigen_robin_beta_modes_resolve_defaults_overrides_and_invalid_policy",
+      "responsibility": "Exercise planner normalization, forced named values, and invalid mode/factor combinations.",
+      "evidence_status": "source test; CI pending"
+    },
+    {
+      "id": "source-robin-native-abi-tests",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_robin_abi_uses_the_shared_mode_factor_contract",
+      "responsibility": "Exercise missing config and bc_kind for active Robin defaults/modes, invalid or contradictory inputs, and preservation of a non-Robin realization.",
+      "evidence_status": "source test; CI pending"
+    },
+    {
+      "id": "source-robin-reference-tests",
+      "path": "crates/fullmag-runner/src/fem_reference.rs",
+      "symbol": "reference_runner_resolves_raw_robin_mode_and_factor_with_shared_contract",
+      "responsibility": "Exercise the reference runner's raw-plan forwarding through the shared IR resolver.",
+      "evidence_status": "source test; CI pending"
     }
   ],
   "public_api": {

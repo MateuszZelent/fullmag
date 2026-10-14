@@ -216,12 +216,6 @@ pub(super) fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option
     ) {
         return Ok(None);
     }
-    let coefficient_factor = config.robin_beta_factor.unwrap_or(2.0);
-    if !coefficient_factor.is_finite() || coefficient_factor <= 0.0 {
-        return Err(RunError {
-            message: "shared-domain Robin beta factor must be positive".to_string(),
-        });
-    }
     let mut min_corner = [f64::INFINITY; 3];
     let mut max_corner = [f64::NEG_INFINITY; 3];
     for node in &plan.mesh.nodes {
@@ -239,6 +233,29 @@ pub(super) fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option
         }
     }
     let reference_extent = robin_reference_extent_m(min_corner, max_corner, periodic_axis);
+    shared_domain_robin_beta_for_extent(config, reference_extent)
+}
+
+fn shared_domain_robin_beta_for_extent(
+    config: &fullmag_ir::AirBoxConfigIR,
+    reference_extent: f64,
+) -> Result<Option<f64>, RunError> {
+    match config.bc_kind.as_deref() {
+        Some("dirichlet") | Some("pure_neumann") => return Ok(None),
+        Some("robin") | None => {}
+        Some(other) => {
+            return Err(RunError {
+                message: format!("shared-domain unsupported air-box boundary kind '{other}'"),
+            });
+        }
+    }
+    let coefficient_factor = fullmag_ir::resolve_robin_beta_factor(
+        config.robin_beta_mode.as_deref(),
+        config.robin_beta_factor,
+    )
+    .map_err(|error| RunError {
+        message: format!("shared-domain {error}"),
+    })?;
     if !(reference_extent.is_finite() && reference_extent > 0.0) {
         return Err(RunError {
             message: "shared-domain Robin beta requires a positive mesh extent".to_string(),
@@ -249,7 +266,97 @@ pub(super) fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option
 
 #[cfg(test)]
 mod tests {
-    use super::robin_reference_extent_m;
+    use super::{robin_reference_extent_m, shared_domain_robin_beta_for_extent};
+
+    fn robin_config(mode: Option<&str>, factor: Option<f64>) -> fullmag_ir::AirBoxConfigIR {
+        robin_config_with_kind(mode, factor, Some("robin"))
+    }
+
+    fn robin_config_with_kind(
+        mode: Option<&str>,
+        factor: Option<f64>,
+        bc_kind: Option<&str>,
+    ) -> fullmag_ir::AirBoxConfigIR {
+        fullmag_ir::AirBoxConfigIR {
+            factor: 1.0,
+            grading: 1.4,
+            boundary_marker: 99,
+            bc_kind: bc_kind.map(str::to_string),
+            robin_beta_mode: mode.map(str::to_string),
+            robin_beta_factor: factor,
+            shape: Some("bbox".to_string()),
+            factor_source: None,
+            boundary_marker_source: None,
+        }
+    }
+
+    #[test]
+    fn shared_domain_robin_beta_resolves_mode_and_open_axis_extent() {
+        let reference_extent = robin_reference_extent_m(
+            [-80.0e-9, -40.0e-9, -25.0e-9],
+            [80.0e-9, 40.0e-9, 25.0e-9],
+            [true, true, false],
+        );
+        assert!((reference_extent - 50.0e-9).abs() < 1.0e-18);
+
+        let legacy = shared_domain_robin_beta_for_extent(
+            &robin_config(Some("legacy"), None),
+            reference_extent,
+        )
+        .expect("legacy mode resolves");
+        let dipole = shared_domain_robin_beta_for_extent(
+            &robin_config(Some("dipole"), None),
+            reference_extent,
+        )
+        .expect("dipole mode resolves");
+        let legacy_with_factor = shared_domain_robin_beta_for_extent(
+            &robin_config(Some("legacy"), Some(3.5)),
+            reference_extent,
+        )
+        .expect("legacy mode forces its named coefficient");
+        let dipole_with_factor = shared_domain_robin_beta_for_extent(
+            &robin_config(Some("dipole"), Some(0.75)),
+            reference_extent,
+        )
+        .expect("dipole mode forces its named coefficient");
+        let unspecified_with_factor = shared_domain_robin_beta_for_extent(
+            &robin_config(None, Some(3.5)),
+            reference_extent,
+        )
+        .expect("an explicit coefficient without a named mode resolves as user mode");
+        let legacy_without_bc_kind = shared_domain_robin_beta_for_extent(
+            &robin_config_with_kind(Some("legacy"), Some(3.5), None),
+            reference_extent,
+        )
+        .expect("an omitted boundary kind on an active air-box config uses Robin policy");
+        assert!((legacy.unwrap() - 4.0e7).abs() < 1.0e-6);
+        assert!((dipole.unwrap() - 8.0e7).abs() < 1.0e-6);
+        assert!((legacy_with_factor.unwrap() - 4.0e7).abs() < 1.0e-6);
+        assert!((dipole_with_factor.unwrap() - 8.0e7).abs() < 1.0e-6);
+        assert!((unspecified_with_factor.unwrap() - 1.4e8).abs() < 1.0e-6);
+        assert!((legacy_without_bc_kind.unwrap() - 4.0e7).abs() < 1.0e-6);
+
+        assert!(shared_domain_robin_beta_for_extent(
+            &robin_config(Some("user"), None),
+            reference_extent,
+        )
+        .is_err());
+        assert!(shared_domain_robin_beta_for_extent(
+            &robin_config(Some("unknown"), Some(3.0)),
+            reference_extent,
+        )
+        .is_err());
+        assert!(shared_domain_robin_beta_for_extent(
+            &robin_config(None, Some(0.0)),
+            reference_extent,
+        )
+        .is_err());
+        assert!(shared_domain_robin_beta_for_extent(
+            &robin_config_with_kind(None, Some(3.0), Some("unknown")),
+            reference_extent,
+        )
+        .is_err());
+    }
 
     #[test]
     fn robin_reference_extent_ignores_periodic_cell_width() {

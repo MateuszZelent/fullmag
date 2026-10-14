@@ -27,8 +27,6 @@ const AIRBOX_DEFAULT_GRADING: f64 = 1.4;
 const AIRBOX_DEFAULT_SHAPE: &str = "bbox";
 /// Default Robin beta mode (dipole approximation).
 const AIRBOX_DEFAULT_ROBIN_BETA_MODE: &str = "dipole";
-/// Default Robin beta factor.
-const AIRBOX_DEFAULT_ROBIN_BETA_FACTOR: f64 = 2.0;
 
 static MAG_TEXTURE_SAMPLE_LOG_KEYS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 
@@ -1971,23 +1969,24 @@ pub(crate) fn build_air_box_config(
         .and_then(|p| p.shape.clone())
         .unwrap_or_else(|| AIRBOX_DEFAULT_SHAPE.to_string());
 
-    let robin_beta_mode = if bc_kind == "robin" {
-        Some(
-            policy
-                .and_then(|p| p.robin_beta_mode.clone())
-                .unwrap_or_else(|| AIRBOX_DEFAULT_ROBIN_BETA_MODE.to_string()),
+    let (robin_beta_mode, robin_beta_factor) = if bc_kind == "robin" {
+        let authored_mode = policy.and_then(|p| p.robin_beta_mode.clone());
+        let authored_factor = policy.and_then(|p| p.robin_beta_factor);
+        let resolved_factor = fullmag_ir::resolve_robin_beta_factor(
+            authored_mode.as_deref(),
+            authored_factor,
+        )
+        .map_err(|error| format!("air_box_policy: {error}"))?;
+        (
+            Some(match authored_mode {
+                Some(mode) => mode,
+                None if authored_factor.is_some() => "user".to_string(),
+                None => AIRBOX_DEFAULT_ROBIN_BETA_MODE.to_string(),
+            }),
+            Some(resolved_factor),
         )
     } else {
-        None
-    };
-    let robin_beta_factor = if bc_kind == "robin" {
-        Some(
-            policy
-                .and_then(|p| p.robin_beta_factor)
-                .unwrap_or(AIRBOX_DEFAULT_ROBIN_BETA_FACTOR),
-        )
-    } else {
-        None
+        (None, None)
     };
 
     Ok(Some(AirBoxConfigIR {

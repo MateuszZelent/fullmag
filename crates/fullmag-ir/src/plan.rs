@@ -1994,10 +1994,10 @@ pub struct AirBoxConfigIR {
     /// Boundary condition kind: `"dirichlet"` or `"robin"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bc_kind: Option<String>,
-    /// Robin beta mode: `"legacy"` (c=1), `"dipole"` (c=2), `"user"`.
+    /// Resolved Robin beta mode: `"legacy"` (c=1), `"dipole"` (c=2), or `"user"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub robin_beta_mode: Option<String>,
-    /// User-specified c in β = c/R*.
+    /// Resolved positive finite c in β = c/R*. The planner stores the coefficient selected by mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub robin_beta_factor: Option<f64>,
     /// Airbox shape: `"bbox"` or `"sphere"`.
@@ -2024,15 +2024,40 @@ pub struct AirBoxPolicyIR {
     /// and refuse heuristic marker selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary_marker: Option<u32>,
-    /// Robin beta mode override: `"legacy"`, `"dipole"`, or `"user"`.
+    /// Robin beta mode: `"legacy"` forces c=1; `"dipole"` forces c=2; `"user"` requires a factor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub robin_beta_mode: Option<String>,
-    /// Robin beta factor override (c in β = c/R*).
+    /// Optional positive finite c in β = c/R*. It is used for `"user"` or when mode is omitted;
+    /// named `"legacy"` and `"dipole"` modes retain their fixed coefficients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub robin_beta_factor: Option<f64>,
     /// Air-box shape override: `"bbox"` or `"sphere"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<String>,
+}
+
+/// Resolve the dimensionless Robin coefficient `c_R` in `β = c_R / R_*`.
+///
+/// Named modes `legacy` and `dipole` force coefficients 1 and 2 respectively.
+/// `user` requires an explicit factor. With no mode, an explicit factor is used
+/// or the dipole value 2 is selected. Any supplied factor is validated even
+/// when a named mode forces another coefficient.
+pub fn resolve_robin_beta_factor(mode: Option<&str>, factor: Option<f64>) -> Result<f64, String> {
+    if let Some(value) = factor {
+        if !value.is_finite() || value <= 0.0 {
+            return Err("Robin beta factor must be positive and finite".to_string());
+        }
+    }
+
+    match mode {
+        Some("legacy") => Ok(1.0),
+        Some("dipole") => Ok(2.0),
+        Some("user") => factor.ok_or_else(|| {
+            "Robin beta mode 'user' requires an explicit factor".to_string()
+        }),
+        None => Ok(factor.unwrap_or(2.0)),
+        Some(other) => Err(format!("unsupported Robin beta mode '{other}'")),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2232,6 +2257,42 @@ mod tests {
         TimeStageContextIR,
         SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn robin_beta_mode_factor_resolver_preserves_named_modes_and_unspecified_factor() {
+        assert_eq!(super::resolve_robin_beta_factor(None, None), Ok(2.0));
+        assert_eq!(super::resolve_robin_beta_factor(None, Some(3.5)), Ok(3.5));
+        assert_eq!(
+            super::resolve_robin_beta_factor(Some("legacy"), None),
+            Ok(1.0)
+        );
+        assert_eq!(
+            super::resolve_robin_beta_factor(Some("dipole"), None),
+            Ok(2.0)
+        );
+        assert!(super::resolve_robin_beta_factor(Some("user"), None).is_err());
+
+        assert_eq!(
+            super::resolve_robin_beta_factor(Some("legacy"), Some(3.5)),
+            Ok(1.0)
+        );
+        assert_eq!(
+            super::resolve_robin_beta_factor(Some("dipole"), Some(3.5)),
+            Ok(2.0)
+        );
+        assert_eq!(
+            super::resolve_robin_beta_factor(Some("user"), Some(3.5)),
+            Ok(3.5)
+        );
+        assert!(super::resolve_robin_beta_factor(Some("other"), Some(3.5)).is_err());
+
+        for invalid_factor in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(
+                super::resolve_robin_beta_factor(Some("legacy"), Some(invalid_factor)).is_err(),
+                "invalid explicit factor must fail closed: {invalid_factor}"
+            );
+        }
+    }
 
     #[test]
     fn fem_eigen_solver_policy_preserves_partial_fields_and_rejects_unknown_fields() {

@@ -12784,7 +12784,7 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
 }
 
 #[test]
-fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air() {
+fn fem_eigen_robin_beta_modes_resolve_defaults_overrides_and_invalid_policy() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -12911,6 +12911,53 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
                 .all(|(_, value)| *value == [0.0, 0.0, 0.0]));
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
+    for (mode, explicit_factor, expected_mode, expected_factor) in [
+        (None, None, Some("dipole"), Some(2.0)),
+        (None, Some(3.5), Some("user"), Some(3.5)),
+        (Some("legacy"), None, Some("legacy"), Some(1.0)),
+        (Some("legacy"), Some(3.5), Some("legacy"), Some(1.0)),
+        (Some("dipole"), None, Some("dipole"), Some(2.0)),
+        (Some("dipole"), Some(0.75), Some("dipole"), Some(2.0)),
+        (Some("user"), Some(4.0), Some("user"), Some(4.0)),
+        (Some("user"), None, None, None),
+        (Some("unknown"), Some(4.0), None, None),
+        (None, Some(0.0), None, None),
+        (Some("legacy"), Some(0.0), None, None),
+        (Some("dipole"), Some(f64::NAN), None, None),
+    ] {
+        let mut policy_ir = ir.clone();
+        policy_ir.air_box_policy = Some(fullmag_ir::AirBoxPolicyIR {
+            grading: None,
+            boundary_marker: None,
+            robin_beta_mode: mode.map(str::to_string),
+            robin_beta_factor: explicit_factor,
+            shape: None,
+        });
+
+        let planned = plan(&policy_ir);
+        if let (Some(expected_mode), Some(expected_factor)) = (expected_mode, expected_factor) {
+            let planned = planned.expect("valid Robin mode/factor must plan");
+            match planned.backend_plan {
+                BackendPlanIR::FemEigen(fem) => {
+                    let config = fem
+                        .air_box_config
+                        .expect("Robin realization must retain its air-box config");
+                    assert_eq!(
+                        config.robin_beta_mode.as_deref(),
+                        Some(expected_mode)
+                    );
+                    assert_eq!(config.robin_beta_factor, Some(expected_factor));
+                }
+                other => panic!("expected FEM eigen plan, got {other:?}"),
+            }
+        } else {
+            assert!(
+                planned.is_err(),
+                "invalid Robin mode/factor must fail planning: mode={mode:?}, factor={explicit_factor:?}"
+            );
+        }
     }
 }
 

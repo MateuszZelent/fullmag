@@ -481,15 +481,15 @@ pub(crate) fn build_problem_and_state(
     };
     let mut problem = match resolved_demag_realization {
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin) => {
+            let robin_beta_factor =
+                resolved_reference_robin_beta_factor(plan.air_box_config.as_ref())?;
             FemLlgProblem::with_terms_and_demag_airbox(
                 topology,
                 material,
                 dynamics,
                 terms,
                 false,
-                plan.air_box_config
-                    .as_ref()
-                    .and_then(|config| config.robin_beta_factor),
+                robin_beta_factor,
             )
         }
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet) => {
@@ -538,6 +538,35 @@ pub(crate) fn build_problem_and_state(
             })?;
     }
     Ok((problem, state))
+}
+
+fn resolved_reference_robin_beta_factor(
+    config: Option<&fullmag_ir::AirBoxConfigIR>,
+) -> Result<Option<f64>, RunError> {
+    let Some(config) = config else {
+        return fullmag_ir::resolve_robin_beta_factor(None, None)
+            .map(Some)
+            .map_err(|error| RunError {
+                message: format!("FEM reference Robin coefficient: {error}"),
+            });
+    };
+    if let Some(bc_kind) = config.bc_kind.as_deref() {
+        if bc_kind != "robin" {
+            return Err(RunError {
+                message: format!(
+                    "FEM reference PoissonRobin demag conflicts with air-box boundary kind '{bc_kind}'"
+                ),
+            });
+        }
+    };
+    fullmag_ir::resolve_robin_beta_factor(
+        config.robin_beta_mode.as_deref(),
+        config.robin_beta_factor,
+    )
+    .map(Some)
+    .map_err(|error| RunError {
+        message: format!("FEM reference Robin coefficient: {error}"),
+    })
 }
 
 pub(crate) fn execution_provenance(plan: &FemPlanIR) -> Result<ExecutionProvenance, RunError> {
@@ -1876,6 +1905,63 @@ mod tests {
         RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn reference_runner_resolves_raw_robin_mode_and_factor_with_shared_contract() {
+        let make_config_with_kind =
+            |mode: Option<&str>, factor: Option<f64>, bc_kind: Option<&str>| AirBoxConfigIR {
+                factor: 1.0,
+                grading: 1.0,
+                boundary_marker: 99,
+                bc_kind: bc_kind.map(str::to_string),
+                robin_beta_mode: mode.map(str::to_string),
+                robin_beta_factor: factor,
+                shape: Some("bbox".to_string()),
+                factor_source: None,
+                boundary_marker_source: None,
+            };
+        let make_config = |mode: Option<&str>, factor: Option<f64>| {
+            make_config_with_kind(mode, factor, Some("robin"))
+        };
+
+        assert_eq!(resolved_reference_robin_beta_factor(None).unwrap(), Some(2.0));
+        assert_eq!(
+            resolved_reference_robin_beta_factor(Some(&make_config(Some("legacy"), Some(3.5))))
+                .unwrap(),
+            Some(1.0)
+        );
+        assert_eq!(
+            resolved_reference_robin_beta_factor(Some(&make_config(None, Some(3.5)))).unwrap(),
+            Some(3.5)
+        );
+        assert_eq!(
+            resolved_reference_robin_beta_factor(Some(&make_config(None, None))).unwrap(),
+            Some(2.0)
+        );
+        assert_eq!(
+            resolved_reference_robin_beta_factor(Some(&make_config_with_kind(
+                Some("legacy"),
+                Some(3.5),
+                None,
+            )))
+            .unwrap(),
+            Some(1.0)
+        );
+        assert!(resolved_reference_robin_beta_factor(Some(&make_config(Some("user"), None)))
+            .is_err());
+        assert!(resolved_reference_robin_beta_factor(Some(&make_config_with_kind(
+            None,
+            Some(3.5),
+            Some("dirichlet"),
+        )))
+        .is_err());
+        assert!(resolved_reference_robin_beta_factor(Some(&make_config_with_kind(
+            None,
+            Some(3.5),
+            Some("unknown"),
+        )))
+        .is_err());
+    }
 
     #[test]
     fn reference_antenna_drive_maps_stage_clock_to_waveform_origin() {

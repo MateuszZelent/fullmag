@@ -446,8 +446,174 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // ── Fallback defaults when air_box_config is absent (FEM-040) ────────────
 #[cfg(feature = "fem-gpu")]
 const FALLBACK_POISSON_BOUNDARY_MARKER: i32 = 99;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", test))]
 const FALLBACK_ROBIN_BETA_FACTOR: f64 = 2.0;
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn native_robin_beta_abi_parameters(
+    config: Option<&fullmag_ir::AirBoxConfigIR>,
+    robin_boundary_active: bool,
+) -> Result<(i32, f64), String> {
+    let authored_factor = config.and_then(|config| config.robin_beta_factor);
+    if !robin_boundary_active {
+        return Ok((0, authored_factor.unwrap_or(FALLBACK_ROBIN_BETA_FACTOR)));
+    }
+
+    if let Some(bc_kind) = config.and_then(|config| config.bc_kind.as_deref()) {
+        if bc_kind != "robin" {
+            return Err(format!(
+                "PoissonRobin demag conflicts with air-box boundary kind '{bc_kind}'"
+            ));
+        }
+    }
+
+    let authored_mode = config.and_then(|config| config.robin_beta_mode.as_deref());
+    let factor = fullmag_ir::resolve_robin_beta_factor(authored_mode, authored_factor)?;
+    let mode = match authored_mode {
+        Some("legacy") => 1,
+        Some("dipole") => 2,
+        Some("user") => 3,
+        None if authored_factor.is_some() => 3,
+        None => 2,
+        Some(other) => return Err(format!("unsupported Robin beta mode '{other}'")),
+    };
+    Ok((mode, factor))
+}
+
+#[cfg(test)]
+mod robin_beta_abi_contract_tests {
+    use super::native_robin_beta_abi_parameters;
+
+    fn config(
+        mode: Option<&str>,
+        factor: Option<f64>,
+        bc_kind: Option<&str>,
+    ) -> fullmag_ir::AirBoxConfigIR {
+        fullmag_ir::AirBoxConfigIR {
+            factor: 1.0,
+            grading: 1.4,
+            boundary_marker: 99,
+            bc_kind: bc_kind.map(str::to_string),
+            robin_beta_mode: mode.map(str::to_string),
+            robin_beta_factor: factor,
+            shape: Some("bbox".to_string()),
+            factor_source: None,
+            boundary_marker_source: None,
+        }
+    }
+
+    #[test]
+    fn native_robin_abi_uses_the_shared_mode_factor_contract() {
+        assert_eq!(native_robin_beta_abi_parameters(None, true), Ok((2, 2.0)));
+        assert_eq!(native_robin_beta_abi_parameters(None, false), Ok((0, 2.0)));
+        assert_eq!(
+            native_robin_beta_abi_parameters(Some(&config(None, None, Some("robin"))), true),
+            Ok((2, 2.0))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(Some(&config(None, Some(3.5), Some("robin"))), true),
+            Ok((3, 3.5))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("legacy"), Some(3.5), Some("robin"))),
+                true,
+            ),
+            Ok((1, 1.0))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("dipole"), Some(0.75), Some("robin"))),
+                true,
+            ),
+            Ok((2, 2.0))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("user"), Some(4.0), Some("robin"))),
+                true,
+            ),
+            Ok((3, 4.0))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(None, Some(1.5), Some("dirichlet"))),
+                false,
+            ),
+            Ok((0, 1.5))
+        );
+        assert!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("user"), None, Some("robin"))),
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("unknown"), Some(2.0), Some("robin"))),
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            native_robin_beta_abi_parameters(
+                Some(&config(None, Some(0.0), Some("robin"))),
+                true,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("legacy"), Some(3.5), None)),
+                true,
+            ),
+            Ok((1, 1.0))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(None, Some(3.5), None)),
+                true,
+            ),
+            Ok((3, 3.5))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("dipole"), Some(0.75), None)),
+                true,
+            ),
+            Ok((2, 2.0))
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("user"), Some(4.0), None)),
+                true,
+            ),
+            Ok((3, 4.0))
+        );
+        assert!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("legacy"), Some(3.5), Some("dirichlet"))),
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("legacy"), Some(3.5), Some("unknown"))),
+                true,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            native_robin_beta_abi_parameters(
+                Some(&config(Some("legacy"), Some(3.5), Some("robin"))),
+                false,
+            ),
+            Ok((0, 3.5))
+        );
+    }
+}
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
@@ -2877,6 +3043,17 @@ impl NativeFemBackend {
         } else {
             fullmag_ir::ResolvedFemDemagIR::PoissonRobin
         };
+        let robin_boundary_active =
+            resolved_demag_realization == fullmag_ir::ResolvedFemDemagIR::PoissonRobin;
+        let (robin_beta_mode, robin_beta_factor) = native_robin_beta_abi_parameters(
+            plan.air_box_config.as_ref(),
+            robin_boundary_active,
+        )
+        .map_err(|error| {
+            RunError {
+                message: format!("native FEM Robin coefficient: {error}"),
+            }
+        })?;
 
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
@@ -3057,22 +3234,8 @@ impl NativeFemBackend {
                 .map_or(FALLBACK_POISSON_BOUNDARY_MARKER, |c| {
                     c.boundary_marker as i32
                 }),
-            robin_beta_mode: plan.air_box_config.as_ref().map_or(0, |c| {
-                match c.bc_kind.as_deref() {
-                    Some("robin") => match c.robin_beta_mode.as_deref() {
-                        Some("legacy") => 1,
-                        Some("dipole") | None => 2,
-                        Some("user") => 3,
-                        _ => 2,
-                    },
-                    _ => 0,
-                }
-            }),
-            robin_beta_factor: plan
-                .air_box_config
-                .as_ref()
-                .and_then(|c| c.robin_beta_factor)
-                .unwrap_or(FALLBACK_ROBIN_BETA_FACTOR),
+            robin_beta_mode,
+            robin_beta_factor,
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
             dt_seconds: resolve_native_fem_plan_dt_seconds(plan)?,
