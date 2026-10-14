@@ -1,4 +1,15 @@
 # Status realizacji całego planu refaktoryzacji
+Checkpoint 14.10.2026 — [P8-53CJ](p8/53cj-exact-layer-diagnostic-checkpoint.md),
+[P8-53CK](p8/53ck-ir-antenna-fixture-contract.md),
+[P8-53CL](p8/53cl-inspector-topology-si-fixture.md) i
+[P8-53CM](p8/53cm-production-mesh-gate-results.md):
+PR #165 scalony; CI Control Room 8541 PASS / 13 skip i generated API PASS.
+Naprawy fixture IR i jednostek FMMT Inspectora są w draft PR #168; CI trwa.
+Mesher candidate: scoped-ring/implicit-cap 2/2 PASS; publiczny Box 36/39 PASS,
+3 porażki zakresu air planes i osobny rzeczywisty FAIL owner XY ring.
+Kandydat pozostaje lokalnym WIP; nie zmieniono oczekiwań ani tolerancji testów.
+Procenty P0–P8 bez awansu; pełny plan IN PROGRESS.
+
 Checkpoint 14.10.2026 — [P8-53CH](p8/53ch-canonical-api-generation-and-antenna-scope.md)
 i [P8-53CI](p8/53ci-scoped-exact-layer-mesher-diagnosis.md):
 CI odebrało **87/87 API session** i **315/315 fullmag-session**, w tym late
