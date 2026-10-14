@@ -1109,11 +1109,11 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   const secondPageNodeId = `${hysteresisRootId}:catalog-dataset-0500`;
   const secondPageNode = page.locator(`[data-node-id="${secondPageNodeId}"]`);
   await scrollExplorerTreeToEnd();
-  await secondPageNode.waitFor({ state: "visible", timeout: timeoutMs });
 
   if (
     (await readExplorerTreeRowLabel(
       secondPageNode,
+      secondPageNodeId,
       "Catalog dataset 0500 from the second page",
       "second page",
     )) !== "Catalog dataset 0500 from the second page"
@@ -1149,11 +1149,11 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   const refreshedNodeId = `${hysteresisRootId}:catalog-dataset-0501`;
   const refreshedNode = page.locator(`[data-node-id="${refreshedNodeId}"]`);
   await scrollExplorerTreeToEnd();
-  await refreshedNode.waitFor({ state: "visible", timeout: timeoutMs });
 
   if (
     (await readExplorerTreeRowLabel(
       refreshedNode,
+      refreshedNodeId,
       "Catalog dataset 0501 after StageExecution",
       "StageExecution-refreshed row",
     )) !== "Catalog dataset 0501 after StageExecution"
@@ -1250,105 +1250,169 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   }
 }
 
-async function readExplorerTreeRowLabel(row, expectedLabel, context) {
-  const label = row.locator(".fm-explorer-tree-row__label");
+async function readExplorerTreeRowLabel(row, expectedNodeId, expectedLabel, context) {
   try {
-    return await label.textContent();
+    await row.waitFor({ state: "visible", timeout: timeoutMs });
+    return await row.locator(".fm-explorer-tree-row__label").textContent();
   } catch (error) {
     const rowSnapshot = await row
-      .evaluate((element, expected) => {
-        const descendants = Array.from(element.querySelectorAll("*"));
-        const exactTextElements = descendants
-          .filter(
-            (descendant) =>
-              descendant.children.length === 0 &&
-              descendant.textContent?.trim() === expected,
-          )
-          .slice(0, 8)
-          .map((descendant) => ({
-            className: typeof descendant.className === "string"
-              ? descendant.className.slice(0, 256)
+      .evaluateAll((elements, requested) => {
+        const summarize = (element, includeHtml) => {
+          const bounds = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return {
+            bounds: {
+              bottom: bounds.bottom,
+              height: bounds.height,
+              left: bounds.left,
+              right: bounds.right,
+              top: bounds.top,
+              width: bounds.width,
+            },
+            className: typeof element.className === "string"
+              ? element.className.slice(0, 512)
               : "",
-            tagName: descendant.tagName,
-            text: descendant.textContent?.slice(0, 512) ?? null,
-          }));
-        return {
-          attributes: Array.from(element.attributes)
-            .slice(0, 16)
-            .map((attribute) => ({
-              name: attribute.name,
-              value: attribute.value.slice(0, 256),
-            })),
-          className: typeof element.className === "string"
-            ? element.className.slice(0, 512)
-            : "",
-          childElements: Array.from(element.children)
-            .slice(0, 16)
-            .map((child) => ({
-              className: typeof child.className === "string"
-                ? child.className.slice(0, 256)
-                : "",
-              tagName: child.tagName,
-              text: child.textContent?.slice(0, 256) ?? null,
-            })),
-          exactTextElements,
-          exactTextElementCount: descendants.filter(
-            (descendant) =>
-              descendant.children.length === 0 &&
-              descendant.textContent?.trim() === expected,
-          ).length,
-          labelClassCount:
-            element.querySelectorAll(".fm-explorer-tree-row__label").length,
-          outerHTML: element.outerHTML.slice(0, 8192),
-          parentClassName:
-            element.parentElement?.className?.toString().slice(0, 512) ?? "",
-          role: element.getAttribute("role"),
-          tagName: element.tagName,
-          treeItemSelf: element.matches('[role="treeitem"]'),
-          withinExplorerTree: Boolean(element.closest(".fm-explorer-tree")),
+            exactTextElementCount: Array.from(element.querySelectorAll("*")).filter(
+              (descendant) =>
+                descendant.children.length === 0 &&
+                descendant.textContent?.trim() === requested.expectedLabel,
+            ).length,
+            labelClassCount:
+              element.querySelectorAll(".fm-explorer-tree-row__label").length,
+            expectedNodeId: requested.expectedNodeId,
+            idMatchesExpected:
+              element.getAttribute("data-node-id") === requested.expectedNodeId,
+            nodeId: element.getAttribute("data-node-id"),
+            role: element.getAttribute("role"),
+            tagName: element.tagName,
+            text: element.textContent?.slice(0, 1024) ?? null,
+            visible: bounds.width > 0 &&
+              bounds.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden",
+            ...(includeHtml ? { outerHTML: element.outerHTML.slice(0, 4096) } : {}),
+          };
         };
-      }, expectedLabel)
-      .catch((snapshotError) => ({ snapshotError: String(snapshotError).slice(0, 2000) }));
-    const nodeId = await row.getAttribute("data-node-id").catch(() => null);
+        return {
+          matchCount: elements.length,
+          matches: elements.slice(0, 2).map((element) => summarize(element, true)),
+        };
+      }, { expectedLabel, expectedNodeId })
+      .catch((snapshotError) => ({ snapshotError: String(snapshotError).slice(0, 1500) }));
     const viewportSnapshot = await page
       .locator(".fm-explorer-tree")
-      .evaluate((tree, expectedNodeId) => {
-        const rows = Array.from(tree.querySelectorAll("[data-node-id]"));
-        const matchingRows = rows
-          .filter((candidate) => candidate.getAttribute("data-node-id") === expectedNodeId)
-          .slice(0, 4)
-          .map((candidate) => ({
-            className: typeof candidate.className === "string"
-              ? candidate.className.slice(0, 512)
+      .evaluateAll((trees, requestedNodeId) => {
+        const summarizeRow = (element, includeHtml) => {
+          const bounds = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return {
+            bounds: {
+              bottom: bounds.bottom,
+              height: bounds.height,
+              left: bounds.left,
+              right: bounds.right,
+              top: bounds.top,
+              width: bounds.width,
+            },
+            className: typeof element.className === "string"
+              ? element.className.slice(0, 512)
               : "",
             labelClassCount:
-              candidate.querySelectorAll(".fm-explorer-tree-row__label").length,
-            role: candidate.getAttribute("role"),
-            tagName: candidate.tagName,
-            text: candidate.textContent?.slice(0, 1024) ?? null,
-            outerHTML: candidate.outerHTML.slice(0, 8192),
-          }));
-        return {
-          clientHeight: tree.clientHeight,
-          matchingNodeCount: rows.filter(
-            (candidate) => candidate.getAttribute("data-node-id") === expectedNodeId,
-          ).length,
-          matchingRows,
-          mountedNodeCount: rows.length,
-          scrollHeight: tree.scrollHeight,
-          scrollTop: tree.scrollTop,
-          visibleNodeIds: rows
-            .slice(0, 64)
-            .map((candidate) => candidate.getAttribute("data-node-id")),
+              element.querySelectorAll(".fm-explorer-tree-row__label").length,
+            nodeId: element.getAttribute("data-node-id"),
+            role: element.getAttribute("role"),
+            tagName: element.tagName,
+            text: element.textContent?.slice(0, 512) ?? null,
+            visible: bounds.width > 0 &&
+              bounds.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden",
+            ...(includeHtml ? { outerHTML: element.outerHTML.slice(0, 4096) } : {}),
+          };
         };
-      }, nodeId)
-      .catch((snapshotError) => ({ snapshotError: String(snapshotError).slice(0, 2000) }));
+        const edgeChild = (element) => {
+          if (!element) return null;
+          const bounds = element.getBoundingClientRect();
+          return {
+            bounds: {
+              bottom: bounds.bottom,
+              height: bounds.height,
+              left: bounds.left,
+              right: bounds.right,
+              top: bounds.top,
+              width: bounds.width,
+            },
+            className: typeof element.className === "string"
+              ? element.className.slice(0, 256)
+              : "",
+            inlineHeight: element.style?.height ?? "",
+            nodeId: element.getAttribute("data-node-id"),
+            role: element.getAttribute("role"),
+            tagName: element.tagName,
+          };
+        };
+        const summarizeTree = (tree) => {
+          const rows = Array.from(tree.querySelectorAll("[data-node-id]"));
+          const expectedRows = rows.filter(
+            (candidate) => candidate.getAttribute("data-node-id") === requestedNodeId,
+          );
+          const treeBounds = tree.getBoundingClientRect();
+          return {
+            expectedNodeCount: expectedRows.length,
+            expectedRows: expectedRows.slice(0, 2).map((row) => summarizeRow(row, true)),
+            firstChild: edgeChild(tree.firstElementChild),
+            lastChild: edgeChild(tree.lastElementChild),
+            mountedNodeCount: rows.length,
+            renderedBottom: rows.slice(-4).map((row) => summarizeRow(row, false)),
+            renderedTop: rows.slice(0, 4).map((row) => summarizeRow(row, false)),
+            scroll: {
+              clientHeight: tree.clientHeight,
+              clientWidth: tree.clientWidth,
+              maxLeft: Math.max(0, tree.scrollWidth - tree.clientWidth),
+              maxTop: Math.max(0, tree.scrollHeight - tree.clientHeight),
+              scrollHeight: tree.scrollHeight,
+              scrollLeft: tree.scrollLeft,
+              scrollTop: tree.scrollTop,
+              scrollWidth: tree.scrollWidth,
+            },
+            treeBounds: {
+              bottom: treeBounds.bottom,
+              height: treeBounds.height,
+              left: treeBounds.left,
+              right: treeBounds.right,
+              top: treeBounds.top,
+              width: treeBounds.width,
+            },
+          };
+        };
+        return {
+          treeCount: trees.length,
+          trees: trees.slice(0, 3).map((tree) => summarizeTree(tree)),
+        };
+      }, expectedNodeId)
+      .catch((snapshotError) => ({ snapshotError: String(snapshotError).slice(0, 1500) }));
+    const activeTabs = await page
+      .locator(".fm-explorer .fm-tabs-trigger")
+      .evaluateAll((tabs) =>
+        tabs.slice(0, 12).map((tab) => ({
+          ariaSelected: tab.getAttribute("aria-selected"),
+          className: typeof tab.className === "string"
+            ? tab.className.slice(0, 256)
+            : "",
+          text: tab.textContent?.trim().slice(0, 256) ?? null,
+        })),
+      )
+      .catch((snapshotError) => ({ snapshotError: String(snapshotError).slice(0, 1500) }));
     throw new Error(
-      "Explorer " + context + " label lookup failed. DOM evidence: " +
+      "Explorer " + context + " row/label lookup failed. DOM evidence: " +
         JSON.stringify({
+          activeTabs,
           cause: String(error).slice(0, 2000),
           expectedLabel,
-          nodeId,
+          expectedNodeId,
+          failedResponses: failedResponses.slice(-10).map((response) => String(response).slice(0, 512)),
+          pageErrors: errors.slice(-10).map((pageError) => String(pageError).slice(0, 1024)),
+          pageUrl: page.url(),
           row: rowSnapshot,
           viewport: viewportSnapshot,
         }) +
