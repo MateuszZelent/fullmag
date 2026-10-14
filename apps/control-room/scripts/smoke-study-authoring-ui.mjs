@@ -1110,12 +1110,13 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   const secondPageNode = page.locator(`[data-node-id="${secondPageNodeId}"]`);
   await scrollExplorerTreeToEnd();
   await secondPageNode.waitFor({ state: "visible", timeout: timeoutMs });
-  const secondPageLabel = secondPageNode.locator(
-    ".fm-explorer-tree-row__label",
-  );
+
   if (
-    (await secondPageLabel.textContent()) !==
-    "Catalog dataset 0500 from the second page"
+    (await readExplorerTreeRowLabel(
+      secondPageNode,
+      "Catalog dataset 0500 from the second page",
+      "second page",
+    )) !== "Catalog dataset 0500 from the second page"
   ) {
     throw new Error(
       `Explorer did not render the dataset from page two: ${await secondPageNode.innerText()}.`,
@@ -1149,12 +1150,13 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   const refreshedNode = page.locator(`[data-node-id="${refreshedNodeId}"]`);
   await scrollExplorerTreeToEnd();
   await refreshedNode.waitFor({ state: "visible", timeout: timeoutMs });
-  const refreshedLabel = refreshedNode.locator(
-    ".fm-explorer-tree-row__label",
-  );
+
   if (
-    (await refreshedLabel.textContent()) !==
-    "Catalog dataset 0501 after StageExecution"
+    (await readExplorerTreeRowLabel(
+      refreshedNode,
+      "Catalog dataset 0501 after StageExecution",
+      "StageExecution-refreshed row",
+    )) !== "Catalog dataset 0501 after StageExecution"
   ) {
     throw new Error(
       `StageExecution did not refresh the visible complete catalog: ${await refreshedNode.innerText()}.`,
@@ -1248,6 +1250,112 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   }
 }
 
+async function readExplorerTreeRowLabel(row, expectedLabel, context) {
+  const label = row.locator(".fm-explorer-tree-row__label");
+  try {
+    return await label.textContent();
+  } catch (error) {
+    const rowSnapshot = await row
+      .evaluate((element, expected) => {
+        const descendants = Array.from(element.querySelectorAll("*"));
+        const exactTextElements = descendants
+          .filter(
+            (descendant) =>
+              descendant.children.length === 0 &&
+              descendant.textContent?.trim() === expected,
+          )
+          .slice(0, 8)
+          .map((descendant) => ({
+            className: typeof descendant.className === "string"
+              ? descendant.className.slice(0, 256)
+              : "",
+            tagName: descendant.tagName,
+            text: descendant.textContent?.slice(0, 512) ?? null,
+          }));
+        return {
+          attributes: Array.from(element.attributes)
+            .slice(0, 16)
+            .map((attribute) => ({
+              name: attribute.name,
+              value: attribute.value.slice(0, 256),
+            })),
+          className: typeof element.className === "string"
+            ? element.className.slice(0, 512)
+            : "",
+          childElements: Array.from(element.children)
+            .slice(0, 16)
+            .map((child) => ({
+              className: typeof child.className === "string"
+                ? child.className.slice(0, 256)
+                : "",
+              tagName: child.tagName,
+              text: child.textContent?.slice(0, 256) ?? null,
+            })),
+          exactTextElements,
+          exactTextElementCount: descendants.filter(
+            (descendant) =>
+              descendant.children.length === 0 &&
+              descendant.textContent?.trim() === expected,
+          ).length,
+          labelClassCount:
+            element.querySelectorAll(".fm-explorer-tree-row__label").length,
+          outerHTML: element.outerHTML.slice(0, 8192),
+          parentClassName:
+            element.parentElement?.className?.toString().slice(0, 512) ?? "",
+          role: element.getAttribute("role"),
+          tagName: element.tagName,
+          treeItemSelf: element.matches('[role="treeitem"]'),
+          withinExplorerTree: Boolean(element.closest(".fm-explorer-tree")),
+        };
+      }, expectedLabel)
+      .catch((snapshotError) => ({ snapshotError: String(snapshotError).slice(0, 2000) }));
+    const nodeId = await row.getAttribute("data-node-id").catch(() => null);
+    const viewportSnapshot = await page
+      .locator(".fm-explorer-tree")
+      .evaluate((tree, expectedNodeId) => {
+        const rows = Array.from(tree.querySelectorAll("[data-node-id]"));
+        const matchingRows = rows
+          .filter((candidate) => candidate.getAttribute("data-node-id") === expectedNodeId)
+          .slice(0, 4)
+          .map((candidate) => ({
+            className: typeof candidate.className === "string"
+              ? candidate.className.slice(0, 512)
+              : "",
+            labelClassCount:
+              candidate.querySelectorAll(".fm-explorer-tree-row__label").length,
+            role: candidate.getAttribute("role"),
+            tagName: candidate.tagName,
+            text: candidate.textContent?.slice(0, 1024) ?? null,
+            outerHTML: candidate.outerHTML.slice(0, 8192),
+          }));
+        return {
+          clientHeight: tree.clientHeight,
+          matchingNodeCount: rows.filter(
+            (candidate) => candidate.getAttribute("data-node-id") === expectedNodeId,
+          ).length,
+          matchingRows,
+          mountedNodeCount: rows.length,
+          scrollHeight: tree.scrollHeight,
+          scrollTop: tree.scrollTop,
+          visibleNodeIds: rows
+            .slice(0, 64)
+            .map((candidate) => candidate.getAttribute("data-node-id")),
+        };
+      }, nodeId)
+      .catch((snapshotError) => ({ snapshotError: String(snapshotError).slice(0, 2000) }));
+    throw new Error(
+      "Explorer " + context + " label lookup failed. DOM evidence: " +
+        JSON.stringify({
+          cause: String(error).slice(0, 2000),
+          expectedLabel,
+          nodeId,
+          row: rowSnapshot,
+          viewport: viewportSnapshot,
+        }) +
+        ".",
+    );
+  }
+}
 async function waitForCatalogPages(generation) {
   const deadline = Date.now() + timeoutMs;
   let pages = datasetCatalogRequests.filter(
