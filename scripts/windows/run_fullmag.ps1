@@ -590,7 +590,7 @@ function Ensure-ControlRoomDependencies {
     $stageArguments = @((Join-Path (Get-WindowsBuildToolsRoot) "stage_workspace_frontend.py"), "--repo-root", $BuildSourceRoot, "--build-root", $BuildRoot, "--mode", $Frontend)
     if ($Frontend -eq "dev") { $stageArguments += @("--web-port", $stageWebPort.ToString()) }
     if ($BuildSnapshot) { $stageArguments += @("--source-snapshot-record", [string]$BuildSnapshot.record_path) }
-    $stageOutput = (& python @stageArguments 2>&1 | Out-String)
+    $stageOutput = (& python -B @stageArguments 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Native frontend staging failed: $stageOutput" }
     $stage = $stageOutput | ConvertFrom-Json
     $script:FrontendWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$stage.workspace_root) -Label "native frontend workspace" -Parent $BuildRoot
@@ -2272,7 +2272,7 @@ if ($BuildMode -eq "true") {
   }
   $workspaceExecutableHashes = [ordered]@{}
   if ($RunMode -eq "workspace" -and -not $BrowserWorkspace) {
-    $bundleNamesOutput = (& python -c "import sys; sys.path.insert(0, sys.argv[1]); from runtime_bundle import BINARY_NAMES; print('\n'.join(BINARY_NAMES))" (Get-WindowsBuildToolsRoot) | Out-String)
+    $bundleNamesOutput = (& python -B -c "import sys; sys.path.insert(0, sys.argv[1]); from runtime_bundle import BINARY_NAMES; print('\n'.join(BINARY_NAMES))" (Get-WindowsBuildToolsRoot) | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Native executable inventory failed" }
     foreach ($bundleName in ($bundleNamesOutput.Trim() -split '\r?\n')) {
       $workspaceExecutableHashes[$bundleName] = Get-Sha256File (Join-Path (Split-Path -Parent $FullmagExe) $bundleName)
