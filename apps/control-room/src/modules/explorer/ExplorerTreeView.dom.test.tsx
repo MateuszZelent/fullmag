@@ -202,3 +202,67 @@ describe("ExplorerTreeView branch interaction", () => {
     }
   });
 });
+
+
+describe("ExplorerTreeView resource refresh scroll retention", () => {
+  it("keeps manual scroll across row refresh and still reveals a changed selection", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const expandedIds = new Set<string>();
+    let rows: ExplorerNode[] = Array.from({ length: 300 }, (_, index) => ({
+      id: `result-${index}`,
+      kind: "results.resonance.modal.mode",
+      label: `Mode ${index}`,
+      parentId: null,
+    }));
+    let activeNodeId = "result-0";
+    const renderTree = () => (
+      <ExplorerTreeView
+        activeNodeId={activeNodeId}
+        expandedIds={expandedIds}
+        keyboardRowId={null}
+        kernel={{} as KernelApi}
+        moduleId="explorer"
+        nodes={rows}
+        sceneResourceData={null}
+        tabId="results"
+      />
+    );
+    try {
+      await act(async () => root.render(renderTree()));
+      const tree = findElement(
+        container,
+        (element) => element.getAttribute("role") === "tree",
+        "Explorer tree",
+      ) as TestElement & { scrollTop: number; clientHeight: number };
+      Object.defineProperty(tree, "clientHeight", { configurable: true, value: 95 });
+      await act(async () => {
+        tree.scrollTop = 6000;
+        tree.dispatchEvent(new TestEvent("scroll", { bubbles: true }));
+      });
+      rows = rows.map((node) => ({ ...node, label: `${node.label} refreshed` }));
+      await act(async () => root.render(renderTree()));
+      expect(tree.scrollTop).toBe(6000);
+
+      activeNodeId = "result-299";
+      await act(async () => root.render(renderTree()));
+      expect(tree.scrollTop).toBe(300 * 26 - 95);
+
+      // A selection that arrives in a later resource page must also be revealed.
+      activeNodeId = "result-later";
+      await act(async () => root.render(renderTree()));
+      rows = [...rows, {
+        id: "result-later",
+        kind: "results.resonance.modal.mode",
+        label: "Later page mode",
+        parentId: null,
+      }];
+      await act(async () => root.render(renderTree()));
+      expect(tree.scrollTop).toBe(301 * 26 - 95);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+});

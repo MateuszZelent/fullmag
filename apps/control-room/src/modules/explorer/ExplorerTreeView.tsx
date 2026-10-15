@@ -107,10 +107,27 @@ export function resolveExplorerRevealScrollTop({
   scrollTop: number;
   viewportHeight: number;
 }): number | null {
-  if (!activeNodeId) return null;
-  const index = rowIds.indexOf(activeNodeId);
-  if (index < 0) return null;
-  const rowTop = index * rowHeight;
+  return resolveExplorerRowRevealScrollTop({
+    rowIndex: activeNodeId ? rowIds.indexOf(activeNodeId) : -1,
+    rowHeight,
+    scrollTop,
+    viewportHeight,
+  });
+}
+
+function resolveExplorerRowRevealScrollTop({
+  rowIndex,
+  rowHeight,
+  scrollTop,
+  viewportHeight,
+}: {
+  rowIndex: number;
+  rowHeight: number;
+  scrollTop: number;
+  viewportHeight: number;
+}): number | null {
+  if (rowIndex < 0) return null;
+  const rowTop = rowIndex * rowHeight;
   const rowBottom = rowTop + rowHeight;
   if (rowTop < scrollTop) return rowTop;
   if (rowBottom > scrollTop + viewportHeight) {
@@ -552,6 +569,12 @@ export function ExplorerTreeView({
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],
   );
+  // Rebuilding resource-backed rows must not undo a user's manual scroll.
+  // Only a changed selection, its position, or viewport size needs a reveal.
+  const activeRowIndex = useMemo(
+    () => activeNodeId ? rows.findIndex((row) => row.node.id === activeNodeId) : -1,
+    [activeNodeId, rows],
+  );
   const virtualized = rows.length > EXPLORER_VIRTUALIZATION_THRESHOLD;
   const visibleRows = useMemo(
     () =>
@@ -615,10 +638,9 @@ export function ExplorerTreeView({
   useEffect(() => {
     const tree = treeRef.current;
     if (!tree) return;
-    const nextScrollTop = resolveExplorerRevealScrollTop({
-      activeNodeId,
+    const nextScrollTop = resolveExplorerRowRevealScrollTop({
+      rowIndex: activeRowIndex,
       rowHeight: EXPLORER_ROW_HEIGHT,
-      rowIds: rows.map((row) => row.node.id),
       scrollTop: tree.scrollTop,
       viewportHeight: tree.clientHeight || viewport.height,
     });
@@ -629,7 +651,7 @@ export function ExplorerTreeView({
         ? current
         : { ...current, scrollTop: nextScrollTop },
     );
-  }, [activeNodeId, rows, viewport.height]);
+  }, [activeNodeId, activeRowIndex, viewport.height]);
 
   return (
     <div
