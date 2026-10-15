@@ -116,12 +116,22 @@ Path(os.environ['NATIVE_FEM_LOG']).write_text(json.dumps(sys.argv), encoding='ut
     return repo
 
 
+def _native_shell_command() -> list[str]:
+    if os.name != "nt":
+        return ["bash"]
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    git_bash = Path(program_files) / "Git" / "bin" / "bash.exe"
+    if not git_bash.is_file():
+        raise AssertionError(f"Git Bash is required at {git_bash}; refusing PATH bash/WSL fallback")
+    return [str(git_bash)]
+
+
 def _run_shell(repo: Path, recipe: str, log: Path) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["NATIVE_FEM_LOG"] = str(log)
     environment["PATH"] = str(repo / "bin") + os.pathsep + environment["PATH"]
     return subprocess.run(
-        ["bash", "scripts/just_storage_shell.sh", recipe],
+        _native_shell_command() + ["scripts/just_storage_shell.sh", recipe],
         cwd=repo,
         env=environment,
         capture_output=True,
