@@ -694,9 +694,7 @@ impl StoreWalker {
         references: &LiveSnapshotArtifactReferences,
         source: &str,
     ) -> Result<()> {
-        for artifact in &references.artifacts {
-            let relative = live_snapshot_artifact_path(&references.run_id, &artifact.path)
-                .with_context(|| format!("invalid live artifact reference in `{source}`"))?;
+        for (artifact, relative) in live_snapshot_artifact_paths(references, source)? {
             self.follow_store_live_artifact(&relative, &artifact.kind, source)?;
         }
         Ok(())
@@ -3048,9 +3046,7 @@ impl<'a> ArchiveWalker<'a> {
         references: &LiveSnapshotArtifactReferences,
         source: &str,
     ) -> Result<()> {
-        for artifact in &references.artifacts {
-            let relative = live_snapshot_artifact_path(&references.run_id, &artifact.path)
-                .with_context(|| format!("invalid live artifact reference in `{source}`"))?;
+        for (artifact, relative) in live_snapshot_artifact_paths(references, source)? {
             let exact_member = self.documents.contains_key(&relative);
             let prefix = format!("{relative}/");
             let descendants = self
@@ -4855,10 +4851,30 @@ fn is_object_ref(value: &str) -> bool {
 
 fn live_snapshot_artifact_path(run_id: &str, artifact_path: &str) -> Result<String> {
     validate_component(run_id).context("invalid live snapshot session.run_id")?;
-    validate_file_ref(artifact_path).context("unsafe live snapshot artifact path")?;
+    let artifact_path = artifact_path.replace('\\', "/");
+    validate_file_ref(&artifact_path).context("unsafe live snapshot artifact path")?;
     let relative = format!("runs/{run_id}/artifacts/{artifact_path}");
     validate_file_ref(&relative).context("unsafe session run artifact path")?;
     Ok(relative)
+}
+
+pub(crate) fn live_snapshot_artifact_paths<'a>(
+    references: &'a LiveSnapshotArtifactReferences,
+    source: &str,
+) -> Result<Vec<(&'a LiveSnapshotArtifactReference, String)>> {
+    let mut normalized_paths = HashSet::with_capacity(references.artifacts.len());
+    references
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            let relative = live_snapshot_artifact_path(&references.run_id, &artifact.path)
+                .with_context(|| format!("invalid live artifact reference in `{source}`"))?;
+            if !normalized_paths.insert(relative.clone()) {
+                bail!("duplicate normalized live snapshot artifact path: {relative}");
+            }
+            Ok((artifact, relative))
+        })
+        .collect()
 }
 fn validate_component(component: &str) -> Result<()> {
     crate::repository_path::validate_store_id(component)
@@ -4949,8 +4965,10 @@ mod tests {
     fn live_snapshot_artifacts_retain_spectrum_and_zarr_in_store_archive_and_export_inventory() {
         let directory = tempfile::tempdir().unwrap();
         let run_id = "run-live";
-        let spectrum_relative = "eigen/spectrum.v2.json";
-        let zarr_relative = "fields/m.zarr";
+        let spectrum_relative = r"eigen\spectrum.v2.json";
+        let spectrum_store_relative = "eigen/spectrum.v2.json";
+        let zarr_relative = r"fields\m.zarr";
+        let zarr_store_relative = "fields/m.zarr";
         let zarr_file_relative = "single.zarr";
         let snapshot = live_snapshot_bytes(
             run_id,
@@ -4964,9 +4982,9 @@ mod tests {
         fs::write(&store_snapshot, &snapshot).unwrap();
         let store_artifacts = store_root.join("runs/run-live/artifacts");
         fs::create_dir_all(store_artifacts.join("eigen")).unwrap();
-        fs::write(store_artifacts.join(spectrum_relative), b"spectrum").unwrap();
+        fs::write(store_artifacts.join(spectrum_store_relative), b"spectrum").unwrap();
         fs::write(store_artifacts.join(zarr_file_relative), b"single-zarr-file").unwrap();
-        let zarr_root = store_artifacts.join(zarr_relative);
+        let zarr_root = store_artifacts.join(zarr_store_relative);
         fs::create_dir_all(&zarr_root).unwrap();
         fs::write(zarr_root.join(".zgroup"), b"{}").unwrap();
 
@@ -5032,6 +5050,25 @@ mod tests {
     }
 
     #[test]
+    fn live_snapshot_artifact_paths_reject_separator_normalization_collisions() {
+        let references = LiveSnapshotArtifactReferences {
+            run_id: "run-collision".to_string(),
+            artifacts: vec![
+                LiveSnapshotArtifactReference {
+                    path: r"fields\m.zarr".to_string(),
+                    kind: "zarr".to_string(),
+                },
+                LiveSnapshotArtifactReference {
+                    path: "fields/m.zarr".to_string(),
+                    kind: "zarr".to_string(),
+                },
+            ],
+        };
+
+        assert!(live_snapshot_artifact_paths(&references, "collision test").is_err());
+    }
+
+    #[test]
     fn missing_live_artifacts_block_store_gc_and_archive_even_when_snapshot_is_opaque() {
         let directory = tempfile::tempdir().unwrap();
         let snapshot = live_snapshot_bytes(
@@ -5079,15 +5116,23 @@ mod tests {
     #[test]
     fn unsafe_live_artifact_paths_and_run_ids_fail_closed_in_store_and_archive() {
         let directory = tempfile::tempdir().unwrap();
-        for path in [
+        for (index, path) in [
             "../outside.json",
+            r"..\outside.json",
             "C:/outside.json",
-            "fields\\m.zarr",
+            r"C:\outside.json",
+            r"\\server\share.json",
             "/absolute.json",
+            r"\absolute.json",
             "fields//spectrum.json",
-        ] {
+            r"fields\\spectrum.json",
+            r"fields\..\outside.json",
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let snapshot = live_snapshot_bytes("run-safe", &[(path, "json")], false);
-            let store_root = directory.path().join(format!("store-{}", path.len()));
+            let store_root = directory.path().join(format!("store-{index}"));
             let snapshot_path = store_root.join("project/current_live_snapshot.json");
             fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
             fs::write(&snapshot_path, &snapshot).unwrap();

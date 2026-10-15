@@ -6,8 +6,12 @@ on:
       # Consumers import validators, receipts and analytic oracles across scripts.
       - 'scripts/**/*.py'
       - 'crates/fullmag-workspace-inspect/**'
+      - 'crates/fullmag-api/src/artifacts.rs'
       - 'crates/fullmag-session/src/frequency_domain_artifact_generation.rs'
       - 'crates/fullmag-session/src/lib.rs'
+      - 'crates/fullmag-session/src/fms.rs'
+      - 'crates/fullmag-session/src/reachability.rs'
+      - 'crates/fullmag-session/src/typed_documents.rs'
       - 'crates/fullmag-runner/src/artifact_generation.rs'
       - 'packages/fullmag-py/**'
       - '.github/workflows/dispersion-artifact-consumers.yml'
@@ -17,8 +21,12 @@ on:
       # Consumers import validators, receipts and analytic oracles across scripts.
       - 'scripts/**/*.py'
       - 'crates/fullmag-workspace-inspect/**'
+      - 'crates/fullmag-api/src/artifacts.rs'
       - 'crates/fullmag-session/src/frequency_domain_artifact_generation.rs'
       - 'crates/fullmag-session/src/lib.rs'
+      - 'crates/fullmag-session/src/fms.rs'
+      - 'crates/fullmag-session/src/reachability.rs'
+      - 'crates/fullmag-session/src/typed_documents.rs'
       - 'crates/fullmag-runner/src/artifact_generation.rs'
       - 'packages/fullmag-py/**'
       - '.github/workflows/dispersion-artifact-consumers.yml'
@@ -92,7 +100,7 @@ jobs:
 
   terminal-artifact-attestation:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +117,9 @@ jobs:
       - name: Verify terminal producer publication and platform file safety
         run: |
           cargo test --locked -p fullmag-session --lib frequency_domain_artifact_generation
+          cargo test --locked -p fullmag-session --lib fms::
+          cargo test --locked -p fullmag-session --lib reachability::
           cargo test --locked -p fullmag-workspace-inspect --lib
+          cargo test --locked -p fullmag-api --lib artifacts::tests
       - name: Verify immutable artifact binding and bounded reader races
         run: python -B scripts/test_managed_runtime_artifact_root.py -v

@@ -17,11 +17,7 @@ pub(crate) fn collect_artifacts(
         let path = entry.path();
         if path.is_dir() {
             if path.extension().and_then(|ext| ext.to_str()) == Some("zarr") {
-                let relative = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string();
+                let relative = portable_artifact_relative_path(root, &path)?;
                 out.push(ArtifactEntry {
                     path: relative,
                     kind: "zarr".to_string(),
@@ -32,11 +28,7 @@ pub(crate) fn collect_artifacts(
             collect_artifacts(root, &path, out)?;
             continue;
         }
-        let relative = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
+        let relative = portable_artifact_relative_path(root, &path)?;
         if path
             .file_name()
             .and_then(|name| name.to_str())
@@ -61,6 +53,29 @@ pub(crate) fn collect_artifacts(
     }
     out.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
     Ok(())
+}
+
+// Serialize OS path components rather than replacing characters in file names.
+// A literal POSIX backslash must not alias another file after portable export.
+fn portable_artifact_relative_path(root: &Path, path: &Path) -> Result<String, ApiError> {
+    let relative = path.strip_prefix(root)
+        .map_err(|_| ApiError::internal("artifact is outside its inventory root"))?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(value) = component else {
+            return Err(ApiError::internal("artifact path contains a non-relative component"));
+        };
+        let value = value.to_str()
+            .ok_or_else(|| ApiError::internal("artifact path is not valid UTF-8"))?;
+        if value.contains('\\') {
+            return Err(ApiError::internal("artifact file name contains a non-portable backslash"));
+        }
+        parts.push(value);
+    }
+    if parts.is_empty() {
+        return Err(ApiError::internal("artifact path must not be empty"));
+    }
+    Ok(parts.join("/"))
 }
 
 fn stage_autosave_artifact_entry(
@@ -378,4 +393,42 @@ pub(crate) fn parse_eigen_dispersion_csv(
         });
     }
     Ok(rows)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_inventory_emits_portable_nested_file_and_zarr_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("eigen")).unwrap();
+        std::fs::create_dir_all(root.join("fields/m.zarr")).unwrap();
+        std::fs::write(root.join("eigen/spectrum.json"), b"{}").unwrap();
+        std::fs::write(root.join("eigen/result.autosave.json"), b"{}").unwrap();
+        std::fs::write(root.join("fields/m.zarr/0"), b"chunk").unwrap();
+        let mut entries = Vec::new();
+        collect_artifacts(root, root, &mut entries).unwrap();
+        let paths_and_kinds = entries.iter().map(|entry|
+            (entry.path.as_str(), entry.kind.as_str())).collect::<Vec<_>>();
+        assert_eq!(paths_and_kinds, vec![
+            ("eigen/result.autosave.json", "stage_autosave"),
+            ("eigen/spectrum.json", "json"),
+            ("fields/m.zarr", "zarr"),
+        ]);
+        assert!(entries.iter().all(|entry| !entry.path.contains('\\')));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_inventory_rejects_literal_backslash_aliases_on_posix() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("eigen")).unwrap();
+        std::fs::write(root.join("eigen/spectrum.json"), b"canonical").unwrap();
+        std::fs::write(root.join("eigen\\spectrum.json"), b"different file").unwrap();
+        assert!(collect_artifacts(root, root, &mut Vec::new()).is_err());
+    }
 }

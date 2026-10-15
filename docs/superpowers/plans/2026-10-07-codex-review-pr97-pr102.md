@@ -4461,3 +4461,17 @@ Status `partial` poniżej oznacza wdrożoną i przetestowaną część poprawki 
 Istniejący PostprocessingDataRef zapisuje datasetrevision i fieldID, ale nie field_revision/resource_key. Obecna ścieżka sprawdza je przed zapisem; nie wprowadza nowego schematu. Ponowne pobranie manifestu jest client-side race check, nie atomowym server-side dataset fence. Osobne importedReferenceDefinition nadal używa stageId/artifactRevision i pozostaje do niezależnej korekty.
 
 SzerszeGHA38710636112 FAIL: Python scene lowering61PASS/1FAIL (obsolete auxiliary ID refusal) i Rust authoring163PASS/1FAIL (fixture anteny bez obowiązkowegoentrypoint_kind). 9f884 uzupełnia tylko2pola fixture, bez zmiany asercji/produkcji; pełna bramka wymaga ponownego uruchomienia po ukończeniu aktualizacji auxiliary-ID testu. Nie utożsamiamy focusedPBC SUCCESS z sukcesem całej integracji.
+
+
+## 15.10.2026 — eksport Compact i przenośne ścieżki artefaktów
+
+Ponowny odczyt GitHub potwierdza PR97 closed/merged (merge911902d6d545d1471c77290eedef1a1b6937fb62), PR102 closed/unmerged. Nie oznacza to ukończenia wszystkich ustaleń ani integracji późniejszych poprawek brancha do mastera.
+
+Dla exact61ff0d70d07e4605cd07401debe7d513bbbb4fce trzy bramki zakończyły się SUCCESS: [authoring38713109171](https://github.com/MateuszZelent/fullmag/actions/runs/38713109171) (wszystkie4joby, w tym naprawione fixture'y auxiliaryID i entrypoint_kind), [spectrum scope38713109125](https://github.com/MateuszZelent/fullmag/actions/runs/38713109125) i [artifact consumers38713109270](https://github.com/MateuszZelent/fullmag/actions/runs/38713109270). Ostatnia uruchamiała tylko filtr frequency_domain_artifact_generation i workspace-inspect; nie jest dowodem testów FMS/reachability. Nowy workflow dodaje pełne filtry obu modułów i test collect_artifacts na Windows/Linux. Lokalnych testów i buildów nie uruchamiano.
+
+| Uwaga | Bieżący status | Zmiana i granica dowodu |
+|---|---|---|
+| [4248159340](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4248159340) | partial | pack_fms tworzy prywatną projekcję snapshotu dla profili bez artefaktów, zerując tylko artifacts. Oryginalny typed dokument jest walidowany, CAS i pozostałe pola zachowane; planowanie, walidacja i ZIP używają tej samej projekcji. Regresja sprawdza archiwalne bytes, CAS payload, preflight i brak mutacji wejścia. Nowe testy wymagają terminalnego GHA. |
+| [4248159347](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4248159347) | partial | Producent collect_artifacts emituje slashy; reachability normalizuje historyczne separatory Windows przed ścisłą walidacją. Regresje pozytywne i unsafe paths wykonuje rozszerzona bramka Windows/Linux; brak jeszcze terminalnego wyniku dla tej poprawki. |
+
+Nie osłabiono require_complete, walidacji CAS ani profili zawierających artefakty. Compact nie modyfikuje live sesji i nie usuwa plików źródłowych. Native FEM/GPU i kwalifikacja naukowa pozostają NOT VERIFIED. Canonical pin uwagi4241564392/4251262146 nadal partial: dodatkowy audyt61ff potwierdza brak kanonicznego owner/item w legacy chart-click i FMR Inspector, mimo działającego typed item path. Browser empty-part perturbation proof także pozostaje otwarty.

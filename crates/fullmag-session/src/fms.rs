@@ -47,6 +47,7 @@
 //!    └─ sha256/
 //! ```
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -217,6 +218,8 @@ pub fn pack_fms<W: Write + Seek>(
 ) -> Result<()> {
     let _lease = store.write_transaction()?;
     validate_pack_input(workspace, documents)?;
+    let export_documents = project_export_documents(documents, export_profile)?;
+    let documents = export_documents.as_ref();
     let canonical_root = canonical_store_root(store.root())?;
     let mut run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
     let batch_entries = plan_batch_entries(store.root(), &canonical_root, session)?;
@@ -324,6 +327,40 @@ pub fn pack_fms<W: Write + Seek>(
 
     zip.finish()?;
     Ok(())
+}
+
+/// Project only export-owned snapshot metadata when the selected profile omits
+/// run artifacts. The source documents and live session remain unchanged. Both
+/// CAS planning and ZIP writing consume this same projected document map.
+fn project_export_documents<'a>(
+    documents: &'a HashMap<String, Vec<u8>>,
+    profile: &FmsExportProfile,
+) -> Result<Cow<'a, HashMap<String, Vec<u8>>>> {
+    let mut projected = Cow::Borrowed(documents);
+    if profile.include_artifacts() {
+        return Ok(projected);
+    }
+    for name in ["current_live_snapshot.json", "project/current_live_snapshot.json"] {
+        let Some(data) = documents.get(name) else {
+            continue;
+        };
+        if data.len() as u64 > MAX_CONTROL_DOCUMENT_BYTES {
+            bail!("live snapshot exceeds control document size limit");
+        }
+        // Validate the original typed metadata before removing optional output
+        // edges; projection must not turn malformed snapshots into valid ones.
+        let inspection = crate::typed_documents::inspect_live_snapshot(data);
+        inspection.object_refs.map_err(anyhow::Error::msg)?;
+        let references = inspection.artifact_refs.map_err(anyhow::Error::msg)?;
+        reachability::live_snapshot_artifact_paths(&references, name)?;
+        if references.artifacts.is_empty() {
+            continue;
+        }
+        let mut snapshot: serde_json::Value = serde_json::from_slice(data)?;
+        snapshot["artifacts"] = serde_json::json!([]);
+        projected.to_mut().insert(name.to_string(), serde_json::to_vec(&snapshot)?);
+    }
+    Ok(projected)
 }
 
 /// Pack directly to a file through a unique sibling staging file.
@@ -4477,26 +4514,7 @@ mod tests {
                 ),
             );
 
-            let error = pack_fms(
-                Cursor::new(Vec::new()),
-                &store,
-                &session,
-                &workspace,
-                &profile,
-                &documents,
-                &PackOptions::default(),
-            )
-            .unwrap_err();
-            assert!(
-                format!("{error:#}")
-                    .contains("runs/run-export/artifacts/eigen/spectrum.json"),
-                "{error:#}"
-            );
-
-            documents.insert(
-                snapshot_key.to_string(),
-                live_snapshot_bytes("run-export", &[], Some(&object_ref)),
-            );
+            let original_documents = documents.clone();
             let mut output = Cursor::new(Vec::new());
             pack_fms(
                 &mut output,
@@ -4508,9 +4526,19 @@ mod tests {
                 &PackOptions::default(),
             )
             .unwrap();
+            assert_eq!(documents, original_documents, "export must not mutate live documents");
             let archive = output.into_inner();
             {
                 let mut zip = zip::ZipArchive::new(Cursor::new(&archive)).unwrap();
+                assert!(!zip.file_names().any(|name| name.contains("/artifacts/")));
+                let mut snapshot_bytes = Vec::new();
+                zip.by_name("project/current_live_snapshot.json").unwrap()
+                    .read_to_end(&mut snapshot_bytes).unwrap();
+                let snapshot: serde_json::Value = serde_json::from_slice(&snapshot_bytes).unwrap();
+                let mut expected: serde_json::Value =
+                    serde_json::from_slice(&original_documents[snapshot_key]).unwrap();
+                expected["artifacts"] = serde_json::json!([]);
+                assert_eq!(snapshot, expected, "only artifact output edges may be projected");
                 let name = format!("objects/sha256/{object_ref}");
                 let mut cas_object = zip.by_name(&name).unwrap();
                 let mut archived_payload = Vec::new();
@@ -4519,6 +4547,56 @@ mod tests {
             }
             let preflight = preflight_fms(Cursor::new(archive), &[]).unwrap();
             assert!(preflight.reachability.object_refs.contains(&object_ref));
+        }
+    }
+
+    #[test]
+    fn artifact_export_profiles_preserve_snapshot_bytes_and_references() {
+        let snapshot = live_snapshot_bytes("run-export", &[("eigen/spectrum.json", "json")], None);
+        for save_profile in [SaveProfile::Solved, SaveProfile::Resume, SaveProfile::Archive] {
+            let documents = HashMap::from([("current_live_snapshot.json".to_string(), snapshot.clone())]);
+            let profile = FmsExportProfile::for_profile(save_profile);
+            assert!(profile.include_artifacts());
+            let projected = project_export_documents(&documents, &profile).unwrap();
+            assert!(matches!(&projected, Cow::Borrowed(_)));
+            assert_eq!(projected.as_ref(), &documents);
+        }
+    }
+
+    #[test]
+    fn compact_projection_rejects_malformed_original_snapshot_before_writing() {
+        let (_directory, store, session, workspace, profile, base_documents) =
+            pack_fixture(SaveProfile::Compact);
+        let valid: serde_json::Value = serde_json::from_slice(
+            &live_snapshot_bytes("run-export", &[("eigen/spectrum.json", "json")], None)
+        ).unwrap();
+        let mut bad_artifact = valid.clone();
+        bad_artifact["artifacts"][0]["path"] = serde_json::json!(42);
+        let mut bad_cas = valid.clone();
+        bad_cas["latest_fields"] = serde_json::json!({"m": {"payload_ref": "not-a-cas-ref"}});
+        let mut unknown = valid.clone();
+        unknown["unknown_contract"] = serde_json::json!(true);
+        let mut malformed_cases = vec![bad_artifact, bad_cas, unknown];
+        for path in ["../outside.json", "C:/outside.json", "/absolute.json", "fields//m.json"] {
+            let mut bad_path = valid.clone();
+            bad_path["artifacts"][0]["path"] = serde_json::json!(path);
+            malformed_cases.push(bad_path);
+        }
+        let mut duplicate = valid;
+        duplicate["artifacts"] = serde_json::json!([
+            {"path": "eigen/spectrum.json", "kind": "json"},
+            {"path": "eigen/spectrum.json", "kind": "json"}
+        ]);
+        malformed_cases.push(duplicate);
+        for malformed in malformed_cases {
+            let mut documents = base_documents.clone();
+            documents.insert("current_live_snapshot.json".to_string(), serde_json::to_vec(&malformed).unwrap());
+            let original = documents.clone();
+            let mut output = Cursor::new(Vec::new());
+            assert!(pack_fms(&mut output, &store, &session, &workspace, &profile,
+                &documents, &PackOptions::default()).is_err());
+            assert!(output.into_inner().is_empty(), "validation must precede ZIP writing");
+            assert_eq!(documents, original);
         }
     }
 
