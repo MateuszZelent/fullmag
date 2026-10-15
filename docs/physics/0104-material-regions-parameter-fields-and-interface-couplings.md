@@ -1097,5 +1097,5 @@ Nowy publiczny `MaterialNodalFieldBinding` przechowuje fingerprint `sha256:` i l
 
 Obsługa materiału w planie nie dowodzi obsługi każdego profilu przez operator. Shared-domain MFEM konsumuje nodalne Ms i zachowuje dotychczasowe odmowy pozostałych nieobsługiwanych pól. Operator składany ze skalarów musi odmówić aktywnemu profilowi, którego nie używa. Jawna polityka damping Ignore pozostaje intencją wyłączenia dampingu. Przekazanie alpha przez FFI nie dowodzi aktywnego przestrzennego dampingu.
 
-Status: źródła i regresje w implementacji; testy GHA, wykonanie FEM/GPU i kwalifikacja fizyczna pozostają NOT VERIFIED do uzyskania osobnych dowodów. Historyczny opis bazowego commita powyżej pozostaje opisem tamtego źródła.
+Status: źródła i regresje wdrożone na branchu zadania; [GHA 38703237731](https://github.com/MateuszZelent/fullmag/actions/runs/38703237731) dla `7ab9f941007a2625426d3876832b16e362f87d2f` ma SUCCESS dla kontraktów Python/IR/planera/materializacji/runnera i wskazanych regresji API. Wykonanie managed FEM/GPU, browser i kwalifikacja fizyczna pozostają NOT VERIFIED. Historyczny opis bazowego commita powyżej pozostaje opisem tamtego źródła.
 

@@ -1,7 +1,7 @@
 (mesh-bound-nodal-material-arrays)=
 # ADR 0059 — wiązanie publicznych tablic materiałowych z siatką FEM
 
-Status: accepted dla decyzji semantycznej użytkownika; implementacja i kwalifikacja NOT VERIFIED.
+Status: accepted; implementacja źródłowa i kontrakty CI zweryfikowane. Managed FEM/GPU i kwalifikacja fizyczna NOT VERIFIED.
 
 Data: 15.10.2026. Źródło bazowe: `MateuszZelent/fullmag@91c4bd8618079b4a72af6994a8b1267352a87c3a`. Decyzja użytkownika: zachować publiczne tablice nodalne, wiązać je z siatką i kolejnością węzłów, uwzględniać w planowaniu. Dokument jest kontraktem do implementacji, nie dowodem jej ukończenia.
 
@@ -49,7 +49,7 @@ FDM używa pól komórkowych i innego porządku. Binding nodalny FEM w żądaniu
 
 ## Stan
 
-Decyzja semantyczna **zaakceptowana**. Kontrakt zapisany; implementacja bindingu, wspólnego resolvera oraz wymienione bramki są **TODO / NOT VERIFIED**. Nie zmieniono chronionego worktree ani danych storage.
+Decyzja semantyczna **zaakceptowana**. Binding, wspólny resolver i authoring są wdrożone na branchu zadania. GHA 38703237731 dla `7ab9f941007a2625426d3876832b16e362f87d2f` zakończyło się SUCCESS: Python, pełne kontrakty IR/planera/materializacji/runnera, wybrane regresje API i kompilacja integracji. Managed FEM/GPU, browser i kwalifikacja fizyczna pozostają **NOT VERIFIED**. Nie zmieniono chronionego lokalnego worktree ani danych storage.
 
 ## Doprecyzowanie implementacji i granic operatorów — 15.10.2026
 
@@ -63,5 +63,5 @@ Kanoniczny authoring używa istniejącego MagnetHandle: jawne atrybuty dziesięc
 
 Testy pozytywne tworzą profil dopiero na końcowym, uporządkowanym snapshotcie siatki. Pomocnik testowy nie przenosi istniejącego profilu. Osobne regresje obejmują zmianę numeracji, brak bindingu, owner/airbox, wszystkie dziesięć parametrów, bardzo małe różnice A, mieszanie regionów oraz alpha ABL. Przy mieszaniu wagowym stosujemy równoważną postać (1-w)*base+w*override z jawnym przypadkiem w=1, by uniknąć przepełnienia odejmowania dla skończonych przeciwnych wartości.
 
-Stan powyższych korekt: przygotowywany kandydat źródłowy, bez lokalnego wykonania. Publikacja, testy GHA, managed FEM oraz kwalifikacja fizyczna są oddzielnymi bramkami i pozostają NOT VERIFIED do uzyskania ich dowodów.
+Stan korekt: opublikowane w `8bf2d45e74a2559fc9c7ed4eb4fc9dea6dc766a7`, z późniejszymi poprawkami fixture'ów do `7ab9f941007a2625426d3876832b16e362f87d2f`. [Pełne GHA kontraktów](https://github.com/MateuszZelent/fullmag/actions/runs/38703237731) SUCCESS: 45 testów Pythona i 6 podtestów, 593 testy jednostkowe planera, 108 materializacji i 1794 runnera (1 ignored), ponadto komplet IR/integration i wskazane regresje API. Nie wykonywano lokalnych testów. Testy źródłowe nie kwalifikują managed native FEM/GPU ani dyspersji.
 
