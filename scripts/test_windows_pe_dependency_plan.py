@@ -220,6 +220,16 @@ def test_wrong_architecture_source_rejected(tmp_path, monkeypatch):
         planner.plan_dependencies(stage, Path('unused'), [sdk])
 
 
+def test_wrong_architecture_error_keeps_path_and_machine_details(tmp_path):
+    path = image(tmp_path / 'wrong.dll', 0x14c, 0x10b)
+    with pytest.raises(ValueError) as error:
+        planner.require_x64_pe(path)
+    message = str(error.value)
+    assert str(path) in message
+    assert 'machine=0x014c' in message
+    assert 'magic=0x010b' in message
+
+
 def test_source_changes_during_analysis_rejected(tmp_path, monkeypatch):
     stage, sdk = setup(tmp_path); image(sdk / 'solver.dll')
     def changed(path, tool):

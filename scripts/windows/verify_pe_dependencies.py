@@ -28,6 +28,21 @@ def require_not_driver(path):
 
 
 def require_x64_pe(path):
+    machine, magic = pe_header(path)
+    if machine != 0x8664:
+        raise ValueError(
+            f'Expected AMD64 PE image: {path} '
+            f'(machine=0x{machine:04x}, magic=0x{magic:04x})'
+        )
+    if magic != 0x20b:
+        raise ValueError(
+            f'Expected PE32+ image: {path} '
+            f'(machine=0x{machine:04x}, magic=0x{magic:04x})'
+        )
+
+
+def pe_header(path):
+    """Read the PE machine and optional-header magic without executing it."""
     require_not_driver(path)
     with path.open('rb') as stream:
         dos = stream.read(64)
@@ -38,10 +53,9 @@ def require_x64_pe(path):
             raise ValueError(f'Invalid PE header offset: {path.name}')
         stream.seek(offset)
         header = stream.read(26)
-    if header[:4] != b'PE\0\0' or struct.unpack_from('<H', header, 4)[0] != 0x8664:
-        raise ValueError(f'Expected AMD64 PE image: {path.name}')
-    if struct.unpack_from('<H', header, 24)[0] != 0x20b:
-        raise ValueError(f'Expected PE32+ image: {path.name}')
+    if header[:4] != b'PE\0\0':
+        raise ValueError(f'Not a PE image: {path.name}')
+    return struct.unpack_from('<H', header, 4)[0], struct.unpack_from('<H', header, 24)[0]
 
 
 def parse_dependents(output):
