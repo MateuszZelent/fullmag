@@ -12,6 +12,7 @@ SYSTEM_IMPORTS = frozenset('''advapi32.dll bcrypt.dll bcryptprimitives.dll cabin
 cfgmgr32.dll comctl32.dll comdlg32.dll crypt32.dll cryptbase.dll cryptnet.dll
 cryptsp.dll dbghelp.dll dnsapi.dll dwmapi.dll dxgi.dll d3d11.dll d3d12.dll
 fwpuclnt.dll gdi32.dll gdi32full.dll imm32.dll iphlpapi.dll kernel32.dll
+mswsock.dll ntdsapi.dll authz.dll
 kernelbase.dll mpr.dll msimg32.dll msvcrt.dll ncrypt.dll netapi32.dll normaliz.dll
 ntdll.dll ole32.dll oleaut32.dll opengl32.dll powrprof.dll profapi.dll propsys.dll
 psapi.dll rpcrt4.dll secur32.dll setupapi.dll shell32.dll shlwapi.dll shcore.dll
