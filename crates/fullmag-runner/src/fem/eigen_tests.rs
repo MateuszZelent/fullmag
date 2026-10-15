@@ -10115,7 +10115,7 @@ fn worker_identity_publication_fixture(
         plan.material.uniaxial_anisotropy = Some(0.0);
         plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
     }
-    let (raw_material, _) = raw_material_provenance_from_eigen_plan(&plan).unwrap();
+    let raw_material = shared_domain_content_digest("material_signature", &plan.material).unwrap();
     let eq_schema = if canonical {
         "equilibrium_artifact.v8"
     } else {
@@ -10392,7 +10392,7 @@ fn worker_identity_publication_rejects_input_handoff_and_static_plan_drift() {
             "source_run" => f.handoff.source_run_id.push_str("-other"),
             "completion" => f.handoff.completion_sha256 = format!("sha256:{}", "0".repeat(64)),
             "m0" => f.handoff.equilibrium_magnetization[0] = [0.0, 1.0, 0.0],
-            "field" => f.plan.external_field[0] += 1.0,
+            "field" => f.plan.external_field.get_or_insert([0.0; 3])[0] += 1.0,
             _ => f.build["source_snapshot_sha256"] = serde_json::json!("f".repeat(64)),
         }
         let before = f.artifacts.clone();
