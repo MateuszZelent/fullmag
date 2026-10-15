@@ -3206,7 +3206,7 @@ mod tests {
             .find(|artifact| artifact.relative_path.ends_with("H_per_A.f64le"))
             .expect("magnetic field payload")
             .bytes[0] ^= 1;
-        assert!(load_solved_antenna_drive_basis_projected(
+        let error = load_solved_antenna_drive_basis_projected(
             &artifacts.last().unwrap().bytes,
             &payloads,
             drive(),
@@ -3217,9 +3217,12 @@ mod tests {
             &[[0.1, 0.2, 0.3]],
             None,
         )
-        .unwrap_err()
-        .message
-        .contains("sha256 mismatch"));
+        .unwrap_err();
+        assert!(
+            error.message.contains("H_per_A.f64le") && error.message.contains("sha256"),
+            "{}",
+            error.message
+        );
 
         assert!(load_solved_antenna_drive_basis_projected(
             &artifacts.last().unwrap().bytes,
