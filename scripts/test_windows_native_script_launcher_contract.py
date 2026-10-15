@@ -52,7 +52,9 @@ def _interactive_frontend_runtime_tail() -> str:
     return tail
 
 
-def _run_interactive_frontend_probe(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
+def _run_interactive_frontend_probe(
+    tmp_path: Path, frontend: str
+) -> tuple[dict[str, object], dict[str, object]]:
     powershell = _powershell()
     if powershell is None:
         pytest.skip("Windows PowerShell is required for the interpreted launcher probe")
@@ -70,7 +72,7 @@ def _run_interactive_frontend_probe(tmp_path: Path) -> tuple[dict[str, object], 
                 '$RunMode = "interactive"',
                 '$Backend = "fem"',
                 '$Device = "gpu"',
-                '$Frontend = "dev"',
+                f'$Frontend = "{frontend}"',
                 '$WebPort = 0',
                 '$FemInteractiveApiIsolation = $true',
                 '$FemInteractiveFrontend = $true',
@@ -198,13 +200,17 @@ def _run_script_probe(
     return records[0], records[1]
 
 
-def test_interactive_fem_uses_staged_frontend_and_restores_parent_environment(tmp_path: Path) -> None:
-    during, after = _run_interactive_frontend_probe(tmp_path)
+@pytest.mark.parametrize("frontend", ["dev", "static"])
+def test_interactive_fem_uses_staged_frontend_and_restores_parent_environment(
+    tmp_path: Path, frontend: str
+) -> None:
+    during, after = _run_interactive_frontend_probe(tmp_path, frontend)
     repo = _native_path(tmp_path / "repo")
     assert during["during_repo_root"] == repo + "\\staged-workspace"
     assert during["during_frontend_root"] == repo + "\\staged-frontend"
     assert during["during_state_root"] == repo + "\\runtime\\state"
-    assert during["during_dev_source_root"] == repo + "\\staged-workspace\\apps\\control-room"
+    expected_dev_source = repo + "\\staged-workspace\\apps\\control-room" if frontend == "dev" else ""
+    assert during["during_dev_source_root"] == expected_dev_source
     assert during["during_api_port"] == "0"
     assert during["during_require_owned"] == "1"
     assert after == {
