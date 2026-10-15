@@ -442,7 +442,7 @@ mod tests {
                 producer_run_id: "run-boundary-import-fixture".to_string(),
                 content_sha256: content_sha256.clone(),
                 mesh_signature: format!("sha256:{}", "1".repeat(64)),
-                material_signature: artifact_material_signature,
+                material_signature: artifact_material_signature.clone(),
                 physics_signature: format!("sha256:{}", "2".repeat(64)),
                 boundary_signature: source_boundary,
                 static_demag_signature: format!("sha256:{}", "3".repeat(64)),
