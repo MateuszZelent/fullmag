@@ -86,7 +86,10 @@ def _problem_material_source() -> str:
             name="material-nodal-problem",
             magnets=[film],
             energy=[fm.Exchange()],
-            study=fm.Relaxation(outputs=[]),
+            study=fm.Relaxation(
+                outputs=[],
+                dynamics=fm.LLG(integrator="heun", fixed_timestep=1e-15),
+            ),
         )
     """
 
