@@ -930,6 +930,114 @@ pub struct AcceptedFemRelaxStageHandoff {
     pub(super) verified_replay: Option<AcceptedFemRelaxStageReplayPayload>,
 }
 
+/// Minimal immutable inputs for identity publication. This view does not
+/// serialize a private handoff or invent a native linearization context.
+pub(super) struct LinearizationIdentityArtifacts<'a> {
+    equilibrium_artifact: &'a serde_json::Value,
+    linearization_state: &'a serde_json::Value,
+    equilibrium_artifact_digest: String,
+    linearization_state_digest: String,
+}
+
+impl<'a> LinearizationIdentityArtifacts<'a> {
+    fn from_native_state(state: &'a SharedDomainLinearizationState) -> Self {
+        Self {
+            equilibrium_artifact: &state.equilibrium_artifact,
+            linearization_state: &state.linearization_state,
+            equilibrium_artifact_digest: state.equilibrium_artifact_digest.clone(),
+            linearization_state_digest: state.linearization_state_digest.clone(),
+        }
+    }
+
+    /// Replay publication bytes before their metadata can bind a parent-made
+    /// identity. Physical acceptance still requires the verified handoff and
+    /// the native worker's independently validated request and result.
+    pub(super) fn from_published_artifacts(
+        equilibrium_artifact: &'a serde_json::Value,
+        linearization_state: &'a serde_json::Value,
+    ) -> Result<Self, RunError> {
+        let equilibrium_schema = required_object_string(
+            equilibrium_artifact,
+            "schema_version",
+            "published_equilibrium_artifact",
+        )?;
+        let state_schema = required_object_string(
+            linearization_state,
+            "schema_version",
+            "published_linearization_state",
+        )?;
+        certified_equilibrium_artifact_filenames(Some(&equilibrium_schema), Some(&state_schema))?;
+        let equilibrium_artifact_digest = replay_published_identity_artifact(
+            equilibrium_artifact,
+            &equilibrium_schema,
+            "equilibrium_id",
+        )?;
+        let linearization_state_digest = replay_published_identity_artifact(
+            linearization_state,
+            &state_schema,
+            "linearization_state_id",
+        )?;
+        if linearization_state
+            .get("source_equilibrium_artifact")
+            .and_then(serde_json::Value::as_str)
+            != Some(equilibrium_artifact_digest.as_str())
+            || linearization_state.get("source_equilibrium_id")
+                != equilibrium_artifact.get("equilibrium_id")
+            || linearization_state
+                .get("accepted_for_frequency_operator")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+            || linearization_state
+                .get("operator_dictionary")
+                .and_then(serde_json::Value::as_str)
+                != Some("FrequencyOperatorDictionary.v1")
+        {
+            return Err(RunError {
+                message: "worker_identity_publication_state_equilibrium_binding_mismatch"
+                    .to_string(),
+            });
+        }
+        Ok(Self {
+            equilibrium_artifact,
+            linearization_state,
+            equilibrium_artifact_digest,
+            linearization_state_digest,
+        })
+    }
+
+    pub(super) fn equilibrium_artifact_digest(&self) -> &str {
+        &self.equilibrium_artifact_digest
+    }
+}
+
+fn replay_published_identity_artifact(
+    value: &serde_json::Value,
+    schema: &str,
+    id_field: &str,
+) -> Result<String, RunError> {
+    let declared = required_object_string(value, "content_sha256", "published_identity_artifact")?;
+    let id = required_object_string(value, id_field, "published_identity_artifact")?;
+    let mut payload = value.clone();
+    let object = payload.as_object_mut().ok_or_else(|| RunError {
+        message: "worker_identity_publication_artifact_not_object".to_string(),
+    })?;
+    object.remove("content_sha256");
+    object.remove(id_field);
+    let actual = shared_domain_content_digest(schema, &payload)?;
+    if declared != actual
+        || id
+            != format!(
+                "{schema}:{}",
+                actual.strip_prefix("sha256:").unwrap_or(&actual)
+            )
+    {
+        return Err(RunError {
+            message: "worker_identity_publication_semantic_digest_or_id_mismatch".to_string(),
+        });
+    }
+    Ok(actual)
+}
+
 impl AcceptedFemRelaxStageHandoff {
     /// Construct a handoff only after independently replaying the native
     /// accepted endpoint against the refreshed/recomputed endpoint.  The
@@ -1504,6 +1612,28 @@ impl AcceptedFemRelaxStageHandoff {
         modal_mesh_topology_fingerprint_v3: String,
         consumer_build_identity: serde_json::Value,
     ) -> Result<(LinearizationIdentityV2, Vec<u8>), RunError> {
+        let artifacts = LinearizationIdentityArtifacts::from_native_state(state);
+        self.build_linearization_identity_v2_from_artifacts(
+            plan,
+            &artifacts,
+            sample_index,
+            equilibrium_artifact_path,
+            linearization_state_path,
+            modal_mesh_topology_fingerprint_v3,
+            consumer_build_identity,
+        )
+    }
+
+    pub(super) fn build_linearization_identity_v2_from_artifacts(
+        &self,
+        plan: &FemEigenPlanIR,
+        state: &LinearizationIdentityArtifacts<'_>,
+        sample_index: usize,
+        equilibrium_artifact_path: String,
+        linearization_state_path: String,
+        modal_mesh_topology_fingerprint_v3: String,
+        consumer_build_identity: serde_json::Value,
+    ) -> Result<(LinearizationIdentityV2, Vec<u8>), RunError> {
         let replay = self.verified_replay.as_ref().ok_or_else(|| RunError {
             message: "linearization_identity_missing_verified_replay_payload".to_string(),
         })?;
@@ -1736,7 +1866,7 @@ impl AcceptedFemRelaxStageHandoff {
         recomputed_certificate_schema: String,
         handoff: &Self,
         plan: &FemEigenPlanIR,
-        state: &SharedDomainLinearizationState,
+        state: &LinearizationIdentityArtifacts<'_>,
         modal_mesh_topology_fingerprint_v3: String,
         material_signature: String,
         material_identity_kind: String,

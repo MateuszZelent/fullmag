@@ -251,6 +251,42 @@ częstotliwości/residuali i co-activity są oddzielnymi kontrolami. Nowe testy
 interpretowane:23 PASS; razem z benchmarkiem47 PASS i18 podtestów.
 To nie jest wykonany parytet dwóch nowych kampanii ani kwalifikacja naukowa.
 
+### 7.3 Publikacja target-specific bundle po pracy procesu k — kontrakt naprawy
+
+Stan: kod naprawy producenta zapisany; kompilacja i wykonanie nowych regresji
+w CI oraz managed runtime pozostają NOT VERIFIED.
+Prywatny `AcceptedFemRelaxStageHandoff` pozostaje w procesie rodzica.
+Nie dodaje się jego serializacji do protokołu workera. Jest to uzupełnienie
+istniejącej publikacji identity, bez zmiany schematów artifact/state/v2
+identity, równań, jednostek, semantyki k ani wyboru backendu.
+
+Rodzic może utworzyć bundle dla target sample dopiero po potwierdzeniu
+worker executable/build, sample/k, plan/raw-input SHA i hashów odebranych
+artefaktów. Odtwarza semantic content i ID obu opublikowanych artefaktów,
+sprawdza link state→equilibrium oraz zgodność z wejściowym certyfikowanym
+artefaktem. Oba semantic digesty muszą zgadzać się z `eigen/spectrum.json`
+i jego znacznikiem schema/acceptance; samo poprawne state bez powiązania
+z rzeczywistym widmem nie wystarcza. Builder identity wykorzystuje zachowany, zweryfikowany handoff
+oraz rzeczywiste artifact/state danego punktu. Minimalny widok tych danych
+nie może udawać pełnego `SharedDomainLinearizationState` z wymyślonymi polami.
+Dotychczasowe static material/physics/boundary i cross-build guards buildera
+pozostają aktywne; node/M0 binding musi odpowiadać zaakceptowanemu źródłu.
+
+Nowe identity, exact preimage i consumer snapshot opisują target plan,
+indeks i hashe rzeczywistego wyniku. Accepted/certified fields, recomputed
+certificate i producer provenance zachowują oryginalne zweryfikowane bajty.
+Rodzic dołącza bundle i jego digest do własnej publikacji metadanych;
+nie nadpisuje historycznych plików ani raw response workera i nie sugeruje,
+że te dodatkowe sidecary wyprodukował sam proces natywny. Brak handoff lub
+pełnego dowodu nie pozwala syntetyzować verified identity.
+
+Regresje muszą objąć różne indeksy i k, oba warianty v7/v6 i v8/v7, brak lub
+mutację artefaktu/ID/linku, inny sample, zmieniony static plan, inny snapshot
+oraz zachowanie oryginalnych bajtów. Publikacja metadanych jest atomowa przy
+konflikcie i nie kopiuje dużych buforów pól modów. Wymagany pozostaje managed sweep i
+porównanie obu trybów. Osobne OPEN: niezależny import wyłącznie z Artifact,
+pełny assembled-physical-input preimage i terminal journal binding.
+
 (discrete-realization)=
 ## 8. Realizacja backendów
 
@@ -347,3 +383,11 @@ Nowa regresja importu musi objąć oba kierunki Γ/Floquet, brak lub mutację ka
 Obecność helpera i zielone testy kontraktowe nie promują statusu do runtime
 qualification. Do tego potrzebne są exact artefakty managed runnera, native
 residualy, zbieżność i osobna walidacja fizyczna.
+
+| parent-owned worker publication | `crates/fullmag-runner/src/fem/eigen_worker_identity_publication.rs` + `publish_worker_identity` | FEM CPU | source-visible; CI/runtime NOT VERIFIED |
+| worker artifact replay | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `LinearizationIdentityArtifacts` | FEM CPU | source-visible; CI NOT VERIFIED |
+| publication mutations | `crates/fullmag-runner/src/fem/eigen_tests.rs` + `worker_identity_publication_preserves_exact_bytes_and_binds_each_target` | FEM CPU | prepared regressions; CI NOT VERIFIED |
+
+| parent-owned worker publication | `crates/fullmag-runner/src/fem/eigen_worker_identity_publication.rs` + `publish_worker_identity` | FEM CPU | source-visible; CI/runtime NOT VERIFIED |
+| worker artifact replay | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `LinearizationIdentityArtifacts` | FEM CPU | source-visible; CI NOT VERIFIED |
+| publication mutations | `crates/fullmag-runner/src/fem/eigen_tests.rs` + `worker_identity_publication_preserves_exact_bytes_and_binds_each_target` | FEM CPU | prepared regressions; CI NOT VERIFIED |

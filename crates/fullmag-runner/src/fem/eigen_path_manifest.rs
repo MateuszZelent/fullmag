@@ -1167,6 +1167,7 @@ fn eigen_path_native_provenance_by_sample(
         "equilibrium_artifact_sha256",
         "linearization_state_sha256",
         "linearization_identity_sha256",
+        "linearization_identity_publication_scope",
         "periodic_mesh_certificate_sha256",
         "source_mesh_topology_sha256",
     ];

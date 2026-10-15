@@ -127,3 +127,26 @@ znaczników czasu i jakości pomiarów, nie samego ustawienia max_workers.
 
 Brakujące bramki pozostają OPEN / NOT VERIFIED. Ten audyt ani zielone testy
 kontraktowe nie podnoszą kwalifikacji całego solvera.
+
+
+## Checkpoint 15.10 — parent-owned identity dla workerów k
+
+Zapisano poprawkę producenta: `eigen_worker_identity_publication::publish_worker_identity`
+wiąże rzeczywiste per-sample equilibrium/state z immutable wejściem workera,
+zweryfikowanym prywatnym handoff rodzica i target planem. Odtwarza semantic
+hash/ID, link state→equilibrium, raw SHA wejścia, ukończenie relaksacji, M0
+(z jawnym rozszerzeniem na air), pola statyczne, topology/boundary i build.
+Tożsamość tworzona jest od nowa dla indeksu punktu; nie kopiuje identity
+bootstrapu. Oryginalne raw spectrum/response pozostają zachowane, a parent
+manifest dostaje jawny scope `parent_verified_native_worker_artifacts`.
+
+Osiem nowych testów Rust obejmuje obie rodziny schema i indeksy 1/7/14 z
+ujemnym/zerowym/dodatnim k, mutacje, konflikty, brak handoff i idempotencję.
+Testy skompiluje wyłącznie GitHub Actions. Na tym checkpointcie ich wykonanie
+oraz nowy managed sweep/parytet są NOT VERIFIED. Artifact-only import bez
+prywatnego handoff nie dostaje syntetycznego verified identity.
+
+Nie zmieniono fizycznego residual ceiling, równań, schematów worker request,
+ani historycznych receiptów. Nadal OPEN: fizyczny preimage assembled operator,
+terminal admission journal binding, fresh serial/adaptive sweep, a następnie
+pełny plan S00–S12 (61/8 bands, BV, count proof, zbieżność, COMSOL, UI/GPU).

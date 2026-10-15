@@ -30,6 +30,7 @@ pub(crate) mod eigen_execution;
 pub(crate) mod eigen_execution_resolution;
 pub(crate) mod eigen_k_pool;
 pub(crate) mod eigen_k_worker;
+mod eigen_worker_identity_publication;
 pub(crate) mod eigen_mass_metric;
 pub(crate) mod eigen_normalization_metric;
 pub(crate) mod eigen_math;

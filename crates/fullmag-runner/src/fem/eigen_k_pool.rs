@@ -547,7 +547,7 @@ pub(super) fn prepare_process_pool_samples(
                 ),
             });
         }
-        let artifacts = pool
+        let mut artifacts = pool
             .load_artifacts(response)
             .map_err(|message| RunError { message })?;
         let point_plan =
@@ -557,7 +557,24 @@ pub(super) fn prepare_process_pool_samples(
             &point_plan.spin_wave_bc,
             point_plan.k_sampling.as_ref(),
         )?;
-        let (result, mode_artifacts) = super::eigen_path::parse_worker_single_k_result(
+        let consumer_build_identity = crate::artifacts::build_identity_json();
+        if source_relax_handoff.is_some()
+            && response.worker_build_identity.as_ref() != Some(&consumer_build_identity)
+        {
+            return Err(RunError {
+                message: "worker_identity_publication_worker_build_identity_mismatch".into(),
+            });
+        }
+        let parent_identity = super::eigen_worker_identity_publication::publish_worker_identity(
+            &point_plan,
+            sample.sample_index,
+            &run.final_magnetization,
+            &request.expected_equilibrium_artifact_sha256,
+            source_relax_handoff,
+            consumer_build_identity,
+            &mut artifacts,
+        )?;
+        let (mut result, mode_artifacts) = super::eigen_path::parse_worker_single_k_result(
             plan,
             &point_plan,
             tracking_outputs,
@@ -568,6 +585,24 @@ pub(super) fn prepare_process_pool_samples(
             &tracking_reduction,
             &tracking_metric,
         )?;
+        if let Some(digest) = parent_identity {
+            let diagnostics =
+                result
+                    .solver_diagnostics
+                    .as_mut()
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| RunError {
+                        message: "worker_identity_publication_missing_solver_diagnostics".into(),
+                    })?;
+            diagnostics.insert(
+                "linearization_identity_sha256".into(),
+                serde_json::json!(digest),
+            );
+            diagnostics.insert(
+                "linearization_identity_publication_scope".into(),
+                serde_json::json!("parent_verified_native_worker_artifacts"),
+            );
+        }
         if run.final_magnetization.len() != plan.mesh.nodes.len()
             || run
                 .final_magnetization

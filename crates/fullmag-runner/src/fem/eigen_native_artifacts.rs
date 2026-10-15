@@ -4,7 +4,7 @@ use super::eigen_constants::{
     NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND,
 };
 use super::eigen_equilibrium_contract::{
-    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff,
+    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LinearizationIdentityV2,
 };
 use super::eigen_native_result::NativeModalEigenpair;
 use super::eigen_nonshared_domain::NonSharedFloquetProvenance;
@@ -251,15 +251,94 @@ fn append_exact_signed_sidecar(
             return Ok(());
         }
         return Err(RunError {
-            message: format!(
-                "linearization_identity_signed_sidecar_conflict: {relative_path}"
-            ),
+            message: format!("linearization_identity_signed_sidecar_conflict: {relative_path}"),
         });
     }
     artifacts.push(AuxiliaryArtifact {
         relative_path: relative_path.to_string(),
         bytes,
     });
+    Ok(())
+}
+
+/// Publish the same signed byte bundle for native and parent-owned worker
+/// publication. The caller must hold an independently verified handoff.
+pub(super) fn append_verified_linearization_identity_bundle(
+    artifacts: &mut Vec<AuxiliaryArtifact>,
+    identity: &LinearizationIdentityV2,
+    consumer_plan_snapshot_bytes: &[u8],
+    source_relax_handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<(), RunError> {
+    let sample_index = identity.sample_index;
+    if identity.consumer_plan_snapshot_sha256
+        != format!(
+            "sha256:{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(consumer_plan_snapshot_bytes)
+        )
+    {
+        return Err(RunError {
+            message: "consumer_plan_snapshot_bytes_binding_mismatch".to_string(),
+        });
+    }
+    append_exact_signed_sidecar(
+        artifacts,
+        &identity.accepted_fields_path,
+        source_relax_handoff
+            .verified_replay()
+            .ok_or_else(|| RunError {
+                message: "linearization_identity_missing_verified_replay_payload".to_string(),
+            })?
+            .accepted_fields_json
+            .clone(),
+    )?;
+    append_exact_signed_sidecar(
+        artifacts,
+        &identity.certified_fields_path,
+        source_relax_handoff
+            .verified_replay()
+            .ok_or_else(|| RunError {
+                message: "linearization_identity_missing_verified_replay_payload".to_string(),
+            })?
+            .certified_fields_json
+            .clone(),
+    )?;
+    append_exact_signed_sidecar(
+        artifacts,
+        &identity.recomputed_certificate_path,
+        source_relax_handoff
+            .verified_replay()
+            .ok_or_else(|| RunError {
+                message: "linearization_identity_missing_verified_replay_payload".to_string(),
+            })?
+            .recomputed_certificate_json
+            .clone(),
+    )?;
+    append_exact_signed_sidecar(
+        artifacts,
+        &format!("eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"),
+        serde_json::to_vec_pretty(&identity).map_err(|error| RunError {
+            message: format!("linearization_identity_v2_serialization_failed: {error}"),
+        })?,
+    )?;
+    append_exact_signed_sidecar(
+        artifacts,
+        &format!("eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"),
+        super::eigen_equilibrium_contract::linearization_identity_v2_preimage_sidecar_bytes(
+            identity,
+        )?,
+    )?;
+    append_exact_signed_sidecar(
+        artifacts,
+        &super::eigen_equilibrium_contract::consumer_plan_snapshot_relative_path(sample_index),
+        consumer_plan_snapshot_bytes.to_vec(),
+    )?;
+    append_exact_signed_sidecar(
+        artifacts,
+        &super::eigen_equilibrium_contract::fem_relaxation_producer_provenance_sample_relative_path(
+            sample_index,
+        ),
+        source_relax_handoff.producer_provenance_sidecar_bytes()?,
+    )?;
     Ok(())
 }
 
@@ -315,8 +394,12 @@ pub(super) fn native_modal_artifacts(
     let wants_dispersion = outputs
         .iter()
         .any(|output| matches!(output, OutputIR::DispersionCurve { .. }));
-    let gamma0_rad_s_per_a_m = crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio)
-        .map_err(|error| RunError { message: error.to_string() })?;
+    let gamma0_rad_s_per_a_m = crate::eigen::artifacts::validated_modal_gamma0(
+        plan.gyromagnetic_ratio,
+    )
+    .map_err(|error| RunError {
+        message: error.to_string(),
+    })?;
     let gamma_rad_s_t = gamma0_rad_s_per_a_m / MU0;
     let mu0_t_m_per_a = MU0;
     let mut auxiliary_artifacts = Vec::new();
@@ -334,11 +417,14 @@ pub(super) fn native_modal_artifacts(
         match (linearization_state, source_relax_handoff) {
             (Some(state), Some(handoff)) => {
                 let (equilibrium_artifact_path, linearization_state_path) =
-                    published_state_artifact_paths.as_ref().ok_or_else(|| RunError {
-                        message: "linearization_identity_state_artifact_paths_missing".to_string(),
-                    })?;
-                let (identity, consumer_plan_snapshot_bytes) =
-                    handoff.build_linearization_identity_v2(
+                    published_state_artifact_paths
+                        .as_ref()
+                        .ok_or_else(|| RunError {
+                            message: "linearization_identity_state_artifact_paths_missing"
+                                .to_string(),
+                        })?;
+                let (identity, consumer_plan_snapshot_bytes) = handoff
+                    .build_linearization_identity_v2(
                         plan,
                         state,
                         sample_index,
@@ -721,8 +807,7 @@ pub(super) fn native_modal_artifacts(
     let mode_nonshared_identity =
         mode_provenance_value("nonshared_floquet_operator_identity_sha256");
     let mode_nonshared_source = mode_provenance_value("nonshared_floquet_source_state_sha256");
-    let mode_nonshared_matrix =
-        mode_provenance_value("nonshared_floquet_matrix_pencil_sha256");
+    let mode_nonshared_matrix = mode_provenance_value("nonshared_floquet_matrix_pencil_sha256");
     let mode_relax_to_eigen_handoff = mode_provenance_value("relax_to_eigen_handoff_sha256");
     let mode_relax_to_eigen_source_mesh_topology =
         mode_provenance_value("relax_to_eigen_source_mesh_topology_sha256");
@@ -993,8 +1078,9 @@ pub(super) fn native_modal_artifacts(
         &equilibrium_source_json(&plan.equilibrium),
     )?);
     if let Some(state) = linearization_state {
-        let (equilibrium_artifact_path, linearization_state_path) =
-            published_state_artifact_paths.as_ref().ok_or_else(|| RunError {
+        let (equilibrium_artifact_path, linearization_state_path) = published_state_artifact_paths
+            .as_ref()
+            .ok_or_else(|| RunError {
                 message: "linearization_state_artifact_paths_missing".to_string(),
             })?;
         auxiliary_artifacts.push(json_artifact(
@@ -1010,80 +1096,16 @@ pub(super) fn native_modal_artifacts(
             let identity = linearization_identity_v2.as_ref().ok_or_else(|| RunError {
                 message: "linearization_identity_v2_missing_for_verified_handoff".to_string(),
             })?;
-            append_exact_signed_sidecar(
+            append_verified_linearization_identity_bundle(
                 &mut auxiliary_artifacts,
-                &identity.accepted_fields_path,
-                source_relax_handoff
-                    .verified_replay()
-                    .ok_or_else(|| RunError {
-                        message:
-                            "linearization_identity_missing_verified_replay_payload".to_string(),
-                    })?
-                    .accepted_fields_json
-                    .clone(),
-            )?;
-            append_exact_signed_sidecar(
-                &mut auxiliary_artifacts,
-                &identity.certified_fields_path,
-                source_relax_handoff
-                    .verified_replay()
-                    .ok_or_else(|| RunError {
-                        message:
-                            "linearization_identity_missing_verified_replay_payload".to_string(),
-                    })?
-                    .certified_fields_json
-                    .clone(),
-            )?;
-            append_exact_signed_sidecar(
-                &mut auxiliary_artifacts,
-                &identity.recomputed_certificate_path,
-                source_relax_handoff
-                    .verified_replay()
-                    .ok_or_else(|| RunError {
-                        message:
-                            "linearization_identity_missing_verified_replay_payload".to_string(),
-                    })?
-                    .recomputed_certificate_json
-                    .clone(),
-            )?;
-            append_exact_signed_sidecar(
-                &mut auxiliary_artifacts,
-                &format!(
-                    "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
-                ),
-                serde_json::to_vec_pretty(&identity).map_err(|error| RunError {
-                    message: format!(
-                        "linearization_identity_v2_serialization_failed: {error}"
-                    ),
-                })?,
-            )?;
-            append_exact_signed_sidecar(
-                &mut auxiliary_artifacts,
-                &format!(
-                    "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
-                ),
-                super::eigen_equilibrium_contract::linearization_identity_v2_preimage_sidecar_bytes(
-                    identity,
-                )?,
-            )?;
-            append_exact_signed_sidecar(
-                &mut auxiliary_artifacts,
-                &super::eigen_equilibrium_contract::consumer_plan_snapshot_relative_path(
-                    sample_index,
-                ),
+                identity,
                 consumer_plan_snapshot_bytes
                     .as_ref()
                     .ok_or_else(|| RunError {
                         message: "consumer_plan_snapshot_bytes_missing_for_verified_handoff"
                             .to_string(),
-                    })?
-                    .clone(),
-            )?;
-            append_exact_signed_sidecar(
-                &mut auxiliary_artifacts,
-                &super::eigen_equilibrium_contract::
-                    fem_relaxation_producer_provenance_sample_relative_path(sample_index),
-                source_relax_handoff.producer_provenance_sidecar_bytes()?,
+                    })?,
+                source_relax_handoff,
             )?;
         }
     }

@@ -10071,3 +10071,435 @@ fn eigen_path_manifest_phase_convention_requires_sample_consensus() {
         .get("phase_convention")
         .is_none());
 }
+
+
+// These are publication-contract fixtures, not native eigen or physics proof.
+struct WorkerIdentityPublicationFixture {
+    plan: FemEigenPlanIR,
+    handoff: AcceptedFemRelaxStageHandoff,
+    build: serde_json::Value,
+    artifacts: Vec<AuxiliaryArtifact>,
+    input_sha256: String,
+    input_path: std::path::PathBuf,
+}
+
+impl Drop for WorkerIdentityPublicationFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.input_path);
+    }
+}
+
+fn seal_worker_publication_json(value: &mut serde_json::Value, id_field: &str) {
+    value.as_object_mut().unwrap().remove("content_sha256");
+    value.as_object_mut().unwrap().remove(id_field);
+    let schema = value["schema_version"].as_str().unwrap().to_string();
+    let digest = shared_domain_content_digest(&schema, value).unwrap();
+    value["content_sha256"] = serde_json::json!(digest);
+    value[id_field] = serde_json::json!(format!("{schema}:{}", &digest[7..]));
+}
+
+fn worker_identity_publication_fixture(
+    canonical: bool,
+    sample: usize,
+) -> WorkerIdentityPublicationFixture {
+    let fixture = exact_producer_fixture(canonical);
+    let handoff = verified_exact_handoff_from_fixture(
+        &fixture,
+        fixture.producer_provenance.clone(),
+        fixture.exact_artifacts.clone(),
+    )
+    .unwrap();
+    let build = serde_json::to_value(&fixture.producer_provenance.producer_build_identity).unwrap();
+    let mut plan = minimal_native_modal_plan();
+    if canonical {
+        plan.material.uniaxial_anisotropy = Some(0.0);
+        plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    }
+    let (raw_material, _) = raw_material_provenance_from_eigen_plan(&plan).unwrap();
+    let eq_schema = if canonical {
+        "equilibrium_artifact.v8"
+    } else {
+        "equilibrium_artifact.v7"
+    };
+    let state_schema = if canonical {
+        "LinearizationState.v7"
+    } else {
+        "LinearizationState.v6"
+    };
+    let mut acceptance = serde_json::to_value(&handoff.acceptance).unwrap();
+    acceptance["completion_sha256"] = serde_json::json!(handoff.completion_sha256);
+    let count = plan.mesh.nodes.len();
+    let mut equilibrium = serde_json::json!({
+        "schema_version": eq_schema,
+        "accepted_for_linearization": true,
+        "acceptance_certificate": acceptance,
+        "completion_sha256": handoff.completion_sha256,
+        "producer_run_id": handoff.source_run_id,
+        "mesh_signature": plan.mesh.topology_fingerprint_v6(),
+        "material_signature": if canonical { handoff.equilibrium_material_signature.clone() } else { raw_material.clone() },
+        "physics_signature": format!("sha256:{}", "b".repeat(64)),
+        "boundary_signature": legacy_modal_boundary_snapshot_signature(&plan).unwrap(),
+        "static_demag_signature": format!("sha256:{}", "c".repeat(64)),
+        "m0": handoff.equilibrium_magnetization,
+        "h_eff0_a_per_m": fixture.certified_fields.h_eff_a_per_m,
+        "h_demag0_a_per_m": fixture.certified_fields.h_demag_a_per_m,
+        "phi0_a": fixture.certified_fields.phi_a,
+        "phi0_requirement": "required_for_restart_or_provenance",
+        "external_field_a_per_m": plan.external_field,
+        "observables": {"max_torque_Apm": 0.0, "max_torque_T": 0.0, "max_torque_relative": 0.0},
+        "representation_integrity": {"m0_norm_tolerance": 1e-8},
+        "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6",
+            "certificate_id": "publication-fixture-only", "content_sha256": "publication-fixture-only",
+            "certificate": {"certificate_status": "accepted"}},
+    });
+    if canonical {
+        equilibrium["material_identity_kind"] =
+            serde_json::json!("canonical_equilibrium_material.v2");
+        equilibrium["material_provenance_signature"] = serde_json::json!(raw_material);
+        equilibrium["material_provenance_scope"] = serde_json::json!("materialization_plan");
+    }
+    seal_worker_publication_json(&mut equilibrium, "equilibrium_id");
+    let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+    let mut state = serde_json::json!({
+        "schema_version": state_schema,
+        "source_equilibrium_artifact": equilibrium["content_sha256"],
+        "source_equilibrium_id": equilibrium["equilibrium_id"],
+        "accepted_for_frequency_operator": true,
+        "operator_dictionary": "FrequencyOperatorDictionary.v1",
+        "m0": extend_equilibrium_m0_to_air_nodes(&topology, &handoff.equilibrium_magnetization),
+        "m0_air_extension_policy": "fixed_unit_z_on_nonmagnetic_nodes_v1",
+        "external_field_a_per_m": plan.external_field,
+        "equilibrium_acceptance_certificate": handoff.acceptance,
+        "equilibrium_acceptance_certificate_sha256": handoff.completion_sha256,
+        "producer_run_id": handoff.source_run_id,
+    });
+    for field in [
+        "mesh_signature",
+        "material_signature",
+        "physics_signature",
+        "boundary_signature",
+        "static_demag_signature",
+        "h_eff0_a_per_m",
+        "h_demag0_a_per_m",
+        "phi0_a",
+        "phi0_requirement",
+    ] {
+        state[field] = equilibrium[field].clone();
+    }
+    if canonical {
+        for field in [
+            "material_identity_kind",
+            "material_provenance_signature",
+            "material_provenance_scope",
+        ] {
+            state[field] = equilibrium[field].clone();
+        }
+    }
+    seal_worker_publication_json(&mut state, "linearization_state_id");
+    let spectrum = serde_json::json!({"solver_diagnostics": {
+        "equilibrium_artifact_sha256": equilibrium["content_sha256"],
+        "linearization_state_sha256": state["content_sha256"],
+        "linearization_handoff": {
+            "equilibrium_artifact_schema": eq_schema,
+            "linearization_state_schema": state_schema,
+            "accepted_for_frequency_operator": true,
+        },
+    }});
+    let (eq_file, state_file) =
+        certified_equilibrium_artifact_filenames(Some(eq_schema), Some(state_schema)).unwrap();
+    let input_path = std::env::temp_dir().join(format!(
+        "fullmag-worker-publication-{}-{}-{}-{}.json",
+        std::process::id(),
+        sample,
+        count,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let bytes = serde_json::to_vec_pretty(&equilibrium).unwrap();
+    std::fs::write(&input_path, &bytes).unwrap();
+    let input_sha256 = format!("sha256:{:x}", Sha256::digest(&bytes));
+    plan.equilibrium = EquilibriumSourceIR::Artifact {
+        path: input_path.to_str().unwrap().to_string(),
+    };
+    WorkerIdentityPublicationFixture {
+        plan,
+        handoff,
+        build,
+        input_sha256,
+        input_path,
+        artifacts: vec![
+            AuxiliaryArtifact {
+                relative_path: format!("eigen/metadata/sample_{sample:04}/{eq_file}"),
+                bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: format!("eigen/metadata/sample_{sample:04}/{state_file}"),
+                bytes: serde_json::to_vec_pretty(&state).unwrap(),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/spectrum.json".into(),
+                bytes: serde_json::to_vec_pretty(&spectrum).unwrap(),
+            },
+        ],
+    }
+}
+
+fn publish_worker_fixture(
+    f: &mut WorkerIdentityPublicationFixture,
+    sample: usize,
+) -> Result<Option<String>, RunError> {
+    super::eigen_worker_identity_publication::publish_worker_identity(
+        &f.plan,
+        sample,
+        &f.handoff.equilibrium_magnetization,
+        &f.input_sha256,
+        Some(&f.handoff),
+        f.build.clone(),
+        &mut f.artifacts,
+    )
+}
+
+#[test]
+fn worker_identity_publication_preserves_exact_bytes_and_binds_each_target() {
+    for canonical in [false, true] {
+        for (sample, k) in [(1, -1.0e7), (7, 0.0), (14, 1.0e7)] {
+            let mut f = worker_identity_publication_fixture(canonical, sample);
+            f.plan.k_sampling = Some(KSamplingIR::Single {
+                k_vector: [0.0, k, 0.0],
+            });
+            let originals = f.artifacts.clone();
+            let digest = publish_worker_fixture(&mut f, sample).unwrap().unwrap();
+            assert_eq!(&f.artifacts[..originals.len()], &originals);
+            let identity: LinearizationIdentityV2 = serde_json::from_slice(
+                &f.artifacts
+                    .iter()
+                    .find(|a| {
+                        a.relative_path
+                            == format!(
+                                "eigen/metadata/sample_{sample:04}/linearization_identity.v2.json"
+                            )
+                    })
+                    .unwrap()
+                    .bytes,
+            )
+            .unwrap();
+            assert_eq!(identity.sample_index, sample);
+            assert_eq!(identity.content_sha256, digest);
+            let snapshot = f
+                .artifacts
+                .iter()
+                .find(|a| a.relative_path == consumer_plan_snapshot_relative_path(sample))
+                .unwrap();
+            assert_eq!(snapshot.bytes, serde_json::to_vec(&f.plan).unwrap());
+            let accepted = f
+                .artifacts
+                .iter()
+                .find(|a| a.relative_path == identity.accepted_fields_path)
+                .unwrap();
+            assert_eq!(
+                accepted.bytes,
+                f.handoff.verified_replay().unwrap().accepted_fields_json
+            );
+            let before = f.artifacts.clone();
+            assert_eq!(
+                publish_worker_fixture(&mut f, sample).unwrap(),
+                Some(digest)
+            );
+            assert_eq!(f.artifacts, before);
+        }
+    }
+}
+
+#[test]
+fn worker_identity_publication_rejects_missing_duplicate_and_wrong_sample() {
+    for fault in ["missing", "duplicate", "wrong_sample", "schema_family"] {
+        let mut f = worker_identity_publication_fixture(false, 3);
+        match fault {
+            "missing" => {
+                f.artifacts.pop();
+            }
+            "duplicate" => f.artifacts.push(f.artifacts[0].clone()),
+            "wrong_sample" => {
+                f.artifacts[1].relative_path = f.artifacts[1]
+                    .relative_path
+                    .replace("sample_0003", "sample_0004")
+            }
+            _ => {
+                let mut other = f.artifacts[1].clone();
+                other.relative_path = other.relative_path.replace("v6.json", "v7.json");
+                f.artifacts.push(other);
+            }
+        }
+        let before = f.artifacts.clone();
+        assert!(publish_worker_fixture(&mut f, 3).is_err(), "{fault}");
+        assert_eq!(f.artifacts, before);
+    }
+}
+
+#[test]
+fn worker_identity_publication_rejects_state_tamper_even_with_resealed_hash() {
+    for field in [
+        "source_equilibrium_artifact",
+        "source_equilibrium_id",
+        "mesh_signature",
+        "boundary_signature",
+        "producer_run_id",
+        "equilibrium_acceptance_certificate_sha256",
+        "m0",
+        "external_field_a_per_m",
+        "h_eff0_a_per_m",
+        "phi0_a",
+    ] {
+        let mut f = worker_identity_publication_fixture(false, 2);
+        let mut state: serde_json::Value = serde_json::from_slice(&f.artifacts[1].bytes).unwrap();
+        state[field] = serde_json::json!("tampered");
+        seal_worker_publication_json(&mut state, "linearization_state_id");
+        f.artifacts[1].bytes = serde_json::to_vec(&state).unwrap();
+        // Rebind the declared state digest so target guards, not merely the
+        // spectrum hash mismatch, must reject this resealed mutation.
+        let mut spectrum: serde_json::Value =
+            serde_json::from_slice(&f.artifacts[2].bytes).unwrap();
+        spectrum["solver_diagnostics"]["linearization_state_sha256"] =
+            state["content_sha256"].clone();
+        f.artifacts[2].bytes = serde_json::to_vec(&spectrum).unwrap();
+        assert!(publish_worker_fixture(&mut f, 2).is_err(), "{field}");
+    }
+    let mut f = worker_identity_publication_fixture(false, 2);
+    let mut state: serde_json::Value = serde_json::from_slice(&f.artifacts[1].bytes).unwrap();
+    state["content_sha256"] = serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+    f.artifacts[1].bytes = serde_json::to_vec(&state).unwrap();
+    assert!(publish_worker_fixture(&mut f, 2)
+        .unwrap_err()
+        .message
+        .contains("semantic_digest"));
+}
+
+#[test]
+fn worker_identity_publication_rejects_input_handoff_and_static_plan_drift() {
+    for fault in [
+        "raw_sha",
+        "source_run",
+        "completion",
+        "m0",
+        "field",
+        "build",
+    ] {
+        let mut f = worker_identity_publication_fixture(false, 4);
+        match fault {
+            "raw_sha" => f.input_sha256 = format!("sha256:{}", "0".repeat(64)),
+            "source_run" => f.handoff.source_run_id.push_str("-other"),
+            "completion" => f.handoff.completion_sha256 = format!("sha256:{}", "0".repeat(64)),
+            "m0" => f.handoff.equilibrium_magnetization[0] = [0.0, 1.0, 0.0],
+            "field" => f.plan.external_field[0] += 1.0,
+            _ => f.build["source_snapshot_sha256"] = serde_json::json!("f".repeat(64)),
+        }
+        let before = f.artifacts.clone();
+        assert!(publish_worker_fixture(&mut f, 4).is_err(), "{fault}");
+        assert_eq!(f.artifacts, before);
+    }
+}
+
+#[test]
+fn worker_identity_publication_requires_private_verified_evidence() {
+    let mut f = worker_identity_publication_fixture(false, 5);
+    let before = f.artifacts.clone();
+    let result = super::eigen_worker_identity_publication::publish_worker_identity(
+        &f.plan,
+        5,
+        &f.handoff.equilibrium_magnetization,
+        &f.input_sha256,
+        None,
+        f.build.clone(),
+        &mut f.artifacts,
+    )
+    .unwrap();
+    assert_eq!(result, None);
+    assert_eq!(f.artifacts, before);
+    f.handoff.verified_replay = None;
+    assert!(publish_worker_fixture(&mut f, 5)
+        .unwrap_err()
+        .message
+        .contains("missing_verified_handoff"));
+}
+
+#[test]
+fn worker_identity_publication_conflicts_leave_received_bytes_unchanged() {
+    let mut f = worker_identity_publication_fixture(true, 6);
+    f.artifacts.push(AuxiliaryArtifact {
+        relative_path: "eigen/metadata/sample_0006/linearization_identity.v2.json".into(),
+        bytes: b"preserved conflicting bytes".to_vec(),
+    });
+    let before = f.artifacts.clone();
+    assert!(publish_worker_fixture(&mut f, 6)
+        .unwrap_err()
+        .message
+        .contains("signed_sidecar_conflict"));
+    assert_eq!(f.artifacts, before);
+}
+
+#[test]
+fn worker_identity_publication_scope_survives_path_manifest() {
+    let plan = ui_seven_path_manifest_plan(SpinWaveBoundaryKindIR::Floquet);
+    let mut result = ui_seven_path_manifest_result();
+    let root = result.samples[3].solver_diagnostics.as_mut().unwrap();
+    let record = &mut root["sample_solver_diagnostics"][1]["diagnostics"];
+    record["linearization_identity_publication_scope"] =
+        serde_json::json!("parent_verified_native_worker_artifacts");
+    let manifest = crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+        crate::dispatch::FemEngine::CpuNative,
+        &result,
+        &[],
+        &plan,
+    );
+    assert_eq!(
+        manifest["native_provenance_by_sample"]["3"]["linearization_identity_publication_scope"],
+        "parent_verified_native_worker_artifacts"
+    );
+    assert!(manifest["native_provenance_by_sample"]["0"]
+        .get("linearization_identity_publication_scope")
+        .is_none());
+}
+
+#[test]
+fn worker_identity_publication_rejects_stale_spectrum_state_binding() {
+    for fault in [
+        "missing_spectrum",
+        "equilibrium",
+        "state",
+        "marker_schema",
+        "marker_accepted",
+    ] {
+        let mut f = worker_identity_publication_fixture(false, 8);
+        if fault == "missing_spectrum" {
+            f.artifacts.pop();
+        } else {
+            let mut spectrum: serde_json::Value =
+                serde_json::from_slice(&f.artifacts[2].bytes).unwrap();
+            let diagnostics = &mut spectrum["solver_diagnostics"];
+            match fault {
+                "equilibrium" => {
+                    diagnostics["equilibrium_artifact_sha256"] =
+                        serde_json::json!(format!("sha256:{}", "d".repeat(64)))
+                }
+                "state" => {
+                    diagnostics["linearization_state_sha256"] =
+                        serde_json::json!(format!("sha256:{}", "e".repeat(64)))
+                }
+                "marker_schema" => {
+                    diagnostics["linearization_handoff"]["linearization_state_schema"] =
+                        serde_json::json!("LinearizationState.v7")
+                }
+                _ => {
+                    diagnostics["linearization_handoff"]["accepted_for_frequency_operator"] =
+                        serde_json::json!(false)
+                }
+            }
+            f.artifacts[2].bytes = serde_json::to_vec(&spectrum).unwrap();
+        }
+        let before = f.artifacts.clone();
+        assert!(publish_worker_fixture(&mut f, 8).is_err(), "{fault}");
+        assert_eq!(f.artifacts, before);
+    }
+}

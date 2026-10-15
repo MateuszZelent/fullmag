@@ -254,6 +254,27 @@
       "symbol": "validate_signed_de_campaign_parity",
       "responsibility": "Checks capsule-bound identity, semantic and raw digest roles, exact signed15 coverage, native residuals, and scheduler evidence without promoting missing physical-input projections.",
       "evidence_status": "interpreted_pass"
+    },
+    {
+      "id": "worker-parent-publication",
+      "path": "crates/fullmag-runner/src/fem/eigen_worker_identity_publication.rs",
+      "symbol": "publish_worker_identity",
+      "responsibility": "Parent verifies immutable worker equilibrium/state, exact handoff M0, static fields and target bindings before constructing a fresh sample identity; no private handoff serialization.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "worker-artifact-replay",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "LinearizationIdentityArtifacts",
+      "responsibility": "Minimal borrowed view replays semantic content, IDs and state-to-equilibrium links before existing identity builder guards.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "worker-publication-regressions",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "worker_identity_publication_preserves_exact_bytes_and_binds_each_target",
+      "responsibility": "Prepared Rust regressions cover schema families, signed sample plans, exact bytes and fail-closed mutations. Compiled execution requires GitHub Actions.",
+      "evidence_status": "source_visible"
     }
   ],
   "public_api": {
