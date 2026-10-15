@@ -89,6 +89,11 @@ jobs:
           cargo test -p fullmag-runner k_process_pool --no-fail-fast
           cargo test -p fullmag-runner adaptive_resources --no-fail-fast
 
+      - name: Run equilibrium boundary import proof contracts
+        env:
+          RUST_MIN_STACK: 8388608
+        run: cargo test -p fullmag-runner --lib equilibrium_boundary_import --no-fail-fast
+
       - name: Run canonical IR, waveguide and typed V04 migration contracts
         run: cargo test -p fullmag-ir --no-fail-fast
 

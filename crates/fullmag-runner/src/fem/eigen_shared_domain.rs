@@ -293,6 +293,61 @@ fn shared_domain_static_demag_signature(
     )
 }
 
+fn validate_imported_periodic_mesh_certificate(
+    source_certificate: &serde_json::Value,
+    current_certificate: &serde_json::Value,
+    current_outer_digest: &str,
+) -> Result<String, RunError> {
+    let source_certificate = source_certificate.as_object().ok_or_else(|| RunError {
+        message: "equilibrium_periodic_certificate_missing_or_stale: certificate is not an object"
+            .to_string(),
+    })?;
+    for name in ["certificate_id", "content_sha256"] {
+        if source_certificate.get(name) != current_certificate.get(name) {
+            return Err(RunError {
+                message: format!(
+                    "equilibrium_periodic_certificate_missing_or_stale: stored certificate '{}' does not match the current mesh certificate",
+                    name
+                ),
+            });
+        }
+    }
+    if source_certificate.get("modal_equivalence_map_binding")
+        != current_certificate.get("modal_equivalence_map_binding")
+    {
+        return Err(RunError {
+            message:
+                "equilibrium_periodic_certificate_missing_or_stale: modal equivalence map binding does not match the current certificate"
+                    .to_string(),
+        });
+    }
+    if source_certificate
+        .get("content_sha256")
+        .and_then(serde_json::Value::as_str)
+        .is_none()
+    {
+        return Err(RunError {
+            message: "equilibrium_periodic_certificate_missing_or_stale: stored certificate hash is missing"
+                .to_string(),
+        });
+    }
+    Ok(current_outer_digest.to_string())
+}
+
+pub(super) fn legacy_modal_boundary_snapshot_signature(
+    plan: &FemEigenPlanIR,
+) -> Result<String, RunError> {
+    shared_domain_content_digest(
+        "boundary_signature",
+        &serde_json::json!({
+            "spin_wave_bc": plan.spin_wave_bc,
+            "air_box_config": plan.air_box_config,
+            "periodic_node_pairs": plan.mesh.periodic_node_pairs,
+            "periodic_boundary_pairs": plan.mesh.periodic_boundary_pairs,
+        }),
+    )
+}
+
 pub(super) fn build_shared_domain_linearization_state(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
@@ -377,15 +432,7 @@ pub(super) fn build_shared_domain_linearization_state(
                 .map(|value| value.provenance_name()),
         }),
     )?;
-    let boundary_signature = shared_domain_content_digest(
-        "boundary_signature",
-        &serde_json::json!({
-            "spin_wave_bc": plan.spin_wave_bc,
-            "air_box_config": plan.air_box_config,
-            "periodic_node_pairs": plan.mesh.periodic_node_pairs,
-            "periodic_boundary_pairs": plan.mesh.periodic_boundary_pairs,
-        }),
-    )?;
+    let boundary_signature = legacy_modal_boundary_snapshot_signature(plan)?;
     let static_demag_signature = shared_domain_static_demag_signature(
         resolved_demag_realization(plan).map(|value| value.provenance_name()),
         &observables.demag_field,
@@ -463,6 +510,17 @@ pub(super) fn build_shared_domain_linearization_state(
             ),
         ] {
             if expected != actual {
+                if label == "boundary_hash" {
+                    if let EquilibriumSourceIR::Artifact { path } = &plan.equilibrium {
+                        super::eigen_equilibrium_boundary_import::validate_modal_boundary_equilibrium_import(
+                            plan,
+                            path,
+                            source_artifact,
+                            expected,
+                        )?;
+                        continue;
+                    }
+                }
                 return Err(RunError {
                     message: format!(
                         "equilibrium_{label}_mismatch: stored '{}' does not match recomputed '{}'",
@@ -532,40 +590,11 @@ pub(super) fn build_shared_domain_linearization_state(
     let periodic_mesh_certificate_digest =
         shared_domain_content_digest("periodic_mesh_certificate_v6", &periodic_certificate_json)?;
     let periodic_mesh_certificate_digest = if let Some(source_artifact) = source_artifact {
-        let source_certificate = source_artifact
-            .periodic_mesh_certificate
-            .as_object()
-            .ok_or_else(|| RunError {
-                message: "equilibrium_periodic_certificate_missing_or_stale: certificate is not an object"
-                    .to_string(),
-            })?;
-        for name in ["certificate_id", "content_sha256"] {
-            if source_certificate.get(name) != periodic_certificate_json.get(name) {
-                return Err(RunError {
-                    message: format!(
-                        "equilibrium_periodic_certificate_missing_or_stale: stored certificate '{}' does not match the current mesh certificate",
-                        name
-                    ),
-                });
-            }
-        }
-        if source_certificate.get("modal_equivalence_map_binding")
-            != periodic_certificate_json.get("modal_equivalence_map_binding")
-        {
-            return Err(RunError {
-                message:
-                    "equilibrium_periodic_certificate_missing_or_stale: modal equivalence map binding does not match the current certificate"
-                        .to_string(),
-            });
-        }
-        source_certificate
-            .get("content_sha256")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| RunError {
-                message: "equilibrium_periodic_certificate_missing_or_stale: stored certificate hash is missing"
-                    .to_string(),
-            })?
-            .to_string()
+        validate_imported_periodic_mesh_certificate(
+            &source_artifact.periodic_mesh_certificate,
+            &periodic_certificate_json,
+            &periodic_mesh_certificate_digest,
+        )?
     } else {
         periodic_mesh_certificate_digest
     };
@@ -1745,5 +1774,64 @@ mod static_demag_preimage_tests {
             shared_domain_static_demag_signature(None, &[[0.0; 3]], &[f64::INFINITY], None)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod imported_periodic_certificate_digest_tests {
+    use super::*;
+
+    #[test]
+    fn equilibrium_boundary_import_periodic_certificate_keeps_outer_digest_role() {
+        let payload = serde_json::json!({"certificate_status": "accepted"});
+        let inner_digest =
+            shared_domain_content_digest("periodic_mesh_certificate", &payload).unwrap();
+        let current_certificate = serde_json::json!({
+            "schema_version": "periodic_mesh_certificate.v6",
+            "certificate_id": format!(
+                "periodic_mesh_certificate.v6:{}",
+                inner_digest.strip_prefix("sha256:").unwrap()
+            ),
+            "content_sha256": inner_digest,
+            "certificate": payload,
+            "modal_equivalence_map_binding": {
+                "schema_version": "modal_periodic_equivalence_map_binding.v1",
+                "binding_sha256": format!("sha256:{}", "a".repeat(64)),
+            },
+        });
+        let outer_digest =
+            shared_domain_content_digest("periodic_mesh_certificate_v6", &current_certificate)
+                .unwrap();
+
+        let imported_digest = validate_imported_periodic_mesh_certificate(
+            &current_certificate,
+            &current_certificate,
+            &outer_digest,
+        )
+        .unwrap();
+
+        assert_eq!(imported_digest, outer_digest);
+        assert_ne!(imported_digest, inner_digest);
+
+        for field in [
+            "certificate_id",
+            "content_sha256",
+            "modal_equivalence_map_binding",
+        ] {
+            let mut stale = current_certificate.clone();
+            stale[field] = serde_json::json!("stale");
+            assert!(validate_imported_periodic_mesh_certificate(
+                &stale,
+                &current_certificate,
+                &outer_digest,
+            )
+            .is_err());
+        }
+        assert!(validate_imported_periodic_mesh_certificate(
+            &serde_json::json!({"content_sha256": inner_digest}),
+            &current_certificate,
+            &outer_digest,
+        )
+        .is_err());
     }
 }

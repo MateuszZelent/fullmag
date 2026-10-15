@@ -2,8 +2,8 @@
 
 - Status: `source_visible / interpreted_contract_only`
 - Właściciel: wewnętrzny verifier artefaktów FEM frequency-domain
-- Data: 2026-10-01
-- Zakres: pięć dokładnych preimage'ów z `linearization_identity.v2`
+- Data: 2026-10-15
+- Zakres: pięć dokładnych preimage'ów z `linearization_identity.v2` oraz dowód importu statycznej równowagi pomiędzy modalnymi wariantami Γ/Floquet
 - Kontrakty nadrzędne: `docs/physics/0840-equilibrium-material-preimage-replay.md`,
   `docs/physics/r4-linearization-identity-v2.md`
 
@@ -182,6 +182,57 @@ i `unsupported combinations` kończą replay błędem zamiast cichego fallbacku.
 Sam helper nie zastępuje pełnego 52-polowego sprawdzenia; jest wywoływany po
 tej bramce przez main verifier.
 
+### 7.1 Import tej samej równowagi przy przejściu Γ/Floquet
+
+Naprawa FEM CPU jest obecna w źródłach; wykonanie nowego importera pozostaje
+`NOT VERIFIED` do osobnego CI i managed runtime. Serial signed15 na build245
+przeszedł, lecz adaptive sample 7 przy Γ odrzucił import: historyczny
+`boundary_signature` artefaktu v7 wiąże również modalne `spin_wave_bc`.
+Normalizacja Γ zmienia `Floquet` na `Periodic`, choć preimage statycznego
+boundary oraz airbox i pary okresowe pozostają identyczne.
+
+Schematy `equilibrium_artifact.v7/v8` i `LinearizationState.v6/v7` oraz
+ich stare digesty pozostają niezmienione. Zgodny historyczny hash nadal
+przechodzi dotychczasową ścieżkę. Niezgodny hash można dopuścić tylko po
+niezależnym dowodzie wszystkich warunków:
+
+1. Oryginalny artefakt jest lokalnie zweryfikowany: jego ponownie obliczony
+   semantyczny `content_sha256` zgadza się z `equilibrium_artifact_sha256`
+   sąsiedniego `linearization_identity.v2.json`. To nie jest raw SHA pliku
+   JSON; nie dodaje się takiego pola pod istniejącym schematem v2. Own
+   exact-preimage sidecar identity, jego raw SHA-256, framed digest i typed
+   record muszą być spójne.
+2. Oryginalne bajty `consumer_plan_snapshot.v1.json` zgadzają się z hashem
+   identity. Historyczny modalny `boundary_signature`, przeliczony z tego
+   planu źródłowego, musi równać się wartości w importowanym artefakcie.
+3. Źródłowe preimage'y fizyczne i sygnatury materiału, statyki i statycznego
+   boundary zgadzają się z identity oraz planem docelowym. Zmiana airboxu,
+   par periodycznych, exchange BC, materiału lub pola nie jest aliasem.
+4. Jedyną różnicą konfiguracji `spin_wave_bc` jest `Floquet` ↔ `Periodic`.
+   Identyfikatory par, konwencja fazy i pozostałe pola muszą pozostać równe.
+   Plan z `Periodic` musi być pojedynczym Γ według istniejącej stałej
+   `GAMMA_K_TOLERANCE_RAD_PER_M`; plan Floqueta również musi wskazywać
+   pojedynczy, skończony wektor. Obejmuje to zarówno ścieżkę signed z Γ
+   wewnątrz, jak i typowy bootstrap Γ → dodatnie/ujemne k.
+5. Dotychczasowe sprawdzenia mesh, m0, effective field, demag, potencjału,
+   historycznego physics hash i native modalnych residuali pozostają aktywne.
+
+W tej samej granicy importu trzeba zachować rolę digestu certyfikatu
+periodycznego. Wewnętrzne `content_sha256` certyfikuje jego bazowy payload;
+oddzielny `shared_domain_content_digest("periodic_mesh_certificate_v6", wrapper)`
+wiąże pełny wrapper, w tym `modal_equivalence_map_binding`. Producent i
+importer przekazują do operatora ten drugi digest. Importer nadal porównuje
+`certificate_id`, wewnętrzny hash oraz całe map binding z bieżącą siatką;
+nie wolno zastąpić zewnętrznego digestu wewnętrznym tylko dlatego, że oba
+mają format `sha256:...`. Historycznych artefaktów nie przepisuje się.
+
+Brak sidecara, błędny hash, zmieniony snapshot albo niezgodny statyczny
+preimage kończy import błędem. Nie przepisuje się historycznego artefaktu,
+nie zamienia hashów ręcznie i nie zeruje energii. Docelowy operator oraz
+dynamiczne ograniczenia fazowe są nadal budowane i certyfikowane dla
+rzeczywistego k; dowód importu nie zastępuje walidacji Floqueta ani
+niezależnego count proof.
+
 (discrete-realization)=
 ## 8. Realizacja backendów
 
@@ -228,6 +279,8 @@ brak producerowych kluczy `MaterialIR`. Raw replay nie ocenia dodatniości
 parametrów ani rodziny IR; to pozostaje walidacją producer/planner. Nie
 uruchamiano kompilacji native ani managed runnera.
 
+Nowa regresja importu musi objąć oba kierunki Γ/Floquet, brak lub mutację każdego dowodu, zmianę fizycznego boundary i niezerowy k przy Periodic. Kompilacja tych testów odbywa się wyłącznie w GitHub Actions; managed adaptive sweep i parity pozostają oddzielnymi bramkami.
+
 (limitations)=
 ## 11. Ograniczenia
 
@@ -267,6 +320,10 @@ uruchamiano kompilacji native ani managed runnera.
 | independent replay | `scripts/fem_equilibrium_identity_replay.py` + `replay_preimage_json` | verifier | 10 interpreted tests PASS |
 | main full identity gate | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` + `validate_r4_signed_sidecars` | verifier | 57 interpreted tests PASS; full 52-field check precedes helper |
 | mutation coverage | `scripts/test_fem_equilibrium_identity_replay.py` + `class EquilibriumIdentityReplayTests` | verifier | 10 interpreted tests PASS |
+| Γ/Floquet equilibrium import | `crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs` + `validate_modal_boundary_equilibrium_import` | FEM CPU | source-visible; compiled CI and managed execution NOT VERIFIED |
+| unchanged legacy boundary digest | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `legacy_modal_boundary_snapshot_signature` | FEM CPU | source-visible; historical hash payload preserved |
+| periodic certificate digest role | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `validate_imported_periodic_mesh_certificate` | FEM CPU | source-visible; inner checks preserved, outer digest returned |
+| import proof regression | `crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs` + `equilibrium_boundary_import_accepts_both_migration_directions` | FEM CPU | source-visible; compiled tests only in GitHub Actions |
 
 Obecność helpera i zielone testy kontraktowe nie promują statusu do runtime
 qualification. Do tego potrzebne są exact artefakty managed runnera, native

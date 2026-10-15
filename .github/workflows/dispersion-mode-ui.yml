@@ -128,6 +128,7 @@ jobs:
           cargo test -p fullmag-runner --lib eigen_path_native_mode_provenance --no-fail-fast
           cargo test -p fullmag-runner --lib eigen_path_manifest_typed_context_preserves_floquet_and_per_sample_identity --no-fail-fast
           cargo test -p fullmag-runner --lib eigen_path_manifest_phase_convention_requires_sample_consensus --no-fail-fast
+          cargo test -p fullmag-runner --lib equilibrium_boundary_import --no-fail-fast
 
   exact-layer-mesh:
     runs-on: ubuntu-latest

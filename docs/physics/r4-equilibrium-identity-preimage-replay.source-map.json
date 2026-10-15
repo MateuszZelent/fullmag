@@ -30,18 +30,39 @@
   "equations": [
     {
       "id": "eq-r4-identity-framed-digest",
-      "symbols": ["N", "p", "p_len", "D_N"],
-      "sources": ["framed-producer"]
+      "symbols": [
+        "N",
+        "p",
+        "p_len",
+        "D_N"
+      ],
+      "sources": [
+        "framed-producer"
+      ]
     },
     {
       "id": "eq-r4-identity-raw-material-digest",
-      "symbols": ["p", "D_raw"],
-      "sources": ["raw-digest"]
+      "symbols": [
+        "p",
+        "D_raw"
+      ],
+      "sources": [
+        "raw-digest"
+      ]
     },
     {
       "id": "eq-r4-identity-replay-tuple",
-      "symbols": ["R", "D_eq_mat", "D_stat", "D_bnd", "D_raw"],
-      "sources": ["identity-fields", "main-identity-gate"]
+      "symbols": [
+        "R",
+        "D_eq_mat",
+        "D_stat",
+        "D_bnd",
+        "D_raw"
+      ],
+      "sources": [
+        "identity-fields",
+        "main-identity-gate"
+      ]
     }
   ],
   "symbols": [
@@ -198,6 +219,34 @@
       "symbol": "class EquilibriumIdentityReplayTests",
       "responsibility": "Covers golden V1/V2/Ku-zero, raw damping separation and fail-closed mutations.",
       "evidence_status": "interpreted_pass"
+    },
+    {
+      "id": "boundary-import-proof",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs",
+      "symbol": "validate_modal_boundary_equilibrium_import",
+      "responsibility": "Validates the exact source identity and plan before allowing only a Periodic/Floquet kind alias for the same static equilibrium.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "legacy-boundary-hash",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
+      "symbol": "legacy_modal_boundary_snapshot_signature",
+      "responsibility": "Preserves the historical boundary hash payload without rewriting old artifacts.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "imported-periodic-certificate",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
+      "symbol": "validate_imported_periodic_mesh_certificate",
+      "responsibility": "Preserves inner certificate and map-binding checks while returning the current outer certificate digest.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "boundary-import-tests",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs",
+      "symbol": "equilibrium_boundary_import_accepts_both_migration_directions",
+      "responsibility": "Covers both canonical source layouts and both Periodic/Floquet import directions; compiled execution pending CI.",
+      "evidence_status": "source_visible"
     }
   ],
   "public_api": {

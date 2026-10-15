@@ -8,24 +8,48 @@ i dokumentacji nie oznaczają przebudowania tego runtime.
 
 | Bramka | Aktualny dowód | Pozostała praca |
 |---|---|---|
-| Build245 | Job1dd454832d014d28b3b27761b4990e47 succeeded/exit0, 29 artefaktów; digest43a4af1a2d77a2b9071a2c7e52816518a0bb7ab1bfae35bbca154206f826e3be; native-build1731898.235ms | Nie wymaga ponownego buildu dla poprawki postsolve Python |
+| Build245 | Job1dd454832d014d28b3b27761b4990e47 succeeded/exit0, 29 artefaktów; digest43a4af1a2d77a2b9071a2c7e52816518a0bb7ab1bfae35bbca154206f826e3be; native-build1731898.235ms | Dotychczasowy runtime zachowany; nowy importer native wymaga osobnego buildu z dokładnego commita |
 | K0 count1/frequency_window | EPS1e-10/GMRES: 50/50 podokien, 1 mod9.2992496970683GHz, full residual9.800595170769307e-15. Canonical run7edd30b550d34152b9a9a36e9cd8c225 exit0/completed_unqualified | Domyślne EPS1e-11 nadal zawodzi w1/50; niezależna kwalifikacja naukowa i zbieżność pozostają OPEN |
 | K0 energia | Naprawiony Python consumer używa tej samej skali mu0*Ms²*V co native; raw energie zachowane, osobna kontrola ujemności i przeliczona identity. 89 interpretowanych testów PASS | Nie zmienia operatora ani tolerancji full residual1e-8 |
 | K0 analityka | Dla jednorodnego modu i skończonego airboxu:9.299249697068401GHz, różnica−0.000101Hz; otwarty film9.309813711433355GHz | Profil modu i zbieżność wymagają osobnego dowodu; nie dopasowywano parametrów |
 | Signed15 DE serial | Runbe5355a8bb904ed49c0589c69bf8f6cc: native exit0, 15 zapisanych punktów−25…+25rad/µm, wszystkie full descriptor certified; max residual1.0802441875514487e-14 | Świeży run6c9b97a7980a452cae15b203526fcb0a po poprawcef176a45fee3c5cc03de80b354555734cdbb0970f: canonical exit0/completed_unqualified; Gamma1/Floquet14, rekonstrukcja potencjału i signed state closure PASS. Historyczny failed receipt zachowany; osobna próba adaptive odrzucona przez guard tożsamości boundary |
 | Wykres signed15 | Kanoniczny plot-6c9b97a7980a452cae15b203526fcb0a/signed-fifteen-dispersion.png/pdf i plot-receipt.json: consumer PASS na świeżym serial,15punktów oraz open/finite n0 i coupled thickness32; bez fitu, odbicia i interpolacji FEM. Wcześniejszy wykres diagnostyczny zachowany | Diagnoza zbieżności/reciprocity, serial-adaptive parity; wynik NOT VERIFIED |
-| Signed15 adaptive | Run83f4a6cd976541708ac8280431b81361 native exit1: equilibrium_boundary_hash_mismatch, stored aed4fdc43d95670251a6940f224e92a211e75d01029c796fa5ae70a9e991168a, recomputed66e5db54f6e3b88f7d85f3dd12b7c5bbb63473e965d73e57d5cc17f087945a42 | Diagnoza importu równowagi i statycznego boundary workera. Guard pozostaje aktywny; parity/co-activity NOT VERIFIED |
-| Zbieżność +25rad/µm | Canonical FGMRES/EPS1e-10,3warstwy: L0=13.408272871236032GHz, L1=13.489825251951523GHz, L2=13.526688197653702GHz; wszystkie exit0/completed_unqualified. Różnica L0FGMRES−L0GMRES=5.72e-6Hz. L1GMRES osobno przerwał guard rekurencji PETSc | Wpływ dyskretyzacji potwierdzony, zbieżność nadal NOT VERIFIED; potrzeba grubości/airboxu i analizy asymetrii. Bez osłabiania tolerancji |
+| Signed15 adaptive | Run83f4a6cd976541708ac8280431b81361 native exit1: equilibrium_boundary_hash_mismatch, stored aed4fdc43d95670251a6940f224e92a211e75d01029c796fa5ae70a9e991168a, recomputed66e5db54f6e3b88f7d85f3dd12b7c5bbb63473e965d73e57d5cc17f087945a42 | Przyczyna potwierdzona: tylko modalny kind Floquet→Periodic przy Γ. Nowy proof importu i naprawa inner/outer digest certyfikatu obecne w źródłach; compiled CI, nowy runtime i parity/co-activity NOT VERIFIED |
+| Zbieżność +25rad/µm | Canonical FGMRES/EPS1e-10,3warstwy: L0=13.408272871236032GHz, L1=13.489825251951523GHz, L2=13.526688197653702GHz, L3=13.544436286304871GHz; wszystkie exit0/completed_unqualified. Osobno L3/6warstw/restart30=13.557703766420689GHz (run7d06a4c363d54b3a9e735128024d8272); restart8 zakończył się DIVERGED_ITS bez wyniku. Różnica L0FGMRES−L0GMRES=5.72e-6Hz. L1GMRES osobno przerwał guard rekurencji PETSc | Wpływ dyskretyzacji potwierdzony, zbieżność nadal NOT VERIFIED; potrzeba grubości/airboxu i analizy asymetrii. Bez osłabiania tolerancji |
 | API ownership | Commitccb6a781966f5e883de73fb5b03ef2b9305d51f7: CI38692453999 Rust job116281276566 PASS, w tym65ownershiptests i oba naprawione fixtures. Auto CI38692391217 PASS | Cały bootstrap FAIL przez browser request budget13/12; brak lokalnej kompilacji testów |
 | Mapa źródeł | Commit9c27e09ab5a7ae3e9aa7c66520b58bac047ae894: dokładny opt-in CPP-DECL, 28 testów PASS; niejednoznaczne deklaracje nadal odrzucane | Mapę0831 weryfikować razem z konsumentem energii |
 | A1/ring | Diagnoza wykazała, że2object_regions kierują test do generic OCC, poza helperem ring; zielone Python CI po zmianie samych Rust fixtures nie dowodzi naprawy siatki | Produkcyjny air-first cap-lift z regionami i linear grading, final mesh/PBC/native preflight |
-| Storage | Około74GiB wolnego. Preview244/245execution:1.296655757GB, bez usuwania; zachowane wyniki, cache, runtime i provenance | Wykonanie tylko po dokładnej autoryzacji i ponownych kontrolach aktywnych użytkowników |
+| Storage | Ostatni pomiar około43.7GiB wolnego; wartość zmienna. Preview244/245execution:1.296655757GB, bez usuwania; zachowane wyniki, cache, runtime i provenance | Wykonanie tylko po dokładnej autoryzacji i ponownych kontrolach aktywnych użytkowników |
 | Pozostałe S00–S12 | K0 i signed15 są scoped dowodami, nie pełną kwalifikacją | Niezależny non-k0 count proof, full61/8bands, BV, parity CPU/RAM, mesh/airbox/mode convergence, COMSOL A1, S09/provider, interactions/GPU, GUI/WebGL, review/master/cleanup |
 
 Dowody bieżącego etapu: katalog `layered-cap-sliver-diagnostic-20261013`
 w artefaktach tego wątku, logi `build245-k0-eps1e10-energy-fixed-runtime.log`,
 `build245-signed15-serial-runtime.log`, wykres i jego JSON z hashami wejść.
 Historia wcześniejszych diagnoz poniżej pozostaje zachowana.
+
+
+### Uzupełnienie 2026-10-15 — import równowagi i zbieżność
+
+Source-visible poprawka `validate_modal_boundary_equilibrium_import` zachowuje
+dotychczasowy fast path zgodnego hasha i dopuszcza wyłącznie dowiedziony alias
+modalnego kind. Łańcuch dowodu: certyfikowany semantic artefakt → identity v2
+→ exact preimage i raw snapshot planu → statyczne material/physics/boundary
+→ docelowy plan. Oba kierunki Γ/Floquet mają regresję. Brak lub zmiana dowodu
+odrzuca import; dotychczasowe mesh/field/physics guards pozostają aktywne.
+Druga poprawka zachowuje trzy kontrole certyfikatu periodycznego i zwraca
+outer wrapper digest, zgodnie z producentem, zamiast inner content digest.
+Nie migrowano schematów ani nie przepisano wyników build245.
+
+Nowe testy Rust podpięto do istniejących workflow GitHub Actions. Lokalnie
+nie kompilowano testów. Source-map i physics-docs gate PASS; compiled CI i
+wykonanie nowego kodu pozostają NOT VERIFIED do osobnych rezultatów.
+
+Dla DE +25rad/µm kontrola L0→L3 (3warstwy) oraz L3/6warstw potwierdza
+wpływ dyskretyzacji. Przy sześciu warstwach zwiększono wyłącznie restart
+FGMRES z8 do30; zachowano EPS1e-10 i full residual1e-8. Próba restart8
+zakończyła się DIVERGED_ITS i pozostaje zachowana jako nieudana.
+To nie zamyka zbieżności airboxu, grubości ani pełnej kwalifikacji S00–S12.
+
 
 Nowy pomiar diagnostyczny zapisuje wyznacznik i cztery skopiowane wartości
 małej macierzy wyłącznie przy istniejącym błędzie singular validation.
