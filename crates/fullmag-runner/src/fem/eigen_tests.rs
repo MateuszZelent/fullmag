@@ -10129,6 +10129,14 @@ fn worker_identity_publication_fixture(
     let mut acceptance = serde_json::to_value(&handoff.acceptance).unwrap();
     acceptance["completion_sha256"] = serde_json::json!(handoff.completion_sha256);
     let count = plan.mesh.nodes.len();
+    let certificate_payload = serde_json::json!({"certificate_status": "accepted"});
+    let certificate_digest = shared_domain_content_digest("periodic_mesh_certificate", &certificate_payload).unwrap();
+    let periodic_certificate = serde_json::json!({
+        "schema_version": "periodic_mesh_certificate.v6",
+        "certificate_id": format!("periodic_mesh_certificate.v6:{}", &certificate_digest[7..]),
+        "content_sha256": certificate_digest,
+        "certificate": certificate_payload,
+    });
     let mut equilibrium = serde_json::json!({
         "schema_version": eq_schema,
         "accepted_for_linearization": true,
@@ -10148,9 +10156,7 @@ fn worker_identity_publication_fixture(
         "external_field_a_per_m": plan.external_field,
         "observables": {"max_torque_Apm": 0.0, "max_torque_T": 0.0, "max_torque_relative": 0.0},
         "representation_integrity": {"m0_norm_tolerance": 1e-8},
-        "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6",
-            "certificate_id": "publication-fixture-only", "content_sha256": "publication-fixture-only",
-            "certificate": {"certificate_status": "accepted"}},
+        "periodic_mesh_certificate": periodic_certificate,
     });
     if canonical {
         equilibrium["material_identity_kind"] =
