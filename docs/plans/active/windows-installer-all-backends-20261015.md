@@ -36,3 +36,13 @@ Build instalatora z commita `389b11bd8ff88a3ef19dc30b389b049d05c19d55` doszedł 
 Review wykryło też niespójne dopuszczenie skryptu z głównego checkoutu, utratę przypięcia manifestu przy `SkipLocalChanges`, niepełną walidację odzyskiwania cache narzędzi oraz brak jawnego przypięcia MPI przy wyłączonym SLEPc. Poprawki zachowują autorski skrypt i jego hash, dokładny pakiet build-to-run oraz istniejące zweryfikowane cache. Interpretowane regresje tych ścieżek przeszły; integracja MPI wymaga rzeczywistego buildu.
 
 Workspace FEM/full wymaga własnego procesu API. Zgodny serwer FDM działający obok nie może być użyty zamiast nowego API. Instalator i nowy pełny pakiet wymagają ponownej kompilacji, dowodu GUI/Ready, przeglądarki i wykonania oryginalnego skryptu FEM GPU. Te bramki oraz integracja PR pozostają **NOT VERIFIED**.
+
+## Dowody kompilacji i GUI — kontynuacja 2026-10-15
+
+Instalator z zamrożonego commita `9a471b5d94713b0828b15f3ef091a4c87d946376` został zbudowany i zweryfikowany: 43 689 649 bajtów, SHA-256 `f801d2defbb0de69de0f8bc64fa17635a7bd1b9db23a22a2faa2bd3b5b676926`, poprawny PE/Burn oraz zgodne receipt i provenance. Rzeczywisty GUI potwierdził licencję, ekran ścieżek i brak selektora backendu. Regresja wykazała utratę rozróżnienia brakującej i pustej wartości `.env`; poprawkę potwierdza natywny test PowerShell, lecz nowy EXE i ponowny przebieg GUI są wymagane.
+
+Kontrola rzeczywistych wymagań środowiska dla zakresu `all` zakończyła się wynikiem `ready`: wszystkie 19 kontroli przeszło, bez instalacji zależności i zmiany bajtów operatorowego `.env`. Naprawiono lokalny scope walidatora Boost w tej trasie.
+
+Pełny build Windows z tego samego zamrożonego commita przeszedł konfigurację MPI, całą kompilację C++/CUDA, Cargo release (14 min 16 s) i weryfikację wejść kompilatora. Pakowanie przerwało się na rozdzieleniu ścieżki CUDA zawierającej spacje w wywołaniu planera zależności PE. Nie powstał dowód ukończenia pełnego pakietu ani wykonania FEM. Logi i cache zachowano do diagnozy oraz dalszej kompilacji przyrostowej; niczego nie usunięto.
+
+Przyjęto aktualny lokalny i zdalnie potwierdzony `master` `5260690815131bc610450606398e951439d6f290` przez merge `f6500b6a4322cd014f0c7801d38819857805e329`. Aktualizacja obejmuje m.in. poprawki meshingu Pythona i utrwalania źródeł. Dalsza kwalifikacja musi dotyczyć zaktualizowanej gałęzi. Nowy pełny pakiet, GUI Ready, rzeczywista symulacja FEM GPU, przeglądarka i końcowa integracja nadal mają stan **NOT VERIFIED**.
