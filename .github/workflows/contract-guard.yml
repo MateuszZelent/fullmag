@@ -18,6 +18,58 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: Install pinned just (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          JUST_VERSION: "1.51.0"
+          JUST_URL: "https://github.com/casey/just/releases/download/1.51.0/just-1.51.0-x86_64-unknown-linux-musl.tar.gz"
+          JUST_SHA256: "c8f085ca3e885723c341d06243fc291b5abfdc8bbe3b2c076b117de490387b59"
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/just-${JUST_VERSION}.tar.gz"
+          extract="${RUNNER_TEMP}/fullmag-just-${JUST_VERSION}"
+          mkdir -p "${extract}"
+          curl --fail --silent --show-error --location --retry 3 --output "${archive}" "${JUST_URL}"
+          printf '%s  %s\n' "${JUST_SHA256}" "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" --directory "${extract}"
+          mapfile -t binaries < <(find "${extract}" -type f -name just -print)
+          if (( ${#binaries[@]} != 1 )); then
+            echo "Expected exactly one just binary in the pinned archive" >&2
+            exit 1
+          fi
+          chmod +x "${binaries[0]}"
+          echo "$(dirname "${binaries[0]}")" >> "${GITHUB_PATH}"
+          reported="$("${binaries[0]}" --version)"
+          test "${reported}" = "just ${JUST_VERSION}"
+
+      - name: Install pinned just (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          JUST_VERSION: "1.51.0"
+          JUST_URL: "https://github.com/casey/just/releases/download/1.51.0/just-1.51.0-x86_64-pc-windows-msvc.zip"
+          JUST_SHA256: "09d1138b6845e73f04bff5e26be3f57663bddca25e36fe6241d28a5aa310b64e"
+        run: |
+          $ErrorActionPreference = "Stop"
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $archive = Join-Path $env:RUNNER_TEMP "just-$($env:JUST_VERSION).zip"
+          $extract = Join-Path $env:RUNNER_TEMP ("fullmag-just-" + [Guid]::NewGuid().ToString("N"))
+          Invoke-WebRequest -UseBasicParsing -Uri $env:JUST_URL -OutFile $archive
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:JUST_SHA256) {
+            throw "Pinned just archive hash mismatch: expected $($env:JUST_SHA256), got $actual"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract
+          $binaries = @(Get-ChildItem -LiteralPath $extract -Filter "just.exe" -File -Recurse)
+          if ($binaries.Count -ne 1) { throw "Expected exactly one just.exe in the pinned archive" }
+          $just = $binaries[0].FullName
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $binaries[0].Directory.FullName
+          $reported = (& $just --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $reported -ne "just $($env:JUST_VERSION)") {
+            throw "Pinned just reported '$reported'"
+          }
+
       - name: Install Python contract runner
         run: python -m pip install --disable-pip-version-check pytest
       - name: Check storage paths, links and concurrent writers
