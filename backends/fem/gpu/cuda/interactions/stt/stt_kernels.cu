@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cub/cub.cuh>
 
+#include "gpu/cuda/runtime/cccl_extrema.hpp"
+
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
@@ -168,7 +170,8 @@ __global__ void slonczewski_stt_rhs_kernel(
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_max = BlockReduce(temp_storage).Reduce(rhs_norm, cub::Max());
+    const double block_max = BlockReduce(temp_storage).Reduce(
+        rhs_norm, cuda_compat::legacy_maximum{});
     if (threadIdx.x == 0 && block_max_rhs != nullptr) {
         block_max_rhs[blockIdx.x] = block_max;
     }
@@ -328,7 +331,8 @@ __global__ void zhang_li_normalize_add_rhs_kernel(
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_max = BlockReduce(temp_storage).Reduce(rhs_norm, cub::Max());
+    const double block_max = BlockReduce(temp_storage).Reduce(
+        rhs_norm, cuda_compat::legacy_maximum{});
     if (threadIdx.x == 0 && block_max_rhs != nullptr) {
         block_max_rhs[blockIdx.x] = block_max;
     }

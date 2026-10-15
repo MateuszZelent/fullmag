@@ -1,7 +1,7 @@
 export interface PlanarRenderer {
   clearBase(): void;
   dispose(): void;
-  draw(pixels: Uint8ClampedArray, width: number, height: number): void;
+  draw(pixels: Uint8ClampedArray<ArrayBufferLike>, width: number, height: number): void;
   resolveViewport(
     bounds: readonly [number, number, number, number],
     interaction: { panU: number; panV: number; zoom: number },
@@ -299,7 +299,7 @@ export function createPlanarRenderer(
     draw(pixels, width, height) {
       scratch ??= document.createElement("canvas");
       const imagePixels = pixels.buffer instanceof ArrayBuffer
-        ? new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.length)
+        ? pixels as Uint8ClampedArray<ArrayBuffer>
         : new Uint8ClampedArray(pixels);
       const image = new ImageData(imagePixels, width, height);
       scratch.width = width;

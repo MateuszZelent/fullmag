@@ -3,6 +3,7 @@ name = "fullmag-fdm-demag"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [features]
 default = []

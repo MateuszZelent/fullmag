@@ -1,8 +1,8 @@
 # FEM mixed prism/pyramid shared-domain mesh
 
-- Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes `implemented`; evidence is source/contract only, no runtime qualification is asserted, and wider scopes fail closed
+- Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes `implemented`; evidence is source/contract only, no runtime qualification is asserted, and wider scopes fail closed. The proposed disjoint multi-body/material-field extension in Section 7.1 is not implemented or qualified.
 - Owners: Fullmag core
-- Last updated: 2026-08-28
+- Last updated: 2026-10-16
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`,
   `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 - Related specs:
@@ -14,6 +14,8 @@
   - `docs/physics/0105-fem-meshing-production-acceptance.md`
   - `docs/physics/fem_demag_poisson.md`
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
+  - `docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`
+  - `docs/physics/regions/0460-sharp-interfaces-multi-body-and-parameter-fields.md`
 
 (problem-statement)=
 ## 1. Problem statement
@@ -90,17 +92,17 @@ as nodal-P1 material fields in the bounded mixed-P1 source contract:
 ```{math}
 :label: eq-mixed-p1-uniaxial-anisotropy
 
-q=\\mathbf m\\cdot\\mathbf u,
-\\qquad
-E_{\\mathrm u}
-=\\int_{\\Omega_m}\\left(-K_{u1}q^2-K_{u2}q^4\\right)\\,\\mathrm dV.
+q=\mathbf m\cdot\mathbf u,
+\qquad
+E_{\mathrm u}
+=\int_{\Omega_m}\left(-K_{u1}q^2-K_{u2}q^4\right)\,\mathrm dV.
 ```
 
 ```{math}
 :label: eq-mixed-p1-uniaxial-field
 
-\\mathbf H_{\\mathrm u}
-=\\frac{2K_{u1}q+4K_{u2}q^3}{\\mu_0M_s}\\,\\mathbf u.
+\mathbf H_{\mathrm u}
+=\frac{2K_{u1}q+4K_{u2}q^3}{\mu_0M_s}\,\mathbf u.
 ```
 
 For mixed P1, topology enters this local term only through the certified
@@ -183,6 +185,30 @@ Prism, pyramid, and tetrahedron assembly must reproduce these signs exactly.
 | $N_i$ | scalar P1 nodal basis function | $1$ |
 | $M_{ij}$ | scalar mass-matrix entry | $\mathrm{m^3}$ |
 | $w_i$ | magnetic nodal volume weight | $\mathrm{m^3}$ |
+| $\Omega_\ell$ | magnetic layer region | $\mathrm{m^3}$ |
+| $\Omega_r$ | magnetic ring region | $\mathrm{m^3}$ |
+| $N_a^{(r)}$ | regional scalar P1 nodal basis function | $1$ |
+| $M_{s,r,a}$ | regional nodal saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $K_{u1,r,a}$ | regional nodal first-order uniaxial anisotropy constant | $\mathrm{J\,m^{-3}}$ |
+| $K_{u2,r,a}$ | regional nodal second-order uniaxial anisotropy constant | $\mathrm{J\,m^{-3}}$ |
+| $\alpha_{r,a}$ | regional nodal damping parameter | $1$ |
+| $p$ | regional material-field selector for $M_s$, $K_{u1}$, $K_{u2}$, or $\alpha$ | $1$ |
+| $r$ | magnetic-region index | $1$ |
+| $a$ | regional node index | $1$ |
+| $\mathcal N_r$ | node-index set for region r | $1$ |
+| $\ell$ | layer-region label | $1$ |
+| $\operatorname{dist}(\Omega_\ell,\Omega_r)$ | distance between magnetic closures | $\mathrm{m}$ |
+| $\tilde{\mathbf u}_{r,a}$ | authored regional nodal axis input before planner normalization | $1$ |
+| $\mathbf u_{r,a}$ | planner-normalized regional nodal axis at node a in region r; future V2 unit-boundary invariant | $1$ |
+| $I$ | tangent-space identity operator | $1$ |
+| $k$ | PG-BB iteration index | $1$ |
+| $\operatorname{Retr}_{\mathbb S^2}$ | unit-sphere retraction | $1$ |
+| $A_{\mathrm{ex},0}$ | shared positive constant exchange stiffness | $\mathrm{J\,m^{-1}}$ |
+| $w_{r,a}$ | regional magnetic nodal lumped-mass weight | $\mathrm{m^3}$ |
+| $\mathbf P_{m,i}$ | nodal tangent-plane projector | $1$ |
+| $\mathbf H_{\mathrm{eff}}$ | effective magnetic field used by native relaxation | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf g_{r,a}$ | regional nodal field-like tangent gradient | $\mathrm{A\,m^{-1}}$ |
+| $\eta_k$ | projected-gradient step size | $\mathrm{m\,A^{-1}}$ |
 
 All public geometry and mesh sizes remain SI metres. The checked-in Gmsh
 fixture uses normalized geometry because it certifies topology, not physical
@@ -633,9 +659,12 @@ fallback, and one fallback iteration. Receipt schema
 compact JSON containing exactly `region_markers`, `object_region_markers`, and
 the sorted `boundary_map`. Consequently, changing a geometry/object name or
 exchanging boundary meanings fails both full and trusted audit even when the
-same numeric marker set still covers the mesh. Timestamp, provenance, member
-descriptors, and the receipt descriptor are excluded from this projection, so
-the digest graph remains acyclic. Thread count is provenance, not a semantic
+same numeric marker set still covers the mesh. This existing projection does
+not cover the proposed V2 regional ownership, `Ms`, `Ku1`, `Ku2`, `alpha`,
+`axis`, separation, or operator-identity fields; the separately versioned V2
+digest described in the extension subsection is required for those fields.
+Timestamp, provenance, member descriptors, and the receipt descriptor are
+excluded from this projection, so the digest graph remains acyclic. Thread count is provenance, not a semantic
 input. The current `1`,
 `2`, `4`, and `8` engine proof establishes
 identical serialized evidence, counts, and metrics, including bitwise-stable
@@ -1357,7 +1386,8 @@ No lower level implies a higher one.
   source-contract tuple; nodal `Ms`/`Aex`/`alpha` fields and wider axis-field
   variants remain outside it.
 - Arbitrary OCC shapes, cylinders, imported CAD/STL, multiple bodies, and
-  multilayers are deferred.
+  multilayers are deferred for the current first slice; the unchanged
+  layer/ring target has the proposed, unimplemented plan in Section 7.1.
 - PBC/Floquet, FEM/BEM/FMM, frequency-domain/eigen, GPU DMI, STT, thermal,
   magnetoelasticity, regional projections, DG0/material-interface publication,
   and order greater than one are deferred.
@@ -1376,6 +1406,230 @@ No lower level implies a higher one.
   current meshing producer and no `7.5x` speedup is claimed.
 - The feasibility fixture does not select or validate production Gmsh meshing
   algorithms, quality budgets, performance, or runtime memory residency.
+
+### 7.1 Proposed disjoint multi-body mixed-P1 extension (not implemented)
+
+The first-slice contract above remains unchanged. This subsection records a
+future, data-driven extension required by the unchanged
+`permalloy_layer_cofeb_rings_relax_300nm.py` workload. It is a scientific and
+implementation boundary, not evidence that the current planner, mesh producer,
+or native operators already accept this workload.
+
+The fixture has an active magnetic layer `Box` and one active top ring formed by
+`Difference(Cylinder(R_outer), Cylinder(R_inner))` followed by its authored
+translation. The bottom ring remains commented in the source. The source bytes
+are preserved at SHA-256
+`86c67df4c48c04bf2e4b51ed54ceb61ab6ef4667de4be2adb54eb31e82334797`.
+The two active magnetic bodies must remain disjoint, with a positive separation
+certificate; the ring is not to be flattened into the layer, renamed into the
+layer, or treated as a hidden CPU fallback.
+
+The current `MixedLayerTopologyCertificateV1IR` is not extended in place. Its
+existing validation fixes the three mesh parts to `magnetic`, `transition_air`,
+and `far_air`, and fixes the marker accounting to magnetic marker `1` versus
+air marker `0`. That V1 meaning and its readers remain the compatibility path
+for the existing first slice. The extension requires a separately versioned
+`MixedLayerTopologyCertificateV2IR` (in the same certificate family) and an
+explicit V2 producer/consumer dispatch for regional ownership, disjoint
+magnetic bodies, and regional fields. A V1 reader must never interpret a V2
+payload as V1, and a V2 producer must not masquerade as the existing V1
+strategy. The V2 digest projection is distinct from the existing
+`_semantic_manifest_sha256`: that current digest covers normalized region names,
+object-region markers, and boundary meanings, but not the proposed regional
+fields. A V2 writer, loader, and trusted-cache path must reject a missing or
+wrong V2 version and a V1 masquerading payload, then hash one canonical ordered
+projection containing region ownership, ordered region/cell/node identifiers,
+`Ms`, `Ku1`, `Ku2`, `alpha`, authored and planner-normalized `axis`, positive
+separation evidence, and the operator-identity/schema identifiers. A digest
+computed from the existing semantic manifest alone is therefore insufficient.
+
+The intended magnetic set is
+
+```{math}
+:label: eq-mixed-p1-disjoint-bodies
+\Omega_m = \overline{\Omega_\ell}\mathbin{\dot\cup}\overline{\Omega_r},
+\qquad
+\overline{\Omega_\ell}\cap\overline{\Omega_r}=\varnothing,
+\qquad
+\operatorname{dist}(\Omega_\ell,\Omega_r)>0,
+\qquad
+\Omega_{\mathrm{air}}=D\setminus\Omega_m .
+```
+
+Here `\Omega_\ell` is the layer and `\Omega_r` is the ring. The general
+implementation must preserve object identity and region markers rather than
+hard-code exactly two objects or magic material names. A request with an
+intersection, touching magnetic boundaries, ambiguous ownership, or missing
+conforming interface data remains rejected.
+
+For each magnetic region `r`, `Ms`, `Ku1`, `Ku2`, and `alpha` are nodal P1
+fields. Python authoring stores each axis as a three-component authored vector;
+that boundary does not itself prove finiteness or unit norm. The FEM planner's
+`normalize_nonzero_vector3` rejects non-finite and near-zero vectors and returns
+the normalized value. The native P1 AOS-3 payload check enforces shape and
+finiteness, but does not independently enforce unit norm. The future V2
+region-material boundary must bind the authored vector, the planner-normalized
+vector, and an explicit unit-norm check/digest. The local anisotropy operator
+consumes the planner-normalized nodal values directly with the existing lumped
+nodal mass. It does not invent a continuously normalized axis field or normalize
+an interpolated quadrature value. The single exchange constant is shared by all
+magnetic regions; `Aex` is not a DG0 or per-element field in this extension:
+
+```{math}
+:label: eq-mixed-p1-regional-fields
+p_r^h(\mathbf x)=\sum_{a\in\mathcal N_r}N_a^{(r)}(\mathbf x)p_{r,a},
+\quad p\in\{M_s,K_{u1},K_{u2},\alpha\},
+\qquad
+\tilde{\mathbf u}_{r,a}=\text{authored axis},\quad
+\mathbf u_{r,a}=\frac{\tilde{\mathbf u}_{r,a}}
+{\lVert\tilde{\mathbf u}_{r,a}\rVert_2},\quad
+\lVert\mathbf u_{r,a}\rVert_2=1 .
+```
+
+Every `M_{s,r,a}` must be finite and positive, every `alpha_{r,a}` finite and
+non-negative, and every `K_{u1,r,a}` and `K_{u2,r,a}` finite. The planner must
+reject a non-finite or near-zero authored axis and normalize every remaining
+vector; current native finite checks alone do not supply the unit-norm guarantee.
+The future V2 boundary must reject a missing or mismatched unit-norm binding
+before the operator sees it. The positive-gap certificate requires distinct
+magnetic regions to have no shared magnetic node. Overlap, touching boundaries,
+or a shared node between two magnetic region owners is a structural rejection;
+it is never an averaged or last-writer-wins material interface.
+
+The exchange law uses one positive constant and sums region contributions:
+
+```{math}
+:label: eq-mixed-p1-constant-exchange
+A_{\mathrm{ex}}(\mathbf x)=A_{\mathrm{ex},0}>0,
+\qquad
+E_{\mathrm{ex}}=\sum_{r\in\{\ell,r\}}
+\int_{\Omega_r}A_{\mathrm{ex},0}\lVert\nabla\mathbf m\rVert^2\,\mathrm dV .
+```
+
+The local anisotropy derivative uses the regional nodal fields without changing
+the existing negative-power convention. Its current local operator and energy
+path are nodal and lumped, so the extension records that discrete contract
+explicitly rather than replacing it with a new continuous-field quadrature
+semantics:
+
+```{math}
+:label: eq-mixed-p1-multibody-energy
+E_{\mathrm{u},h}=-\sum_{r\in\{\ell,r\}}\sum_{a\in\mathcal N_r}
+w_{r,a}\left[
+K_{u1,r,a}(\mathbf m_{r,a}\mathbin{\cdot}\mathbf u_{r,a})^2
++K_{u2,r,a}(\mathbf m_{r,a}\mathbin{\cdot}\mathbf u_{r,a})^4
+\right] .
+```
+
+The existing scalar Poisson equation and Robin outer boundary remain the
+shared-domain demagnetization contract. Its right-hand side is assembled only
+on magnetic cells, with `M=M_s^h m`; air cells carry no magnetic material law.
+`alpha` is carried and validated as a material input but does not enter the
+static PG-BB energy derivative. A future dynamic LLG lane must explicitly
+consume it and pass its own derivative and time-integration gates; this plan
+must not silently drop or reinterpret it.
+
+The first implementation gate after this note is mesher feasibility for the
+authored geometry: preserve the `Box` as a P1 prism, realize the translated
+X-axis cylindrical difference as P1 tetrahedra, and realize the surrounding
+air with P1 pyramids/tetrahedra while retaining each object's controls and
+markers. This gate must not broaden generic CSG admission or alter the source
+script. It retains the authored Gmsh 4.15.2 controls, including
+`Mesh.Algorithm3D=10` and the existing `optimizeGmsh` quality policy. The proof
+must constructively certify the pyramid transition from the triangular outer
+boundary together with HXT10 free-air/ring tetrahedra where applicable; it must
+fail closed rather than silently relying on automatic HXT pyramids or falling
+back to Delaunay1. The magnetic layer remains a P1 prism region. The CSG ring may be
+represented by P1 tetrahedra, and the surrounding air may contain P1 pyramids
+and tetrahedra. Each magnetic-region/air boundary has a conforming H1 trace with
+explicit region markers; the positive-gap magnetic regions have no magnetic
+interface or shared magnetic node. No prism is converted to tetrahedra merely
+to satisfy a mixed certificate, and no DG0 coefficient is used to hide a
+missing nodal mapping.
+The existing Poisson Robin policy is retained. The operator search direction
+uses the existing tangent projection and projected-gradient Barzilai--Borwein
+contract:
+
+```{math}
+:label: eq-mixed-p1-pgbb-projection
+\mathbf P_{m,i}=I-\mathbf m_i\mathbf m_i^{\mathsf T},
+\qquad
+\mathbf g_{r,a}=-\mathbf P_{m,a}\mathbf H_{\mathrm{eff},r,a},
+\qquad
+\mathbf m^{k+1}_{r,a}=\operatorname{Retr}_{\mathbb S^2}
+\left(\mathbf m^k_{r,a}-\eta_k\mathbf g_{r,a}\right),
+\quad [\mathbf g]=\mathrm{A\,m^{-1}},\ [\eta]=\mathrm{m\,A^{-1}} .
+```
+
+The native implementation calls this field-like quantity `gradient` and
+weights directional products by `\mu_0 M_s w_{r,a}` to obtain joules. The
+descent direction is its negative; the step is therefore dimensionless after
+`\eta_k` multiplies the field-like gradient. BB secants and Armijo checks use
+that existing energy-weighted metric, not a bare joule-valued vector.
+
+The implementation must extend the existing mixed-layer certificate with
+ordered region-marker, ownership, nodal-field, separation, and operator
+identity evidence. It must not add a second backend/profile vocabulary. The
+existing FEM CPU and strict FEM GPU double lanes remain the execution lanes;
+FDM is unchanged; an explicit GPU request must reject any CPU fallback.
+
+#### Required implementation order and gates
+
+1. **Mesher feasibility, Python authoring, and ProblemIR.** First prove the
+   bounded `Box`/prism + translated X-axis ring/tetrahedron + air
+   pyramid/tetrahedron realization with per-object controls and markers. Only
+   then preserve the CSG operand tree, transforms, object IDs, names, and
+   authored field assignments. Reuse
+   `MaterialParameterField`/`MaterialParameterNameIR` and the existing
+   `set_material_field` path; do not add a workload-specific “ring” material
+   or an implementation-only backend name. Lower each geometry segment to an
+   explicit region marker and retain requested/resolved device provenance.
+2. **CSG and mixed-mesh certificate.** Extend the existing mixed certificate
+   with disjointness, positive separation, region-marker ownership, prism/tet/
+   pyramid counts, conforming traces, and deterministic region ordering.
+   Reject overlap, touching magnetic bodies, missing/ambiguous markers,
+   nonconforming traces, order other than P1, and any DG0 material fallback.
+3. **Planner and capability.** Replace the current one-body/one-material
+   structural guard with a validated set of disjoint region entries. The
+   legality test must not accept arbitrary CSG merely because it has two
+   bodies, and it must not require exactly two or specific names. Preserve
+   `requested=GPU`, `resolved=FEM GPU`, strict mode, double precision,
+   `fallback=none`, and all existing failure codes for unsupported physics.
+4. **Region-material interface.** Build deterministic region-to-node maps and
+   nodal arrays for `Ms`, `Ku1`, `Ku2`, `alpha`, and authored nodal axis
+   values. Require finite bounds and positive `Ms`; reject non-finite/near-zero
+   authored axes, normalize them in the planner, and require the V2 boundary to
+   bind the unit norm before the operator; require one shared positive `Aex`;
+   reject field aliasing, same-node conflicting values, and material ordering
+   changes. The interface must expose which nodes/cells were assigned and hash
+   the ordered arrays into provenance.
+5. **Operators and derivatives.** Derive exchange with constant `Aex,0`,
+   anisotropy with regional nodal `Ku1` and axis, and Poisson demagnetization
+   with magnetic-cell-only source ownership. Validate analytic derivatives
+   against central finite differences on each region and on the ring/layer
+   coupling case. Do not claim `alpha` in the static energy derivative.
+6. **CPU reference and convergence.** Add manufactured Poisson--Robin,
+   element patch, mesh-refinement, energy-descent, torque, and projected-step
+   convergence tests. CPU is the readable reference, but its success never
+   authorizes GPU fallback or substitutes for GPU evidence.
+7. **GPU lane and residency.** Upload all regional nodal arrays to device,
+   prove device residency/bytes and no host recomputation, run strict double
+   PG-BB, and compare the same initial state and accepted-step summaries to the
+   CPU reference under frozen tolerances. Device and provider provenance must
+   be tied to the region-field and mesh certificate digests.
+8. **Unchanged original runtime qualification.** Run the exact preserved
+   script, including `study.device("gpu", precision="double")`,
+   `study.demag(realization="poisson_robin")`, and `max_steps=10`; do not
+   rewrite or simplify it. The run must show authored strict GPU intent,
+   resolved native FEM GPU execution, no pre-pass skip, no CPU fallback, the
+   original source SHA above, the mixed region/material/field digests, at least
+   one actual device demagnetization timing, accepted PG-BB steps, finite
+   energy/torque/residual artifacts, and terminal provenance. Until every gate
+   is recorded and independently reviewed, this workload remains **NOT
+   VERIFIED**.
+
+No gate in this subsection changes the current first-slice capability status.
+It is a proposal for a staged source implementation and qualification path.
 
 (scientific-bibliography)=
 ## 8. Scientific bibliography
@@ -1445,3 +1699,14 @@ No lower level implies a higher one.
 | FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | zapisuje bieżące równoległe tablice FMMQ v1 bez tożsamości topologii; może zapisać tablice z mixed mesh, ale payload nie kwalifikuje mixed | writer: current; qualification: tetra-only limit | current source contract |
 | FMMQ v1 decoder | `apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts` | `decodeMeshQualityData` | dekoduje bieżący układ FMMQ v1 | Control room | current codec tests |
 | FMMQ v2 contract | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:fmmq-v2-contract` | definiuje planowany topology-aware v2 i v1 exit | Cross-layer contract | planned contract |
+| CSG difference region identity | `packages/fullmag-py/src/fullmag/model/geometry.py` | `class Difference` | preserves the authored layer/ring operand tree for a future region certificate | FEM CPU/GPU shared | proposed, not implemented |
+| Existing material field payload | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterField` | carries typed regional nodal field data for the existing authoring path | FEM CPU/GPU shared | proposed extension reuse |
+| Existing material assignment | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterAssignment` | preserves authored parameter assignment identity before lowering | FEM CPU/GPU shared | proposed extension reuse |
+| Existing material field API | `packages/fullmag-py/src/fullmag/world.py` | `set_material_field` | keeps the public field-authoring boundary unchanged | FEM CPU/GPU shared | existing source; extension reuse |
+| ProblemIR lowering boundary | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | lowers CSG and regional fields while preserving requested execution intent | FEM CPU/GPU shared | proposed extension boundary |
+| CSG difference mesh generator | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `generate_difference_mesh` | produces the ring difference input that must bind to deterministic region markers | FEM CPU/GPU shared | proposed extension boundary |
+| FEM region-material builder | `crates/fullmag-plan/src/fem.rs` | `build_region_materials` | builds ordered region-material entries for the existing FEM plan | FEM CPU/GPU shared | existing source; extension boundary |
+| FEM regional field builder | `crates/fullmag-plan/src/fem.rs` | `build_region_material_fields` | builds regional fields and axis mappings subject to the future ownership certificate | FEM CPU/GPU shared | existing source; extension boundary |
+| CUDA regional coefficient upload | `backends/fem/gpu/cuda/state/runtime_coefficients_upload.cpp` | `gpu_runtime_coefficients_upload` | uploads regional material arrays to device memory | FEM GPU | proposed residency gate |
+| CUDA PG-BB tangent kernel | `backends/fem/gpu/cuda/relaxation/pgbb_kernels.hpp` | `fullmag_cuda_relax_tangent_gradient_and_norm_blocks` | owns the strict GPU projected-gradient tangent kernel boundary | FEM GPU | proposed residency/parity gate |
+| CPU tangent-gradient reference | `backends/fem/cpu/mfem/relaxation/relaxation_math.hpp` | `tangent_gradient_from_field` | supplies the CPU reference operation for derivative and parity gates | FEM CPU | proposed reference gate |

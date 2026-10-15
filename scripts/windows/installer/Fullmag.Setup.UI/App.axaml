@@ -1,0 +1,107 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fluent="using:Avalonia.Themes.Fluent"
+             xmlns:local="using:Fullmag.Setup.UI"
+             x:Class="Fullmag.Setup.UI.App"
+             RequestedThemeVariant="Default">
+  <Application.Styles>
+    <fluent:FluentTheme DensityStyle="Compact">
+      <fluent:FluentTheme.Palettes>
+        <fluent:ColorPaletteResources x:Key="Light"
+                                      Accent="#35629B"
+                                      RegionColor="#F4F7FB"
+                                      ErrorText="#A33B3B" />
+        <fluent:ColorPaletteResources x:Key="Dark"
+                                      Accent="#9FC4FF"
+                                      RegionColor="#111318"
+                                      ErrorText="#FFB4AB" />
+      </fluent:FluentTheme.Palettes>
+    </fluent:FluentTheme>
+    <Style Selector="TextBlock.heading">
+      <Setter Property="FontSize" Value="28" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource SetupHeadingBrush}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.subheading">
+      <Setter Property="FontSize" Value="17" />
+      <Setter Property="Foreground" Value="{DynamicResource SetupBodyBrush}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.caption">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Foreground" Value="{DynamicResource SetupCaptionBrush}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.status">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="{DynamicResource SetupBodyBrush}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Button.primary-action">
+      <Setter Property="MinWidth" Value="150" />
+      <Setter Property="MinHeight" Value="42" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.secondary-action">
+      <Setter Property="MinWidth" Value="110" />
+      <Setter Property="MinHeight" Value="42" />
+    </Style>
+    <Style Selector="ListBox.sidebar-listbox">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="ListBox.sidebar-listbox /template/ ListBoxItem">
+      <Setter Property="Padding" Value="14,12" />
+      <Setter Property="Margin" Value="0,2" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+  </Application.Styles>
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="SetupWindowBackgroundBrush">#F4F7FB</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarBackgroundBrush">#172033</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarForegroundBrush">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarMutedBrush">#AAB8D0</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarBadgeBrush">#30415F</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarBadgeForegroundBrush">#E7EEFC</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupCardBackgroundBrush">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupAccentPanelBackgroundBrush">#EEF4FF</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupAccentHeadingBrush">#1D3155</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSubtlePanelBackgroundBrush">#F7F9FC</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupBorderBrush">#D8E0EC</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupHeadingBrush">#172033</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupBodyBrush">#42516A</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupCaptionBrush">#61708A</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupAccentBrush">#35629B</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupWarningBackgroundBrush">#FFF8E8</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSuccessBackgroundBrush">#EEF9F2</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSuccessForegroundBrush">#1E5A37</SolidColorBrush>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="SetupWindowBackgroundBrush">#111318</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarBackgroundBrush">#0B0D12</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarForegroundBrush">#F3F5FA</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarMutedBrush">#B8C1D1</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarBadgeBrush">#293348</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSidebarBadgeForegroundBrush">#E6ECF8</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupCardBackgroundBrush">#1A1E26</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupAccentPanelBackgroundBrush">#202A3B</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupAccentHeadingBrush">#DDE8FF</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSubtlePanelBackgroundBrush">#20242D</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupBorderBrush">#414B5C</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupHeadingBrush">#F2F4F8</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupBodyBrush">#D2D8E3</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupCaptionBrush">#AEB8C8</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupAccentBrush">#9FC4FF</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupWarningBackgroundBrush">#3A321C</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSuccessBackgroundBrush">#1F3528</SolidColorBrush>
+          <SolidColorBrush x:Key="SetupSuccessForegroundBrush">#A8E4BB</SolidColorBrush>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+      <local:InverseBooleanConverter x:Key="InverseBoolean" />
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

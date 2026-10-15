@@ -251,6 +251,52 @@ describe("planar renderer lifecycle", () => {
     }
   });
 
+  it("passes a raster subview to ImageData without copying its backing range", () => {
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      imageSmoothingEnabled: true,
+      putImageData: vi.fn(),
+    };
+    const canvas = {
+      getContext: vi.fn(() => context),
+      height: 0,
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const originalImageData = Object.getOwnPropertyDescriptor(globalThis, "ImageData");
+    let received: Uint8ClampedArray<ArrayBuffer> | undefined;
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: { createElement: vi.fn(() => ({ getContext: vi.fn(() => context), height: 0, width: 0 })) },
+    });
+    Object.defineProperty(globalThis, "ImageData", {
+      configurable: true,
+      value: class {
+        constructor(readonly data: Uint8ClampedArray<ArrayBuffer>, readonly width: number, readonly height: number) {
+          received = data;
+        }
+      },
+    });
+    const renderer = createPlanarRenderer(canvas);
+    const backing = new ArrayBuffer(8);
+    const pixels = new Uint8ClampedArray<ArrayBuffer>(backing, 4, 4);
+
+    try {
+      renderer.draw(pixels, 1, 1);
+
+      expect(received).toBe(pixels);
+      expect(received?.buffer).toBe(backing);
+      expect(received?.byteOffset).toBe(4);
+      expect(received?.byteLength).toBe(4);
+    } finally {
+      if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+      else Reflect.deleteProperty(globalThis, "document");
+      if (originalImageData) Object.defineProperty(globalThis, "ImageData", originalImageData);
+      else Reflect.deleteProperty(globalThis, "ImageData");
+    }
+  });
+
   it("clears and forgets the owned raster when the scalar layer is disabled", () => {
     const context = {
       clearRect: vi.fn(),

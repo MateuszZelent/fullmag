@@ -28,6 +28,160 @@ function(fullmag_check_windows_mfem_library target property extension prefix)
     endif()
 endfunction()
 
+function(_fullmag_windows_mpi_fail message_text)
+    message(FATAL_ERROR "Fullmag Windows MFEM MPI: ${message_text}")
+endfunction()
+
+function(_fullmag_windows_mpi_normalize path role output_variable)
+    file(TO_CMAKE_PATH "${path}" _mpi_normalized)
+    if(NOT IS_ABSOLUTE "${_mpi_normalized}" OR NOT EXISTS "${_mpi_normalized}")
+        _fullmag_windows_mpi_fail("${role} must be an existing absolute path: ${path}")
+    endif()
+    get_filename_component(_mpi_real "${_mpi_normalized}" REALPATH)
+    if(NOT EXISTS "${_mpi_real}")
+        _fullmag_windows_mpi_fail("${role} cannot be canonicalized: ${path}")
+    endif()
+    file(TO_CMAKE_PATH "${_mpi_real}" _mpi_real_normalized)
+    set(${output_variable} "${_mpi_real_normalized}" PARENT_SCOPE)
+endfunction()
+
+function(_fullmag_windows_mpi_path_within path prefix output_variable)
+    file(TO_CMAKE_PATH "${path}" _mpi_path)
+    file(TO_CMAKE_PATH "${prefix}" _mpi_prefix)
+    string(TOLOWER "${_mpi_path}" _mpi_path_lower)
+    string(TOLOWER "${_mpi_prefix}" _mpi_prefix_lower)
+    string(REGEX REPLACE "/+$" "" _mpi_prefix_lower "${_mpi_prefix_lower}")
+    set(_mpi_inside FALSE)
+    string(FIND "${_mpi_path_lower}" "${_mpi_prefix_lower}/" _mpi_prefix_position)
+    if(_mpi_path_lower STREQUAL _mpi_prefix_lower OR _mpi_prefix_position EQUAL 0)
+        set(_mpi_inside TRUE)
+    endif()
+    set(${output_variable} "${_mpi_inside}" PARENT_SCOPE)
+endfunction()
+
+function(_fullmag_windows_mpi_list_has_path list_variable expected output_variable)
+    set(_mpi_found FALSE)
+    foreach(_mpi_candidate IN LISTS ${list_variable})
+        if(IS_ABSOLUTE "${_mpi_candidate}" AND EXISTS "${_mpi_candidate}")
+            get_filename_component(_mpi_candidate_real "${_mpi_candidate}" REALPATH)
+            file(TO_CMAKE_PATH "${_mpi_candidate_real}" _mpi_candidate_normalized)
+            string(TOLOWER "${_mpi_candidate_normalized}" _mpi_candidate_lower)
+            string(TOLOWER "${expected}" _mpi_expected_lower)
+            if(_mpi_candidate_lower STREQUAL _mpi_expected_lower)
+                set(_mpi_found TRUE)
+            endif()
+        endif()
+    endforeach()
+    set(${output_variable} "${_mpi_found}" PARENT_SCOPE)
+endfunction()
+
+function(fullmag_pin_windows_mpi)
+    if(NOT WIN32)
+        return()
+    endif()
+    if(NOT FULLMAG_FEM_DEPENDENCY_PREFIX OR
+       NOT IS_DIRECTORY "${FULLMAG_FEM_DEPENDENCY_PREFIX}")
+        _fullmag_windows_mpi_fail("FULLMAG_FEM_DEPENDENCY_PREFIX is unavailable")
+    endif()
+    if(NOT DEFINED ENV{MSMPI_INC} OR NOT DEFINED ENV{MSMPI_LIB64})
+        _fullmag_windows_mpi_fail(
+            "managed MSMPI_INC and MSMPI_LIB64 paths are required for every Windows MFEM configure")
+    endif()
+
+    _fullmag_windows_mpi_normalize(
+        "$ENV{MSMPI_INC}" "MSMPI include directory" _mpi_include)
+    _fullmag_windows_mpi_normalize(
+        "$ENV{MSMPI_LIB64}" "MSMPI library directory" _mpi_library_directory)
+    set(_mpi_header "${_mpi_include}/mpi.h")
+    set(_mpi_library "${_mpi_library_directory}/msmpi.lib")
+    if(NOT EXISTS "${_mpi_header}" OR IS_DIRECTORY "${_mpi_header}")
+        _fullmag_windows_mpi_fail("managed MSMPI include directory does not contain mpi.h: ${_mpi_include}")
+    endif()
+    if(NOT EXISTS "${_mpi_library}" OR IS_DIRECTORY "${_mpi_library}")
+        _fullmag_windows_mpi_fail("managed MSMPI library directory does not contain msmpi.lib: ${_mpi_library_directory}")
+    endif()
+    get_filename_component(_mpi_provider_prefix "${FULLMAG_FEM_DEPENDENCY_PREFIX}" REALPATH)
+    get_filename_component(_mpi_provider_root "${_mpi_provider_prefix}" DIRECTORY)
+    _fullmag_windows_mpi_path_within(
+        "${_mpi_include}" "${_mpi_provider_root}" _mpi_include_inside)
+    _fullmag_windows_mpi_path_within(
+        "${_mpi_library}" "${_mpi_provider_root}" _mpi_library_inside)
+    if(NOT _mpi_include_inside OR NOT _mpi_library_inside)
+        _fullmag_windows_mpi_fail(
+            "MSMPI paths must remain inside the managed provider root: ${_mpi_provider_root}")
+    endif()
+
+    # Remove stale FindMPI selections before supplying the exact managed SDK.
+    foreach(_mpi_cache_variable IN ITEMS
+        MPI_DIR MPI_CONFIG MPI_ROOT MPI_CXX_COMPILER MPI_CXX_COMPILER_EXECUTABLE
+        MPI_CXX_COMPILER_FLAGS MPI_CXX_LINK_FLAGS MPI_CXX_WORKS MPI_CXX_FOUND
+        MPI_C_WORKS MPI_C_FOUND)
+        unset(${_mpi_cache_variable} CACHE)
+        unset(${_mpi_cache_variable})
+    endforeach()
+    set(MPI_CXX_INCLUDE_DIR "${_mpi_include}" CACHE PATH
+        "Managed Fullmag Windows MPI C++ include directory" FORCE)
+    set(MPI_CXX_HEADER_DIR "${_mpi_include}" CACHE PATH
+        "Managed Fullmag Windows MPI C++ headers" FORCE)
+    set(MPI_CXX_INCLUDE_DIRS "${_mpi_include}" CACHE STRING
+        "Managed Fullmag Windows MPI C++ include directories" FORCE)
+    set(MPI_CXX_ADDITIONAL_INCLUDE_DIRS "${_mpi_include}" CACHE STRING
+        "Managed Fullmag Windows MPI C++ additional include directories" FORCE)
+    set(MPI_CXX_LIB_NAMES "msmpi" CACHE STRING
+        "Managed Fullmag Windows MPI C++ library names" FORCE)
+    set(MPI_msmpi_LIBRARY "${_mpi_library}" CACHE FILEPATH
+        "Managed Fullmag Windows MPI import library" FORCE)
+    set(MPI_CXX_LIBRARIES "${_mpi_library}" CACHE STRING
+        "Managed Fullmag Windows MPI C++ libraries" FORCE)
+    set(MPI_C_HEADER_DIR "${_mpi_include}" CACHE PATH
+        "Managed Fullmag Windows MPI C headers" FORCE)
+    set(MPI_C_INCLUDE_DIRS "${_mpi_include}" CACHE STRING
+        "Managed Fullmag Windows MPI C include directories" FORCE)
+    set(MPI_C_LIB_NAMES "msmpi" CACHE STRING
+        "Managed Fullmag Windows MPI C library names" FORCE)
+    set(MPI_C_LIBRARIES "${_mpi_library}" CACHE STRING
+        "Managed Fullmag Windows MPI C libraries" FORCE)
+    set(MPI_SKIP_COMPILER_WRAPPER ON CACHE BOOL
+        "Use the managed Microsoft MPI library directly" FORCE)
+    set(MPI_ASSUME_NO_BUILTIN_MPI ON CACHE BOOL
+        "Do not infer an ambient MPI compiler wrapper" FORCE)
+    set(MPI_CXX_SKIP_MPICXX ON CACHE BOOL
+        "Do not use the deprecated MPI C++ bindings" FORCE)
+    set(MPI_C_INCLUDE_DIR "${_mpi_include}" CACHE PATH
+        "Managed Fullmag Windows MPI C include directory" FORCE)
+
+    find_package(MPI MODULE REQUIRED COMPONENTS CXX)
+    if(NOT MPI_CXX_FOUND OR NOT TARGET MPI::MPI_CXX)
+        _fullmag_windows_mpi_fail("FindMPI did not expose the managed MPI::MPI_CXX target")
+    endif()
+    _fullmag_windows_mpi_list_has_path(
+        MPI_CXX_INCLUDE_DIRS "${_mpi_include}" _mpi_variable_include_matches)
+    _fullmag_windows_mpi_list_has_path(
+        MPI_CXX_LIBRARIES "${_mpi_library}" _mpi_variable_library_matches)
+    if(NOT _mpi_variable_include_matches OR NOT _mpi_variable_library_matches)
+        _fullmag_windows_mpi_fail(
+            "FindMPI selected paths different from the managed MSMPI receipt")
+    endif()
+    get_target_property(_mpi_target_includes MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
+    get_target_property(_mpi_target_libraries MPI::MPI_CXX INTERFACE_LINK_LIBRARIES)
+    if(_mpi_target_includes STREQUAL "_mpi_target_includes-NOTFOUND" OR
+       _mpi_target_libraries STREQUAL "_mpi_target_libraries-NOTFOUND")
+        _fullmag_windows_mpi_fail("MPI::MPI_CXX does not expose inspectable include and library paths")
+    endif()
+    _fullmag_windows_mpi_list_has_path(
+        _mpi_target_includes "${_mpi_include}" _mpi_target_include_matches)
+    _fullmag_windows_mpi_list_has_path(
+        _mpi_target_libraries "${_mpi_library}" _mpi_target_library_matches)
+    if(NOT _mpi_target_include_matches OR NOT _mpi_target_library_matches)
+        _fullmag_windows_mpi_fail(
+            "MPI::MPI_CXX target is not bound to the managed MSMPI receipt")
+    endif()
+    set(FULLMAG_WINDOWS_MFEM_MPI_INCLUDE_DIR "${_mpi_include}" CACHE INTERNAL
+        "Managed Windows MFEM MPI include directory" FORCE)
+    set(FULLMAG_WINDOWS_MFEM_MPI_LIBRARY "${_mpi_library}" CACHE INTERNAL
+        "Managed Windows MFEM MPI import library" FORCE)
+endfunction()
+
 macro(fullmag_find_mfem)
     if(NOT WIN32)
         find_package(MFEM CONFIG REQUIRED)

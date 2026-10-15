@@ -10,17 +10,88 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / 'scripts/windows/native_fem_package.ps1'
+LAUNCHER = ROOT / 'scripts/windows/run_fullmag.ps1'
 INSTALLER = ROOT / 'scripts/windows/build_windows_msi.ps1'
+RUN_NATIVE_WINDOWS_POWERSHELL = os.environ.get('FULLMAG_RUN_NATIVE_WINDOWS_POWERSHELL') == '1'
 POWERSHELL = shutil.which('pwsh') or shutil.which('powershell')
-pytestmark = pytest.mark.skipif(os.name != 'nt' or not POWERSHELL, reason='Windows PowerShell required')
+if RUN_NATIVE_WINDOWS_POWERSHELL and not POWERSHELL:
+    POWERSHELL = os.environ.get('FULLMAG_WINDOWS_POWERSHELL')
+pytestmark = pytest.mark.skipif(
+    not POWERSHELL or (os.name != 'nt' and not RUN_NATIVE_WINDOWS_POWERSHELL),
+    reason='Windows PowerShell required',
+)
+
+
+def native_path(path: Path) -> str:
+    if os.name == 'nt' or not RUN_NATIVE_WINDOWS_POWERSHELL:
+        return str(path)
+    wslpath = shutil.which('wslpath')
+    if not wslpath:
+        raise AssertionError('wslpath is required for the explicit WSL PowerShell run')
+    return subprocess.check_output([wslpath, '-w', str(path)], text=True, timeout=10).strip()
+
+
+def local_path(path: str) -> Path:
+    """Map a native PowerShell path back to this WSL checkout for assertions."""
+    if os.name == 'nt' or not RUN_NATIVE_WINDOWS_POWERSHELL:
+        return Path(path)
+    wslpath = shutil.which('wslpath')
+    if not wslpath:
+        raise AssertionError('wslpath is required for the explicit WSL PowerShell run')
+    return Path(subprocess.check_output([wslpath, '-u', path], text=True, timeout=10).strip())
 
 
 def run_driver(tmp_path, text, *arguments, tool=None):
     driver = tmp_path/'driver.ps1'
     driver.write_text("param($Module,$Fixture,$Case)\n$ErrorActionPreference='Stop'\n. $Module\n"+text, encoding='utf-8')
-    result = subprocess.run([tool or POWERSHELL, '-NoProfile', '-File', str(driver), str(MODULE), str(tmp_path), *map(str, arguments)],
+    result = subprocess.run([tool or POWERSHELL, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                             native_path(driver), native_path(MODULE), native_path(tmp_path), *map(str, arguments)],
                             capture_output=True, text=True, errors='replace', timeout=25)
     return result
+
+
+def run_launcher_guard(tmp_path, stage, audit, expected_hash, launch=None, launch_base=None):
+    driver = tmp_path/'launcher_guard.ps1'
+    driver.write_text(r'''param($Run,$Stage,$Audit,$Expected,$Launch,$LaunchBase)
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($Run,[ref]$tokens,[ref]$errors)
+foreach($name in @('Resolve-AbsolutePath','Get-Sha256File','Test-NativeFemPathWithin','Assert-NativeFemPathChain','Assert-NativeFemStagedPeAudit')) {
+  $fn=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+  if($null -eq $fn){throw "Missing function: $name"}
+  . ([scriptblock]::Create($fn.Extent.Text))
+}
+try { Assert-NativeFemStagedPeAudit -AuditPath $Audit -StageRoot $Stage -ExpectedAuditSha256 $Expected -LaunchRoot $Launch -LaunchBase $LaunchBase; exit 0 }
+catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
+''', encoding='utf-8')
+    return subprocess.run(
+        [POWERSHELL, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+         '-File', native_path(driver), native_path(LAUNCHER), native_path(stage),
+         native_path(audit), expected_hash, native_path(launch) if launch else '',
+         native_path(launch_base) if launch_base else ''],
+        capture_output=True, text=True, errors='replace', timeout=25,
+    )
+
+
+def run_copy_destination_guard(tmp_path, destination, base):
+    driver = tmp_path/'copy_destination_guard.ps1'
+    driver.write_text(r'''param($Run,$Destination,$Base)
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($Run,[ref]$tokens,[ref]$errors)
+foreach($name in @('Resolve-AbsolutePath','Test-NativeFemPathWithin','Assert-NativeFemPathChain','Assert-NativeFemCopyDestination')) {
+  $fn=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+  if($null -eq $fn){throw "Missing function: $name"}
+  . ([scriptblock]::Create($fn.Extent.Text))
+}
+try { Assert-NativeFemCopyDestination -Path $Destination -Base $Base -Label 'copy destination' | Out-Null; exit 0 }
+catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
+''', encoding='utf-8')
+    return subprocess.run(
+        [POWERSHELL, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+         '-File', native_path(driver), native_path(LAUNCHER), native_path(destination), native_path(base)],
+        capture_output=True, text=True, errors='replace', timeout=25,
+    )
 
 
 @pytest.mark.parametrize('mode,cuda,profile,features', [
@@ -54,6 +125,75 @@ Get-FullmagMsiBuildPlan -FemMode $mode -DependencyPrefix $prefix -PrebuiltFemDir
     assert result.returncode != 0 and expected in result.stderr
 
 
+def test_native_fem_staged_audit_binds_manifest_hash_and_every_pe_file(tmp_path):
+    stage = tmp_path/'windows-fem-runtime'/'bin'
+    stage.mkdir(parents=True)
+    images = []
+    for name, payload in (('fullmag.exe', b'executable fixture'), ('fullmag_fem.dll', b'fem fixture')):
+        image = stage/name
+        image.write_bytes(payload)
+        images.append({'path': f'bin/{name}', 'sha256': hashlib.sha256(payload).hexdigest()})
+    audit = stage.parent/'windows-pe-dependencies.json'
+    audit.write_text(json.dumps({
+        'schema_version': 1,
+        'target': 'x86_64-pc-windows-msvc',
+        'scope': 'bin_pe_static_and_delay_imports',
+        'images': images,
+    }), encoding='utf-8')
+    expected_hash = hashlib.sha256(audit.read_bytes()).hexdigest()
+    launch_base = tmp_path/'target'
+    launch = launch_base/'x86_64-pc-windows-msvc'/'release'
+    launch.mkdir(parents=True)
+    for name, payload in (('fullmag.exe', b'executable fixture'), ('fullmag_fem.dll', b'fem fixture')):
+        (launch/name).write_bytes(payload)
+
+    valid = run_launcher_guard(tmp_path, stage, audit, expected_hash, launch, launch_base)
+    assert valid.returncode == 0, valid.stdout + valid.stderr
+
+    audit.write_text(audit.read_text(encoding='utf-8') + '\n', encoding='utf-8')
+    changed_audit = run_launcher_guard(tmp_path, stage, audit, expected_hash, launch, launch_base)
+    assert changed_audit.returncode == 2
+    assert 'audit hash' in changed_audit.stderr.lower()
+
+    audit.write_text(audit.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')
+    # Recreate the exact original JSON bytes before testing a staged image drift.
+    original_audit = json.dumps({
+        'schema_version': 1,
+        'target': 'x86_64-pc-windows-msvc',
+        'scope': 'bin_pe_static_and_delay_imports',
+        'images': images,
+    })
+    audit.write_text(original_audit, encoding='utf-8')
+    (stage/'fullmag_fem.dll').write_bytes(b'tampered fixture')
+    changed_image = run_launcher_guard(tmp_path, stage, audit, expected_hash, launch, launch_base)
+    assert changed_image.returncode == 2
+    assert 'image hash' in changed_image.stderr.lower()
+
+    (stage/'fullmag_fem.dll').write_bytes(b'fem fixture')
+    (launch/'fullmag_fem.dll').write_bytes(b'tampered launch fixture')
+    changed_launch = run_launcher_guard(tmp_path, stage, audit, expected_hash, launch, launch_base)
+    assert changed_launch.returncode == 2
+    assert 'launch image hash' in changed_launch.stderr.lower()
+
+
+def test_native_fem_copy_destination_checks_existing_leaf_before_force_copy(tmp_path):
+    base = tmp_path/'stage'
+    base.mkdir()
+    missing = base/'missing.dll'
+    allowed_missing = run_copy_destination_guard(tmp_path, missing, base)
+    assert allowed_missing.returncode == 0, allowed_missing.stdout + allowed_missing.stderr
+
+    missing.write_bytes(b'existing regular file')
+    allowed_regular = run_copy_destination_guard(tmp_path, missing, base)
+    assert allowed_regular.returncode == 0, allowed_regular.stdout + allowed_regular.stderr
+
+    existing_directory = base/'existing.dll'
+    existing_directory.mkdir()
+    rejected_directory = run_copy_destination_guard(tmp_path, existing_directory, base)
+    assert rejected_directory.returncode == 2
+    assert 'existing directory' in rejected_directory.stderr.lower()
+
+
 @pytest.mark.parametrize('case', ['release','flat','missing','ambiguous','dll_only','lib_only','empty','directory'])
 def test_fem_output_requires_current_profile_dll_and_import_library_pair(tmp_path,case):
     root=tmp_path/'backends/fem'
@@ -69,9 +209,9 @@ def test_fem_output_requires_current_profile_dll_and_import_library_pair(tmp_pat
         assert result.returncode == 0, result.stderr
         data=json.loads(result.stdout)
         expected=root/('Release' if case=='release' else '.')
-        assert Path(data['directory']) == expected
-        assert Path(data['dll']) == expected/'fullmag_fem.dll'
-        assert Path(data['import_library']) == expected/'fullmag_fem.lib'
+        assert data['directory'] == native_path(expected)
+        assert data['dll'] == native_path(expected/'fullmag_fem.dll')
+        assert data['import_library'] == native_path(expected/'fullmag_fem.lib')
     else:
         assert result.returncode != 0 and ('pair' in result.stderr)
 
@@ -123,24 +263,24 @@ try {
     assert f'-DFULLMAG_FEM_REQUIRE_GPU={"ON" if case in ("gpu","slepc_off_gpu") else "OFF"}' in configure
     assert f'-DFULLMAG_ENABLE_CUDA={"ON" if case in ("gpu","slepc_off_gpu") else "OFF"}' in configure
     assert f'-DFULLMAG_FEM_WITH_SLEPC={"ON" if case in ("gpu","slepc_override","modal_changed") else "OFF"}' in configure
-    assert f'-DFULLMAG_FEM_DEPENDENCY_PREFIX={tmp_path}' in configure
+    assert f'-DFULLMAG_FEM_DEPENDENCY_PREFIX={native_path(tmp_path)}' in configure
     assert '-DCMAKE_CUDA_ARCHITECTURES=89' in configure
     if case=='configure_failure':
         assert len(calls)==1 and 'configure failed' in data['error']
     else:
-        assert calls[1]==['--build',str(tmp_path/'build'),'--config','Release','--target','fullmag_fem']
+        assert calls[1]==['--build',native_path(tmp_path/'build'),'--config','Release','--target','fullmag_fem']
         if case=='build_failure': assert 'build failed' in data['error']
         elif case=='config_changed': assert 'config changed during build' in data['error']
         elif case=='modal_changed': assert 'input changed after configure' in data['error']
         else:
             assert isinstance(data['output'],dict) and data['error'] is None
             for key,file in [('dll_sha256','dll'),('import_library_sha256','import_library'),('provider_config_sha256','provider_config')]:
-                assert data['output'][key] == hashlib.sha256(Path(data['output'][file]).read_bytes()).hexdigest()
+                assert data['output'][key] == hashlib.sha256(local_path(data['output'][file]).read_bytes()).hexdigest()
             inventory=data['output']['modal_provider']
             assert inventory['enabled'] == (case in ('gpu','slepc_override'))
             if inventory['enabled']:
                 for item in inventory['files']:
-                    assert item['sha256'] == hashlib.sha256(Path(item['path']).read_bytes()).hexdigest()
+                    assert item['sha256'] == hashlib.sha256(local_path(item['path']).read_bytes()).hexdigest()
 
 
 @pytest.mark.parametrize('case', ['valid','disabled_stale','no_cache','no_field','duplicate_field','schema','profile',
@@ -155,8 +295,8 @@ def test_modal_inventory_requires_pinned_inputs_and_rejects_changes(tmp_path,cas
     values={
         'SCHEMA': 'wrong.v1' if case=='schema' else 'fullmag.windows.modal-provider.v1',
         'PROFILE':'Debug' if case=='profile' else 'Release',
-        'FILES':'' if case=='empty_files' else str(library) if case=='omitted_config' else f'{config};{library}',
-        'CONFIGS':str(config),
+        'FILES':'' if case=='empty_files' else native_path(library) if case=='omitted_config' else f'{native_path(config)};{native_path(library)}',
+        'CONFIGS':native_path(config),
         'TARGETS':'MPI::MPI_CXX;PETSC::petsc' if case=='missing_target' else 'MPI::MPI_CXX;PETSC::petsc;SLEPC::slepc',
     }
     entries=[]
@@ -221,30 +361,116 @@ Assert-FullmagMsiFemAvailability -Plan $plan -Status $status
 
 @pytest.mark.parametrize('mode', ['none','cpu','gpu'])
 def test_fem_manifests_and_sdk_roots_follow_actual_assembly_scope(tmp_path,mode):
-    for sub in ('bin','lib'): (tmp_path/sub).mkdir()
+    prefix=tmp_path/'installed'
+    for sub in ('bin','lib'): (prefix/sub).mkdir(parents=True)
+    mpi_library=tmp_path/'tools/msmpi/PFiles/Microsoft SDKs/MPI/Lib/x64/msmpi.lib'
+    mpi_install=tmp_path/'mpi-install'
+    mpi_bin=mpi_install/'Bin'
+    mpi_runtime=tmp_path/'system32'
+    if mode != 'none':
+        mpi_library.parent.mkdir(parents=True)
+        mpi_library.write_bytes(b'msmpi import library fixture')
+        mpi_bin.mkdir(parents=True)
+        (mpi_bin/'mpiexec.exe').write_bytes(b'mpiexec fixture')
+        mpi_runtime.mkdir()
+        (mpi_runtime/'msmpi.dll').write_bytes(b'msmpi runtime fixture')
+        (tmp_path/'provider-receipt.json').write_text(json.dumps({
+            'schema':'fullmag.windows.fem-providers.v1',
+            'plan':{'root':native_path(tmp_path),'prefix':native_path(prefix)},
+            'mpi_library':native_path(mpi_library),
+        }), encoding='utf-8')
     result=run_driver(tmp_path, f'''
-$plan=Get-FullmagMsiBuildPlan -FemMode '{mode}' -Cuda:('{mode}' -eq 'gpu') -DependencyPrefix $Fixture
+$prefix=Join-Path $Fixture 'installed'
+$plan=Get-FullmagMsiBuildPlan -FemMode '{mode}' -Cuda:('{mode}' -eq 'gpu') -DependencyPrefix $prefix
+if ($plan.fem_enabled) {{
+  function Test-Path {{ param([string]$LiteralPath,[string]$Path,[string]$PathType); if ($LiteralPath -eq 'HKLM:\SOFTWARE\Microsoft\MPI') {{ return $true }}; Microsoft.PowerShell.Management\Test-Path @PSBoundParameters }}
+  function Get-ItemProperty {{ param([string]$LiteralPath); if ($LiteralPath -eq 'HKLM:\SOFTWARE\Microsoft\MPI') {{ return [pscustomobject]@{{ InstallRoot=(Join-Path $Fixture 'mpi-install'); MSPMSProvider=(Join-Path $Fixture 'system32/msmpi.dll'); Version='fixture' }} }}; Microsoft.PowerShell.Management\Get-ItemProperty @PSBoundParameters }}
+      function Get-Item {{
+        param([string]$LiteralPath,[switch]$Force)
+        if ($LiteralPath -like '*msmpi.dll' -or $LiteralPath -like '*mpiexec.exe') {{
+          return [pscustomobject]@{{ Attributes=[System.IO.FileAttributes]::Normal; LinkType=$null; VersionInfo=[pscustomobject]@{{ FileVersion='fixture' }} }}
+        }}
+        Microsoft.PowerShell.Management\Get-Item @PSBoundParameters
+      }}
+  $env:MSMPI_BIN=Join-Path $Fixture 'mpi-install/Bin'
+}}
 $root=Join-Path $Fixture 'runtimes'
 Write-FullmagMsiFemRuntimeManifests -Plan $plan -RuntimesRoot $root -Version '0.1.0'
 @{{roots=@(Get-FullmagMsiFemDependencyRoots -Plan $plan); files=@(Get-ChildItem $root -Filter manifest.json -Recurse -ErrorAction SilentlyContinue | ForEach-Object {{ Get-Content $_.FullName -Raw | ConvertFrom-Json }})}} | ConvertTo-Json -Depth 8 -Compress
 ''')
     assert result.returncode == 0,result.stderr
     data=json.loads(result.stdout)
-    assert {Path(p) for p in data['roots']} == (set() if mode=='none' else {tmp_path,tmp_path/'bin',tmp_path/'lib'})
+    expected_roots = set() if mode == 'none' else {
+        native_path(root) for root in (prefix, prefix/'bin', prefix/'lib', mpi_runtime)
+    }
+    assert set(data['roots']) == expected_roots
     assert [f['family'] for f in data['files']] == ([] if mode=='none' else ['fem-cpu-native'] if mode=='cpu' else ['fem-cpu-native','fem-gpu'])
     for file in data['files']:
         assert file['worker']=='../../bin/fullmag-bin.exe'
         assert file['engines'][0]['public'] is False and file['engines'][0]['stability']=='experimental'
 
 
+@pytest.mark.parametrize('case,expected', [
+    ('missing_receipt','managed provider receipt'),
+    ('missing_runtime','registered runtime DLL is missing'),
+    ('missing_mpiexec','exactly one registered x64 mpiexec bin'),
+    ('environment_mismatch','does not match'),
+])
+def test_fem_mpi_runtime_root_is_receipted_and_fail_closed(tmp_path,case,expected):
+    prefix=tmp_path/'installed'
+    prefix.mkdir()
+    mpi_library=tmp_path/'tools/msmpi/PFiles/Microsoft SDKs/MPI/Lib/x64/msmpi.lib'
+    mpi_library.parent.mkdir(parents=True)
+    mpi_library.write_bytes(b'msmpi import library fixture')
+    mpi_install=tmp_path/'mpi-install'
+    mpi_bin=mpi_install/'Bin'
+    if case != 'missing_mpiexec':
+        mpi_bin.mkdir(parents=True)
+        (mpi_bin/'mpiexec.exe').write_bytes(b'mpiexec fixture')
+    if case == 'environment_mismatch':
+        other_bin=mpi_install/'OtherBin'
+        other_bin.mkdir(parents=True)
+        (other_bin/'mpiexec.exe').write_bytes(b'mpiexec fixture with mismatched registration')
+    runtime=tmp_path/'system32'
+    if case != 'missing_runtime':
+        runtime.mkdir()
+        (runtime/'msmpi.dll').write_bytes(b'msmpi runtime fixture')
+    if case != 'missing_receipt':
+        (tmp_path/'provider-receipt.json').write_text(json.dumps({
+            'schema':'fullmag.windows.fem-providers.v1',
+            'plan':{'root':native_path(tmp_path),'prefix':native_path(prefix)},
+            'mpi_library':native_path(mpi_library),
+        }), encoding='utf-8')
+    result=run_driver(tmp_path, f'''
+$prefix=Join-Path $Fixture 'installed'
+$plan=Get-FullmagMsiBuildPlan -FemMode cpu -DependencyPrefix $prefix
+function Test-Path {{ param([string]$LiteralPath,[string]$Path,[string]$PathType); if ($LiteralPath -eq 'HKLM:\SOFTWARE\Microsoft\MPI') {{ return $true }}; Microsoft.PowerShell.Management\Test-Path @PSBoundParameters }}
+function Get-ItemProperty {{ param([string]$LiteralPath); if ($LiteralPath -eq 'HKLM:\SOFTWARE\Microsoft\MPI') {{ return [pscustomobject]@{{ InstallRoot=(Join-Path $Fixture 'mpi-install'); MSPMSProvider=(Join-Path $Fixture 'system32/msmpi.dll'); Version='fixture' }} }}; Microsoft.PowerShell.Management\Get-ItemProperty @PSBoundParameters }}
+    function Get-Item {{
+      param([string]$LiteralPath,[switch]$Force)
+      if ($LiteralPath -like '*msmpi.dll' -or $LiteralPath -like '*mpiexec.exe') {{
+        $version=if ($LiteralPath -like '*OtherBin*') {{ 'other' }} else {{ 'fixture' }}
+        return [pscustomobject]@{{ Attributes=[System.IO.FileAttributes]::Normal; LinkType=$null; VersionInfo=[pscustomobject]@{{ FileVersion=$version }} }}
+      }}
+      Microsoft.PowerShell.Management\Get-Item @PSBoundParameters
+    }}
+    if ($Case -eq 'environment_mismatch') {{ $env:MSMPI_BIN=Join-Path $Fixture 'mpi-install/OtherBin' }} else {{ $env:MSMPI_BIN=Join-Path $Fixture 'mpi-install/Bin' }}
+Get-FullmagMsiMpiRuntimeRoot -Plan $plan
+''',case)
+    assert result.returncode != 0
+    assert expected in result.stderr
+
+
 def test_packager_uses_same_features_for_cli_api_and_stages_fem_before_probe():
     text=INSTALLER.read_text(encoding='utf-8')
+    package_text=MODULE.read_text(encoding='utf-8')
     assert text.count('($BuildFeatures -join ",")')==2
     assert text.index('$nativeFemOutput = Invoke-FullmagMsiFemBuild') < text.index('& cargo @launcherBuildArgs')
     assert '$env:FULLMAG_FEM_LIB_DIR = $nativeFemOutput.directory' in text
     assert '$runtimeDllSources += $nativeFemOutput.dll' in text
     assert text.index('$peDependencyAudit = Get-Content') < text.index('runtime fem-availability --json')
     assert 'qualification="not_verified"' in text
+    assert 'Assert-FullmagMsiPathChain' in package_text
 
 
 def test_native_ci_uses_operator_prefixes_and_explicit_fem_cuda_inputs():

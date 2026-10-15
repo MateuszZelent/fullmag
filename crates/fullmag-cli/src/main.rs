@@ -79,6 +79,7 @@ fn main() -> Result<()> {
             mode: None,
             precision: None,
             dev: false,
+            browser: false,
             web_port: None,
         });
     }
@@ -778,6 +779,11 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
 }
 
 fn launch_ui(ui: UiCli) -> Result<()> {
+    let _browser_interrupt = if ui.browser {
+        Some(crate::control_room::BrowserInterruptGuard::install()?)
+    } else {
+        None
+    };
     crate::control_room::development_restore_requested(ui.dev, ui.script.is_some())?;
     crate::control_room::init_api_port()?;
     let (session_id, live_workspace) = if let Some(script) = ui.script.as_ref() {
@@ -838,8 +844,18 @@ fn launch_ui(ui: UiCli) -> Result<()> {
         );
     }
     let initial_api_instance = runtime_binding.api_instance_id().to_owned();
-    let mut ui_child =
-        crate::control_room::open_in_tauri(&ready, intent, runtime_binding.api_instance_id())?;
+    let mut ui_child = if ui.browser {
+        if let Err(error) = crate::control_room::open_in_browser(&ready) {
+            eprintln!("[fullmag] {error:#}; open {} manually", ready.web_url);
+        }
+        None
+    } else {
+        Some(crate::control_room::open_in_tauri(
+            &ready,
+            intent,
+            runtime_binding.api_instance_id(),
+        )?)
+    };
     // Native startup has an owned observer and cannot delay opening the window.
     let mut runtime_attach = match runtime_binding.start() {
         Ok(attach) => attach,
@@ -865,14 +881,18 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     let mut retention_reported = false;
     loop {
         if !ui_closed {
-            match ui_child.try_wait() {
-                Ok(Some(_)) => ui_closed = true,
-                Ok(None) => {}
-                Err(error) => {
-                    eprintln!("UI process observation unavailable: {error}");
-                    let _ = ui_child.wait();
-                    ui_closed = true;
+            if let Some(ui_child) = ui_child.as_mut() {
+                match ui_child.try_wait() {
+                    Ok(Some(_)) => ui_closed = true,
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("UI process observation unavailable: {error}");
+                        let _ = ui_child.wait();
+                        ui_closed = true;
+                    }
                 }
+            } else if crate::control_room::browser_exit_requested() {
+                ui_closed = true;
             }
         }
         if ui_closed {
@@ -2038,6 +2058,13 @@ mod tests {
     fn cli_parses_ui_subcommand() {
         let cli = Cli::try_parse_from(["fullmag", "ui"]).expect("cli parse");
         assert!(matches!(cli.command, Command::Ui(_)));
+
+        let browser = Cli::try_parse_from(["fullmag", "ui", "--browser"])
+            .expect("browser ui parse");
+        match browser.command {
+            Command::Ui(ui) => assert!(ui.browser),
+            _ => panic!("expected ui command"),
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@ name = "fullmag-workspace-inspect"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 description = "Read-only inspectors and scanner for the per-user workspace: projects, scripts and result folders, shared by the desktop host and the local runtime API."
 
 [features]

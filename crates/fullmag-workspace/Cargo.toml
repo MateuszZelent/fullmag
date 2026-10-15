@@ -3,6 +3,7 @@ name = "fullmag-workspace"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 description = "Per-user Fullmag workspace database: recent projects and scripts, usage events, small personal settings."
 
 [dependencies]

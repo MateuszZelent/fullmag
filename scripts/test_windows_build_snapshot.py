@@ -294,6 +294,41 @@ class SnapshotChecks(unittest.TestCase):
         with self.assertRaises((build_snapshot.SnapshotError, build_snapshot.SourceIdentityError)):
             self.make()
 
+    def test_pnpm_ignored_package_junction_is_pruned_but_source_link_fails_closed(self):
+        metadata = self.make()
+        frozen = Path(metadata["source_root"])
+        package_target = self.root / "pnpm-package"
+        package_target.mkdir()
+        (package_target / "package.json").write_text("{}\n")
+        package_link = frozen / "apps/control-room/node_modules/class-variance-authority"
+        package_link.parent.mkdir(parents=True)
+        try:
+            package_link.symlink_to(package_target, target_is_directory=True)
+        except OSError:
+            self.skipTest("Host does not permit creating pnpm-like directory links")
+
+        # A generated pnpm package junction may appear after the snapshot was
+        # sealed. It is ignored before reparse metadata is inspected.
+        self.assertEqual(build_snapshot.verify_snapshot(metadata, self.build), metadata)
+
+        source_link = frozen / "apps/control-room/src/linked.ts"
+        source_link.parent.mkdir(parents=True)
+        source_link.symlink_to(frozen / "crates/demo/src/lib.rs")
+        with self.assertRaisesRegex(build_snapshot.SnapshotError, "symlinks/reparse points"):
+            build_snapshot.verify_snapshot(metadata, self.build)
+
+    def test_tauri_output_rejects_ignored_node_modules_subdirectory(self):
+        metadata = self.make()
+        generated = Path(metadata["source_root"]) / build_snapshot.TAURI_OUTPUT_DIRECTORY
+        generated.mkdir(parents=True)
+        for name in build_snapshot.TAURI_OUTPUT_NAMES:
+            (generated / name).write_text('{"generated": true}')
+        (generated / "node_modules").mkdir()
+        with self.assertRaisesRegex(
+                build_snapshot.SnapshotError,
+                "Tauri generated-output directory cannot contain subdirectories"):
+            build_snapshot.verify_snapshot(metadata, self.build)
+
     def test_bounded_tauri_outputs_are_not_frozen_inputs(self):
         metadata = self.make()
         generated = Path(metadata["source_root"]) / build_snapshot.TAURI_OUTPUT_DIRECTORY

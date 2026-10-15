@@ -3,7 +3,7 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; skip_local_changes="false"; seen_options="";
+build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="0"; skip_local_changes="false"; seen_options="";
 for raw in "$@"; do
   [ -n "$raw" ] || continue;
   key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi;
@@ -64,12 +64,15 @@ case "$run_mode" in interactive|headless) ;; *) echo "unsupported run mode: $run
 if [ -z "$script" ]; then echo "missing script path; example: just fullmag windows=True build=True dev fdm gpu ./examples/permalloy_layer_bimeron_prism_single_layer_relax_300nm.py" >&2; exit 2; fi;
 if [ ! -f "$script" ]; then echo "script not found: $script" >&2; exit 2; fi;
 skip_local_changes_args=(); if [ "$skip_local_changes" = "true" ]; then skip_local_changes_args=(-SkipLocalChanges); fi;
+gpu_runtime_bin="${FULLMAG_GPU_RUNTIME_BIN:-${repo_root}/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu}";
 host_windows="false";
 case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac;
 if [ "$backend" = "fem" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then
+  case ",$seen_options," in *",web_port,"*) ;; *) web_port="0" ;; esac;
   exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}";
 fi;
 if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then
+  case ",$seen_options," in *",web_port,"*) ;; *) web_port="3100" ;; esac;
   exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}";
 fi;
 if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "${repo_root}/.fullmag/local/python/bin/python" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi;
@@ -82,7 +85,7 @@ if [ "$backend" = "fem" ]; then
   runtime_copy_helper="${repo_root}/scripts/lib/runtime_bundle_copy.sh";
   test -f "$runtime_copy_helper" || { echo "managed FEM runtime copy helper is missing: $runtime_copy_helper" >&2; exit 2; };
   if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi;
-  bin="${repo_root}/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu"; path_prefix="";
+  bin="$gpu_runtime_bin"; path_prefix="";
 else
   if [ "$force" = "true" ]; then
     if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi;

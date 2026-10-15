@@ -1,6 +1,5 @@
 from pathlib import Path
 import os
-import re
 import shutil
 import subprocess
 
@@ -21,17 +20,22 @@ SETUP = ROOT / "scripts" / "windows" / "setup_fullmag.ps1"
 STORAGE_ADAPTER = ROOT / "scripts" / "windows" / "fullmag_storage.ps1"
 STORAGE_RESOLVER = ROOT / "scripts" / "fullmag_storage.py"
 MAKE_STORAGE_SHELL = ROOT / "scripts" / "make_storage_shell.sh"
+RUN_FULLMAG = ROOT / "scripts" / "run_fullmag.sh"
 
 
 def test_justfile_exposes_native_windows_fullmag_route() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
+    parser = RUN_FULLMAG.read_text(encoding="utf-8")
 
     assert 'set windows-shell := ["C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe"' in justfile
-    assert 'windows="false"' in justfile
-    assert "--windows|windows)" in justfile
-    assert "scripts/windows/run_fullmag.ps1" in justfile
-    assert "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File" in justfile
-    assert "windows=True" in justfile
+    assert 'fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":' in justfile
+    assert 'bash scripts/run_fullmag.sh "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"' in justfile
+    assert parser.startswith("#!/usr/bin/env bash")
+    assert 'case "$key_lc" in' in parser
+    assert "--windows|windows)" in parser
+    assert "scripts/windows/run_fullmag.ps1" in parser
+    assert "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File" in parser
+    assert "BASH_SOURCE" in parser
 
 
 def test_windows_launcher_keeps_build_and_cache_storage_outside_repo() -> None:
@@ -153,13 +157,15 @@ def test_windows_fem_launchers_define_source_identity_probe_before_use() -> None
 
 def test_just_fullmag_exposes_skip_local_changes_and_forwards_it_to_windows_launchers() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
+    parser = RUN_FULLMAG.read_text(encoding="utf-8")
 
     assert 'windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="false"' in justfile
     assert 'skip_local_changes="false"' in justfile
-    assert "--skip_local_changes|skip_local_changes|--skip-local-changes|skip-local-changes" in justfile
-    assert 'skip_local_changes="$value_lc"' in justfile
-    assert 'skip_local_changes_args=(-SkipLocalChanges)' in justfile
-    assert '"${skip_local_changes_args[@]}"' in justfile
+    assert "--skip_local_changes|skip_local_changes|--skip-local-changes|skip-local-changes" in parser
+    assert 'skip_local_changes="$value_lc"' in parser
+    assert 'skip_local_changes_args=(-SkipLocalChanges)' in parser
+    assert '"${skip_local_changes_args[@]}"' in parser
+    assert 'bash scripts/run_fullmag.sh' in justfile
 
 
 def test_windows_build_recipe_normalizes_named_arguments() -> None:
@@ -224,11 +230,11 @@ def test_windows_launcher_builds_cli_and_api_in_the_selected_profile() -> None:
 
 def test_frozen_build_uses_stable_cargo_inputs_and_verifies_before_publication() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
-    materialize = launcher.index('"compiler_inputs.py") materialize')
+    materialize = launcher.index("Invoke-CompilerInputsTool -Command materialize")
     cargo_root = launcher.index("Push-Location $CompilerSourceRoot")
     cargo = launcher.index('Invoke-External "cargo" $cargoArguments', cargo_root)
     desktop = launcher.index('Invoke-External "cargo" $desktopCargoArguments', cargo)
-    verify = launcher.index('"compiler_inputs.py") verify', cargo_root)
+    verify = launcher.index("Invoke-CompilerInputsTool -Command verify", cargo_root)
     publish = launcher.index("$manifest = [ordered]@{", verify)
     assert materialize < cargo_root < cargo < desktop < verify < publish
     # Runtime/staging provenance must continue to refer to immutable sources.
@@ -291,17 +297,13 @@ def test_root_workspace_and_windows_setup_use_one_pnpm_lock_contract() -> None:
     assert "Pinned pnpm validation failed" in setup
 
 
-def test_windows_fem_gpu_routes_to_docker_before_posix_host_setup() -> None:
+def test_windows_fem_routes_before_posix_host_setup() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
-
-    assert "scripts/windows/run_fullmag_fem.ps1" in justfile
-    assert "scripts/windows/run_fullmag_wsl.ps1" not in justfile
-    assert '[ "$backend" = "fem" ]' in justfile
-    assert '[ "$device" = "gpu" ]' in justfile
-    fullmag_start = justfile.index("fullmag opt_1")
-    assert justfile.index("run_fullmag_fem.ps1", fullmag_start) < justfile.index(
-        "just ensure-python", fullmag_start
-    )
+    parser = (ROOT / "scripts/run_fullmag.sh").read_text(encoding="utf-8")
+    assert "bash scripts/run_fullmag.sh" in justfile
+    assert "scripts/windows/run_fullmag_fem.ps1" in parser
+    assert "scripts/windows/run_fullmag_wsl.ps1" not in parser
+    assert parser.index("run_fullmag_fem.ps1") < parser.index("just ensure-python")
 
 
 def test_windows_fem_aliases_share_storage_contract() -> None:
@@ -479,10 +481,12 @@ def test_windows_setup_bootstraps_tools_and_validates_storage() -> None:
 
 def test_justfile_exposes_windows_setup_doctor_and_build_only_routes() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
+    parser = RUN_FULLMAG.read_text(encoding="utf-8")
 
     for recipe in ("windows-setup:", "windows-doctor:", "windows-build "):
         assert recipe in justfile
-    assert '[ "$windows" = "true" ] || [ "$host_windows" = "true" ]' in justfile
+    assert '[ "$windows" = "true" ] || [ "$host_windows" = "true" ]' in parser
+    assert 'bash scripts/run_fullmag.sh' in justfile
     assert "-BuildOnly" in justfile
 
 
@@ -539,9 +543,10 @@ def test_windows_fem_interactive_launch_separates_host_and_container_web_ports(l
 def test_windows_fem_default_web_port_is_selected_from_a_bindable_host_range() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
     launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    parser = RUN_FULLMAG.read_text(encoding="utf-8")
 
     assert 'fullmag opt_1=""' in justfile
-    assert 'web_port="0"' in justfile
+    assert 'web_port="0"' in parser
     assert 'scripts\\control_room_port.py' in launcher
     assert '[int]$WebPort = 0' in launcher
     assert "scripts\\control_room_port.py" in launcher
@@ -556,26 +561,37 @@ def test_windows_fem_default_web_port_is_selected_from_a_bindable_host_range() -
     [("fdm", None, "3100"), ("fem", None, "0"),
      ("fdm", "3197", "3197"), ("fem", "3197", "3197")],
 )
-def test_fullmag_windows_dispatch_preserves_port_defaults(backend, explicit_port, expected):
+def test_fullmag_windows_dispatch_preserves_port_defaults(tmp_path, backend, explicit_port, expected):
     git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
     bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
     if bash is None:
-        pytest.skip("Bash is required to exercise the justfile parser")
-    recipe = JUSTFILE.read_text(encoding="utf-8").split('fullmag opt_1=""', 1)[1]
-    body = recipe.split("bash -euo pipefail -c '\\\n", 1)[1]
-    body = body.split("\n\n", 1)[0].rstrip()
-    assert body.endswith("'")
-    body = body[:-1].replace("\\\n", "\n")
-    options = ["windows=True", backend, "gpu", "justfile"]
-    # Use an existing file: this probe exits before invoking a real launcher.
-    options[3] = "script=justfile"
+        pytest.skip("Bash is required to exercise the external fullmag parser")
+    fake_powershell = tmp_path / "powershell.exe"
+    fake_powershell.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = \"-WebPort\" ]; then shift; printf '%s' \"$1\"; exit 0; fi\n"
+        "  shift\n"
+        "done\n"
+        "exit 3\n",
+        encoding="utf-8",
+    )
+    fake_powershell.chmod(0o755)
+    options = ["windows=True", backend, "gpu", "script=justfile"]
     if explicit_port is not None:
         options.append(f"web_port={explicit_port}")
-    body = body.replace("{{repo_root}}", ".")
-    for index in range(1, 9):
-        body = body.replace("{{opt_" + str(index) + "}}", options[index - 1] if index <= len(options) else "")
-    body = re.sub(r"exec powershell\.exe[^\n]*", 'printf "%s" "$web_port"; exit 0', body)
-    result = subprocess.run([bash, "-c", body], cwd=ROOT, text=True, capture_output=True)
+    env = os.environ.copy()
+    env["PATH"] = str(tmp_path) + os.pathsep + env.get("PATH", "")
+    # Execute the real parser so BASH_SOURCE resolves its repository root; the
+    # fake powershell process exits before any Windows launcher is invoked.
+    result = subprocess.run(
+        [bash, RUN_FULLMAG.as_posix(), *options],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout == expected
 

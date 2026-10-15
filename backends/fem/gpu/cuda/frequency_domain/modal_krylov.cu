@@ -87,9 +87,14 @@ __host__ __device__ double complex_abs2(GpuComplex value)
     return value.real * value.real + value.imag * value.imag;
 }
 
+__host__ __device__ bool scalar_is_finite(double value)
+{
+    return isfinite(value);
+}
+
 __host__ __device__ bool complex_is_finite(GpuComplex value)
 {
-    return isfinite(value.real) && isfinite(value.imag);
+    return scalar_is_finite(value.real) && scalar_is_finite(value.imag);
 }
 
 __device__ bool modal_status_stopped(const int *status)
@@ -305,7 +310,7 @@ __global__ void dense_shifted_solve_kernel(
                 pivot_row = row;
             }
         }
-        if (!std::isfinite(pivot_norm) || pivot_norm <= kBreakdownTolerance) {
+        if (!scalar_is_finite(pivot_norm) || pivot_norm <= kBreakdownTolerance) {
             atomicOr(status, kModalStatusBreakdown);
             return;
         }
@@ -512,7 +517,7 @@ __global__ void block_jacobi_precondition_kernel(
     if (index < nq + np) {
         const std::uint64_t phi_row = index - nq;
         const double diagonal = csr_real_entry(a_phiphi, phi_row, phi_row);
-        if (!std::isfinite(diagonal) || std::abs(diagonal) <= kDiagonalTolerance) {
+        if (!scalar_is_finite(diagonal) || std::abs(diagonal) <= kDiagonalTolerance) {
             atomicOr(status, kModalStatusBreakdown);
             return;
         }
@@ -743,7 +748,8 @@ __global__ void update_linear_convergence_kernel(
     }
     const double residual = *residual_norm_squared;
     const double rhs = *rhs_norm_squared;
-    if (!std::isfinite(residual) || !std::isfinite(rhs) || residual < 0.0 || rhs < 0.0) {
+    if (!scalar_is_finite(residual) || !scalar_is_finite(rhs) ||
+        residual < 0.0 || rhs < 0.0) {
         atomicOr(status, kModalStatusNonFinite);
         return;
     }

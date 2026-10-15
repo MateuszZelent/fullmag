@@ -202,7 +202,7 @@ describe("compute-node snapshot inventory", () => {
               over_budget: false,
               blocking_reasons: [],
             },
-          },
+          } as unknown as NonNullable<ComputeNodesResource["nodes"][number]["node_policy"]>,
         }],
       },
       status: "ready",

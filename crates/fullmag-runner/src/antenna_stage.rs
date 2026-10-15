@@ -1611,7 +1611,10 @@ mod tests {
         )
         .expect_err("cancelled publication must not return a ready asset");
         assert!(error.message.contains("cancelled before atomic rename"));
-        assert!(!root.join("antenna/field_solutions/solution").exists());
+        let (asset_id, _) = manifest_metadata(&result).unwrap();
+        let revision = physical_solution_revision_dir(&root, &result.solution_id, &asset_id);
+        assert!(!revision.exists());
+        assert!(fs::read_dir(revision.parent().unwrap()).unwrap().next().is_none());
         fs::remove_dir_all(&root).ok();
     }
 

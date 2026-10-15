@@ -15,6 +15,8 @@ apps/desktop/src-tauri/gen/
 !/readme.md
 !.agents/**/*.md
 !.github/**/*.md
+!scripts/windows/installer/FullmagBootstrapperApplication/README.md
+!scripts/windows/installer/Fullmag.Setup.UI/README.md
 *.zip
 *.patch
 *.orig
@@ -24,7 +26,7 @@ apps/desktop/src-tauri/gen/
 *.egg
 *.whl
 # === Rust ===
-# Cargo.lock is tracked — this monorepo contains binary crates.
+# Cargo.lock is tracked â€” this monorepo contains binary crates.
 
 # === Node / pnpm ===
 node_modules/
@@ -171,3 +173,8 @@ task-storage/
 .tmp*
 .codex*
 target-tracking-fix/
+
+# Compiled Windows artifacts are distributed through GitHub Releases.
+*.exe
+*.msi
+*.wixpdb

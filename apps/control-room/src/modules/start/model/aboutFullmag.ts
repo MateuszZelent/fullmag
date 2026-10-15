@@ -73,7 +73,7 @@ export const FULLMAG_BIBTEX = `@software{fullmag_2026,
 export const FULLMAG_REPOSITORY_URL = "https://github.com/MateuszZelent/fullmag";
 
 export const FULLMAG_LICENSE =
-  "The repository does not currently contain a root-level license file. Contact the project coordinator before reuse or redistribution.";
+  "The Fullmag-owned source in this repository is licensed under the Apache License, Version 2.0. See NOTICE for the existing project attribution. External solvers, vendored files, runtimes, containers, data, and other third-party components retain their own terms; see the Fullmag licensing guide before redistribution. The third-party inventory for a complete release remains NOT VERIFIED.";
 
 export const FULLMAG_FUNDING =
   "Mateusz Zelent acknowledges funding from the European Union's Horizon Europe programme under HORIZON-MSCA-2024-PF-01, Marie Skłodowska-Curie Grant Agreement No. 101208951 (CNMA).";

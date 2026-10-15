@@ -10,6 +10,8 @@
 #include <cub/cub.cuh>
 #include <math_constants.h>
 
+#include "gpu/cuda/runtime/cccl_extrema.hpp"
+
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
@@ -124,9 +126,12 @@ __global__ void adaptive_error_norm_blocks_kernel(
     __shared__ typename BlockReduce::TempStorage error_storage;
     __shared__ typename BlockReduce::TempStorage norm_storage;
     __shared__ typename BlockReduce::TempStorage rotation_storage;
-    const double block_max = BlockReduce(error_storage).Reduce(local_max, cub::Max());
-    const double block_norm_defect = BlockReduce(norm_storage).Reduce(local_norm_defect, cub::Max());
-    const double block_spin_rotation = BlockReduce(rotation_storage).Reduce(local_spin_cosine, cub::Min());
+    const double block_max = BlockReduce(error_storage).Reduce(
+        local_max, cuda_compat::legacy_maximum{});
+    const double block_norm_defect = BlockReduce(norm_storage).Reduce(
+        local_norm_defect, cuda_compat::legacy_maximum{});
+    const double block_spin_rotation = BlockReduce(rotation_storage).Reduce(
+        local_spin_cosine, cuda_compat::legacy_minimum{});
     if (threadIdx.x == 0) {
         block_max_scaled_error[blockIdx.x] = block_max;
         block_max_norm_defect[blockIdx.x] = block_norm_defect;

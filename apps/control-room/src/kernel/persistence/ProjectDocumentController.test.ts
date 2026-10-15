@@ -211,8 +211,9 @@ describe("ProjectDocumentController", () => {
     vi.stubGlobal("document", {
       createElement: vi.fn(() => anchor),
     });
+    const createObjectURL = vi.fn((_blob: Blob) => "blob:project");
     vi.stubGlobal("URL", {
-      createObjectURL: vi.fn(() => "blob:project"),
+      createObjectURL,
       revokeObjectURL: vi.fn(),
     });
     const api = apiFor(resource({ name: "Download me" }));
@@ -223,6 +224,8 @@ describe("ProjectDocumentController", () => {
 
     expect(anchor.download).toBe("download-me.fms");
     expect(anchor.href).toBe("blob:project");
+    const archive = createObjectURL.mock.calls[0][0];
+    expect([...new Uint8Array(await archive.arrayBuffer())]).toEqual([80, 75, 3, 4]);
     expect(click).toHaveBeenCalledOnce();
   });
 

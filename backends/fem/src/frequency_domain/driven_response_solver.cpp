@@ -21,8 +21,12 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(_WIN32)
+#include <direct.h>
+#else
 #include <sys/stat.h>
 #include <sys/types.h>
+#endif
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
@@ -6942,7 +6946,12 @@ FrequencyDomainStatus write_response_zarr_array_artifacts(
 
 FrequencyDomainStatus ensure_directory(const char *path, char error_message[128]) noexcept
 {
-    if (mkdir(path, 0777) == 0 || errno == EEXIST) {
+#if defined(_WIN32)
+    const int create_result = _mkdir(path);
+#else
+    const int create_result = mkdir(path, 0777);
+#endif
+    if (create_result == 0 || errno == EEXIST) {
         return FrequencyDomainStatus::ok;
     }
     std::snprintf(error_message, 128, "failed to create artifact directory: %s", path);
