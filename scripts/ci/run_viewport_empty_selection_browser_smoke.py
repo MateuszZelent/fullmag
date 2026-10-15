@@ -109,7 +109,9 @@ def managed_temporary_directory() -> Path:
     root = Path(configured)
     if not root.is_absolute():
         raise RuntimeError("FULLMAG_BUILD_STORAGE_ROOT must be absolute")
-    directory = root / "tmp" / "viewport-empty-selection-browser"
+    # Chrome creates a Unix-domain SingletonSocket below TMPDIR; Linux's
+    # socket path limit includes both the managed root and Chrome's suffix.
+    directory = root / "tmp" / "vp"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
