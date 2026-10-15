@@ -37,15 +37,18 @@ function Get-FullmagInstallerEnvInheritedSecretNames {
 
 function Get-FullmagInstallerEnvRedactedValue {
   param(
-    [Parameter()][AllowNull()][string]$Value,
+    # Keep null distinct from an explicitly empty non-secret value. Windows
+    # PowerShell coerces a null [string] parameter to an empty string before
+    # the body can apply the <unset> marker.
+    [Parameter()][AllowNull()][object]$Value,
     [Parameter(Mandatory = $true)][string]$Key
   )
   if (Test-FullmagInstallerEnvSecretKey $Key) {
-    if ([string]::IsNullOrEmpty($Value)) { return "<empty>" }
+    if ($null -eq $Value -or [string]::IsNullOrEmpty([string]$Value)) { return "<empty>" }
     return (Get-FullmagInstallerEnvSecretToken)
   }
   if ($null -eq $Value) { return "<unset>" }
-  return $Value
+  return [string]$Value
 }
 
 function Test-FullmagInstallerEnvReparseItem {
@@ -431,7 +434,7 @@ function Get-FullmagInstallerEnvAssignment {
 }
 
 function Find-FullmagInstallerEnvCommentIndex {
-  param([Parameter(Mandatory = $true)][string]$Value)
+  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
   $quote = [char]0
   for ($i = 0; $i -lt $Value.Length; $i++) {
     $character = $Value[$i]
@@ -451,7 +454,9 @@ function Find-FullmagInstallerEnvCommentIndex {
 }
 
 function ConvertFrom-FullmagInstallerEnvValue {
-  param([Parameter(Mandatory = $true)][string]$Value)
+  # An existing `KEY=` entry is a valid explicit empty value, so preserve it
+  # through Windows PowerShell parameter binding.
+  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
   $clean = $Value.Trim()
   $comment = Find-FullmagInstallerEnvCommentIndex -Value $clean
   if ($comment -ge 0) { $clean = $clean.Substring(0, $comment).TrimEnd() }
@@ -531,7 +536,7 @@ function ConvertTo-FullmagInstallerEnvInputMap {
 
 function ConvertTo-FullmagInstallerEnvValueForWrite {
   param(
-    [Parameter()][AllowNull()][string]$Value,
+    [Parameter()][AllowNull()][AllowEmptyString()][string]$Value,
     [Parameter(Mandatory = $true)][string]$Key
   )
   if ($null -eq $Value) { return "" }
@@ -548,7 +553,7 @@ function Get-FullmagInstallerEnvChangedLine {
   param(
     [Parameter(Mandatory = $true)][string]$Body,
     [Parameter(Mandatory = $true)][string]$Key,
-    [Parameter(Mandatory = $true)][string]$Value
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value
   )
   $assignment = Get-FullmagInstallerEnvAssignment -Body $Body
   if ($null -eq $assignment -or [string]$assignment.Groups['key'].Value -ne $Key) { return $null }
@@ -862,7 +867,10 @@ function Get-FullmagInstallerEnvProposalInternal {
     if (-not $changes.Contains($key)) { continue }
     $old = if ($current.Contains($key)) { [string]$current[$key] } else { $null }
     $new = if ($effective.Contains($key)) { [string]$effective[$key] } else { "" }
-    if ([string]$old -eq [string]$new) { continue }
+    # An absent key and an explicitly empty key stringify identically. Keep
+    # the presence transition visible in the preview and hash proposal; only
+    # an existing key with the same value is a no-op.
+    if ($current.Contains($key) -and [string]$old -eq [string]$new) { continue }
     [void]$changedKeys.Add($key)
     [void]$diff.Add("-$key=" + (Get-FullmagInstallerEnvRedactedValue -Value $old -Key $key))
     [void]$diff.Add("+$key=" + (Get-FullmagInstallerEnvRedactedValue -Value $new -Key $key))

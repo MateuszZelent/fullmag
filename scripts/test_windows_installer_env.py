@@ -474,6 +474,46 @@ try {{
   Require ($unchangedPreview.valid -and $unchangedPreview.can_commit) 'valid unchanged proposal was not admissible'
   Require (-not $unchangedPreview.write_required) 'unchanged proposal incorrectly required a write'
   Require (@($unchangedPreview.changed_fields).Count -eq 0) 'unchanged proposal reported changed fields'
+
+  # A missing non-secret key must remain distinct from an explicitly empty
+  # key in the redacted proposal.  Exercise both presence transitions and the
+  # existing-empty no-op without writing any of these proposals.
+  $proposalScenarioBytes = [System.IO.File]::ReadAllBytes($envPath)
+  try {{
+    $missingText = "POSTGRES_PASSWORD=supersecret`r`nFULLMAG_PROJECT_STORAGE_ROOT=$storage`r`n"
+    [System.IO.File]::WriteAllText($envPath, $missingText, [System.Text.UTF8Encoding]::new($false))
+    $missingSession = Get-FullmagInstallerEnvSession -CheckoutPath $repo
+    $missingDebug = Get-FullmagInstallerEnvPreview -Session $missingSession -Values @{{ RUST_LOG = 'debug' }}
+    Require ($missingDebug.valid -and $missingDebug.write_required) 'missing-to-debug proposal was not admissible'
+    Require (@($missingDebug.changed_fields) -contains 'RUST_LOG') 'missing-to-debug did not report RUST_LOG'
+    Require ($missingDebug.redacted_diff -match '(?m)^-RUST_LOG=<unset>$') 'missing-to-debug omitted the unset baseline'
+    Require ($missingDebug.redacted_diff -match '(?m)^\+RUST_LOG=debug$') 'missing-to-debug omitted the proposed value'
+
+    $missingEmpty = Get-FullmagInstallerEnvPreview -Session $missingSession -Values @{{ RUST_LOG = '' }}
+    Require ($missingEmpty.valid -and $missingEmpty.write_required) 'missing-to-empty proposal was not admissible'
+    Require (@($missingEmpty.changed_fields) -contains 'RUST_LOG') 'missing-to-empty did not report presence change'
+    Require ($missingEmpty.redacted_diff -match '(?m)^-RUST_LOG=<unset>$') 'missing-to-empty omitted the unset baseline'
+    Require ($missingEmpty.redacted_diff -match '(?m)^\+RUST_LOG=$') 'missing-to-empty omitted the explicit empty value'
+
+    $emptyText = "POSTGRES_PASSWORD=supersecret`r`nRUST_LOG=`r`nFULLMAG_PROJECT_STORAGE_ROOT=$storage`r`n"
+    [System.IO.File]::WriteAllText($envPath, $emptyText, [System.Text.UTF8Encoding]::new($false))
+    $emptySession = Get-FullmagInstallerEnvSession -CheckoutPath $repo
+    $existingEmpty = Get-FullmagInstallerEnvPreview -Session $emptySession -Values @{{ RUST_LOG = '' }}
+    Require ($existingEmpty.valid -and -not $existingEmpty.write_required) 'existing-empty-to-empty was not a no-op'
+    Require (@($existingEmpty.changed_fields).Count -eq 0 -and [string]::IsNullOrEmpty([string]$existingEmpty.redacted_diff)) 'existing-empty-to-empty produced a diff'
+
+    [System.IO.File]::WriteAllBytes($envPath, $proposalScenarioBytes)
+    $secretProposalSession = Get-FullmagInstallerEnvSession -CheckoutPath $repo
+    $secretProposal = Get-FullmagInstallerEnvPreview -Session $secretProposalSession -Values @{{ POSTGRES_PASSWORD = 'new-secret' }}
+    Require ($secretProposal.valid -and (@($secretProposal.changed_fields) -contains 'POSTGRES_PASSWORD')) 'secret proposal was not reported'
+    Require ($secretProposal.redacted_diff -notmatch 'supersecret|new-secret') 'secret proposal leaked a value'
+    Require ($secretProposal.redacted_diff -match '(?m)^-POSTGRES_PASSWORD=<redacted>$' -and
+      $secretProposal.redacted_diff -match '(?m)^\+POSTGRES_PASSWORD=<redacted>$') 'secret proposal was not redacted'
+  }}
+  finally {{
+    [System.IO.File]::WriteAllBytes($envPath, $proposalScenarioBytes)
+  }}
+
   $unchangedBeforeBytes = [System.IO.File]::ReadAllBytes($envPath)
   $unchangedBeforeHash = BytesHash $unchangedBeforeBytes
   $unchangedBackupRoot = Join-Path (Join-Path $storage 'tmp') 'host-config-backups'
