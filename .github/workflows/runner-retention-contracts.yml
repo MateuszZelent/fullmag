@@ -1,0 +1,36 @@
+name: runner-retention-contracts
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/eigensolve-dispersion-plan-20260912']
+    paths:
+      - 'scripts/local_runner/container_api.py'
+      - 'scripts/local_runner/retention*.py'
+      - 'scripts/tests/local_runner/test_container_api.py'
+      - 'scripts/test_local_runner_retention*.py'
+      - 'apps/runner-console/**'
+      - '.github/workflows/runner-retention-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  retention-http-and-console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.18.0'
+      - name: Verify bounded HTTP responses and revision-bound retention pages
+        run: python -m unittest discover -s scripts/tests/local_runner -p test_container_api.py -v
+      - name: Verify durable plan reconstruction
+        run: python -m unittest discover -s scripts -p test_local_runner_retention_persistence.py -v
+      - name: Verify read-only polling and serialized retention operations
+        run: python -m unittest discover -s scripts -p test_local_runner_retention_service.py -v
+      - name: Verify canonical runner console source and pagination
+        run: node apps/runner-console/test.mjs
