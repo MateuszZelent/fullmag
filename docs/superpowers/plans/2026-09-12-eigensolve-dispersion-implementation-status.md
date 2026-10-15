@@ -28,6 +28,30 @@ w artefaktach tego wątku, logi `build245-k0-eps1e10-energy-fixed-runtime.log`,
 Historia wcześniejszych diagnoz poniżej pozostaje zachowana.
 
 
+### Kolejka i bramki po review importu
+
+- Naprawa native jest na remote w commicie
+  `8ea04862f2630f0e7d55988ed7ebe6d6b798e227`.
+- Build **#252**, job `32eaaa08d87a4822a60b34bb7b5e6c01`, przyjęto jako
+  `queued` w profilu `fem-cpu-slepc-runtime-v2`, z dokładnego commita powyżej.
+  Source digest: `1a2b2ff7d030ccb25b3e045f3e953431eb2c7ff32d3d7cd38e728bff48ff1b78`.
+  Oczekuje za obcym buildem; nie uruchomiono drugiego ciężkiego wykonawcy.
+- CI38705241555 ujawniło E0382 wyłącznie w nowym fixture testowym. Poprawka
+  clone sygnatury jest na remote jako
+  `00900295e4545580cfec7da0b9cddbcf7194a03c`; CI38706160578 jest osobnym
+  dowodem dla tego commita. Nie zamienia to źródeł już przyjętego buildu252.
+- Raport grubości `build245-de-k25-L3-thickness-check-20261015.json` wiąże
+  rzeczywiste receipt/CSV i native spectrum: residual3warstwy
+  `9.447221957997469e-14`, residual6warstw `2.2783526273107843e-14`.
+  Zmiana częstotliwości wynosi `13267480.115818024Hz`; brak jeszcze dowodu
+  zbieżności całej serii.
+- Następny odrębny fragment: walidator signed15 serial/adaptive oraz
+  publikacja brakujących per-worker identity/preimage/snapshot. Hash operatora
+  zawiera per-run lineage, hash planu obejmuje run-local path, a scheduler
+  podaje raw SHA wejściowego artefaktu. Nie porównuje się ich jako jednakowych
+  fizycznych sygnatur ani z semantic content hash. Brak jawnego dowodu
+  projekcji fizycznej oznacza `NOT VERIFIED`, nie pozorny błąd fizyki.
+
 ### Uzupełnienie 2026-10-15 — import równowagi i zbieżność
 
 Source-visible poprawka `validate_modal_boundary_equilibrium_import` zachowuje
