@@ -535,8 +535,13 @@ describe("pins from the typed Results item producer", () => {
   it("does not read or write into a new session when the item read is pending", async () => {
     const fixture = publishedPinFixture();
     const pendingItem = deferred<AnalysisResultSpectralItemSummary>();
-    fixture.readItem.mockReturnValueOnce(pendingItem.promise);
+    const itemReadStarted = deferred<void>();
+    fixture.readItem.mockImplementationOnce(() => {
+      itemReadStarted.resolve(undefined);
+      return pendingItem.promise;
+    });
     const result = fixture.command.run(fixture.context as never);
+    await itemReadStarted.promise;
     expect(fixture.readItem).toHaveBeenCalledTimes(1);
     fixture.expire();
     pendingItem.resolve(fixture.item);
