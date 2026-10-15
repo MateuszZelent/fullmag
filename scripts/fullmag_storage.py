@@ -490,6 +490,74 @@ def worktree_records(repo):
     return records
 
 
+def _native_fem_authored_script(layout, script_path):
+    """Admit authored FEM input from this checkout or Git's main checkout.
+
+    Compiler inputs come from the managed worktree snapshot, but a simulation
+    script remains user-authored input.  Git's first registered worktree is
+    the only additional checkout accepted here; arbitrary paths and reparse
+    redirects remain rejected by ``absolute``.
+    """
+    candidate = Path(script_path)
+    if not candidate.is_absolute():
+        candidate = Path(layout["repo_root"]) / candidate
+    candidate = absolute(str(candidate), "native FEM script")
+    current_root = absolute(layout["repo_root"], "native FEM checkout")
+    try:
+        registrations = worktree_records(current_root)
+    except (OSError, StorageError, ValueError, TypeError) as error:
+        raise StorageError(
+            "Cannot verify the registered main checkout for native FEM script admission"
+        ) from error
+    if not registrations or not isinstance(registrations[0].get("worktree"), str):
+        raise StorageError("Git returned no registered main checkout for native FEM script admission")
+    try:
+        main_root = absolute(registrations[0]["worktree"], "registered main checkout")
+    except StorageError as error:
+        raise StorageError("Registered main checkout failed the canonical path guard") from error
+    if not main_root.is_dir() or not (main_root / ".git").exists():
+        raise StorageError(f"Registered main checkout is not an available Git checkout: {main_root}")
+    try:
+        verified_root = absolute(
+            git(main_root, "rev-parse", "--show-toplevel"),
+            "registered main checkout Git root",
+        )
+    except (OSError, StorageError) as error:
+        raise StorageError("Cannot verify the registered main checkout through Git") from error
+    if verified_root != main_root:
+        raise StorageError("Registered main checkout Git root does not match its worktree record")
+    allowed_roots = (current_root,) if current_root == main_root else (current_root, main_root)
+    if not candidate.is_file() or not any(inside(candidate, root) for root in allowed_roots):
+        roots = " or ".join(str(root) for root in allowed_roots)
+        raise StorageError(
+            f"Native FEM script must be an existing file inside an approved checkout ({roots}): {candidate}"
+        )
+    try:
+        script_sha256 = _sha256_file(candidate)
+    except OSError as error:
+        raise StorageError(f"Cannot hash the admitted native FEM script: {candidate}") from error
+    if not SHA256_RE.fullmatch(script_sha256):
+        raise StorageError("Admitted native FEM script did not produce a SHA256 digest")
+    return candidate, script_sha256
+
+
+def _verify_native_fem_script_unchanged(path, expected_sha256):
+    """Reject an authored input changed after admission and before launch."""
+    if path is None:
+        return
+    try:
+        guarded_path = absolute(str(path), "native FEM script")
+        if guarded_path != Path(path):
+            raise StorageError("Native FEM script path changed after admission")
+        actual = _sha256_file(guarded_path)
+    except (OSError, StorageError) as error:
+        raise StorageError(f"Cannot re-hash the admitted native FEM script: {path}") from error
+    if actual != expected_sha256:
+        raise StorageError(
+            f"Native FEM script changed after admission: expected {expected_sha256}, found {actual}"
+        )
+
+
 def atomic_json(path, data, *, retry_windows_replace=False):
     if type(retry_windows_replace) is not bool:
         raise StorageError("Invalid metadata replacement retry option")
@@ -2058,13 +2126,13 @@ def run_windows_workspace(
         )
         if build_result != 0:
             return build_result
-        if not skip_local_changes:
-            # Launch the verified output of this explicit build request even
-            # if another agent edits the checkout before the launcher starts.
-            identity = build_receipt.get("build_manifest_sha256")
-            if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
-                raise StorageError("Native build completed without a pinned output manifest")
-            runtime_command.extend(["-ExpectedBuildId", identity])
+        # SkipLocalChanges relaxes source-dirty admission only.  It must never
+        # widen the artifact handoff: runtime still receives the exact
+        # manifest identity produced by this build request.
+        identity = build_receipt.get("build_manifest_sha256")
+        if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+            raise StorageError("Native build completed without a pinned output manifest")
+        runtime_command.extend(["-ExpectedBuildId", identity])
     return _run_managed_command(
         layout,
         runtime_command,
@@ -2162,15 +2230,9 @@ def run_windows_fem(
         raise StorageError(f"Native FEM launcher is missing: {launcher}")
 
     resolved_script = None
+    resolved_script_sha256 = None
     if script_path:
-        script_candidate = Path(script_path)
-        if not script_candidate.is_absolute():
-            script_candidate = Path(layout["repo_root"]) / script_candidate
-        candidate = absolute(str(script_candidate), "native FEM script")
-        repo_root = Path(layout["repo_root"])
-        if not inside(candidate, repo_root) or not candidate.is_file():
-            raise StorageError(f"Native FEM script must be an existing file inside the checkout: {candidate}")
-        resolved_script = candidate
+        resolved_script, resolved_script_sha256 = _native_fem_authored_script(layout, script_path)
     if output_dir:
         output_candidate = Path(output_dir)
         output_root = Path(layout["build_storage_root"])
@@ -2215,6 +2277,7 @@ def run_windows_fem(
         command.extend(("-ExpectedBuildId", expected_build_id))
 
     def run_phase(phase_command, phase_execution_mode, phase_attempt_id, phase_record, *, phase_build):
+        _verify_native_fem_script_unchanged(resolved_script, resolved_script_sha256)
         return _run_managed_command(
             layout,
             phase_command,
@@ -2318,6 +2381,7 @@ def run_windows_fem(
             "build_mode": build_mode,
             "build_only": bool(build_only),
             "script": str(resolved_script) if resolved_script is not None else None,
+            "script_sha256": resolved_script_sha256,
             "output_dir": str(resolved_output),
             "execution_mode": active_execution_mode,
             "attempt_id": active_attempt_id,

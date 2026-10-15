@@ -454,6 +454,75 @@ class StorageTests(unittest.TestCase):
             hashlib.sha256(manifest.read_bytes()).hexdigest(),
         )
 
+        calls.clear()
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "file_lock", unlocked), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage.subprocess, "run", side_effect=fake_run), \
+             patch.object(storage, "_run_logged_command", side_effect=fake_run), \
+             patch("windows.runtime_lease.run_sealed_runtime", side_effect=fake_runtime):
+            result = storage.run_windows_workspace(
+                layout, "static", 3197, build_mode="auto", skip_local_changes=True,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("-SkipLocalChanges", calls[0])
+        self.assertIn("-SkipLocalChanges", calls[1])
+        self.assertEqual(
+            calls[1][calls[1].index("-ExpectedBuildId") + 1],
+            hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        )
+
+    def test_native_fem_script_accepts_registered_main_checkout_with_hash_guard(self):
+        subprocess.run([
+            "git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
+            "user.email=test@example.invalid", "config", "core.autocrlf", "false",
+        ], check=True)
+        main_script = self.repo / "examples" / "main-authored.py"
+        main_script.parent.mkdir(parents=True)
+        main_script.write_bytes(b"# main authored input\n")
+        subprocess.run(["git", "-C", str(self.repo), "add", "examples/main-authored.py"], check=True)
+        subprocess.run([
+            "git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
+            "user.email=test@example.invalid", "commit", "--quiet", "-m", "fixture",
+        ], check=True)
+        task = self.project / "worktrees" / "native-fem-task"
+        subprocess.run([
+            "git", "-C", str(self.repo), "worktree", "add", "--quiet", "--detach", str(task),
+        ], check=True)
+        self.addCleanup(lambda: subprocess.run(
+            ["git", "-C", str(self.repo), "worktree", "remove", "--force", str(task)],
+            capture_output=True, check=False,
+        ))
+
+        layout = storage.resolve_layout(task, profile="windows-native-fem-gpu", environ=self.env)
+        admitted, digest = storage._native_fem_authored_script(layout, main_script)
+        self.assertEqual(admitted, main_script.resolve())
+        self.assertEqual(digest, hashlib.sha256(main_script.read_bytes()).hexdigest())
+
+        outside = self.project / "outside-authored.py"
+        outside.write_bytes(b"# outside\n")
+        with self.assertRaisesRegex(storage.StorageError, "approved checkout"):
+            storage._native_fem_authored_script(layout, outside)
+
+        linked = task / "linked-authored.py"
+        try:
+            linked.symlink_to(outside)
+        except OSError:
+            self.skipTest("symlink support is unavailable")
+        with self.assertRaisesRegex(storage.StorageError, "symlink/junction"):
+            storage._native_fem_authored_script(layout, linked)
+
+        main_script.unlink()
+        main_script.symlink_to(outside)
+        with self.assertRaisesRegex(storage.StorageError, "Cannot re-hash"):
+            storage._verify_native_fem_script_unchanged(admitted, digest)
+        main_script.unlink()
+        main_script.write_bytes(b"# changed after admission\n")
+        with self.assertRaisesRegex(storage.StorageError, "changed after admission"):
+            storage._verify_native_fem_script_unchanged(admitted, digest)
+
     def test_workspace_auto_profile_and_canonical_storage_are_separate(self):
         self.assertEqual(storage.resolve_windows_workspace_backend_profile("dev", "auto"), "dev")
         self.assertEqual(storage.resolve_windows_workspace_backend_profile("static", "auto"), "release")
@@ -505,6 +574,7 @@ class StorageTests(unittest.TestCase):
         manifest.write_bytes(manifest_raw)
         storage._validate_expected_build_handoff(
             layout, command, native_workspace_paths=False, native_fem_paths=True,
+            native_full_workspace_paths=False,
             native_manifest_relative="windows-fem-runtime/build-manifest.json",
             execution_mode="windows-fem",
         )
@@ -512,6 +582,7 @@ class StorageTests(unittest.TestCase):
         with self.assertRaisesRegex(storage.StorageError, "does not match"):
             storage._validate_expected_build_handoff(
                 layout, command, native_workspace_paths=False, native_fem_paths=True,
+                native_full_workspace_paths=False,
                 native_manifest_relative="windows-fem-runtime/build-manifest.json",
                 execution_mode="windows-fem",
             )
