@@ -1,21 +1,29 @@
 <!-- current-eigensolve-status-begin -->
-## Bieżący checkpoint — build245 PASS i kontrakty API, 2026-10-15
+## Bieżący checkpoint — K0 pipeline PASS, signed15 solver PASS / walidacja OPEN, 2026-10-15
 
-Pełny cel **S00–S12 pozostaje OPEN**. Aktualny worktree:
-`dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Źródło aktywnego buildu i źródło późniejszych diagnostyk CI są rozdzielone.
+Pełny cel **S00–S12 pozostaje OPEN**. Worktree `dispersion-mode-ui-20261008`,
+branch `codex/dispersion-mode-ui-20261008`. Runtime jest zamrożony na
+f0f2930815c00514317b0d9917a0b150511af948; późniejsze poprawki konsumentów
+i dokumentacji nie oznaczają przebudowania tego runtime.
 
 | Bramka | Aktualny dowód | Pozostała praca |
 |---|---|---|
-| Managed build243 | Terminalne succeeded/exit0, hashe 29 artefaktów sprawdzone; source181b4e7b4e8b749cc5de3af0c15b3317e468306b | Nie zastępuje buildu poprawki K0 |
-| DE z demagiem, signed ±2rad/µm | Natywne wyniki 9,722781146398083 i 9,722781258027445GHz; residuale poniżej9e-15; odchylenie od analityki około−0,0303% | Wyniki completed_unqualified: window_count niecertyfikowany, brak zbieżności i pełnego sweepa |
-| K0 window recovery | Runtime244: count4/EPS1e-10 ukończył50/50 podokien, lecz odzyskał1 fizyczny klaster; count1 ukończył48/50, base NEV4/NCV16 bez miejsca na retry. Poprawka f0f2930815c00514317b0d9917a0b150511af948 oddziela budżet retrieval od physical count; scoped native CI PASS | Runtime nowej poprawki w build245; physical count, residual i certyfikacja bez rozluźniania |
-| Managed build244 | Job681ccf26c84742cf83880d97517ca4e4, source13d9d71f6, digestfb56ec30e8d70c3543fea6a45cf76b813a8be3052d9b788ec886dba4a22ee275, native-build exit0,2211640ms; build-receipt state succeeded,29 artefaktów/340071153B; dependency/runtime attestations PASS; kolejka succeeded/exit0, terminalny receipt potwierdzony | Build wykonany; obowiązują osobne runtime/science/UI gates i signed15 |
-| Storage i observer | Job245/1dd454832d014d28b3b27761b4990e47 terminalnie succeeded/exit0 potwierdzony API i coordinator journal; sourcef0f293081, digest43a4af1a2d77a2b9071a2c7e52816518a0bb7ab1bfae35bbca154206f826e3be. Native-build1731898.235ms. Observer49807 zakończył się po3 timeoutach przed pilotem | Sprawdzić canonical preflight i wykonać pierwszy de-smoke-k0/count1/frequency_window na tym samym buildzie; nie zlecać ponownego buildu |
-| Native CI | Source849fa8ddb: normal4/4 PASS iASAN ABI PASS. Sourcef0f293081: native job115551933931/run38471638858 PASS; cały workflow FAIL | Python: degenerate tet4 i facet bez adjacency w modelu z otworem; Rust: ownership fixtures; browser: Inspector request budget. Runtime/nauka pozostają osobne |
-| API ownership fixtures | Dwa testy linked artifact/field meta używają validated exact test-session/test-run identity; payloady mają96B/64B LE-f64 zgodnie z metadanymi. Asercje i produkcyjny owner guard zachowane; scoped review i diff check PASS | Kompilacja i wykonanie wyłącznie GitHub Actions; brak lokalnego runtime proof, testy jeszcze NOT VERIFIED |
-| Produkcyjne non-k0 count proof | Sparse retrieval emituje prawidłowe not_certified/methodnone; nie ma niezależnego count proof | Wymagana sprawdzona struktura pencilu i niezależne zliczanie, nie zmiana etykiety certyfikacji |
-| COMSOL A1 i pozostały plan | Scoped Box dokładny; ring/A1, pełne okno/pasma, serial/adaptive parity, convergence, S09 provider, interactions/GPU, GUI/WebGL i review/master/cleanup pozostają OPEN | Każda bramka wymaga dowodu odpowiadającego jej rzeczywistemu zakresowi |
+| Build245 | Job1dd454832d014d28b3b27761b4990e47 succeeded/exit0, 29 artefaktów; digest43a4af1a2d77a2b9071a2c7e52816518a0bb7ab1bfae35bbca154206f826e3be; native-build1731898.235ms | Nie wymaga ponownego buildu dla poprawki postsolve Python |
+| K0 count1/frequency_window | EPS1e-10/GMRES: 50/50 podokien, 1 mod9.2992496970683GHz, full residual9.800595170769307e-15. Canonical run7edd30b550d34152b9a9a36e9cd8c225 exit0/completed_unqualified | Domyślne EPS1e-11 nadal zawodzi w1/50; niezależna kwalifikacja naukowa i zbieżność pozostają OPEN |
+| K0 energia | Naprawiony Python consumer używa tej samej skali mu0*Ms²*V co native; raw energie zachowane, osobna kontrola ujemności i przeliczona identity. 89 interpretowanych testów PASS | Nie zmienia operatora ani tolerancji full residual1e-8 |
+| K0 analityka | Dla jednorodnego modu i skończonego airboxu:9.299249697068401GHz, różnica−0.000101Hz; otwarty film9.309813711433355GHz | Profil modu i zbieżność wymagają osobnego dowodu; nie dopasowywano parametrów |
+| Signed15 DE serial | Runbe5355a8bb904ed49c0589c69bf8f6cc: native exit0, 15 zapisanych punktów−25…+25rad/µm, wszystkie full descriptor certified; max residual1.0802441875514487e-14 | Host kończy failed: global.ksp_type must be a non-empty string. Naprawa obsługi telemetryki każdego punktu trwa; nie pomijać walidacji |
+| Wykres signed15 | build245-de-signed15-20261015.png/svg/pdf/json w katalogu diagnostyki; 15 rzeczywistych punktów plus KS n0 open-film, bez fitu; max różnica1.9423568%, max asymetria±k459752.48Hz | Diagnoza zbieżności/reciprocity, serial-adaptive parity; wynik NOT VERIFIED |
+| API ownership | Commitccb6a781966f5e883de73fb5b03ef2b9305d51f7: CI38692453999 Rust job116281276566 PASS, w tym65ownershiptests i oba naprawione fixtures. Auto CI38692391217 PASS | Cały bootstrap FAIL przez browser request budget13/12; brak lokalnej kompilacji testów |
+| Mapa źródeł | Commit9c27e09ab5a7ae3e9aa7c66520b58bac047ae894: dokładny opt-in CPP-DECL, 28 testów PASS; niejednoznaczne deklaracje nadal odrzucane | Mapę0831 weryfikować razem z konsumentem energii |
+| A1/ring | Diagnoza wykazała, że2object_regions kierują test do generic OCC, poza helperem ring; zielone Python CI po zmianie samych Rust fixtures nie dowodzi naprawy siatki | Produkcyjny air-first cap-lift z regionami i linear grading, final mesh/PBC/native preflight |
+| Storage | Około74GiB wolnego. Preview244/245execution:1.296655757GB, bez usuwania; zachowane wyniki, cache, runtime i provenance | Wykonanie tylko po dokładnej autoryzacji i ponownych kontrolach aktywnych użytkowników |
+| Pozostałe S00–S12 | K0 i signed15 są scoped dowodami, nie pełną kwalifikacją | Niezależny non-k0 count proof, full61/8bands, BV, parity CPU/RAM, mesh/airbox/mode convergence, COMSOL A1, S09/provider, interactions/GPU, GUI/WebGL, review/master/cleanup |
+
+Dowody bieżącego etapu: katalog `layered-cap-sliver-diagnostic-20261013`
+w artefaktach tego wątku, logi `build245-k0-eps1e10-energy-fixed-runtime.log`,
+`build245-signed15-serial-runtime.log`, wykres i jego JSON z hashami wejść.
+Historia wcześniejszych diagnoz poniżej pozostaje zachowana.
 
 Nowy pomiar diagnostyczny zapisuje wyznacznik i cztery skopiowane wartości
 małej macierzy wyłącznie przy istniejącym błędzie singular validation.

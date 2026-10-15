@@ -254,6 +254,34 @@ def validate_fixture(tmp_path, csv_path, sampling, diagnostics_path):
     return validate_rows(csv_path,sampling,diagnostics_path,metadata_path)
 
 
+def write_gamma_validation_inputs(tmp_path, *, ms=MS, period=PERIOD):
+    csv_path = tmp_path / 'dispersion.csv'
+    write(csv_path, rows('two'))
+    diagnostics_path = tmp_path / 'solver.v1.json'
+    diagnostics_value = diagnostics('two')
+    gamma_probe = diagnostics_value['sample_solver_diagnostics'][0]['diagnostics'][
+        'poisson_airbox_k0_demag_operator_probe']
+    metadata_path = tmp_path / 'metadata.json'
+    write_metadata(metadata_path)
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    model = metadata['problem_meta']['runtime_metadata']['de_smoke']
+    model['cell_period_m'] = period
+    model['saturation_magnetization_a_per_m'] = ms
+    volume = period * period * THICKNESS
+    gamma_probe['magnetic_volume_m3'] = volume
+    for direction in ('global_y', 'global_z'):
+        sample = gamma_probe[direction]
+        sample['mean_magnetization_a_per_m'] = ms
+        sample['mean_field_a_per_m'] = -sample['demag_factor'] * ms
+        energy = 0.0 if direction == 'global_y' else 0.5 * MU0 * ms * ms * NZ * volume
+        sample['potential_energy_j'] = energy
+        sample['magnetic_energy_j'] = energy
+    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+    diagnostics_path.write_text(json.dumps(diagnostics_value), encoding='utf-8')
+    write_spectrum_v3(tmp_path / 'spectrum.v3.json', 'two')
+    return csv_path, diagnostics_path, metadata_path, gamma_probe
+
+
 def write_full_floquet_spectrum(path, *, seam_residual=6e-12):
     reduced_q = 3e-12
     reduced_phi = 4e-12
@@ -722,6 +750,91 @@ def test_gamma_requires_geometry_matched_dirichlet_demag_probe(tmp_path,mutation
     diagnostics_path.write_text(json.dumps(value),encoding='utf-8')
     with pytest.raises(ValueError):
         validate_fixture(tmp_path,csv_path,'two',diagnostics_path)
+
+
+@pytest.mark.parametrize(('ms_scale', 'period_scale', 'sign'), [
+    (1.0, 1.0, -1.0),
+    (1e-2, 1e-3, -1.0),
+    (1e3, 10.0, 1.0),
+])
+def test_gamma_accepts_reference_scaled_roundoff_energy(
+        tmp_path, ms_scale, period_scale, sign):
+    ms = MS * ms_scale
+    period = PERIOD * period_scale
+    csv_path, diagnostics_path, metadata_path, _ = write_gamma_validation_inputs(
+        tmp_path, ms=ms, period=period)
+    diagnostics_value = json.loads(diagnostics_path.read_text(encoding='utf-8'))
+    probe_value = diagnostics_value['sample_solver_diagnostics'][0]['diagnostics'][
+        'poisson_airbox_k0_demag_operator_probe']
+    reference_scale = MU0 * ms * ms * period * period * THICKNESS
+    tolerance = probe_value['relative_tolerance']
+    roundoff_energy = sign * 0.25 * tolerance * reference_scale
+    zero_response = probe_value['global_y']
+    zero_response['potential_energy_j'] = roundoff_energy
+    zero_response['magnetic_energy_j'] = roundoff_energy
+    diagnostics_path.write_text(json.dumps(diagnostics_value), encoding='utf-8')
+
+    result = validate_rows(csv_path, 'two', diagnostics_path, metadata_path)
+
+    report = result['gamma_demag_operator_probe']
+    assert report['reference_scale_j'] == pytest.approx(reference_scale)
+    assert report['negativity_bound_j'] == pytest.approx(tolerance * reference_scale)
+    direction_report = report['directions']['global_y']
+    assert direction_report['potential_energy_j'] == pytest.approx(roundoff_energy)
+    assert direction_report['magnetic_energy_j'] == pytest.approx(roundoff_energy)
+    assert direction_report['energy_form_relative_defect'] == 1e-12
+    assert direction_report['recomputed_energy_form_relative_defect'] == 0.0
+
+
+@pytest.mark.parametrize('direction', ['global_y', 'global_z'])
+@pytest.mark.parametrize('negative_energy', ['potential_energy_j', 'magnetic_energy_j'])
+def test_gamma_negative_energy_uses_reference_bound(
+        tmp_path, direction, negative_energy):
+    csv_path, diagnostics_path, metadata_path, _ = write_gamma_validation_inputs(tmp_path)
+    diagnostics_value = json.loads(diagnostics_path.read_text(encoding='utf-8'))
+    probe_value = diagnostics_value['sample_solver_diagnostics'][0]['diagnostics'][
+        'poisson_airbox_k0_demag_operator_probe']
+    reference_scale = MU0 * MS * MS * VOLUME
+    tolerance = probe_value['relative_tolerance']
+    sample = probe_value[direction]
+    sample[negative_energy] = -1.000001 * tolerance * reference_scale
+    positive_energy = ('magnetic_energy_j' if negative_energy == 'potential_energy_j'
+                       else 'potential_energy_j')
+    sample[positive_energy] = 2.0 * reference_scale
+    sample['energy_form_relative_defect'] = 0.0
+    diagnostics_path.write_text(json.dumps(diagnostics_value), encoding='utf-8')
+
+    with pytest.raises(ValueError, match='magnetostatic energy is negative'):
+        validate_rows(csv_path, 'two', diagnostics_path, metadata_path)
+
+
+def test_gamma_recomputes_energy_identity_instead_of_trusting_reported_defect(tmp_path):
+    csv_path, diagnostics_path, metadata_path, _ = write_gamma_validation_inputs(tmp_path)
+    diagnostics_value = json.loads(diagnostics_path.read_text(encoding='utf-8'))
+    probe_value = diagnostics_value['sample_solver_diagnostics'][0]['diagnostics'][
+        'poisson_airbox_k0_demag_operator_probe']
+    reference_scale = MU0 * MS * MS * VOLUME
+    zero_response = probe_value['global_y']
+    zero_response['potential_energy_j'] = 0.0
+    zero_response['magnetic_energy_j'] = 1.01 * probe_value['relative_tolerance'] * reference_scale
+    zero_response['energy_form_relative_defect'] = 1e-12
+    diagnostics_path.write_text(json.dumps(diagnostics_value), encoding='utf-8')
+
+    with pytest.raises(ValueError, match='recomputed energy identity exceeds tolerance'):
+        validate_rows(csv_path, 'two', diagnostics_path, metadata_path)
+
+
+@pytest.mark.parametrize('ms', [1e200, 1e-200])
+def test_gamma_rejects_unrepresentable_reference_scale(tmp_path, ms):
+    csv_path, diagnostics_path, metadata_path, _ = write_gamma_validation_inputs(tmp_path)
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    metadata['problem_meta']['runtime_metadata']['de_smoke'][
+        'saturation_magnetization_a_per_m'] = ms
+    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+
+    with pytest.raises(ValueError, match='reference energy scale must be finite and positive'):
+        validate_rows(csv_path, 'two', diagnostics_path, metadata_path)
+
 
 @pytest.mark.parametrize("sampling", ["k25", "bv-k25", "k-25", "bv-k-25", "k17", "k22", "bv-k7", "bv-k12", "bv-k17", "bv-k22"])
 def test_25_wavevector_and_geometry_are_checked(tmp_path, sampling):

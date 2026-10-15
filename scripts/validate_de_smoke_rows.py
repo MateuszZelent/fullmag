@@ -1072,6 +1072,10 @@ def validate_gamma_demag_probe(
         raise ValueError("Gamma K0 demag probe magnetic volume disagrees with the declared geometry")
     if abs(mu0 - expected_mu0) > 1e-12 * expected_mu0:
         raise ValueError("Gamma K0 demag probe mu0 disagrees with the declared SI convention")
+    reference_scale_j = expected_mu0 * expected_ms * expected_ms * expected_volume
+    if not math.isfinite(reference_scale_j) or reference_scale_j <= 0:
+        raise ValueError("Gamma K0 reference energy scale must be finite and positive")
+    negativity_bound_j = tolerance * reference_scale_j
 
     directions = {}
     for direction in ("global_y", "global_z"):
@@ -1098,11 +1102,21 @@ def validate_gamma_demag_probe(
         if values["energy_form_relative_defect"] < 0 or \
                 values["energy_form_relative_defect"] > tolerance:
             raise ValueError(f"Gamma K0 {direction} energy identity exceeds tolerance")
-        energy_scale = max(abs(values["potential_energy_j"]),
-                           abs(values["magnetic_energy_j"]), 1e-300)
-        if min(values["potential_energy_j"], values["magnetic_energy_j"]) < \
-                -tolerance * energy_scale:
+        potential_energy_j = values["potential_energy_j"]
+        magnetic_energy_j = values["magnetic_energy_j"]
+        if (potential_energy_j < -negativity_bound_j or
+                magnetic_energy_j < -negativity_bound_j):
             raise ValueError(f"Gamma K0 {direction} magnetostatic energy is negative")
+        energy_difference_j = abs(potential_energy_j - magnetic_energy_j)
+        energy_identity_scale_j = max(
+            reference_scale_j, abs(potential_energy_j), abs(magnetic_energy_j))
+        if not math.isfinite(energy_difference_j):
+            raise ValueError(f"Gamma K0 {direction} recomputed energy difference is non-finite")
+        recomputed_energy_form_relative_defect = energy_difference_j / energy_identity_scale_j
+        if not math.isfinite(recomputed_energy_form_relative_defect):
+            raise ValueError(f"Gamma K0 {direction} recomputed energy identity is non-finite")
+        if recomputed_energy_form_relative_defect > tolerance:
+            raise ValueError(f"Gamma K0 {direction} recomputed energy identity exceeds tolerance")
         if abs(values["mean_magnetization_a_per_m"] - expected_ms) > \
                 GEOMETRY_RELATIVE_TOLERANCE * expected_ms:
             raise ValueError(f"Gamma K0 {direction} perturbation magnetization disagrees with Ms")
@@ -1117,6 +1131,9 @@ def validate_gamma_demag_probe(
             "mean_magnetization_a_per_m": values["mean_magnetization_a_per_m"],
             "potential_relative_residual": values["potential_relative_residual"],
             "energy_form_relative_defect": values["energy_form_relative_defect"],
+            "potential_energy_j": potential_energy_j,
+            "magnetic_energy_j": magnetic_energy_j,
+            "recomputed_energy_form_relative_defect": recomputed_energy_form_relative_defect,
         }
 
     if abs(directions["global_y"]["demag_factor"]) > GAMMA_NY_ABSOLUTE_TOLERANCE:
@@ -1131,6 +1148,8 @@ def validate_gamma_demag_probe(
         "measured_nz": measured_nz,
         "relative_nz_error": abs(measured_nz - expected_nz) / expected_nz,
         "magnetic_volume_m3": volume,
+        "reference_scale_j": reference_scale_j,
+        "negativity_bound_j": negativity_bound_j,
         "outer_boundary_kind": probe["outer_boundary_kind"],
         "directions": directions,
     }

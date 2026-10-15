@@ -2,10 +2,11 @@
 
 - Status: FEM CPU and FEM GPU `source_visible / unvalidated`; the public
   stage-first modal and driven-response authoring, native operator boundaries,
-  CPU Schur solver and GPU PETSc/SLEPc adapter are visible in source, but this
-  page records no current-snapshot managed runtime or production qualification
+  CPU Schur solver and GPU PETSc/SLEPc adapter are visible in source. The
+  scoped K0 runtime measurements below do not establish production qualification
+  for the full operator family.
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-09-29
+- Last updated: 2026-10-15
 - Related architecture:
   - `docs/architecture/backend-golden-masterplan.md`
 - Related physics notes:
@@ -42,7 +43,7 @@ buffers, or solver-library conventions.
 
 | Solver | Device | Current state | Evidence boundary |
 |---|---|---|---|
-| FEM | CPU | `source_visible / unvalidated` | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` and `crates/fullmag-runner/src/frequency_response.rs` + `try_execute_fem_frequency_response_native_production_cpu` are source-visible. This page carries no fresh managed numerical or physical qualification. |
+| FEM | CPU | `source_visible / unvalidated` | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` and `crates/fullmag-runner/src/frequency_response.rs` + `try_execute_fem_frequency_response_native_production_cpu` are source-visible. Scoped K0 build245/sourcef0f293081 completed 50/50 subwindows with EPS1e-10; this does not qualify all FEM CPU routes, independent nonzero-k count proof or convergence. |
 | FEM | GPU | `source_visible / unvalidated` | `backends/fem/include/frequency_domain/modal_gpu_krylov.hpp` + `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc` is source-visible. No current device-identity, residency, convergence, parity or scaling artifact is attached here. |
 | FDM | CPU | not applicable | This page introduces no FDM frequency-domain realization; an FDM solver must receive a separate numerical owner while preserving the shared physical convention. |
 | FDM | GPU | not applicable | This page introduces no FDM frequency-domain realization; an FDM solver must receive a separate numerical owner while preserving the shared physical convention. |
@@ -189,6 +190,12 @@ algebraic realization of this complex contract, not another convention.
 | $\beta$ | Robin boundary coefficient | $\mathrm{m^{-1}}$ |
 | $\operatorname{Re}$, $\exp$, $\mathrm{i}$, $\pi$, $(\cdot)^{\mathsf T}$, $(\cdot)^{\mathsf H}$, $\times$, $\cdot$ | real-part map, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, cross product and contraction | $1$ |
 | $\lVert\cdot\rVert_2$, $|\cdot|$, $\max$ | norm, absolute-value and maximum operators | $1$ |
+| $E_*$ | uniform-film reference energy used by the K0 probe | $\mathrm J$ |
+| $V_{\mathrm{probe}}$ | declared magnetic volume checked against native quadrature | $\mathrm{m^3}$ |
+| $E_\phi$ | raw potential quadratic energy including its factor one half | $\mathrm J$ |
+| $E_m$ | raw magnetic-feedback quadratic energy including its factor one half | $\mathrm J$ |
+| $\tau_E$ | published K0 probe energy tolerance, no greater than 1e-8 | $1$ |
+| $d_E$ | reconstructed energy-form relative defect | $1$ |
 
 The public field spellings are `gamma_rad_s_T`,
 `gamma0_rad_s_per_A_m`, `omega_rad_s`, `frequency_hz`,
@@ -2011,6 +2018,50 @@ material defects, exact-zero rows, gauge and nonfinite inputs.
 Managed execution of this correction and repetition of the signed path are
 pending; source presence does not qualify the physics.
 
+### Charge-free K0 probe energy scale — Python consumer correction
+
+The uniform DE-SMOKE film uses the same SI reference as the native quadrature
+owner, `magnetic_energy_scale_global_y_j` / `magnetic_energy_scale_global_z_j`.
+For its unit transverse probes and uniform saturation magnetization:
+
+```{math}
+:label: eq-fem-k0-probe-energy-reference
+E_* = \mu_0 M_s^2 V_{\mathrm{probe}},\qquad
+E_\phi,E_m\geq-\tau_E E_*,\qquad
+d_E=\frac{|E_\phi-E_m|}{\max(E_*,|E_\phi|,|E_m|)}\leq\tau_E.
+```
+
+Symbols and SI units are defined in the canonical typed-symbol table.
+
+The reference deliberately has no factor $1/2$: it matches the existing native
+quadrature scale $\int\mu_0 M_s^2|\delta\mathbf m|^2\,dV$. The Python
+DE-SMOKE consumer may reconstruct this reference only after checking the
+declared geometry, $M_s$, $\mu_0$ and probe volume. Nonfinite, zero, underflowed
+or overflowed references cannot certify a result and fail closed.
+
+At $k=0$, the uniform in-plane probe is charge-free. Its response and energy
+vanish in exact arithmetic; scaling a negativity threshold only by the
+measured energies makes the check singular at this zero-response limit.
+Build245 measured $E_m=-2.843727687153757\times10^{-51}\,\mathrm J$ and
+$E_\phi=2.088967385391937\times10^{-50}\,\mathrm J$, while
+$E_*\simeq1.2868\times10^{-17}\,\mathrm J$. The native probe passed its
+existing scale-aware criterion. These raw energies must remain published;
+the consumer must neither clip them to zero nor divide a physical tolerance
+by a cancelled response. An energy below $-\tau_E E_*$ still fails, including
+when the other measured energy is large. The energy-form defect is checked
+both as published telemetry and by reconstruction from the two raw energies.
+
+This repairs a postsolve validator mismatch; it changes neither the native
+operator nor the modal full-block residual threshold. EPS1e-10 on build245
+completed 50/50 K0 subwindows with one mode at 9.2992496970683GHz and stable
+subspace comparison. The canonical Python validation initially rejected that
+run at this energy check. After the consumer correction, canonical run
+`7edd30b550d34152b9a9a36e9cd8c225` completed with exit 0 and status
+`completed_unqualified`. Independent nonzero-k count proof, signed sweep
+validation, mesh/airbox convergence and COMSOL A1 qualification remain separate
+gates. The explicit EPS prefilter was 1e-10; the default 1e-11 trial still failed
+one refinement subwindow and is not qualified by this result.
+
 ### Signed K0 spectral guards — source correction pending runtime
 
 The #167 Gamma window accepted a $9.299249697$ GHz mode with full descriptor
@@ -2172,8 +2223,13 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
+| backends/fem/include/frequency_domain/mode_kinematics.hpp | CPP-DECL:constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0; | Set the default zero-frequency angular tolerance to 0 rad/s; nonzero nullspace or Goldstone classification requires independent certification. |
+| backends/fem/tests/frequency_domain/mode_kinematics_test.cpp | void default_zero_frequency_classification_preserves_small_finite_branches | Regress signed 1 rad/s and 1 kHz modes, exact zero, both phase conventions and explicit tolerance boundaries; source test only. |
+| backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp | bool run_k0_demag_probe_sample | Existing native reference-scaled energy positivity and identity gates. |
+| scripts/validate_de_smoke_rows.py | validate_gamma_demag_probe | Reconstruct the uniform-film SI reference and validate raw energies without zero-response normalization. |
+| scripts/test_validate_de_smoke_rows.py | test_gamma_accepts_reference_scaled_roundoff_energy | Check zero-response roundoff at different film energy scales; reject material negative energies separately. |
 | backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace. |
-| backends/fem/src/frequency_domain/mode_kinematics.cpp | map_eigenvalue | Phase-aware omega/frequency mapping with exact-zero default classification and explicit absolute-threshold support. |
+| backends/fem/src/frequency_domain/mode_kinematics.cpp | CPP-DECL:ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept | Phase-aware omega/frequency mapping with exact-zero default classification and explicit absolute-threshold support. |
 
 Stable repository-relative `path + symbol` is the primary source identity.
 The links below resolve the committed source baseline
