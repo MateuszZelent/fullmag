@@ -918,7 +918,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
         precomputed: RefCell<HashMap<usize, PrecomputedSingleK>>,
-        parallel_report: Option<crate::eigen::k_process_pool::ProcessPoolReportV1>,
+        parallel_report: Option<super::eigen_k_pool::ProcessPoolPublication>,
     }
 
     impl SingleKSolver for KSolverAdapter<'_, '_, '_> {
@@ -1992,10 +1992,16 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
     if let Some(report) = parallel_report {
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/parallel_execution.v1.json".to_string(),
-            bytes: serde_json::to_vec_pretty(&report).map_err(|error| RunError {
+            bytes: serde_json::to_vec_pretty(&report.report).map_err(|error| RunError {
                 message: format!("failed to serialize adaptive process-pool report: {error}"),
             })?,
         });
+        if let Some(bytes) = report.terminal_admission_journal {
+            auxiliary_artifacts.push(AuxiliaryArtifact {
+                relative_path: "eigen/admission_journal.v1.json".into(),
+                bytes,
+            });
+        }
     }
 
     Ok(ExecutedRun {

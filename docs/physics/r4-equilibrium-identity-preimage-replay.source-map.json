@@ -275,6 +275,20 @@
       "symbol": "worker_identity_publication_preserves_exact_bytes_and_binds_each_target",
       "responsibility": "Prepared Rust regressions cover schema families, signed sample plans, exact bytes and fail-closed mutations. Compiled execution requires GitHub Actions.",
       "evidence_status": "source_visible"
+    },
+    {
+      "id": "terminal-admission-persistence",
+      "path": "crates/fullmag-runner/src/eigen/k_process_pool.rs",
+      "symbol": "finish_completed_for_publication",
+      "responsibility": "Returns actual persisted bounded completed-phase journal bytes only after successful write/readback and report binding; truncated bodies remain missing evidence.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "terminal-admission-consumer",
+      "path": "scripts/validate_signed_de_campaign_parity.py",
+      "symbol": "_scheduler_report",
+      "responsibility": "Prefers the additive journal only with its own raw receipt binding and validates the actual embedded report; no fallback from missing journal proof.",
+      "evidence_status": "source_visible"
     }
   ],
   "public_api": {

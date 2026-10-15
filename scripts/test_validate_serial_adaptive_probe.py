@@ -349,6 +349,54 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             self.assertFalse(result["structural_report"]["serial_process_pool_report"]["present"])
             self.assertEqual(result["science"]["status"], "NOT VERIFIED")
 
+    def test_terminal_journal_is_preferred_and_requires_its_own_receipt_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            case = _artifact_dir(adaptive)
+            report = json.loads((case / REPORT_RELATIVE_PATH).read_text(encoding="utf-8"))
+            journal = _adaptive_report()
+            journal["report"] = report
+            relative = "eigen/admission_journal.v1.json"
+            raw = json.dumps(journal).encode("utf-8")
+            (case / relative).write_bytes(raw)
+            result_path = adaptive / "run-result.json"
+            receipt = json.loads(result_path.read_text(encoding="utf-8"))
+            receipt["artifacts"]["required_artifact_hashes"][relative] = {
+                "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw),
+            }
+            result_path.write_text(json.dumps(receipt), encoding="utf-8")
+            result = validate_serial_adaptive_probe(serial, adaptive)
+            evidence = result["structural_report"]["adaptive_process_pool_report"]
+            self.assertEqual(evidence["status"], "pass")
+            self.assertEqual(evidence["artifact_binding"]["relative_path"], relative)
+            del receipt["artifacts"]["required_artifact_hashes"][relative]
+            result_path.write_text(json.dumps(receipt), encoding="utf-8")
+            result = validate_serial_adaptive_probe(serial, adaptive)
+            self.assertEqual(result["structural_report"]["adaptive_process_pool_report"]["status"], "not_verified")
+
+    def test_noncompleted_terminal_journal_cannot_pass_despite_valid_coactivity(self) -> None:
+        for state in ("running", "failed", "cancelled"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                serial, adaptive = _make_batches(Path(directory))
+                case = _artifact_dir(adaptive)
+                journal = _adaptive_report()
+                journal["report"] = json.loads((case / REPORT_RELATIVE_PATH).read_text(encoding="utf-8"))
+                journal["terminal_state"] = state
+                relative = "eigen/admission_journal.v1.json"
+                raw = json.dumps(journal).encode("utf-8")
+                (case / relative).write_bytes(raw)
+                path = adaptive / "run-result.json"
+                receipt = json.loads(path.read_text(encoding="utf-8"))
+                receipt["artifacts"]["required_artifact_hashes"][relative] = {
+                    "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw),
+                }
+                path.write_text(json.dumps(receipt), encoding="utf-8")
+                result = validate_serial_adaptive_probe(serial, adaptive)
+                evidence = result["structural_report"]["adaptive_process_pool_report"]
+                self.assertEqual(evidence["status"], "not_verified")
+                self.assertEqual(evidence["validation"]["terminal_state"], state)
+                self.assertEqual(evidence["validation"]["concurrency"]["status"], "observed_from_active_count")
+
     def test_missing_runtime_output_binding_is_not_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))

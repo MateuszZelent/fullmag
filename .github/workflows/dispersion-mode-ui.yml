@@ -118,6 +118,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Validate resource and managed-store contracts
         run: |
+          cargo test -p fullmag-runner --lib worker_identity_publication --no-fail-fast
+          cargo test -p fullmag-runner --lib terminal_admission_publication --no-fail-fast
           cargo test -p fullmag-authoring --lib scene_ --no-fail-fast
           cargo test -p fullmag-runtime-control --lib accepted_store --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_dispersion_resource --no-fail-fast
@@ -129,7 +131,6 @@ jobs:
           cargo test -p fullmag-runner --lib eigen_path_manifest_typed_context_preserves_floquet_and_per_sample_identity --no-fail-fast
           cargo test -p fullmag-runner --lib eigen_path_manifest_phase_convention_requires_sample_consensus --no-fail-fast
           cargo test -p fullmag-runner --lib equilibrium_boundary_import --no-fail-fast
-          cargo test -p fullmag-runner --lib worker_identity_publication --no-fail-fast
 
   exact-layer-mesh:
     runs-on: ubuntu-latest

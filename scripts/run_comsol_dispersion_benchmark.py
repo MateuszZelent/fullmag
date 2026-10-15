@@ -1357,18 +1357,24 @@ def _validate_case_artifacts(case_dir: Path, case: str) -> dict[str, Any]:
             "size": artifact.stat().st_size,
             "sha256": _sha256_file(artifact),
         }
-    optional_spectrum_v3 = case_dir / "eigen/spectrum.v3.json"
-    if optional_spectrum_v3.exists() or _is_reparse(optional_spectrum_v3):
-        label = f"benchmark case artifact {case}/eigen/spectrum.v3.json"
-        _regular_file(optional_spectrum_v3, label)
-        before = optional_spectrum_v3.stat()
+    for relative in (
+        "eigen/spectrum.v3.json",
+        "eigen/parallel_execution.v1.json",
+        "eigen/admission_journal.v1.json",
+    ):
+        optional_artifact = case_dir / relative
+        if not optional_artifact.exists() and not _is_reparse(optional_artifact):
+            continue
+        label = f"benchmark case artifact {case}/{relative}"
+        _regular_file(optional_artifact, label)
+        before = optional_artifact.stat()
         if before.st_size == 0:
             raise BenchmarkError(
-                f"benchmark case artifact is empty: {case}/eigen/spectrum.v3.json"
+                f"benchmark case artifact is empty: {case}/{relative}"
             )
-        spectrum_v3_sha256 = _sha256_file(optional_spectrum_v3)
-        _regular_file(optional_spectrum_v3, label)
-        after = optional_spectrum_v3.stat()
+        optional_sha256 = _sha256_file(optional_artifact)
+        _regular_file(optional_artifact, label)
+        after = optional_artifact.stat()
         before_signature = (
             before.st_dev,
             before.st_ino,
@@ -1385,11 +1391,11 @@ def _validate_case_artifacts(case_dir: Path, case: str) -> dict[str, Any]:
         )
         if before_signature != after_signature:
             raise BenchmarkError(
-                f"benchmark case artifact changed while hashing: {case}/eigen/spectrum.v3.json"
+                f"benchmark case artifact changed while hashing: {case}/{relative}"
             )
-        required_hashes["eigen/spectrum.v3.json"] = {
+        required_hashes[relative] = {
             "size": before.st_size,
-            "sha256": spectrum_v3_sha256,
+            "sha256": optional_sha256,
         }
     spectrum = _json_file(case_dir / "eigen/spectrum.v2.json", f"{case} spectrum")
     branches = _json_file(case_dir / "eigen/branches.v2.json", f"{case} branches")

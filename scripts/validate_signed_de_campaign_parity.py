@@ -32,6 +32,7 @@ POOL_SAMPLE_INDICES = tuple(range(1, SAMPLE_COUNT))
 SPECTRUM_PATH = "eigen/spectrum.v3.json"
 MANIFEST_PATH = "frequency_domain/manifest.v1.json"
 REPORT_PATH = "eigen/parallel_execution.v1.json"
+JOURNAL_PATH = "eigen/admission_journal.v1.json"
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SIDECAR_SCHEMA_PAIRS = {
@@ -632,7 +633,9 @@ def _numeric_parity(serial, adaptive):
     }
 
 def _scheduler_report(campaign, mode, native, *, required):
-    path = Path(campaign["case"]) / REPORT_PATH
+    journal = Path(campaign["case"]) / JOURNAL_PATH
+    relative = JOURNAL_PATH if journal.exists() or journal.is_symlink() else REPORT_PATH
+    path = Path(campaign["case"]) / relative
     if not path.is_file():
         if required:
             return {"status": "not_verified", "present": False, "required": True,
@@ -640,11 +643,13 @@ def _scheduler_report(campaign, mode, native, *, required):
         return {"status": "not_required", "present": False, "required": False,
                 "reason": "serial producer may omit its process-pool report", "sample_indices": []}
     try:
-        path, binding = _bound_artifact(campaign, REPORT_PATH)
+        path, binding = _bound_artifact(campaign, relative)
     except EvidenceUnavailable as error:
         return {"status": "not_verified", "present": True, "required": required,
                 "reason": str(error), "sample_indices": []}
     raw = _read_json(path, f"{mode} scheduler report")
+    if relative == JOURNAL_PATH and raw.get("schema_version") != "fullmag.eigen.admission_journal.v1":
+        raise ValidationError(f"{mode} terminal journal schema is invalid")
     try:
         validation = validate_parallel_execution_report(
             path, expected_mode=mode, expected_sample_count=len(POOL_SAMPLE_INDICES),

@@ -1082,6 +1082,24 @@ class PilotTests(unittest.TestCase):
             with self.assertRaises(pilot.managed.BenchmarkError):
                 pilot.bind_parallel_report(case, artifacts, expected_policy=_policy(), expected_indices=range(1, 4))
 
+    def test_adaptive_binding_prefers_actual_terminal_journal(self):
+        from test_validate_parallel_execution_report import _adaptive_report, _policy
+        with TemporaryDirectory() as temporary:
+            case = Path(temporary)
+            (case / "eigen").mkdir()
+            journal = _adaptive_report()
+            path = case / "eigen/admission_journal.v1.json"
+            path.write_text(json.dumps(journal), encoding="utf-8")
+            (case / "eigen/parallel_execution.v1.json").write_text(json.dumps(journal["report"]), encoding="utf-8")
+            artifacts = {"required_artifact_hashes": {}}
+            validation = pilot.bind_parallel_report(case, artifacts, expected_policy=_policy(), expected_indices=range(3))
+            self.assertEqual(validation["terminal_state"], "completed")
+            self.assertEqual(artifacts["required_artifact_hashes"]["eigen/admission_journal.v1.json"]["sha256"],
+                             hashlib.sha256(path.read_bytes()).hexdigest())
+            path.write_text(json.dumps(journal["report"]), encoding="utf-8")
+            with self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.bind_parallel_report(case, artifacts, expected_policy=_policy(), expected_indices=range(3))
+
     def test_signed_fifteen_preserves_actual_model_commit_identity(self):
         identity = {"kind": "versioned_standalone_input", "commit": "a" * 40, "sha256": "b" * 64}
         campaign = pilot.signed_fifteen_campaign_identity(identity, "adaptive")

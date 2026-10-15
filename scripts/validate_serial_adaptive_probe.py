@@ -646,16 +646,26 @@ def _report_inputs(value: Mapping[str, Any], probe: Mapping[str, Any]) -> dict[i
     return result
 
 
-def _artifact_hash_binding(result: Mapping[str, Any], report_path: Path) -> dict[str, Any]:
+
+def _preferred_process_report(case_dir):
+    root = Path(case_dir)
+    journal = root / "eigen/admission_journal.v1.json"
+    if journal.exists() or journal.is_symlink():
+        return journal, "eigen/admission_journal.v1.json"
+    return root / REPORT_RELATIVE_PATH, REPORT_RELATIVE_PATH
+
+
+def _artifact_hash_binding(result: Mapping[str, Any], report_path: Path,
+                           relative_path: str = REPORT_RELATIVE_PATH) -> dict[str, Any]:
     artifacts = result.get("artifacts")
     if not isinstance(artifacts, Mapping):
         raise EvidenceUnavailable("run-result has no artifact hash catalog for the adaptive report")
     hashes = artifacts.get("required_artifact_hashes")
     if not isinstance(hashes, Mapping):
         raise EvidenceUnavailable("run-result does not publish required_artifact_hashes")
-    entry = hashes.get(REPORT_RELATIVE_PATH)
+    entry = hashes.get(relative_path)
     if not isinstance(entry, Mapping):
-        raise EvidenceUnavailable("run-result does not bind eigen/parallel_execution.v1.json")
+        raise EvidenceUnavailable(f"run-result does not bind {relative_path}")
     declared = _digest(entry.get("sha256"), "required_artifact_hashes.parallel_execution.sha256")
     try:
         actual = hashlib.sha256(report_path.read_bytes()).hexdigest()
@@ -663,7 +673,7 @@ def _artifact_hash_binding(result: Mapping[str, Any], report_path: Path) -> dict
         raise EvidenceUnavailable(f"cannot read adaptive process-pool report: {report_path}") from error
     if declared != actual:
         raise ValidationError("adaptive process-pool report hash differs from run-result binding")
-    return {"status": "pass", "relative_path": REPORT_RELATIVE_PATH, "sha256": actual}
+    return {"status": "pass", "relative_path": relative_path, "sha256": actual}
 
 
 def _validate_process_report(
@@ -673,7 +683,7 @@ def _validate_process_report(
     *,
     required: bool,
 ) -> dict[str, Any]:
-    report_path = Path(case["case_dir"]) / REPORT_RELATIVE_PATH
+    report_path, relative_path = _preferred_process_report(case["case_dir"])
     if not report_path.is_file():
         if required:
             return {
@@ -689,6 +699,8 @@ def _validate_process_report(
             "reason": "serial producer may omit a process-pool report",
         }
     raw = _load_json(report_path, f"{mode} process-pool report")
+    if relative_path == "eigen/admission_journal.v1.json" and raw.get("schema_version") != "fullmag.eigen.admission_journal.v1":
+        raise ValidationError("terminal admission journal schema is invalid")
     try:
         report_inputs = _report_inputs(raw, receipt["probe"])
     except EvidenceUnavailable as error:
@@ -706,7 +718,7 @@ def _validate_process_report(
     )
     if required:
         try:
-            binding = _artifact_hash_binding(receipt["result"], report_path)
+            binding = _artifact_hash_binding(receipt["result"], report_path, relative_path)
         except EvidenceUnavailable as error:
             return {
                 "present": True,
@@ -715,6 +727,15 @@ def _validate_process_report(
                 "reason": str(error),
                 "validation": validation,
                 "input_binding": report_inputs,
+            }
+        if relative_path == "eigen/admission_journal.v1.json" and (
+            validation.get("status") != "pass" or validation.get("terminal_state") != "completed"
+        ):
+            return {
+                "present": True, "required": True, "status": "not_verified",
+                "reason": "terminal journal lacks completed, valid process-pool evidence",
+                "validation": validation, "input_binding": report_inputs,
+                "artifact_binding": binding,
             }
         concurrency = validation.get("concurrency", {})
         if concurrency.get("status") != "observed_from_active_count":
@@ -741,7 +762,9 @@ def _validate_process_report(
             "present": True,
             "required": True,
             "status": "pass",
-            "reason": "direct report is bound to completed_unqualified run-result; terminal state remains separate",
+            "reason": ("terminal journal is hash-bound; completion applies to the process-pool phase"
+                       if relative_path == "eigen/admission_journal.v1.json" else
+                       "direct report is bound to completed_unqualified run-result; terminal state remains separate"),
             "validation": validation,
             "input_binding": report_inputs,
             "artifact_binding": binding,
@@ -887,8 +910,8 @@ def validate_serial_adaptive_probe(serial_dir: str | Path, adaptive_dir: str | P
         "reason": "serial producer may omit eigen/parallel_execution.v1.json",
     }
     if serial_report.get("present") and adaptive_report.get("present"):
-        serial_report_path = Path(serial_case["case_dir"]) / REPORT_RELATIVE_PATH
-        adaptive_report_path = Path(adaptive_case["case_dir"]) / REPORT_RELATIVE_PATH
+        serial_report_path, _ = _preferred_process_report(serial_case["case_dir"])
+        adaptive_report_path, _ = _preferred_process_report(adaptive_case["case_dir"])
         report_parity = compare_serial_adaptive_policy(serial_report_path, adaptive_report_path)
         report_parity = {**report_parity, **_compare_report_inputs(serial_report, adaptive_report)}
 

@@ -851,3 +851,56 @@ def test_identity_snapshot_must_match_the_selected_runtime_capsule(valid_pair):
     _refresh_catalog(serial)
     with pytest.raises(parity.ValidationError, match="snapshot differs from the selected capsule"):
         parity.validate_signed_de_campaign_parity(serial, adaptive)
+
+
+def test_additive_terminal_journal_is_preferred_and_hash_bound(valid_pair):
+    serial, adaptive = valid_pair
+    case = _artifact_case(adaptive)
+    old = case / parity.REPORT_PATH
+    journal = _read_json(old)
+    _write_json(case / parity.JOURNAL_PATH, journal)
+    _write_json(old, journal["report"])
+    _refresh_catalog(adaptive)
+    result = parity.validate_signed_de_campaign_parity(serial, adaptive)
+    scheduler = result["scheduler"]["adaptive"]
+    assert scheduler["status"] == "pass"
+    assert scheduler["artifact_binding"]["relative_path"] == parity.JOURNAL_PATH
+
+
+def test_present_journal_without_hash_binding_never_falls_back_to_legacy(valid_pair):
+    serial, adaptive = valid_pair
+    case = _artifact_case(adaptive)
+    _write_json(case / parity.JOURNAL_PATH, _read_json(case / parity.REPORT_PATH))
+    # Deliberately do not add the new journal to the completed receipt.
+    result = parity.validate_signed_de_campaign_parity(serial, adaptive)
+    assert result["scheduler"]["adaptive"]["status"] == "not_verified"
+    assert result["scheduler"]["adaptive"]["present"] is True
+
+
+def test_truncated_terminal_journal_remains_not_verified(valid_pair):
+    serial, adaptive = valid_pair
+    case = _artifact_case(adaptive)
+    _write_json(case / parity.JOURNAL_PATH, {
+        "schema_version": "fullmag.eigen.admission_journal.v1",
+        "terminal_state": "completed", "events_truncated": True,
+    })
+    _refresh_catalog(adaptive)
+    result = parity.validate_signed_de_campaign_parity(serial, adaptive)
+    assert result["scheduler"]["adaptive"]["status"] == "not_verified"
+    assert "omitted" in result["scheduler"]["adaptive"]["reason"]
+
+
+def test_additive_journal_tamper_or_wrong_schema_is_rejected(valid_pair):
+    serial, adaptive = valid_pair
+    case = _artifact_case(adaptive)
+    journal = _read_json(case / parity.REPORT_PATH)
+    path = case / parity.JOURNAL_PATH
+    _write_json(path, journal)
+    _refresh_catalog(adaptive)
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(parity.ValidationError):
+        parity.validate_signed_de_campaign_parity(serial, adaptive)
+    _write_json(path, journal["report"])
+    _refresh_catalog(adaptive)
+    with pytest.raises(parity.ValidationError, match="schema"):
+        parity.validate_signed_de_campaign_parity(serial, adaptive)

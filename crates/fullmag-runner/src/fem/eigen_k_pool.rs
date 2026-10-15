@@ -22,6 +22,13 @@ pub(super) struct PrecomputedSingleK {
     pub(super) final_magnetization: Vec<[f64; 3]>,
 }
 
+
+/// Scheduler phase evidence, separate from overall eigen-run completion.
+pub(super) struct ProcessPoolPublication {
+    pub(super) report: crate::eigen::k_process_pool::ProcessPoolReportV1,
+    pub(super) terminal_admission_journal: Option<Vec<u8>>,
+}
+
 fn parallel_admission_progress(
     event: &crate::eigen::k_process_pool::ProcessAdmissionEventV1,
     policy: &ParallelExecutionPolicyIR,
@@ -206,7 +213,7 @@ pub(super) fn prepare_process_pool_samples(
 ) -> Result<
     (
         HashMap<usize, PrecomputedSingleK>,
-        crate::eigen::k_process_pool::ProcessPoolReportV1,
+        ProcessPoolPublication,
     ),
     RunError,
 > {
@@ -371,7 +378,9 @@ pub(super) fn prepare_process_pool_samples(
                 "single sample completed by verified Relax→Eigen bootstrap".into(),
             ),
         };
-        return Ok((precomputed, report));
+        return Ok((precomputed, ProcessPoolPublication {
+            report, terminal_admission_journal: None,
+        }));
     }
     let requests = worker_samples
         .iter()
@@ -642,5 +651,8 @@ pub(super) fn prepare_process_pool_samples(
             ),
         });
     }
-    Ok((precomputed, pool_result.report))
+    Ok((precomputed, ProcessPoolPublication {
+        report: pool_result.report,
+        terminal_admission_journal: Some(pool_result.terminal_admission_journal),
+    }))
 }

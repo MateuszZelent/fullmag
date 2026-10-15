@@ -643,19 +643,25 @@ def signed_fifteen_campaign_identity(model_identity, parallel_mode):
 
 def bind_parallel_report(case_dir, artifacts, *, expected_policy, expected_indices):
     """Bind actual scheduler telemetry to the numerical campaign receipt."""
-    relative = "eigen/parallel_execution.v1.json"
+    journal = Path(case_dir) / "eigen/admission_journal.v1.json"
+    relative = "eigen/admission_journal.v1.json" if journal.exists() or journal.is_symlink() else "eigen/parallel_execution.v1.json"
     path = Path(case_dir) / relative
     managed._regular_file(path, "adaptive process-pool report")
     raw = managed._json_file(path, "adaptive process-pool report", max_bytes=4 * 1024 * 1024)
+    if relative == "eigen/admission_journal.v1.json" and raw.get("schema_version") != "fullmag.eigen.admission_journal.v1":
+        raise managed.BenchmarkError("adaptive terminal journal schema is invalid")
     try:
         validation = validate_parallel_execution_report(
             raw, expected_mode="adaptive", expected_sample_count=len(expected_indices),
             require_concurrency=False)
     except ParallelReportError as error:
         raise managed.BenchmarkError("adaptive report validation failed: " + str(error)) from error
-    if raw.get("policy") != expected_policy:
+    body = raw.get("report") if raw.get("schema_version") == "fullmag.eigen.admission_journal.v1" else raw
+    if not isinstance(body, dict):
+        raise managed.BenchmarkError("adaptive journal omitted its report body; completion evidence NOT VERIFIED")
+    if body.get("policy") != expected_policy:
         raise managed.BenchmarkError("adaptive report policy differs from the campaign request")
-    if [entry["sample_index"] for entry in raw.get("inputs", [])] != list(expected_indices):
+    if [entry["sample_index"] for entry in body.get("inputs", [])] != list(expected_indices):
         raise managed.BenchmarkError("adaptive report sample indices differ from the campaign")
     binding = {"size": path.stat().st_size, "sha256": managed._sha256_file(path)}
     artifacts["required_artifact_hashes"][relative] = binding

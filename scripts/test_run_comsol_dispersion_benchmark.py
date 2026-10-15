@@ -346,6 +346,32 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                 {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()},
             )
 
+    def test_optional_scheduler_artifacts_are_raw_hash_bound(self):
+        for relative in ("eigen/parallel_execution.v1.json", "eigen/admission_journal.v1.json"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                case = Path(directory) / "c0"
+                self._write_valid_c0_case(case)
+                payload = b'{"terminal_state":"completed"}\n'
+                (case / relative).write_bytes(payload)
+                result = benchmark._validate_case_artifacts(case, "c0")
+                self.assertEqual(result["required_artifact_hashes"][relative],
+                                 {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
+
+    def test_optional_scheduler_artifacts_reject_empty_directory_and_reparse(self):
+        for relative in ("eigen/parallel_execution.v1.json", "eigen/admission_journal.v1.json"):
+            for fault in ("empty", "directory", "reparse"):
+                with self.subTest(relative=relative, fault=fault), tempfile.TemporaryDirectory() as directory:
+                    case = Path(directory) / "c0"
+                    self._write_valid_c0_case(case)
+                    path = case / relative
+                    if fault == "directory": path.mkdir()
+                    else: path.write_bytes(b"" if fault == "empty" else b"valid")
+                    if fault == "reparse":
+                        with patch.object(benchmark, "_is_reparse", side_effect=lambda candidate: Path(candidate) == path):
+                            with self.assertRaises(benchmark.BenchmarkError): benchmark._validate_case_artifacts(case, "c0")
+                    else:
+                        with self.assertRaises(benchmark.BenchmarkError): benchmark._validate_case_artifacts(case, "c0")
+
     def test_optional_spectrum_v3_rejects_invalid_or_changing_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

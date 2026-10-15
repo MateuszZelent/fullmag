@@ -150,3 +150,40 @@ Nie zmieniono fizycznego residual ceiling, równań, schematów worker request,
 ani historycznych receiptów. Nadal OPEN: fizyczny preimage assembled operator,
 terminal admission journal binding, fresh serial/adaptive sweep, a następnie
 pełny plan S00–S12 (61/8 bands, BV, count proof, zbieżność, COMSOL, UI/GPU).
+
+
+## Checkpoint 15.10 — rzeczywisty terminal journal i wykonane kontrole
+
+Zapisano addytywną publikację `eigen/admission_journal.v1.json` z dokładnych
+bajtów utrwalonych przez guard puli. Nie odtwarza się wrappera z osobnego
+raportu; `eigen/parallel_execution.v1.json` zachowuje poprzedni schemat.
+Brak zapisu/readback blokuje terminalny sukces puli, a obcięta telemetria
+pozostaje niepełnym dowodem. Bootstrap-only nie otrzymuje sztucznego journala.
+Journal dowodzi zakończenia fazy puli, nie całej symulacji.
+
+Benchmark wiąże raw SHA/size nowych artefaktów. Pilot i oba konsumery
+preferują journal, wymagają jego własnego wiązania i nie cofają się do
+starego raportu, gdy journal istnieje bez dowodu. Review wykryło promocję
+nieukończonego journala w starszym probe; naprawiono ją oraz dodano regresje
+running/failed/cancelled z zachowaną współbieżnością.
+
+Dowody źródłowe:
+- cztery zestawy konsumentów:137 testów i169 podtestów PASS, exit0,
+  `terminal-journal-sourcechecks-20261015.log`;
+- po poprawce review ponowiono wyłącznie probe:19 testów i7 podtestów PASS;
+- kontrakt dokumentacji:46 testów interpretowanych PASS;
+- parser zmienionych Rust/Python oraz focused source-map validator PASS;
+- cztery nowe regresje Rust journala przygotowane, kompilacja tylko w GHA.
+
+Poprzednie GHA38715628806 zatrzymało się na dwóch błędach kompilacji nowych
+fixture; naprawiono w bcb549b126af62baba0ad739b89c0c4063e4984a. Następne
+GHA38716621280 skompilowało kod i wykonało8 nowych worker testów:5 PASS,
+3 FAIL z powodu niespójnego ID testowego certyfikatu PBC. Fixture poprawiono
+w kolejnym commicie6fed2ead7f49e13dbc3106c83c61f5e46b2af4b5. Nie osłabiono loadera ani
+asercji; cała poprawka worker publication nadal wymaga nowego zielonego CI.
+
+Build252 na8ea04862f rzeczywiście kompiluje (native-build/install-cli-dev),
+ale nie zawiera późniejszych poprawek publikacji. Nie zgłoszono duplikatu.
+Managed wykonanie nowych zmian oraz nowy serial/adaptive sweep pozostają
+NOT VERIFIED. Pełny plan S00–S12 nadal OPEN; kolejnym brakującym kontraktem
+jest niezależny fizyczny preimage assembled operator i worker plan projection.

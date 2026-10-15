@@ -287,6 +287,30 @@ konflikcie i nie kopiuje dużych buforów pól modów. Wymagany pozostaje manage
 porównanie obu trybów. Osobne OPEN: niezależny import wyłącznie z Artifact,
 pełny assembled-physical-input preimage i terminal journal binding.
 
+
+### 7.4 Rzeczywisty terminal admission journal — kontrakt naprawy
+
+Stan: kod publikacji i interpretowane regresje zapisane; testy Rust w CI
+i wykonanie runtime NOT VERIFIED. Dotychczasowy
+`eigen/parallel_execution.v1.json` pozostaje bez zmiany schematu, jako
+`ProcessPoolReportV1`. Sam raport nie jest dowodem terminalnego zakończenia.
+
+Dla rzeczywistej puli procesów publikacja ma dodatkowo zachować dokładne
+bajty zakończonego `admission-journal.v1.json` pod
+`eigen/admission_journal.v1.json`. Journal pochodzi z guardu puli po
+`finish(..., "completed")`; nie powstaje przez dopisanie znacznika do
+starego raportu. Przed publikacją wymagana jest kontrola schematu,
+terminal state i ograniczenia rozmiaru. Błąd odczytu lub trwałego zapisu
+nie może wyprodukować pozornego terminal proof.
+
+Receipt benchmarku wiąże raw SHA/size journala i raportu, jeśli istnieją.
+Konsument preferuje journal, lecz brak jego wiązania nie powoduje cichego
+powrotu do dogodniejszego raportu. Brak, obcięcie lub niepełna telemetria
+pozostają NOT VERIFIED; terminal completed nie zastępuje co-activity,
+walidacji wejść workerów ani naukowego residualu. Bootstrap-only bez puli
+nie dostaje fikcyjnego journala. Zachowane historyczne wyniki nie są
+przepisywane ani uzupełniane retrospektywnie.
+
 (discrete-realization)=
 ## 8. Realizacja backendów
 
@@ -391,3 +415,6 @@ residualy, zbieżność i osobna walidacja fizyczna.
 | parent-owned worker publication | `crates/fullmag-runner/src/fem/eigen_worker_identity_publication.rs` + `publish_worker_identity` | FEM CPU | source-visible; CI/runtime NOT VERIFIED |
 | worker artifact replay | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `LinearizationIdentityArtifacts` | FEM CPU | source-visible; CI NOT VERIFIED |
 | publication mutations | `crates/fullmag-runner/src/fem/eigen_tests.rs` + `worker_identity_publication_preserves_exact_bytes_and_binds_each_target` | FEM CPU | prepared regressions; CI NOT VERIFIED |
+
+| terminal pool journal | `crates/fullmag-runner/src/eigen/k_process_pool.rs` + `finish_completed_for_publication` | FEM CPU | source-visible; CI/runtime NOT VERIFIED |
+| terminal journal consumer | `scripts/validate_signed_de_campaign_parity.py` + `_scheduler_report` | verifier | source-visible; 137 interpreted tests +169 subtests PASS; probe after review 19 tests +7 subtests PASS |

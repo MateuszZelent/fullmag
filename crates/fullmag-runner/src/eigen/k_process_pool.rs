@@ -350,6 +350,8 @@ pub(crate) struct ProcessPoolWorkerLogV1 {
 pub(crate) struct ProcessPoolResult {
     pub responses: Vec<EigenKWorkerResponseV1>,
     pub report: ProcessPoolReportV1,
+    /// Exact bytes persisted by the pool's completed-phase journal guard.
+    pub terminal_admission_journal: Vec<u8>,
 }
 
 /// Best-effort bounded evidence retained in the private pool root even when
@@ -384,14 +386,43 @@ impl AdmissionJournalGuard {
         self.write_now();
     }
 
-    fn finish(&mut self, report: &ProcessPoolReportV1, terminal_state: &str) {
+    fn finish(&mut self, report: &ProcessPoolReportV1, terminal_state: &str) -> bool {
         self.report = report.clone();
         self.terminal_state = terminal_state.to_string();
         self.finished = true;
-        self.write_now();
+        self.write_now()
     }
 
-    fn write_now(&mut self) {
+    fn finish_completed_for_publication(
+        &mut self,
+        report: &ProcessPoolReportV1,
+    ) -> Result<Vec<u8>, String> {
+        if !self.finish(report, "completed") {
+            return Err("terminal admission journal persistence failed".into());
+        }
+        let metadata = fs::symlink_metadata(&self.path)
+            .map_err(|cause| format!("terminal admission journal metadata: {cause}"))?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() == 0
+            || metadata.len() > MAX_ADMISSION_JOURNAL_BYTES as u64
+        {
+            return Err("terminal admission journal is not a bounded regular file".into());
+        }
+        let mut bytes = Vec::new();
+        fs::File::open(&self.path)
+            .map_err(|cause| format!("open terminal admission journal: {cause}"))?
+            .take(MAX_ADMISSION_JOURNAL_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|cause| format!("read terminal admission journal: {cause}"))?;
+        if bytes.len() > MAX_ADMISSION_JOURNAL_BYTES {
+            return Err("terminal admission journal exceeded its read bound".into());
+        }
+        validate_terminal_admission_journal(&bytes, report)?;
+        Ok(bytes)
+    }
+
+    fn write_now(&mut self) -> bool {
         let mut value = serde_json::json!({
             "schema_version": "fullmag.eigen.admission_journal.v1",
             "terminal_state": &self.terminal_state,
@@ -425,6 +456,7 @@ impl AdmissionJournalGuard {
             if let Some(report) = value.get_mut("report") {
                 report["events_truncated"] = serde_json::Value::Bool(true);
             }
+            value["events_truncated"] = serde_json::Value::Bool(true);
             encoded = serde_json::to_vec_pretty(&value).unwrap_or_else(|_| b"{}".to_vec());
             if encoded.len() > MAX_ADMISSION_JOURNAL_BYTES {
                 value = serde_json::json!({
@@ -438,11 +470,80 @@ impl AdmissionJournalGuard {
         let temporary = self
             .path
             .with_extension(format!("tmp-{}", std::process::id()));
-        if fs::write(&temporary, encoded).is_ok() {
-            let _ = fs::rename(&temporary, &self.path);
-        }
+        let persisted = fs::write(&temporary, encoded).is_ok()
+            && fs::rename(&temporary, &self.path).is_ok();
         self.last_write = Instant::now();
+        persisted
     }
+}
+
+
+/// Validate exact persisted bytes. Truncated journals remain incomplete evidence;
+/// never replace their missing body with the separate direct report.
+fn validate_terminal_admission_journal(
+    bytes: &[u8],
+    report: &ProcessPoolReportV1,
+) -> Result<(), String> {
+    if bytes.is_empty() || bytes.len() > MAX_ADMISSION_JOURNAL_BYTES {
+        return Err("terminal admission journal has invalid size".into());
+    }
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|cause| format!("decode terminal admission journal: {cause}"))?;
+    if value.get("schema_version").and_then(Value::as_str)
+        != Some("fullmag.eigen.admission_journal.v1")
+        || value.get("terminal_state").and_then(Value::as_str) != Some("completed")
+    {
+        return Err("terminal admission journal schema or completion mismatch".into());
+    }
+    let truncated = value
+        .get("events_truncated")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "terminal admission journal missing truncation flag".to_string())?;
+    let Some(body) = value.get("report") else {
+        return if truncated {
+            Ok(())
+        } else {
+            Err("terminal admission journal missing report".into())
+        };
+    };
+    let mut expected = serde_json::to_value(report)
+        .map_err(|cause| format!("encode terminal admission report: {cause}"))?;
+    if !truncated {
+        if body != &expected {
+            return Err("terminal admission journal report mismatch".into());
+        }
+    } else {
+        let mut actual = body.clone();
+        let actual_object = actual
+            .as_object_mut()
+            .ok_or_else(|| "terminal admission journal report is not an object".to_string())?;
+        let events = actual_object
+            .remove("events")
+            .and_then(|value| value.as_array().cloned())
+            .ok_or_else(|| "terminal admission journal truncated events unavailable".to_string())?;
+        if events.len() > report.events.len()
+            || body.get("events_truncated").and_then(Value::as_bool) != Some(true)
+        {
+            return Err("terminal admission journal truncation mismatch".into());
+        }
+        let expected_events = expected
+            .get("events")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "terminal admission report events unavailable".to_string())?;
+        if events.as_slice() != &expected_events[expected_events.len() - events.len()..] {
+            return Err("terminal admission journal events do not match report suffix".into());
+        }
+        actual_object.remove("events_truncated");
+        let expected_object = expected
+            .as_object_mut()
+            .ok_or_else(|| "terminal admission report is not an object".to_string())?;
+        expected_object.remove("events");
+        expected_object.remove("events_truncated");
+        if actual != expected {
+            return Err("terminal admission journal truncated report mismatch".into());
+        }
+    }
+    Ok(())
 }
 
 impl Drop for AdmissionJournalGuard {
@@ -1104,8 +1205,8 @@ impl EigenKProcessPool {
                 responses.push(response);
                 journal.update(&report);
             }
-            journal.finish(&report, "completed");
-            return Ok(ProcessPoolResult { responses, report });
+            let terminal_admission_journal = journal.finish_completed_for_publication(&report)?;
+            return Ok(ProcessPoolResult { responses, report, terminal_admission_journal });
         }
 
         let mut sampler = ResourceSampler::new().map_err(|error| {
@@ -1495,13 +1596,14 @@ impl EigenKProcessPool {
             std::thread::sleep(Duration::from_millis(100));
         }
         responses.sort_by_key(|(index, _)| *index);
-        journal.finish(&report, "completed");
+        let terminal_admission_journal = journal.finish_completed_for_publication(&report)?;
         Ok(ProcessPoolResult {
             responses: responses
                 .into_iter()
                 .map(|(_, response)| response)
                 .collect(),
             report,
+            terminal_admission_journal,
         })
     }
 }
@@ -1910,5 +2012,152 @@ mod tests {
 
         let active = AtomicBool::new(false);
         assert!(admission_may_spawn_worker(&active, false));
+    }
+}
+
+
+#[cfg(test)]
+mod terminal_admission_publication_tests {
+    use super::*;
+
+    fn report_fixture() -> ProcessPoolReportV1 {
+        ProcessPoolReportV1 {
+            protocol: EIGEN_K_WORKER_PROTOCOL_V1.into(),
+            requested_mode: ParallelExecutionModeIR::Adaptive,
+            resolved_mode: "adaptive".into(),
+            resolved_workers: 2,
+            policy: ParallelExecutionPolicyIR {
+                mode: ParallelExecutionModeIR::Adaptive,
+                ..Default::default()
+            },
+            inputs: vec![],
+            thread_bindings: vec![],
+            cpu_observations: vec![],
+            worker_logs: vec![],
+            events: vec![],
+            events_truncated: false,
+            telemetry_reason: None,
+        }
+    }
+
+    struct OwnedJournalRoot(PathBuf);
+    impl OwnedJournalRoot {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "fullmag-terminal-journal-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for OwnedJournalRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(self.0.join("admission-journal.v1.json"));
+            let _ = fs::remove_file(
+                self.0
+                    .join(format!("admission-journal.v1.tmp-{}", std::process::id())),
+            );
+            let _ = fs::remove_dir(&self.0);
+        }
+    }
+
+    #[test]
+    fn terminal_admission_publication_returns_exact_persisted_bytes() {
+        let root = OwnedJournalRoot::new();
+        let report = report_fixture();
+        let mut journal = AdmissionJournalGuard::new(&root.0, &report);
+        let bytes = journal.finish_completed_for_publication(&report).unwrap();
+        assert_eq!(
+            bytes,
+            fs::read(root.0.join("admission-journal.v1.json")).unwrap()
+        );
+        validate_terminal_admission_journal(&bytes, &report).unwrap();
+        let mut different = report.clone();
+        different.resolved_workers += 1;
+        assert!(validate_terminal_admission_journal(&bytes, &different).is_err());
+        let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["terminal_state"], "completed");
+        assert_eq!(parsed["report"], serde_json::to_value(&report).unwrap());
+    }
+
+    #[test]
+    fn terminal_admission_publication_rejects_missing_persistence_and_nonterminal_state() {
+        let root = OwnedJournalRoot::new();
+        let report = report_fixture();
+        let mut journal = AdmissionJournalGuard::new(&root.0.join("absent"), &report);
+        assert!(journal.finish_completed_for_publication(&report).is_err());
+        for state in ["running", "failed", "cancelled", "failed_or_cancelled"] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "schema_version": "fullmag.eigen.admission_journal.v1",
+                "terminal_state": state, "events_truncated": false, "report": report,
+            }))
+            .unwrap();
+            assert!(
+                validate_terminal_admission_journal(&bytes, &report).is_err(),
+                "{state}"
+            );
+        }
+        assert!(validate_terminal_admission_journal(
+            &vec![b' '; MAX_ADMISSION_JOURNAL_BYTES + 1],
+            &report
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn terminal_admission_publication_accepts_only_the_actual_event_suffix() {
+        let mut report = report_fixture();
+        let event = ProcessAdmissionEventV1 {
+            at_unix_ms: 1,
+            active_workers: 1,
+            pending_samples: 1,
+            desired_workers: 2,
+            reason: "fixture".into(),
+            cpu_target_kind: "soft_admission_target".into(),
+            snapshot: None,
+            worker_peak: None,
+        };
+        report.events.push(event.clone());
+        let mut later = event;
+        later.at_unix_ms = 2;
+        report.events.push(later);
+        let mut value = serde_json::json!({
+            "schema_version": "fullmag.eigen.admission_journal.v1",
+            "terminal_state": "completed", "events_truncated": true, "report": report,
+        });
+        value["report"]["events_truncated"] = serde_json::json!(true);
+        value["report"]["events"].as_array_mut().unwrap().remove(0);
+        validate_terminal_admission_journal(&serde_json::to_vec(&value).unwrap(), &report).unwrap();
+        value["report"]["events"][0]["at_unix_ms"] = serde_json::json!(1);
+        assert!(
+            validate_terminal_admission_journal(&serde_json::to_vec(&value).unwrap(), &report)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_admission_publication_preserves_bounded_missing_body_evidence() {
+        let root = OwnedJournalRoot::new();
+        let mut report = report_fixture();
+        report.telemetry_reason = Some("x".repeat(MAX_ADMISSION_JOURNAL_BYTES + 1));
+        let mut journal = AdmissionJournalGuard::new(&root.0, &report);
+        let bytes = journal.finish_completed_for_publication(&report).unwrap();
+        assert!(bytes.len() < MAX_ADMISSION_JOURNAL_BYTES);
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["events_truncated"], true);
+        assert!(value.get("report").is_none());
+        // Export is exact, but missing report cannot establish scheduler parity.
+        let mut invalid = value.clone();
+        invalid["events_truncated"] = serde_json::json!(false);
+        assert!(validate_terminal_admission_journal(
+            &serde_json::to_vec(&invalid).unwrap(),
+            &report
+        )
+        .is_err());
     }
 }
