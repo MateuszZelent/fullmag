@@ -33,4 +33,4 @@ jobs:
       - name: Verify read-only polling and serialized retention operations
         run: python -m unittest discover -s scripts -p test_local_runner_retention_service.py -v
       - name: Verify canonical runner console source and pagination
-        run: node apps/runner-console/test.mjs
+        run: npm --prefix apps/runner-console test
