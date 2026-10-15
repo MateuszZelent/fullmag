@@ -538,9 +538,31 @@ async function installFixtureConfig(page) {
 }
 
 async function installFixtureApi(page, fixture) {
+  await page.route("**/v2/platform/development-backend", async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return route.continue();
+    const requestUrl = new URL(request.url());
+    fixture.requests.push(`${request.method()} ${requestUrl.pathname}${requestUrl.search}`);
+    return fulfillJson(route, {
+      schema_version: "1.0.0",
+      configured: false,
+      revision: 0,
+      state: "disabled",
+      current_build: null,
+      ready_build: null,
+      build_available: false,
+      build_request_id: null,
+      workspace_identity: null,
+      restart_available: false,
+      reason: "disabled",
+    });
+  });
   await page.route("**/v2/sessions", async (route) => {
+    const request = route.request();
+    const requestUrl = new URL(request.url());
+    fixture.requests.push(`${request.method()} ${requestUrl.pathname}${requestUrl.search}`);
     await fulfillJson(route, {
-      schema_version: "session_list.v1",
+      schema_version: "2.0.0",
       sessions: [
         {
           current: true,
@@ -1747,7 +1769,7 @@ function createEmptyPartColorFixture() {
 function baseFixture(discretization, objects) {
   return {
     fieldRequests: [], requests: [],
-    status: { api_contract_version: "1.0.0", capabilities: { binary_fields: true, explicit_topology: discretization === "fem", node_fields: true, preview_3d: true, structured_grid: discretization === "fdm" }, display: { active_quantity_id: "m", view_mode: "3d" }, domain: { cell_count: discretization === "fdm" ? FDM_TARGET_GRID_CELL_COUNT : 8, discretization, generation_id: 1 }, energies: {}, metrics: {}, resources: { domain_generation_id: 1, field_catalog_revision: 1, field_revision: 1, fields_revision: 1, mesh_revision: 1, scene_revision: 1, topology_revision: 1, visualization_state_revision: 1 }, run: null, runtime_bundle_version: "browser-target-fixture", session: { created_at: "0", name: "browser target fixture", session_id: "browser-target-fixture", workspace_root: "/tmp" }, solver: { state: "idle" } },
+    status: { api_contract_version: "1.0.0", capabilities: { binary_fields: true, explicit_topology: discretization === "fem", node_fields: true, preview_3d: true, structured_grid: discretization === "fdm" }, display: { active_quantity_id: "m", view_mode: "3d" }, domain: { cell_count: discretization === "fdm" ? FDM_TARGET_GRID_CELL_COUNT : 8, discretization, generation_id: 1 }, energies: {}, metrics: {}, resources: { domain_generation_id: 1, field_catalog_revision: 1, field_revision: 1, fields_revision: 1, mesh_revision: 1, scene_revision: 1, topology_revision: 1, visualization_state_revision: 1 }, run: null, runtime_bundle_version: "browser-target-fixture", session: { created_at: "0", name: "browser target fixture", session_epoch: "browser-target-fixture@0", request_scope_epoch: "browser-target-fixture-instance:0", session_id: "browser-target-fixture", workspace_root: "/tmp" }, solver: { state: "idle" } },
     visualization: { active_quantity_id: "m", layers: { airbox: { vectors: { visible: false }, wireframe: { visible: true } }, surface: { visible: true }, vectors: { visible: false }, wireframe: { visible: false } }, overrides: [], quantity: { active_quantity_id: "m" }, revision: 1, schema_version: 1 },
     scene: { objects, revision: 1, schema_version: 2 },
     universe: { mesh_dirty: false, object_bounds_max: [1, 1, 1], object_bounds_min: [-1, -1, -1], scene_revision: 1, study_universe_mesh: null, universe: null },
