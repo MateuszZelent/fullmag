@@ -2704,7 +2704,7 @@ if ($RunMode -eq "workspace") {
   $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
   $env:FULLMAG_STATE_ROOT = Join-Path $StorageLayout.runtime_root "state"
   $env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev") {
-    if ($BrowserWorkspace) { Join-Path $FrontendWorkspaceRoot "apps\control-room" } else { Join-Path $RepoRoot "apps\control-room" }
+    Join-Path $RepoRoot "apps\control-room"
   } else { "" }
   if ($BrowserWorkspace) {
     # The browser CLI owns free-port selection when WebPort=0.  Passing zero
@@ -2839,7 +2839,7 @@ try {
     $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
     $env:FULLMAG_STATE_ROOT = Join-Path $StorageLayout.runtime_root "state"
     $env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev") {
-      Join-Path $FrontendWorkspaceRoot "apps\control-room"
+      Join-Path $RepoRoot "apps\control-room"
     } else { "" }
   }
   if ($RunMode -eq "headless") {

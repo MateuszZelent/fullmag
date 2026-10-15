@@ -22,6 +22,13 @@ def _powershell() -> str | None:
     return next((item for item in candidates if item and Path(item).exists()), None)
 
 
+def _node() -> str | None:
+    candidates = [shutil.which("node.exe")]
+    if os.name == "nt":
+        candidates.append(shutil.which("node"))
+    return next((item for item in candidates if item and Path(item).exists()), None)
+
+
 def _native_path(path: Path) -> str:
     if os.name == "nt":
         return str(path)
@@ -50,6 +57,16 @@ def _interactive_frontend_runtime_tail() -> str:
     assert "$env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot" in tail
     assert "Invoke-External $FullmagExe $cliArguments" in tail
     return tail
+
+
+def _workspace_frontend_environment_block() -> str:
+    source = LAUNCHER.read_text(encoding="utf-8-sig")
+    workspace_start = source.index('if ($RunMode -eq "workspace") {')
+    start = source.index("$env:FULLMAG_REPO_ROOT = $FrontendWorkspaceRoot", workspace_start)
+    end = source.index("  if ($BrowserWorkspace) {", start)
+    block = source[start:end]
+    assert '$env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev")' in block
+    return block
 
 
 def _run_interactive_frontend_probe(
@@ -128,6 +145,115 @@ def _run_interactive_frontend_probe(
     ]
     assert len(records) == 2, result.stdout
     return records[0], records[1]
+
+
+def _run_workspace_frontend_environment_probe(
+    tmp_path: Path, frontend: str
+) -> dict[str, str]:
+    powershell = _powershell()
+    if powershell is None:
+        pytest.skip("Windows PowerShell is required for the workspace environment probe")
+
+    repo = tmp_path / "workspace-env-repo"
+    repo.mkdir()
+    probe = tmp_path / f"workspace-frontend-environment-{frontend}.ps1"
+    block = _workspace_frontend_environment_block()
+    probe.write_text(
+        "\n".join(
+            [
+                'param([Parameter(Mandatory = $true)][string]$RepoRoot)',
+                '$ErrorActionPreference = "Stop"',
+                '$RunMode = "workspace"',
+                '$Frontend = "' + frontend + '"',
+                '$BrowserWorkspace = $true',
+                '$FrontendWorkspaceRoot = Join-Path $RepoRoot "staged-workspace"',
+                '$FrontendCacheRoot = Join-Path $RepoRoot "staged-frontend"',
+                '$StorageLayout = [pscustomobject]@{ runtime_root = Join-Path $RepoRoot "runtime" }',
+                block,
+                '[ordered]@{ repo_root = [string]$env:FULLMAG_REPO_ROOT; frontend_root = [string]$env:FULLMAG_FRONTEND_ROOT; state_root = [string]$env:FULLMAG_STATE_ROOT; dev_source_root = [string]$env:FULLMAG_DEV_SOURCE_ROOT } | ConvertTo-Json -Compress',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            _native_path(probe),
+            _native_path(repo),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    records = [
+        json.loads(line.strip())
+        for line in result.stdout.splitlines()
+        if line.strip().startswith("{")
+    ]
+    assert len(records) == 1, result.stdout
+    return records[0]
+
+
+def _run_dev_source_mirror_probe(
+    tmp_path: Path, source_root: Path, target_root: Path
+) -> None:
+    node = _node()
+    if node is None:
+        pytest.skip("native Node.js is required for the dev source mirror admission probe")
+    for root in (source_root, target_root):
+        for directory in ("app", "src", "public", "scripts"):
+            path = root / directory
+            path.mkdir(parents=True, exist_ok=True)
+    for directory in ("app", "src", "public", "scripts"):
+        path = source_root / directory
+        (path / "fixture.txt").write_bytes(b"fixture\n")
+    driver = tmp_path / "dev-source-mirror-admission.mjs"
+    driver.write_text(
+        """import { pathToFileURL } from "node:url";
+
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const [, , modulePath, sourceRoot, targetRoot] = process.argv;
+const { createDevSourceMirror } = await import(pathToFileURL(modulePath).href);
+const mirror = createDevSourceMirror({ sourceRoot, targetRoot });
+try {
+  await mirror.start();
+  const copied = await readFile(join(targetRoot, "app", "fixture.txt"), "utf8");
+  if (copied !== "fixture\\n") throw new Error("initial source mirror copy was not published");
+  process.stdout.write("initial-copy-ok\\n");
+  process.stdout.write("mirror-started\\n");
+} finally {
+  await mirror.close();
+}
+""",
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    result = subprocess.run(
+        [
+            node,
+            _native_path(driver),
+            _native_path(ROOT / "apps" / "control-room" / "scripts" / "dev-source-mirror.mjs"),
+            _native_path(source_root),
+            _native_path(target_root),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "initial-copy-ok" in result.stdout
+    assert "mirror-started" in result.stdout
 
 
 def _run_script_probe(
@@ -209,8 +335,21 @@ def test_interactive_fem_uses_staged_frontend_and_restores_parent_environment(
     assert during["during_repo_root"] == repo + "\\staged-workspace"
     assert during["during_frontend_root"] == repo + "\\staged-frontend"
     assert during["during_state_root"] == repo + "\\runtime\\state"
-    expected_dev_source = repo + "\\staged-workspace\\apps\\control-room" if frontend == "dev" else ""
+    expected_dev_source = repo + "\\apps\\control-room" if frontend == "dev" else ""
     assert during["during_dev_source_root"] == expected_dev_source
+    if frontend == "dev":
+        source_root = tmp_path / "repo" / "apps" / "control-room"
+        target_root = tmp_path / "repo" / "staged-workspace" / "apps" / "control-room"
+        assert source_root != target_root
+        _run_dev_source_mirror_probe(tmp_path, source_root, target_root)
+    workspace = _run_workspace_frontend_environment_probe(tmp_path, frontend)
+    workspace_repo = _native_path(tmp_path / "workspace-env-repo")
+    assert workspace == {
+        "repo_root": workspace_repo + "\\staged-workspace",
+        "frontend_root": workspace_repo + "\\staged-frontend",
+        "state_root": workspace_repo + "\\runtime\\state",
+        "dev_source_root": workspace_repo + "\\apps\\control-room" if frontend == "dev" else "",
+    }
     assert during["during_api_port"] == "0"
     assert during["during_require_owned"] == "1"
     assert after == {
@@ -233,6 +372,8 @@ def test_source_keeps_zero_web_port_out_of_script_cli_and_scopes_fem_api_ownersh
     )[0]
     assert '$env:FULLMAG_API_PORT = "0"' in tail
     assert '$env:FULLMAG_REQUIRE_OWN_API = "1"' in tail
+    assert 'Join-Path $RepoRoot "apps\\control-room"' in tail
+    assert 'if ($BrowserWorkspace) { Join-Path $FrontendWorkspaceRoot "apps\\control-room" }' not in tail
     assert '$previousScriptApiPortWasSet = Test-Path Env:FULLMAG_API_PORT' in tail
     assert '$previousScriptRequireOwnedApiWasSet = Test-Path Env:FULLMAG_REQUIRE_OWN_API' in tail
     assert 'SetEnvironmentVariable("FULLMAG_API_PORT", $previousScriptApiPort, "Process")' in tail
