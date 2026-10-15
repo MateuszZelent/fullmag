@@ -2,7 +2,10 @@
 param(
   [switch]$InstallMissing,
   [string]$StorageRoot,
-  [switch]$ManagedBuild
+  [switch]$ManagedBuild,
+  [Parameter()]
+  [ValidateSet('setup-only', 'initial-build')]
+  [string]$BootstrapMode = 'initial-build'
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -439,7 +442,8 @@ if (-not $ManagedBuild) {
     $env:Path = (Split-Path -Parent $python) + ';' + (Split-Path -Parent $git) + ';' + $oldPath
     $env:FULLMAG_PROJECT_STORAGE_ROOT = [string]$report.storage_root
     Invoke-InstallerTool $python @('-B',(Join-Path $repo 'scripts\fullmag_storage.py'),
-      'run-windows-installer-source','--repo-root',$repo,'--profile',$profile)
+      'run-windows-installer-source','--repo-root',$repo,'--profile',$profile,
+      '--bootstrap-mode',$BootstrapMode)
   }
   finally { $env:Path = $oldPath; $env:FULLMAG_PROJECT_STORAGE_ROOT = $oldStorage }
   exit 0
@@ -492,6 +496,7 @@ $executionRecord = [ordered]@{
   execution_directory = $execution.execution_directory
   path_budget_max = $execution.max_path_length
   worst_path_length = $execution.worst_path_length
+  bootstrap_mode = [string]$BootstrapMode
 }
 [IO.File]::WriteAllText($executionRecordPath,($executionRecord | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
 $baBuild = Assert-ProducerPath ([string]$execution.ba_build) $buildRoot
@@ -531,7 +536,7 @@ $wrapper = Join-Path $source 'scripts\windows\build_windows_installer_exe.ps1'
   -CompilerInputMirrorRecord ([string]$mirror.record_path) -CompilerInputMirrorSha256 ([string]$mirror.record_sha256) `
   -BootstrapperApplicationDll $ba -BootstrapperApplicationSha256 (Get-FileHash $ba -Algorithm SHA256).Hash `
   -EnvironmentBootstrapExe $hostExe -EnvironmentBootstrapSha256 (Get-FileHash $hostExe -Algorithm SHA256).Hash `
-  -EnvironmentBootstrapVersion '1.0.0' -BootstrapMode initial-build -ProductVersion $productVersion `
+  -EnvironmentBootstrapVersion '1.0.0' -BootstrapMode $BootstrapMode -ProductVersion $productVersion `
   -SourceCommit ([string]$snapshot.source_identity.head_commit_full) `
   -SourceSnapshotSha256 ([string]$snapshot.source_identity.source_snapshot_sha256) `
   -SourceSnapshotDirty ([bool]$snapshot.source_identity.source_snapshot_dirty) `
@@ -542,6 +547,7 @@ $verified = (& $python -B (Join-Path $repo 'scripts\windows\build_snapshot.py') 
 if ($LASTEXITCODE -ne 0) { throw 'Installer frozen source verification failed' }
 $manifest = [ordered]@{
   schema='fullmag.windows-installer-source-build.v1'; state='completed'; profile=$profile
+  bootstrap_mode=[string]$BootstrapMode
   attempt_id=$env:FULLMAG_INSTALLER_ATTEMPT_ID
   run_id=$runId; execution_directory=$execution.execution_directory
   path_budget=[ordered]@{ max_length=$execution.max_path_length; worst_path_length=$execution.worst_path_length }

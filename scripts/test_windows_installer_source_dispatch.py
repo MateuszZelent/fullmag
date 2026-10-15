@@ -14,7 +14,8 @@ def test_installer_dispatch_rejects_other_host_or_profile(monkeypatch, windows, 
     with pytest.raises(storage.StorageError):
         storage.run_windows_installer_source({"profile": profile})
 
-def test_installer_dispatch_uses_fixed_producer_and_manifest(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", [None, "initial-build", "setup-only"])
+def test_installer_dispatch_uses_fixed_producer_and_manifest(tmp_path, monkeypatch, mode):
     producer = tmp_path / "scripts/windows/build_installer_from_source.ps1"
     producer.parent.mkdir(parents=True)
     producer.write_text("# fixture, never executed")
@@ -25,10 +26,15 @@ def test_installer_dispatch_uses_fixed_producer_and_manifest(tmp_path, monkeypat
         calls.append((args, kwargs))
         return 17
     monkeypatch.setattr(storage, "_run_managed_command", record)
-    assert storage.run_windows_installer_source(layout) == 17
+    if mode is None:
+        assert storage.run_windows_installer_source(layout) == 17
+    else:
+        assert storage.run_windows_installer_source(layout, mode) == 17
     args, options = calls[0]
-    assert args[1] == ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(producer), "-ManagedBuild"]
+    expected_mode = mode or "initial-build"
+    assert args[1] == ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(producer), "-ManagedBuild", "-BootstrapMode", expected_mode]
     assert options["native_user_build"] and options["native_installer_paths"]
+    assert options["installer_bootstrap_mode"] == expected_mode
     assert options["execution_mode"] == "windows-installer-source-build"
     assert options["native_manifest_relative"] == "installer-source/build-manifest.json"
 
@@ -43,8 +49,14 @@ def test_installer_cli_rejects_profile_before_storage_writes(monkeypatch, capsys
     assert storage.main(["run-windows-installer-source", "--profile", "windows-native-fem-gpu"]) == 2
     assert "Windows installer producer" in capsys.readouterr().err
 
+@pytest.mark.parametrize("mode", ["initial-build", "setup-only"])
+def test_installer_cli_rejects_explicit_mode_for_non_installer(monkeypatch, capsys, mode):
+    monkeypatch.setattr(storage, "resolve_layout", lambda *a: pytest.fail("non-installer mode must be rejected before storage discovery"))
+    assert storage.main(["resolve", "--bootstrap-mode", mode]) == 2
+    assert "only valid for run-windows-installer-source" in capsys.readouterr().err
+
 @pytest.mark.skipif(__import__("os").name == "nt", reason="Bash fake-Windows dispatch fixture")
-@pytest.mark.parametrize("suffix,windows,accepted", [("", True, True), ("", False, False), ("; echo bypass", True, False), (" -ManagedBuild", True, False)])
+@pytest.mark.parametrize("suffix,windows,accepted", [("", True, True), (" -BootstrapMode \"setup-only\"", True, True), ("", False, False), ("; echo bypass", True, False), (" -ManagedBuild", True, False), (" -BootstrapMode \"invalid\"", True, False)])
 def test_installer_shell_dispatch_is_closed(tmp_path, suffix, windows, accepted):
     import json
     import os
@@ -69,7 +81,7 @@ def test_installer_shell_dispatch_is_closed(tmp_path, suffix, windows, accepted)
     if accepted:
         assert result.returncode == 0, result.stderr
         arguments = json.loads(log.read_text())
-        assert arguments == ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(repo / "scripts/windows/build_installer_from_source.ps1")]
+        assert arguments == ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(repo / "scripts/windows/build_installer_from_source.ps1"), "-BootstrapMode", ("setup-only" if suffix else "initial-build")]
     else:
         assert result.returncode == 2, result.stderr
         assert not log.exists()
@@ -98,7 +110,82 @@ def test_installer_terminal_manifest_binds_attempt_and_artifact(tmp_path, damage
         artifact.rename(renamed)
         manifest["artifact"] = str(renamed)
     if damage is None:
+        # Legacy v1 manifests without bootstrap_mode remain valid when no new
+        # expected mode is supplied.
         storage.validate_installer_terminal_manifest({"runs_root": str(runs)}, manifest, attempt)
     else:
         with pytest.raises(storage.StorageError):
             storage.validate_installer_terminal_manifest({"runs_root": str(runs)}, manifest, attempt)
+
+def _write_bootstrap_sidecars(root, artifact_hash, mode="setup-only"):
+    import hashlib
+    import json
+    provenance = {"schema": "fullmag.windows-installer-provenance.v1",
+                  "source_first": {"mode": mode}}
+    provenance_path = root / "fullmag-installer-provenance.json"
+    provenance_bytes = json.dumps(provenance).encode("utf-8")
+    provenance_path.write_bytes(provenance_bytes)
+    (root / "fullmag-installer-receipt.json").write_text(json.dumps({
+        "schema": "fullmag.windows-installer-receipt.v1",
+        "source_first_mode": mode,
+        "output_sha256": artifact_hash,
+        "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
+    }))
+
+@pytest.mark.parametrize("damage", [None, "missing_mode", "receipt_mode", "receipt_output", "receipt_provenance", "provenance_mode", "missing_run", "invalid_run", "other_run", "relocated_parent"])
+def test_installer_terminal_manifest_binds_bootstrap_sidecars(tmp_path, damage):
+    import hashlib
+    import json
+    runs = tmp_path / "runs"
+    run_id = "c" * 32
+    artifact = runs / ("windows-installer-source-" + run_id) / "fullmag.exe"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"fixture artifact, never executed")
+    attempt = "a" * 32
+    artifact_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    _write_bootstrap_sidecars(artifact.parent, artifact_hash)
+    manifest = {"schema": "fullmag.windows-installer-source-build.v1", "state": "completed",
+                "profile": "windows-installer-source", "attempt_id": attempt,
+                "bootstrap_mode": "setup-only", "run_id": run_id, "artifact": str(artifact),
+                "artifact_sha256": artifact_hash}
+    if damage == "missing_run":
+        manifest.pop("run_id")
+    elif damage == "invalid_run":
+        manifest["run_id"] = "not-a-run"
+    elif damage == "other_run":
+        manifest["run_id"] = "d" * 32
+    elif damage == "relocated_parent":
+        relocated = runs / "relocated"
+        artifact.parent.rename(relocated)
+        manifest["artifact"] = str(relocated / "fullmag.exe")
+    elif damage == "missing_mode":
+        manifest.pop("bootstrap_mode")
+    elif damage == "receipt_mode":
+        path = artifact.parent / "fullmag-installer-receipt.json"
+        value = json.loads(path.read_text())
+        value["source_first_mode"] = "initial-build"
+        path.write_text(json.dumps(value))
+    elif damage == "receipt_output":
+        path = artifact.parent / "fullmag-installer-receipt.json"
+        value = json.loads(path.read_text())
+        value["output_sha256"] = "0" * 64
+        path.write_text(json.dumps(value))
+    elif damage == "receipt_provenance":
+        path = artifact.parent / "fullmag-installer-receipt.json"
+        value = json.loads(path.read_text())
+        value["provenance_sha256"] = "0" * 64
+        path.write_text(json.dumps(value))
+    elif damage == "provenance_mode":
+        path = artifact.parent / "fullmag-installer-provenance.json"
+        value = json.loads(path.read_text())
+        value["source_first"]["mode"] = "initial-build"
+        path.write_text(json.dumps(value))
+    if damage is None:
+        storage.validate_installer_terminal_manifest(
+            {"runs_root": str(runs)}, manifest, attempt, expected_bootstrap_mode="setup-only"
+        )
+    else:
+        with pytest.raises(storage.StorageError):
+            storage.validate_installer_terminal_manifest(
+                {"runs_root": str(runs)}, manifest, attempt, expected_bootstrap_mode="setup-only"
+            )

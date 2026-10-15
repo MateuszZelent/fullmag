@@ -33,6 +33,7 @@ WINDOWS_WORKSPACE_BUILD_REQUEST_RECEIPT_FIELDS = frozenset({
     "state", "exit_code", "build_manifest_sha256", "started_at", "finished_at",
 })
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_INSTALLER_SIDECAR_BYTES = 16 * 1024 * 1024
 WINDOWS_WORKSPACE_STORAGE_PROFILES = {
     "release": "windows-native-fdm-cpu",
     "dev": "windows-native-fdm-cpu-dev",
@@ -1407,6 +1408,7 @@ def _run_managed_command(
     attempt_id=None,
     fem_frontend=None,
     full_origin_attempt_id=None,
+    installer_bootstrap_mode=None,
 ):
     if attempt_id is None:
         attempt_id = uuid.uuid4().hex
@@ -1463,12 +1465,18 @@ def _run_managed_command(
                 or "-Browser" not in command):
             raise StorageError("FEM browser workspace requires the closed browser operation")
     if native_installer_paths:
+        if installer_bootstrap_mode is None:
+            installer_bootstrap_mode = "initial-build"
+        if installer_bootstrap_mode not in ("initial-build", "setup-only"):
+            raise StorageError("Installer bootstrap mode must be initial-build or setup-only")
         if (not _is_native_windows()
                 or execution_mode != "windows-installer-source-build"
                 or layout.get("profile") != WINDOWS_INSTALLER_SOURCE_PROFILE
                 or not native_user_build
                 or native_workspace_paths or native_fem_paths):
             raise StorageError("Installer source builds require the closed native Windows installer operation")
+    elif installer_bootstrap_mode is not None:
+        raise StorageError("Installer bootstrap mode is only valid for the closed installer operation")
     if native_user_build and not (
         native_workspace_paths or native_fem_paths or native_full_workspace_paths or native_installer_paths
     ):
@@ -1572,6 +1580,8 @@ def _run_managed_command(
                  "build_root": layout["build_root"], "frontend_root": layout["frontend_root"],
                  "runtime_root": layout["runtime_root"], "qualification": "not_assessed",
                  "execution_mode": execution_mode}
+        if native_installer_paths:
+            state["bootstrap_mode"] = installer_bootstrap_mode
         atomic_json(record, state)
         try:
             if cancel_check is not None and cancel_check():
@@ -1653,7 +1663,10 @@ def _run_managed_command(
                         state["build_manifest_sha256"] = hashlib.sha256(raw_manifest).hexdigest()
                     if native_installer_paths:
                         try:
-                            validate_installer_terminal_manifest(layout, json.loads(raw_manifest), attempt_id)
+                            validate_installer_terminal_manifest(
+                                layout, json.loads(raw_manifest), attempt_id,
+                                expected_bootstrap_mode=installer_bootstrap_mode,
+                            )
                         except (StorageError, ValueError, TypeError):
                             print("[fullmag storage] Installer terminal manifest or artifact validation failed", file=sys.stderr)
                             state.update(state="failed", exit_code=1)
@@ -2447,8 +2460,34 @@ def validate_full_workspace_handoff(layout, expected_build_id):
     return manifest
 
 
-def validate_installer_terminal_manifest(layout, manifest, attempt_id):
+def _read_installer_sidecar(path, label):
+    """Read one bounded regular installer sidecar without following links."""
+    if is_link(path) or not path.is_file():
+        raise StorageError(f"{label} is missing or is not a regular file")
+    before = path.stat()
+    if before.st_size <= 0 or before.st_size > MAX_INSTALLER_SIDECAR_BYTES:
+        raise StorageError(f"{label} has an invalid bounded size")
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError(f"{label} is unreadable") from error
+    after = path.stat()
+    if ((before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns)
+            or len(raw) != after.st_size or not isinstance(value, dict)):
+        raise StorageError(f"{label} changed while being read or has an invalid schema")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def validate_installer_terminal_manifest(layout, manifest, attempt_id, expected_bootstrap_mode=None):
     """Reject stale installer receipts and changed or misplaced public artifacts."""
+    bootstrap_mode = manifest.get("bootstrap_mode")
+    if expected_bootstrap_mode is not None:
+        if (bootstrap_mode not in ("initial-build", "setup-only")
+                or bootstrap_mode != expected_bootstrap_mode):
+            raise StorageError("Installer terminal manifest has an unexpected bootstrap mode")
+    elif bootstrap_mode is not None and bootstrap_mode not in ("initial-build", "setup-only"):
+        raise StorageError("Installer terminal manifest has an invalid bootstrap mode")
     if (manifest.get("schema") != "fullmag.windows-installer-source-build.v1"
             or manifest.get("state") != "completed"
             or manifest.get("profile") != WINDOWS_INSTALLER_SOURCE_PROFILE
@@ -2461,10 +2500,48 @@ def validate_installer_terminal_manifest(layout, manifest, attempt_id):
             or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
             or hashlib.sha256(artifact.read_bytes()).hexdigest() != expected_hash):
         raise StorageError("Installer terminal artifact is missing or its hash differs")
+    if expected_bootstrap_mode is None:
+        return
+    run_id = manifest.get("run_id")
+    if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise StorageError("Installer terminal manifest has an invalid producer run identity")
+    producer_root = validate_path(
+        Path(layout["runs_root"]) / ("windows-installer-source-" + run_id),
+        layout["runs_root"], "installer producer run",
+    )
+    if not _same_path(artifact.parent, producer_root):
+        raise StorageError("Installer artifact does not belong to the declared producer run")
+    artifact_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    sidecar_root = producer_root
+    receipt_path = validate_path(
+        sidecar_root / "fullmag-installer-receipt.json",
+        layout["runs_root"], "installer receipt",
+    )
+    provenance_path = validate_path(
+        sidecar_root / "fullmag-installer-provenance.json",
+        layout["runs_root"], "installer provenance",
+    )
+    receipt, _ = _read_installer_sidecar(receipt_path, "Installer receipt")
+    provenance, provenance_hash = _read_installer_sidecar(provenance_path, "Installer provenance")
+    provenance_source_first = provenance.get("source_first")
+    provenance_mode = (
+        provenance_source_first.get("mode")
+        if isinstance(provenance_source_first, dict)
+        else None
+    )
+    if (receipt.get("schema") != "fullmag.windows-installer-receipt.v1"
+            or receipt.get("source_first_mode") != expected_bootstrap_mode
+            or receipt.get("output_sha256") != artifact_hash
+            or receipt.get("provenance_sha256") != provenance_hash
+            or provenance.get("schema") != "fullmag.windows-installer-provenance.v1"
+            or provenance_mode != expected_bootstrap_mode):
+        raise StorageError("Installer sidecar provenance does not match the requested bootstrap mode")
 
 
-def run_windows_installer_source(layout):
+def run_windows_installer_source(layout, bootstrap_mode="initial-build"):
     """Compile only the fixed installer producer under the native heavy lease."""
+    if bootstrap_mode not in ("initial-build", "setup-only"):
+        raise StorageError("Installer bootstrap mode must be initial-build or setup-only")
     if not _is_native_windows() or layout.get("profile") != WINDOWS_INSTALLER_SOURCE_PROFILE:
         raise StorageError("Installer source builds require native Windows and the fixed installer profile")
     producer = validate_path(
@@ -2476,8 +2553,10 @@ def run_windows_installer_source(layout):
     return _run_managed_command(
         layout,
         ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
-         "-ExecutionPolicy", "Bypass", "-File", str(producer), "-ManagedBuild"],
+         "-ExecutionPolicy", "Bypass", "-File", str(producer), "-ManagedBuild",
+         "-BootstrapMode", bootstrap_mode],
         native_user_build=True, native_installer_paths=True,
+        installer_bootstrap_mode=bootstrap_mode,
         execution_mode="windows-installer-source-build",
         native_manifest_relative="installer-source/build-manifest.json",
     )
@@ -3223,6 +3302,12 @@ def main(argv=None):
     parser.add_argument("action", choices=("resolve", "validate", "run", "run-windows-workspace", "run-windows-workspace-build", "run-windows-fem", "run-windows-fem-workspace", "run-windows-fem-workspace-build", "run-windows-full-workspace", "run-windows-full-workspace-build", "run-windows-installer-source", "register", "finish", "inventory", "prepare-links", "assert-lock"))
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--profile")
+    parser.add_argument(
+        "--bootstrap-mode", "--installer-bootstrap-mode",
+        dest="installer_bootstrap_mode",
+        choices=("initial-build", "setup-only"),
+        default=None,
+    )
     parser.add_argument("--format", choices=("json", "sh"), default="json")
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--path")
@@ -3262,6 +3347,9 @@ def main(argv=None):
         args_list, command = args_list[:position], args_list[position + 1:]
     args = parser.parse_args(args_list)
     try:
+        if (args.installer_bootstrap_mode is not None
+                and args.action != "run-windows-installer-source"):
+            raise StorageError("--bootstrap-mode is only valid for run-windows-installer-source")
         if args.workspace_request_id is not None:
             validate_workspace_request_id(args.workspace_request_id)
             if args.action != "run-windows-workspace-build":
@@ -3324,7 +3412,9 @@ def main(argv=None):
         if args.action == "run-windows-installer-source":
             if command:
                 raise StorageError("run-windows-installer-source does not accept an arbitrary command")
-            return run_windows_installer_source(layout)
+            return run_windows_installer_source(
+                layout, args.installer_bootstrap_mode or "initial-build"
+            )
         if args.action == "run":
             return run(layout, command)
         if args.action == "run-windows-fem":

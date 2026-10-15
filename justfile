@@ -217,8 +217,8 @@ windows-setup:
 
 # Build the source-first EXE installer; prerequisites must already pass check.
 # A fresh host enters build_installer_from_source.ps1 -InstallMissing directly.
-windows-installer-build:
-    powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/build_installer_from_source.ps1"
+windows-installer-build bootstrap_mode="initial-build":
+    powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/build_installer_from_source.ps1" -BootstrapMode "{{bootstrap_mode}}"
 
 # Build a missing/stale native package, then open the empty authoring workspace.
 windows-ui frontend="dev" web_port="3197" build="auto" backend_profile="auto" expected_build_id="":

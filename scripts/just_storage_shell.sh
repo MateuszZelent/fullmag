@@ -114,8 +114,10 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_antenna_field_reader.py" --repo-root "${repo_root}"
     ;;
   *"scripts/windows/build_installer_from_source.ps1"*)
-    installer_pattern='^powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/build_installer_from_source.ps1"$'
-    if [[ ! "${recipe}" =~ ${installer_pattern} ]]; then
+    installer_pattern='^powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/build_installer_from_source.ps1"( -BootstrapMode "(initial-build|setup-only)")?$'
+    if [[ "${recipe}" =~ ${installer_pattern} ]]; then
+      installer_bootstrap_mode="${BASH_REMATCH[2]:-initial-build}"
+    else
       echo "[fullmag just] invalid native installer producer recipe" >&2
       exit 2
     fi
@@ -125,7 +127,7 @@ case "${recipe}" in
     fi
     # The producer owns minimal check, the closed storage action and receipts.
     # Always dispatch this checkout's script, never evaluate supplied shell text.
-    exec powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/build_installer_from_source.ps1"
+    exec powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/build_installer_from_source.ps1" -BootstrapMode "${installer_bootstrap_mode}"
     ;;
   *"scripts/windows/recover_runtime.py"*)
     runtime_recovery_pattern='^[^[:space:]]+ "[^"]+/scripts/windows/recover_runtime.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
