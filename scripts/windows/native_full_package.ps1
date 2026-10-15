@@ -124,6 +124,155 @@ function Get-FullmagFullPackageArtifact {
   }
 }
 
+function Get-FullmagFullPackageCanonicalRuntimeNames {
+  [CmdletBinding()]
+  param(
+    [switch]$IncludeDesktop,
+    [Parameter()][string]$ToolsRoot = ""
+  )
+  # runtime_bundle.py is the single Cargo-to-public-runtime inventory.  The
+  # browser workspace deliberately omits only the desktop/Tauri executable.
+  if ([string]::IsNullOrWhiteSpace($ToolsRoot)) {
+    $toolsRootCommand = Get-Command "Get-WindowsBuildToolsRoot" -CommandType Function -ErrorAction SilentlyContinue
+    $runtimeBundleRoot = if ($null -ne $toolsRootCommand) {
+      [string](Get-WindowsBuildToolsRoot)
+    } else {
+      $PSScriptRoot
+    }
+  } else {
+    $runtimeBundleRoot = [System.IO.Path]::GetFullPath($ToolsRoot)
+  }
+  Assert-FullmagFullPackageDirectory -Path $runtimeBundleRoot `
+    -Label "canonical runtime inventory tools root" | Out-Null
+  $runtimeBundle = Join-Path $runtimeBundleRoot "runtime_bundle.py"
+  Assert-FullmagFullPackageFile -Path $runtimeBundle `
+    -Label "canonical runtime inventory" -Root $runtimeBundleRoot | Out-Null
+  $python = Get-Command "python.exe" -ErrorAction SilentlyContinue
+  if ($null -eq $python) { $python = Get-Command "python" -ErrorAction SilentlyContinue }
+  if ($null -eq $python) { throw "Python is required to read the canonical runtime inventory" }
+  $pythonPath = if ($python.Source) { [string]$python.Source } else { [string]$python.Name }
+  $scriptsRoot = Split-Path -Parent $runtimeBundle
+  $code = "import sys; sys.path.insert(0, sys.argv[1]); from runtime_bundle import BINARY_NAMES; print('\n'.join(BINARY_NAMES))"
+  $output = @(& $pythonPath -B -c $code $scriptsRoot 2>&1)
+  if ($LASTEXITCODE -ne 0) { throw "Canonical runtime inventory failed: $($output -join [Environment]::NewLine)" }
+  $names = @($output | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+  if ($names.Count -eq 0 -or @($names | Where-Object { $_ -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*\.exe$' }).Count -ne 0) {
+    throw "Canonical runtime inventory contains an invalid executable name"
+  }
+  if (@($names | Sort-Object -Unique).Count -ne $names.Count) {
+    throw "Canonical runtime inventory contains duplicate executable names"
+  }
+  if (-not $IncludeDesktop) { $names = @($names | Where-Object { $_ -ine "fullmag-ui.exe" }) }
+  if ($names.Count -eq 0) { throw "Canonical runtime inventory is empty after workspace filtering" }
+  return $names
+}
+
+function Get-FullmagFullPackageRuntimeFamilyInventorySha256 {
+  param([Parameter(Mandatory = $true)][object[]]$Artifacts)
+  # The caller supplies runtime_bundle.BINARY_NAMES order.  Preserve it: the
+  # Windows PowerShell culture sort is not byte/ordinal stable across hosts.
+  $lines = @($Artifacts | ForEach-Object {
+    if ([string]$_.name -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*\.exe$' -or
+        [int64]$_.size_bytes -le 0 -or [string]$_.sha256 -notmatch '^[0-9a-f]{64}$') {
+      throw "Runtime family artifact identity is malformed"
+    }
+    "{0}|{1}|{2}" -f ([string]$_.name), ([int64]$_.size_bytes), ([string]$_.sha256).ToLowerInvariant()
+  })
+  $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(($lines -join "`n") + "`n")
+  return ([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join ""
+}
+
+function Assert-FullmagFullPackageRuntimeFamily {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)][object]$NativeFem,
+    [Parameter(Mandatory = $true)][bool]$BrowserWorkspace,
+    [Parameter(Mandatory = $true)][string]$BuildRoot,
+    [Parameter()][string]$ToolsRoot = ""
+  )
+  foreach ($name in @("runtime_family_root", "runtime_family", "runtime_family_inventory", "runtime_family_inventory_sha256", "dependency_audit_path", "dependency_audit_sha256")) {
+    if ($null -eq $NativeFem.PSObject.Properties[$name] -or $null -eq $NativeFem.$name) {
+      throw "Native FEM manifest is missing runtime family proof: $name"
+    }
+  }
+  $root = Assert-FullmagFullPackageDirectory -Path ([string]$NativeFem.runtime_family_root) `
+    -Label "native FEM runtime family root"
+  $expectedNames = @(Get-FullmagFullPackageCanonicalRuntimeNames `
+    -IncludeDesktop:(-not $BrowserWorkspace) -ToolsRoot $ToolsRoot)
+  $declaredNames = @($NativeFem.runtime_family_inventory | ForEach-Object { [string]$_ })
+  $declaredRecords = @($NativeFem.runtime_family)
+  if ($declaredNames.Count -ne $expectedNames.Count -or
+      $declaredRecords.Count -ne $expectedNames.Count -or
+      ((@($declaredNames | Sort-Object) -join ",") -ne (@($expectedNames | Sort-Object) -join ","))) {
+    throw "Native FEM runtime family inventory does not match the canonical runtime inventory"
+  }
+  $artifacts = @()
+  foreach ($name in $expectedNames) {
+    $record = @($NativeFem.runtime_family | Where-Object { [string]$_.name -eq $name })
+    if ($record.Count -ne 1) { throw "Native FEM runtime family is missing $name" }
+    $path = [System.IO.Path]::GetFullPath([string]$record[0].path)
+    if ([System.IO.Path]::GetFileName($path) -cne $name -or
+        [System.IO.Path]::GetFullPath((Split-Path -Parent $path)) -ine [System.IO.Path]::GetFullPath($root)) {
+      throw "Native FEM runtime family path is not rooted at the declared family root: $name"
+    }
+    $artifact = Get-FullmagFullPackageArtifact -Path $path -Label "native FEM runtime family $name" -Root $BuildRoot
+    if ([int64]$record[0].size_bytes -ne [int64]$artifact.size_bytes -or
+        [string]$record[0].sha256 -ne [string]$artifact.sha256) {
+      throw "Native FEM runtime family artifact changed: $name"
+    }
+    $artifacts += [ordered]@{ name = $name; path = $artifact.path; size_bytes = $artifact.size_bytes; sha256 = $artifact.sha256 }
+  }
+  if ((Get-FullmagFullPackageRuntimeFamilyInventorySha256 -Artifacts $artifacts) -ne [string]$NativeFem.runtime_family_inventory_sha256) {
+    throw "Native FEM runtime family inventory hash mismatch"
+  }
+  $audit = Get-FullmagFullPackageArtifact -Path ([string]$NativeFem.dependency_audit_path) `
+    -Label "native FEM PE dependency audit" -Root $BuildRoot
+  if ([string]$audit.sha256 -ne [string]$NativeFem.dependency_audit_sha256) {
+    throw "Native FEM PE dependency audit hash mismatch"
+  }
+  try {
+    $auditReport = Get-Content -LiteralPath $audit.path -Raw -Encoding UTF8 |
+      ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "Native FEM PE dependency audit is not valid JSON: $($audit.path)"
+  }
+  if ([int]$auditReport.schema_version -ne 1 -or
+      [string]$auditReport.target -ne "x86_64-pc-windows-msvc" -or
+      [string]$auditReport.scope -ne "bin_pe_static_and_delay_imports" -or
+      $null -eq $auditReport.images) {
+    throw "Native FEM PE dependency audit has an incompatible schema: $($audit.path)"
+  }
+  $auditedImages = @{}
+  foreach ($image in @($auditReport.images)) {
+    $relative = [string]$image.path
+    if ($relative -notmatch '^bin[\\/][^\\/]+$' -or
+        [string]$image.sha256 -notmatch '^[0-9a-f]{64}$') {
+      throw "Native FEM PE dependency audit contains an invalid image record"
+    }
+    $key = $relative.Substring(4).ToLowerInvariant()
+    if ($auditedImages.ContainsKey($key)) {
+      throw "Native FEM PE dependency audit contains a duplicate image: $key"
+    }
+    $auditedImages[$key] = [string]$image.sha256
+  }
+  foreach ($artifact in $artifacts) {
+    $key = ([System.IO.Path]::GetFileName([string]$artifact.path)).ToLowerInvariant()
+    if (-not $auditedImages.ContainsKey($key) -or
+        $auditedImages[$key] -ne ([string]$artifact.sha256).ToLowerInvariant()) {
+      throw "Native FEM PE dependency audit does not cover runtime family binary: $key"
+    }
+  }
+  return [ordered]@{
+    root = [System.IO.Path]::GetFullPath($root)
+    names = $expectedNames
+    artifacts = $artifacts
+    inventory_sha256 = [string]$NativeFem.runtime_family_inventory_sha256
+    dependency_audit_path = $audit.path
+    dependency_audit_sha256 = $audit.sha256
+  }
+}
+
 function Write-FullmagFullPackageJsonAtomic {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -265,7 +414,8 @@ function New-FullmagFullRuntimeManifest {
     [Parameter(Mandatory = $true)][string]$SourceCommit,
     [Parameter(Mandatory = $true)][string]$SourceSnapshotSha256,
     [Parameter(Mandatory = $true)][string]$AttemptId,
-    [Parameter()][string]$BuildRoot = ""
+    [Parameter()][string]$BuildRoot = "",
+    [Parameter()][string]$ToolsRoot = ""
   )
   $outputRootPath = [System.IO.Path]::GetFullPath($OutputRoot)
   $buildRootPath = if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
@@ -319,6 +469,9 @@ function New-FullmagFullRuntimeManifest {
   if ([string]$physical.native_fem_attempt_id -ne $AttemptId) {
     throw "The physical FEM manifest attempt identity does not match the full capability package"
   }
+  if ($physical.browser_workspace -isnot [bool]) {
+    throw "The physical FEM manifest is missing its browser workspace marker"
+  }
   if ($SourceSnapshotSha256 -notmatch '^[0-9a-f]{64}$' -or
       $AttemptId -notmatch '^[0-9a-f]{32}$') {
     throw "The full capability package source identity is malformed"
@@ -333,6 +486,9 @@ function New-FullmagFullRuntimeManifest {
     -Label "native FDM DLL" -Root $buildRootPath
   $femArtifact = Get-FullmagFullPackageArtifact -Path $NativeFemDll `
     -Label "native FEM DLL" -Root $buildRootPath
+  $runtimeFamilyProof = Assert-FullmagFullPackageRuntimeFamily `
+    -NativeFem $physical.native_fem -BrowserWorkspace ([bool]$physical.browser_workspace) `
+    -BuildRoot $buildRootPath -ToolsRoot $ToolsRoot
   $componentsRoot = Join-Path $outputRootPath "components"
   Assert-FullmagFullPackagePathChain -Path $componentsRoot -Root $outputRootPath `
     -Label "full capability component root" -AllowMissingLeaf | Out-Null
@@ -397,6 +553,12 @@ function New-FullmagFullRuntimeManifest {
     features = @($physical.features)
     native_fdm_dll = [string]$physical.native_fdm_dll
     native_fem = $physical.native_fem
+    runtime_family_root = [string]$runtimeFamilyProof.root
+    runtime_family = @($runtimeFamilyProof.artifacts)
+    runtime_family_inventory = @($runtimeFamilyProof.names)
+    runtime_family_inventory_sha256 = [string]$runtimeFamilyProof.inventory_sha256
+    runtime_family_dependency_audit_path = [string]$runtimeFamilyProof.dependency_audit_path
+    runtime_family_dependency_audit_sha256 = [string]$runtimeFamilyProof.dependency_audit_sha256
     workspace_namespace = [string]$physical.workspace_namespace
     cuda_bin = [string]$physical.cuda_bin
     cargo_target_dir = [string]$physical.cargo_target_dir
@@ -483,7 +645,8 @@ function Assert-FullmagFullRuntimeManifest {
     [Parameter(Mandatory = $true)][string]$SourceCommit,
     [Parameter(Mandatory = $true)][string]$SourceSnapshotSha256,
     [Parameter(Mandatory = $true)][string]$AttemptId,
-    [Parameter()][string]$BuildRoot = ""
+    [Parameter()][string]$BuildRoot = "",
+    [Parameter()][string]$ToolsRoot = ""
   )
   $manifestPathResolved = [System.IO.Path]::GetFullPath($ManifestPath)
   $outputRootPath = [System.IO.Path]::GetFullPath((Split-Path -Parent $manifestPathResolved))
@@ -557,6 +720,12 @@ function Assert-FullmagFullRuntimeManifest {
       [string]$physicalManifest.native_fem_attempt_id -ne $AttemptId) {
     throw "The full capability package origin source identity is stale"
   }
+  if ($physicalManifest.browser_workspace -isnot [bool]) {
+    throw "The full capability package origin is missing its browser workspace marker"
+  }
+  $runtimeFamilyProof = Assert-FullmagFullPackageRuntimeFamily `
+    -NativeFem $physicalManifest.native_fem -BrowserWorkspace ([bool]$physicalManifest.browser_workspace) `
+    -BuildRoot $buildRootPath -ToolsRoot $ToolsRoot
   $originPath = [System.IO.Path]::GetFullPath($OriginManifestPath)
   if ([string]$manifest.origin_manifest_path -ine $originPath -or
       [string]$manifest.origin_manifest_sha256 -ne (Get-FullmagFullPackageSha256 -Path $OriginManifestPath)) {
@@ -573,6 +742,36 @@ function Assert-FullmagFullRuntimeManifest {
     fdm_gpu = @($FullmagExe, $FullmagApiExe, $NativeFdmDll)
     fem_cpu = @($FullmagExe, $FullmagApiExe, $NativeFemDll)
     fem_gpu = @($FullmagExe, $FullmagApiExe, $NativeFemDll)
+  }
+  foreach ($propertyName in @("runtime_family_root", "runtime_family", "runtime_family_inventory", "runtime_family_inventory_sha256", "runtime_family_dependency_audit_path", "runtime_family_dependency_audit_sha256")) {
+    if ($null -eq $manifest.PSObject.Properties[$propertyName] -or $null -eq $manifest.$propertyName) {
+      throw "Full capability manifest is missing runtime family proof: $propertyName"
+    }
+  }
+  if ([System.IO.Path]::GetFullPath([string]$manifest.runtime_family_root) -ine [string]$runtimeFamilyProof.root -or
+      [string]$manifest.runtime_family_inventory_sha256 -ne [string]$runtimeFamilyProof.inventory_sha256 -or
+      [System.IO.Path]::GetFullPath([string]$manifest.runtime_family_dependency_audit_path) -ine [string]$runtimeFamilyProof.dependency_audit_path -or
+      [string]$manifest.runtime_family_dependency_audit_sha256 -ne [string]$runtimeFamilyProof.dependency_audit_sha256) {
+    throw "Full capability manifest runtime family proof does not match the physical FEM manifest"
+  }
+  $aggregateNames = @($manifest.runtime_family_inventory | ForEach-Object { [string]$_ })
+  if ((@($aggregateNames | Sort-Object) -join ",") -ne (@($runtimeFamilyProof.names | Sort-Object) -join ",")) {
+    throw "Full capability manifest runtime family inventory is stale"
+  }
+  $aggregateFamily = @($manifest.runtime_family)
+  if ($aggregateFamily.Count -ne $runtimeFamilyProof.artifacts.Count) {
+    throw "Full capability manifest runtime family is incomplete"
+  }
+  foreach ($expectedFamilyArtifact in @($runtimeFamilyProof.artifacts)) {
+    $matchingFamily = @($aggregateFamily | Where-Object {
+      [string]$_.name -eq [string]$expectedFamilyArtifact.name -and
+      [System.IO.Path]::GetFullPath([string]$_.path) -ieq [string]$expectedFamilyArtifact.path -and
+      [int64]$_.size_bytes -eq [int64]$expectedFamilyArtifact.size_bytes -and
+      [string]$_.sha256 -eq [string]$expectedFamilyArtifact.sha256
+    })
+    if ($matchingFamily.Count -ne 1) {
+      throw "Full capability manifest runtime family record is stale: $($expectedFamilyArtifact.name)"
+    }
   }
   $expectedComponents = @("fdm_cpu", "fdm_gpu", "fem_cpu", "fem_gpu")
   $properties = @($manifest.components.PSObject.Properties.Name)

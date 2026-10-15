@@ -1721,6 +1721,260 @@ def _full_workspace_artifacts(value, root, expected_paths, label):
     return observed
 
 
+def _full_workspace_directory(value, root, label):
+    """Validate an immutable package directory without traversing reparses."""
+    if not isinstance(value, str) or not value:
+        raise StorageError(f"{label} path is missing")
+    try:
+        path = validate_path(value, root, label)
+    except (StorageError, TypeError, ValueError) as error:
+        raise StorageError(f"{label} path is invalid") from error
+    if not path.is_dir() or is_link(path):
+        raise StorageError(f"{label} is missing or is not a regular directory")
+    return path
+
+
+def _full_workspace_frozen_runtime_names(
+    build_root, source_snapshot, source_snapshot_sha256, browser_workspace,
+):
+    """Read the canonical runtime bundle from the sealed source snapshot.
+
+    The mutable checkout must not be able to change the binary family admitted
+    for an already-built package.  The snapshot record and its inventory bind
+    the source file before its AST is used to derive the expected names.
+    """
+    if not isinstance(source_snapshot, dict) or set(source_snapshot) != {
+        "record_path", "inventory_sha256", "source_root"
+    }:
+        raise StorageError("Full workspace frozen source binding is malformed")
+    inventory_sha256 = _full_workspace_hash(
+        source_snapshot.get("inventory_sha256"),
+        "full workspace frozen source inventory",
+    )
+    record_path = _full_workspace_file(
+        source_snapshot.get("record_path"), build_root,
+        "full workspace frozen source record",
+    )
+    source_root = _full_workspace_directory(
+        source_snapshot.get("source_root"), build_root,
+        "full workspace frozen source root",
+    )
+    if record_path.name != "record.json" or source_root.name != "source":
+        raise StorageError("Full workspace frozen source locations are not canonical")
+    if not _same_path(record_path.parent, source_root.parent):
+        raise StorageError("Full workspace frozen source record and root are not paired")
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Full workspace frozen source record is unreadable") from error
+    if not isinstance(record, dict) or record.get("schema") != "fullmag.windows-build-snapshot.v1":
+        raise StorageError("Full workspace frozen source record has an invalid schema")
+    record_source_root = record.get("source_root")
+    record_path_value = record.get("record_path")
+    if (not isinstance(record_source_root, str)
+            or not _same_path(record_source_root, source_root)
+            or (record_path_value is not None
+                and (not isinstance(record_path_value, str)
+                     or not _same_path(record_path_value, record_path)))):
+        raise StorageError("Full workspace frozen source record location is not bound")
+    source_identity = record.get("source_identity")
+    if (not isinstance(source_identity, dict)
+            or source_identity.get("source_snapshot_sha256") != source_snapshot_sha256):
+        raise StorageError("Full workspace frozen source identity is not bound")
+    recorded_inventory = record.get("inventory")
+    if not isinstance(recorded_inventory, list):
+        raise StorageError("Full workspace frozen source inventory is missing")
+    try:
+        inventory_payload = json.dumps(
+            recorded_inventory, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8") + b"\n"
+    except (TypeError, ValueError) as error:
+        raise StorageError("Full workspace frozen source inventory is not serializable") from error
+    if hashlib.sha256(inventory_payload).hexdigest() != inventory_sha256:
+        raise StorageError("Full workspace frozen source inventory hash changed")
+    runtime_entry = None
+    for entry in recorded_inventory:
+        if not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256"}:
+            raise StorageError("Full workspace frozen source inventory entry is invalid")
+        if entry.get("path") == "scripts/windows/runtime_bundle.py":
+            if runtime_entry is not None:
+                raise StorageError("Full workspace frozen source runtime bundle is duplicated")
+            runtime_entry = entry
+    if runtime_entry is None:
+        raise StorageError("Full workspace frozen source runtime bundle is missing")
+    runtime_path = _full_workspace_file(
+        str(source_root / "scripts" / "windows" / "runtime_bundle.py"),
+        source_root,
+        "full workspace frozen runtime bundle",
+    )
+    if (type(runtime_entry.get("size")) is not int
+            or runtime_entry["size"] != runtime_path.stat().st_size
+            or not isinstance(runtime_entry.get("sha256"), str)
+            or not SHA256_RE.fullmatch(runtime_entry["sha256"])
+            or _sha256_file(runtime_path) != runtime_entry["sha256"]):
+        raise StorageError("Full workspace frozen runtime bundle changed")
+    try:
+        tree = ast.parse(runtime_path.read_text(encoding="utf-8"), filename=str(runtime_path))
+    except (OSError, UnicodeError, SyntaxError) as error:
+        raise StorageError("Full workspace frozen runtime bundle is not valid Python") from error
+    values = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(target, ast.Name) and target.id == "BINARY_NAMES" for target in targets):
+                try:
+                    values.append(ast.literal_eval(node.value))
+                except (ValueError, TypeError, SyntaxError) as error:
+                    raise StorageError("Full workspace frozen runtime bundle names are not literals") from error
+    if len(values) != 1 or not isinstance(values[0], (tuple, list)):
+        raise StorageError("Full workspace frozen runtime bundle names are malformed")
+    names = list(values[0])
+    if (not names or any(not isinstance(name, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9.-]*\.exe", name
+        ) for name in names) or len(set(names)) != len(names)):
+        raise StorageError("Full workspace frozen runtime bundle names are malformed")
+    if browser_workspace:
+        names = [name for name in names if name.casefold() != "fullmag-ui.exe"]
+    if not names:
+        raise StorageError("Full workspace frozen runtime bundle is empty")
+    return tuple(names)
+
+
+def _full_workspace_runtime_family_inventory_sha256(records):
+    try:
+        payload = "".join(
+            f"{record['name']}|{record['size_bytes']}|{record['sha256'].lower()}\n"
+            for record in records
+        ).encode("utf-8")
+    except (KeyError, AttributeError, TypeError, ValueError) as error:
+        raise StorageError("Full workspace runtime family inventory is malformed") from error
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_full_workspace_runtime_family(
+    build_root, proof, stage_proof, expected_names, label,
+):
+    """Bind launch and staged PE image sets to the frozen runtime family audit."""
+    if not isinstance(proof, dict) or not isinstance(stage_proof, dict):
+        raise StorageError(f"{label} runtime family proof is missing")
+    required = (
+        "runtime_family_root", "runtime_family", "runtime_family_inventory",
+        "runtime_family_inventory_sha256", "runtime_family_dependency_audit_path",
+        "runtime_family_dependency_audit_sha256",
+    )
+    if any(key not in proof for key in required):
+        raise StorageError(f"{label} runtime family proof is incomplete")
+    family_root = _full_workspace_directory(
+        proof.get("runtime_family_root"), build_root, f"{label} runtime family root",
+    )
+    declared_names = proof.get("runtime_family_inventory")
+    if not isinstance(declared_names, list) or tuple(declared_names) != tuple(expected_names):
+        raise StorageError(f"{label} runtime family inventory is not frozen-source bound")
+    declared_records = proof.get("runtime_family")
+    if not isinstance(declared_records, list) or len(declared_records) != len(expected_names):
+        raise StorageError(f"{label} runtime family records are incomplete")
+    records_by_name = {}
+    observed = []
+    for record in declared_records:
+        if not isinstance(record, dict) or record.get("name") in records_by_name:
+            raise StorageError(f"{label} runtime family record is invalid")
+        name = record.get("name")
+        if name not in expected_names:
+            raise StorageError(f"{label} runtime family contains an unexpected executable")
+        path = _full_workspace_file(
+            record.get("path"), family_root, f"{label} runtime family {name}", record.get("sha256"),
+        )
+        if path != family_root / name:
+            raise StorageError(f"{label} runtime family path is not canonical: {name}")
+        size = record.get("size_bytes")
+        digest = record.get("sha256")
+        if (type(size) is not int or size <= 0 or size != path.stat().st_size
+                or not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
+            raise StorageError(f"{label} runtime family artifact identity is invalid: {name}")
+        normalized = {"name": name, "size_bytes": size, "sha256": digest.lower()}
+        records_by_name[name] = normalized
+    if set(records_by_name) != set(expected_names):
+        raise StorageError(f"{label} runtime family is missing a canonical executable")
+    observed = [records_by_name[name] for name in expected_names]
+    inventory_hash = _full_workspace_hash(
+        proof.get("runtime_family_inventory_sha256"),
+        f"{label} runtime family inventory",
+    )
+    if _full_workspace_runtime_family_inventory_sha256(observed) != inventory_hash:
+        raise StorageError(f"{label} runtime family inventory hash does not match its files")
+
+    audit_path = _full_workspace_file(
+        proof.get("runtime_family_dependency_audit_path"), build_root,
+        f"{label} runtime family dependency audit",
+        proof.get("runtime_family_dependency_audit_sha256"),
+    )
+    if (not _same_path(audit_path, stage_proof.get("dependency_audit_path", ""))
+            or proof.get("runtime_family_dependency_audit_sha256")
+            != stage_proof.get("dependency_audit_sha256")):
+        raise StorageError(f"{label} runtime family audit is not bound to the FEM audit")
+    stage_root = _full_workspace_directory(
+        stage_proof.get("runtime_bin"), build_root, f"{label} staged runtime root",
+    )
+    try:
+        audit_data = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError(f"{label} runtime family dependency audit is unreadable") from error
+    if (not isinstance(audit_data, dict)
+            or audit_data.get("schema_version") != 1
+            or audit_data.get("target") != "x86_64-pc-windows-msvc"
+            or audit_data.get("scope") != "bin_pe_static_and_delay_imports"
+            or not isinstance(audit_data.get("images"), list)
+            or not audit_data["images"]):
+        raise StorageError(f"{label} runtime family dependency audit schema is invalid")
+    audited = {}
+    for image in audit_data["images"]:
+        if not isinstance(image, dict):
+            raise StorageError(f"{label} runtime family dependency audit image is invalid")
+        relative = image.get("path")
+        digest = image.get("sha256")
+        match = re.fullmatch(r"bin[\\/]([^\\/]+)", relative) if isinstance(relative, str) else None
+        if (match is None or Path(match.group(1)).name != match.group(1)
+                or Path(match.group(1)).suffix.casefold() not in {".exe", ".dll"}
+                or not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
+            raise StorageError(f"{label} runtime family dependency audit image is malformed")
+        name = match.group(1)
+        key = name.casefold()
+        if key in audited:
+            raise StorageError(f"{label} runtime family dependency audit contains a duplicate image")
+        audited[key] = (name, digest.lower())
+
+    def image_set(root, root_label):
+        observed_images = {}
+        for path in root.iterdir():
+            if path.suffix.casefold() not in {".exe", ".dll"}:
+                continue
+            artifact = _full_workspace_file(str(path), root, f"{root_label} image")
+            observed_images[path.name.casefold()] = (path.name, _sha256_file(artifact))
+        return observed_images
+
+    stage_images = image_set(stage_root, f"{label} staged runtime")
+    if set(stage_images) != set(audited):
+        raise StorageError(f"{label} staged PE image set differs from its dependency audit")
+    launch_images = image_set(family_root, f"{label} launch runtime")
+    if set(launch_images) != set(audited):
+        raise StorageError(f"{label} launch PE image set differs from its dependency audit")
+    for key, (name, digest) in audited.items():
+        if stage_images[key][1] != digest or launch_images[key][1] != digest:
+            raise StorageError(f"{label} launch or staged PE image changed: {name}")
+    for name in expected_names:
+        key = name.casefold()
+        if key not in audited or records_by_name[name]["sha256"] != audited[key][1]:
+            raise StorageError(f"{label} runtime family executable is not covered by its audit: {name}")
+    audit_alias_path = proof.get("dependency_audit_path", proof.get("runtime_family_dependency_audit_path"))
+    audit_alias_sha256 = proof.get("dependency_audit_sha256", proof.get("runtime_family_dependency_audit_sha256"))
+    if (not isinstance(audit_alias_path, str)
+            or not isinstance(audit_alias_sha256, str)
+            or not _same_path(audit_alias_path, audit_path)
+            or audit_alias_sha256 != proof["runtime_family_dependency_audit_sha256"]):
+        raise StorageError(f"{label} runtime family dependency audit aliases disagree")
+    return observed
+
+
 def validate_full_workspace_manifest(layout, manifest, *, expected_build_id=None):
     """Validate the four-capability package and its strict FEM GPU origin.
 
@@ -1802,6 +2056,19 @@ def validate_full_workspace_manifest(layout, manifest, *, expected_build_id=None
         browser_workspace=True,
         browser_frontend="static",
     )
+    expected_runtime_names = _full_workspace_frozen_runtime_names(
+        build_root,
+        origin.get("build_source_snapshot"),
+        source_snapshot,
+        bool(origin.get("browser_workspace")),
+    )
+    _validate_full_workspace_runtime_family(
+        build_root,
+        origin_fem,
+        origin_fem,
+        expected_runtime_names,
+        "Full workspace origin",
+    )
 
     if expected_build_id is not None:
         manifest_path = _full_workspace_manifest_path(layout)
@@ -1837,6 +2104,15 @@ def validate_full_workspace_manifest(layout, manifest, *, expected_build_id=None
     ):
         if not _same_path(top_artifacts[aggregate_field], origin_artifact_path) or _sha256_file(top_artifacts[aggregate_field]) != _sha256_file(origin_artifact_path):
             raise StorageError(f"Full workspace aggregate artifact is not bound to its origin: {aggregate_field}")
+    if manifest.get("build_source_snapshot") != origin.get("build_source_snapshot"):
+        raise StorageError("Full workspace aggregate frozen source binding differs from its origin")
+    _validate_full_workspace_runtime_family(
+        build_root,
+        manifest,
+        origin_fem,
+        expected_runtime_names,
+        "Full workspace aggregate",
+    )
     runtime_environment = manifest.get("runtime_environment")
     if (
         not isinstance(runtime_environment, dict)

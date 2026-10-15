@@ -17,6 +17,13 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fullmag_storage as storage  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent / "windows"))
+import runtime_bundle  # noqa: E402
+
+
+RUNTIME_FAMILY_NAMES = tuple(
+    name for name in runtime_bundle.BINARY_NAMES if name != "fullmag-ui.exe"
+)
 
 
 def _write(path: Path, content: str | bytes) -> Path:
@@ -49,13 +56,77 @@ def _artifact(path: Path) -> dict[str, object]:
     return {"path": str(path), "size_bytes": path.stat().st_size, "sha256": _sha(path)}
 
 
+def _runtime_family_inventory_sha256(artifacts: list[dict[str, object]]) -> str:
+    payload = "".join(
+        f"{item['name']}|{item['size_bytes']}|{item['sha256']}\n"
+        for item in artifacts
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _package(layout: dict[str, str], attempt: str) -> dict[str, object]:
     build = Path(layout["build_root"])
-    binary = _write(build / "fullmag.exe", b"fullmag-test-binary")
-    api_binary = _write(build / "fullmag-api.exe", b"fullmag-test-api")
-    fdm_dll = _write(build / "native_fdm.dll", b"fdm-runtime")
-    fem_dll = _write(build / "native_fem.dll", b"fem-runtime")
-    audit = _write(build / "fem-audit.json", "{\"dependencies\":[]}")
+    family_root = build / "runtime-launch"
+    stage_root = build / "windows-fem-runtime" / "bin"
+    binary = _write(family_root / "fullmag.exe", b"fullmag-test-binary")
+    api_binary = _write(family_root / "fullmag-api.exe", b"fullmag-test-api")
+    fdm_dll = _write(family_root / "native_fdm.dll", b"fdm-runtime")
+    fem_dll = _write(family_root / "native_fem.dll", b"fem-runtime")
+    family_artifacts: list[dict[str, object]] = []
+    for name in RUNTIME_FAMILY_NAMES:
+        path = family_root / name
+        if not path.exists():
+            _write(path, name.encode("ascii"))
+        family_artifacts.append(_artifact(path) | {"name": name})
+    for artifact in family_artifacts:
+        _write(stage_root / artifact["name"], Path(artifact["path"]).read_bytes())
+    for path in (fdm_dll, fem_dll):
+        _write(stage_root / path.name, path.read_bytes())
+
+    commit = "a" * 40
+    snapshot = "b" * 64
+    source_root = build / "source-snapshots" / ("e" * 64) / "source"
+    runtime_bundle_path = source_root / "scripts" / "windows" / "runtime_bundle.py"
+    runtime_bundle_text = "BINARY_NAMES = (\n" + "".join(
+        f"    {name!r},\n" for name in runtime_bundle.BINARY_NAMES
+    ) + ")\n"
+    _write(runtime_bundle_path, runtime_bundle_text)
+    source_inventory = [{
+        "path": "scripts/windows/runtime_bundle.py",
+        "size": runtime_bundle_path.stat().st_size,
+        "sha256": _sha(runtime_bundle_path),
+    }]
+    inventory_bytes = (
+        json.dumps(source_inventory, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    inventory_sha256 = hashlib.sha256(inventory_bytes).hexdigest()
+    record_path = source_root.parent / "record.json"
+    _write(record_path, json.dumps({
+        "schema": "fullmag.windows-build-snapshot.v1",
+        "source_identity": {"source_snapshot_sha256": snapshot},
+        "record_path": str(record_path),
+        "source_root": str(source_root),
+        "inventory_sha256": inventory_sha256,
+        "inventory": source_inventory,
+    }, sort_keys=True))
+    frozen_source = {
+        "record_path": str(record_path),
+        "inventory_sha256": inventory_sha256,
+        "source_root": str(source_root),
+    }
+
+    audit_images = []
+    for path in sorted(stage_root.iterdir(), key=lambda item: item.name.casefold()):
+        if path.suffix.casefold() in {".exe", ".dll"}:
+            audit_images.append({"path": f"bin/{path.name}", "sha256": _sha(path)})
+    audit = _write(build / "windows-fem-runtime" / "windows-pe-dependencies.json", json.dumps({
+        "schema_version": 1,
+        "target": "x86_64-pc-windows-msvc",
+        "scope": "bin_pe_static_and_delay_imports",
+        "images": audit_images,
+        "limitations": [],
+    }))
+    family_inventory_sha256 = _runtime_family_inventory_sha256(family_artifacts)
     provider_config = _write(build / "fem-dependencies" / "installed" / "provider.json", "provider")
     provider_receipt = _write(build / "fem-dependencies" / "provider-receipt.json", "receipt")
 
@@ -66,8 +137,6 @@ def _package(layout: dict[str, str], attempt: str) -> dict[str, object]:
     entry = _write(cache / "out" / "index.html", "<!doctype html><title>fixture</title>")
     source_manifest = frontend / "source.json"
 
-    commit = "a" * 40
-    snapshot = "b" * 64
     origin_path = build / "windows-fem-runtime" / "build-manifest.json"
     origin = {
         "schema_version": 1,
@@ -96,6 +165,13 @@ def _package(layout: dict[str, str], attempt: str) -> dict[str, object]:
             "provider_config_sha256": _sha(provider_config),
             "provider_receipt_path": str(provider_receipt),
             "provider_receipt_sha256": _sha(provider_receipt),
+            "runtime_bin": str(stage_root),
+            "runtime_family_root": str(family_root),
+            "runtime_family": family_artifacts,
+            "runtime_family_inventory": list(RUNTIME_FAMILY_NAMES),
+            "runtime_family_inventory_sha256": family_inventory_sha256,
+            "runtime_family_dependency_audit_path": str(audit),
+            "runtime_family_dependency_audit_sha256": _sha(audit),
         },
         "browser_workspace": True,
         "ui_host": "browser",
@@ -110,6 +186,7 @@ def _package(layout: dict[str, str], attempt: str) -> dict[str, object]:
         "frontend_entry_path": str(entry),
         "frontend_entry_sha256": _sha(entry),
         "static_web_sha256": storage._directory_sha256(cache / "out"),
+        "build_source_snapshot": frozen_source,
     }
     _write(origin_path, json.dumps(origin, sort_keys=True))
 
@@ -137,6 +214,14 @@ def _package(layout: dict[str, str], attempt: str) -> dict[str, object]:
         "native_fdm_dll_sha256": _sha(fdm_dll),
         "native_fem_dll": str(fem_dll),
         "native_fem_dll_sha256": _sha(fem_dll),
+        "native_fem": origin["native_fem"],
+        "runtime_family_root": str(family_root),
+        "runtime_family": family_artifacts,
+        "runtime_family_inventory": list(RUNTIME_FAMILY_NAMES),
+        "runtime_family_inventory_sha256": family_inventory_sha256,
+        "runtime_family_dependency_audit_path": str(audit),
+        "runtime_family_dependency_audit_sha256": _sha(audit),
+        "build_source_snapshot": frozen_source,
         "runtime_environment": {
             "FULLMAG_FDM_EXECUTION": None,
             "FULLMAG_FEM_EXECUTION": None,
@@ -216,6 +301,34 @@ def test_validator_and_handoff_reject_drift() -> None:
         manifest_path = Path(layout["build_root"]) / "windows-full-runtime" / "build-manifest.json"
         expected = _sha(manifest_path)
         storage.validate_full_workspace_handoff(layout, expected)
+
+        scheduler = Path(manifest["runtime_family_root"]) / "fullmag-api-accepted-scheduler.exe"
+        scheduler.write_bytes(b"tampered-scheduler")
+        try:
+            storage.validate_full_workspace_handoff(layout, expected)
+        except storage.StorageError:
+            pass
+        else:
+            raise AssertionError("tampered runtime-family scheduler was accepted")
+        scheduler.unlink()
+        try:
+            storage.validate_full_workspace_handoff(layout, expected)
+        except storage.StorageError:
+            pass
+        else:
+            raise AssertionError("missing runtime-family scheduler was accepted")
+
+        scheduler.write_bytes(b"fullmag-api-accepted-scheduler.exe")
+        fem_stage_dll = (Path(manifest["native_fem"]["runtime_bin"])
+                         / Path(manifest["native_fem"]["runtime_dll"]).name)
+        assert fem_stage_dll.is_file()
+        fem_stage_dll.write_bytes(b"tampered-fem-dll")
+        try:
+            storage.validate_full_workspace_handoff(layout, expected)
+        except storage.StorageError:
+            pass
+        else:
+            raise AssertionError("tampered runtime-family dependency was accepted")
 
         with tempfile.TemporaryDirectory(prefix="fullmag-full-origin-state-") as state_temporary:
             state_layout = _layout(Path(state_temporary))

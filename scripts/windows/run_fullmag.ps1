@@ -161,6 +161,24 @@ function Get-WindowsBuildToolsRoot {
   return $PSScriptRoot
 }
 
+function Get-NativeFemMsvcDesktopX64RedistRoot {
+  if (-not $env:VCToolsRedistDir) { return $null }
+  $redistRoot = Resolve-AbsolutePath ([string]$env:VCToolsRedistDir)
+  if (-not (Test-Path -LiteralPath $redistRoot -PathType Container)) {
+    throw "VCToolsRedistDir is not a canonical redistributable directory: $redistRoot"
+  }
+  # VCToolsRedistDir contains x86 and onecore siblings as well as the desktop
+  # CRT.  Register only the vcvars64-selected desktop CRT tree so same-named
+  # but incompatible images cannot compete during PE closure planning.
+  $x64Root = Resolve-AbsolutePath (Join-Path $redistRoot "x64\Microsoft.VC143.CRT")
+  $null = Assert-NativeFemPathChain -Path $x64Root -Base $redistRoot `
+    -Label "MSVC desktop x64 redistributable root"
+  $vcruntime = Join-Path $x64Root "vcruntime140.dll"
+  $null = Assert-NativeFemPathChain -Path $vcruntime -Base $x64Root `
+    -Label "MSVC desktop x64 vcruntime" -Leaf
+  return $x64Root
+}
+
 function Invoke-CompilerInputsTool {
   param(
     [Parameter(Mandatory = $true)][ValidateSet("materialize", "verify")][string]$Command,
@@ -1646,10 +1664,22 @@ function Stage-NativeFemRuntime {
     -Label "native FEM staged runtime"
   $launchRoot = Assert-NativeFemPathChain -Path (Split-Path -Parent $FullmagExe) -Base $TargetRoot `
     -Label "native FEM launch runtime"
-  foreach ($binary in @($FullmagExe, $FullmagApiExe) + $(if ($needsDesktopRuntime) { @($FullmagUiExe) } else { @()})) {
+  $runtimeFamilyNames = @()
+  $stageBinaries = @($FullmagExe, $FullmagApiExe)
+  if ($needsDesktopRuntime) { $stageBinaries += $FullmagUiExe }
+  if ($AllBackendsRequested) {
+    $runtimeFamilyNames = @(Get-FullmagFullPackageCanonicalRuntimeNames `
+      -IncludeDesktop:$needsDesktopRuntime -ToolsRoot (Get-WindowsBuildToolsRoot))
+    foreach ($name in $runtimeFamilyNames) {
+      $stageBinaries += Join-Path $launchRoot $name
+    }
+  }
+  foreach ($binary in @($stageBinaries | Select-Object -Unique)) {
+    $sourceBinary = Assert-NativeFemPathChain -Path $binary -Base $TargetRoot `
+      -Label "native FEM staged runtime binary" -Leaf
     $destination = Assert-NativeFemCopyDestination -Path (Join-Path $stageRoot (Split-Path -Leaf $binary)) `
       -Base $FemRuntimeRoot -Label "native FEM staged binary"
-    Copy-Item -LiteralPath $binary -Destination $destination -Force
+    Copy-Item -LiteralPath $sourceBinary -Destination $destination -Force
   }
   $femDllDestination = Assert-NativeFemCopyDestination -Path (Join-Path $stageRoot "fullmag_fem.dll") `
     -Base $FemRuntimeRoot -Label "native FEM staged backend DLL"
@@ -1667,7 +1697,8 @@ function Stage-NativeFemRuntime {
     (Join-Path $nativeFdmBuildRoot "backends\fdm\Release"),
     (Join-Path $BuildSourceRoot "backends\fdm")
   )
-  if ($env:VCToolsRedistDir) { $dependencyRoots += $env:VCToolsRedistDir }
+  $msvcX64RedistRoot = Get-NativeFemMsvcDesktopX64RedistRoot
+  if ($msvcX64RedistRoot) { $dependencyRoots += $msvcX64RedistRoot }
   if ($env:CUDA_PATH) { $dependencyRoots += (Join-Path $env:CUDA_PATH "bin") }
   if ($env:CUDACXX) { $dependencyRoots += (Split-Path -Parent $env:CUDACXX) }
   $dependencyRoots = @($dependencyRoots | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) } | Sort-Object -Unique)
@@ -1710,6 +1741,22 @@ function Stage-NativeFemRuntime {
   if ((Get-Sha256File $launchFemDll) -ne $expectedFemDllSha256) {
     throw "Native FEM launch DLL hash does not match the built FEM DLL"
   }
+  $runtimeFamily = @()
+  $runtimeFamilyInventorySha256 = $null
+  if ($AllBackendsRequested) {
+    foreach ($name in $runtimeFamilyNames) {
+      $familyPath = Assert-NativeFemPathChain -Path (Join-Path $launchRoot $name) -Base $TargetRoot `
+        -Label "native FEM runtime family binary" -Leaf
+      $familyItem = Get-Item -LiteralPath $familyPath -Force -ErrorAction Stop
+      $runtimeFamily += [ordered]@{
+        name = $name
+        path = [System.IO.Path]::GetFullPath($familyPath)
+        size_bytes = [int64]$familyItem.Length
+        sha256 = Get-Sha256File $familyPath
+      }
+    }
+    $runtimeFamilyInventorySha256 = Get-FullmagFullPackageRuntimeFamilyInventorySha256 -Artifacts $runtimeFamily
+  }
   return [ordered]@{
     device = $Device
     requested_device = if ($env:FULLMAG_FEM_REQUESTED_DEVICE) { $env:FULLMAG_FEM_REQUESTED_DEVICE } else { $Device }
@@ -1727,6 +1774,12 @@ function Stage-NativeFemRuntime {
     provider_receipt_sha256 = $providerProvenance.provider_receipt_sha256
     import_library_sha256 = [string]$FemOutput.import_library_sha256
     strict_gpu = [bool]$useCuda
+    runtime_family_root = if ($AllBackendsRequested) { [System.IO.Path]::GetFullPath($launchRoot) } else { $null }
+    runtime_family = @($runtimeFamily)
+    runtime_family_inventory = @($runtimeFamilyNames)
+    runtime_family_inventory_sha256 = $runtimeFamilyInventorySha256
+    runtime_family_dependency_audit_path = if ($AllBackendsRequested) { [System.IO.Path]::GetFullPath($auditPath) } else { $null }
+    runtime_family_dependency_audit_sha256 = if ($AllBackendsRequested) { $auditSha256 } else { $null }
   }
 }
 
@@ -2280,7 +2333,7 @@ if ($BuildMode -eq "true") {
       -FullmagApiExe $FullmagApiExe -NativeFdmDll $nativeFdmDll `
       -NativeFemDll $nativeFemDll -SourceCommit $sourceCommit `
       -SourceSnapshotSha256 $sourceSnapshotSha256 -AttemptId $NativeFemAttemptId `
-      -BuildRoot $BuildRoot
+      -BuildRoot $BuildRoot -ToolsRoot (Get-WindowsBuildToolsRoot)
   }
 }
 else {
@@ -2306,7 +2359,23 @@ else {
       -NativeFdmDll $nativeFdmDll -NativeFemDll $nativeFemDll `
       -ExpectedBuildId $ExpectedBuildId -SourceCommit $sourceCommit `
       -SourceSnapshotSha256 $sourceSnapshotSha256 -AttemptId $NativeFemAttemptId `
-      -BuildRoot $BuildRoot
+      -BuildRoot $BuildRoot -ToolsRoot (Get-WindowsBuildToolsRoot)
+    $allBackendFem = $manifest.native_fem
+    $allBackendFemAudit = [string]$allBackendFem.dependency_audit_path
+    $allBackendFemRuntimeBin = [string]$allBackendFem.runtime_bin
+    $allBackendFemAuditSha256 = [string]$allBackendFem.dependency_audit_sha256
+    if (-not $allBackendFem -or -not $allBackendFemAudit -or
+        -not $allBackendFemRuntimeBin -or
+        $allBackendFemAuditSha256 -notmatch '^[0-9a-f]{64}$') {
+      throw "Existing full workspace is missing its complete FEM PE audit; rerun with build=True"
+    }
+    $allBackendLaunchRoot = Assert-NativeFemPathChain `
+      -Path (Split-Path -Parent $FullmagExe) -Base $TargetRoot `
+      -Label "full workspace launch runtime"
+    $null = Assert-NativeFemStagedPeAudit `
+      -AuditPath $allBackendFemAudit -StageRoot $allBackendFemRuntimeBin `
+      -ExpectedAuditSha256 $allBackendFemAuditSha256 `
+      -LaunchRoot $allBackendLaunchRoot -LaunchBase $TargetRoot
   }
   $expectedNodeVersion = if ($needsControlRoomToolchain) { (& node --version).Trim() } else { $null }
   $expectedPnpmVersion = if ($needsControlRoomToolchain) { $PinnedPnpmVersion } else { $null }
