@@ -13427,6 +13427,12 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
     let mut extra_boundary = subset_mesh.periodic_boundary_pairs[0].clone();
     extra_boundary.pair_id = "extra_faces".to_string();
     subset_mesh.periodic_boundary_pairs.push(extra_boundary);
+    // This fixture intentionally authors a different periodic topology, without
+    // changing any nodes or their order. Bind its existing profile to that new
+    // snapshot so this test reaches pair-selection admission, not stale binding.
+    let subset_fingerprint = subset_mesh.topology_fingerprint_v6();
+    subset_ir.materials[0].nodal_field_binding.as_mut().unwrap()
+        .canonical_mesh_fingerprint = subset_fingerprint;
     for controls in [false, true] {
         if controls {
             subset_ir.problem_meta.runtime_metadata.insert(
@@ -13437,7 +13443,8 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         let error = plan(&subset_ir)
             .expect_err("shared-domain Floquet subset is unsupported even without solver controls");
         assert!(error.reasons.iter().any(|reason|
-            reason.contains("floquet_airbox_dynamic_demag_pair_selection_unsupported")));
+            reason.contains("floquet_airbox_dynamic_demag_pair_selection_unsupported")),
+            "{:?}", error.reasons);
     }
 
     match planned.backend_plan {
