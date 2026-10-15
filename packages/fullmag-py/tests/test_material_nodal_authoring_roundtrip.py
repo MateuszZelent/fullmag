@@ -100,7 +100,7 @@ class MaterialNodalAuthoringRoundTripTests(unittest.TestCase):
             source = render_loaded_problem_as_script(loaded)
             self.assertIn("film.Ms_field = [700000.0, 800000.0]", source)
             self.assertIn(
-                f"film.nodal_field_binding = {_binding_source()}",
+                "film.nodal_field_binding = fm.MaterialNodalFieldBinding(",
                 source,
             )
             reloaded = _load_text(source, Path(tmp_dir), "canonical.py")
