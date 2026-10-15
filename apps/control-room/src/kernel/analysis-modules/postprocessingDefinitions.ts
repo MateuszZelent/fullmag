@@ -409,8 +409,9 @@ export function modeVisualizationDefinitionFromAnalysisResult(
   ) {
     return { ok: false, reason: "The published item or field identity does not match the selection." };
   }
-  const target = modeVisualizationTarget(manifest, candidates);
-  if (!target.ok) return target;
+  const resolvedTarget = modeVisualizationTarget(manifest, candidates);
+  if (!resolvedTarget.ok) return resolvedTarget;
+  const target = resolvedTarget.target;
   const dataRef: ModeVisualizationDataRef = {
     run_id: manifest.run_id,
     dataset_id: manifest.dataset_id,

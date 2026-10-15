@@ -281,7 +281,7 @@ function publishedItem(
     sample_id: "sample-0001",
     frequency_hz: 1.20251e10,
     source_revision: "item-source-revision-99",
-    field_ref,
+    field_ref: fieldRef,
   } as unknown as AnalysisResultSpectralItemSummary;
 }
 
