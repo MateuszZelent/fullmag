@@ -558,6 +558,161 @@ def _verify_native_fem_script_unchanged(path, expected_sha256):
         )
 
 
+def _native_fem_interactive_frontend_reuse(layout, web_port, expected_build_id):
+    """Admit one existing FEM dev stage for a separate interactive launch.
+
+    Development Next output is keyed by the listener port.  A fresh ephemeral
+    port therefore cannot reuse a stage made for another port: the managed
+    ``.next-control-room-<port>`` link would be absent.  Read and verify the
+    sealed pair before creating a run directory, then return the exact port and
+    manifest digest to pin on the managed child command.
+    """
+    build_root = validate_path(
+        Path(layout["build_root"]), layout["build_storage_root"],
+        "native FEM build root",
+    )
+    manifest_path = validate_path(
+        build_root / "windows-fem-runtime" / "build-manifest.json",
+        build_root,
+        "native FEM build manifest",
+    )
+    if is_link(manifest_path) or not manifest_path.is_file():
+        raise StorageError(
+            "Native FEM dev reuse requires an existing regular build manifest; rerun with build=True"
+        )
+    manifest_sha256 = _sha256_file(manifest_path)
+    if expected_build_id is not None and expected_build_id != manifest_sha256:
+        raise StorageError(
+            "ExpectedBuildId does not match the pinned native FEM build manifest; rerun with build=True"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Pinned native FEM build manifest is unreadable; rerun with build=True") from error
+    if (not isinstance(manifest, dict)
+            or manifest.get("schema_version") != 1
+            or manifest.get("state") != "completed"
+            or manifest.get("backend") != "fem"
+            or manifest.get("frontend_mode") != "dev"):
+        raise StorageError(
+            "Pinned native FEM build manifest has no completed dev frontend stage; rerun with build=True"
+        )
+
+    frozen = manifest.get("build_source_snapshot")
+    if not isinstance(frozen, dict) or set(frozen) != {"record_path", "inventory_sha256", "source_root"}:
+        raise StorageError("Pinned native FEM build manifest has no complete frozen source binding")
+    if not isinstance(frozen.get("inventory_sha256"), str) or not SHA256_RE.fullmatch(frozen["inventory_sha256"]):
+        raise StorageError("Pinned native FEM frozen source inventory is malformed; rerun with build=True")
+    snapshot_record = validate_path(
+        frozen["record_path"], build_root, "native FEM frozen source record",
+    )
+    snapshot_root = validate_path(
+        frozen["source_root"], build_root, "native FEM frozen source root",
+    )
+    if (is_link(snapshot_record) or not snapshot_record.is_file()
+            or is_link(snapshot_root) or not snapshot_root.is_dir()):
+        raise StorageError("Pinned native FEM frozen source binding is unavailable; rerun with build=True")
+    try:
+        from windows.build_snapshot import verify_snapshot
+
+        verified_snapshot = verify_snapshot(str(snapshot_record), str(build_root))
+    except (ImportError, OSError, ValueError, TypeError, RuntimeError) as error:
+        raise StorageError("Pinned native FEM frozen source binding is stale; rerun with build=True") from error
+    if (not isinstance(verified_snapshot, dict)
+            or verified_snapshot.get("inventory_sha256") != frozen["inventory_sha256"]
+            or not _same_path(verified_snapshot.get("source_root"), snapshot_root)):
+        raise StorageError("Pinned native FEM frozen source binding does not match its record; rerun with build=True")
+
+    source_manifest_value = manifest.get("frontend_source_manifest")
+    if not isinstance(source_manifest_value, str) or not source_manifest_value:
+        raise StorageError("Pinned native FEM frontend source manifest path is missing; rerun with build=True")
+    source_manifest = validate_path(
+        source_manifest_value, build_root, "native FEM frontend source manifest",
+    )
+    source_manifest_sha256 = manifest.get("frontend_source_manifest_sha256")
+    if (is_link(source_manifest) or not source_manifest.is_file()
+            or not isinstance(source_manifest_sha256, str)
+            or not SHA256_RE.fullmatch(source_manifest_sha256)
+            or _sha256_file(source_manifest) != source_manifest_sha256):
+        raise StorageError("Native FEM frontend source manifest hash is stale; rerun with build=True")
+    try:
+        stage = json.loads(source_manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Native FEM frontend source manifest is unreadable; rerun with build=True") from error
+    if (not isinstance(stage, dict)
+            or stage.get("schema") != "fullmag.native-workspace-frontend-source.v1"
+            or stage.get("mode") != "dev"):
+        raise StorageError("Native FEM frontend stage schema or mode is incompatible; rerun with build=True")
+    stage_build_root = validate_path(
+        stage.get("build_root", ""), build_root, "native FEM frontend stage build root",
+    )
+    stage_source_root = validate_path(
+        stage.get("source_root", ""), build_root, "native FEM frontend stage source root",
+    )
+    stage_workspace_root = validate_path(
+        stage.get("workspace_root", ""), build_root, "native FEM frontend workspace",
+    )
+    stage_cache_root = validate_path(
+        stage.get("frontend_cache_root", ""), build_root, "native FEM frontend cache",
+    )
+    for label, path, kind in (
+        ("native FEM frontend stage build root", stage_build_root, "dir"),
+        ("native FEM frontend stage source root", stage_source_root, "dir"),
+        ("native FEM frontend workspace", stage_workspace_root, "dir"),
+        ("native FEM frontend cache", stage_cache_root, "dir"),
+    ):
+        if is_link(path) or not getattr(path, f"is_{kind}")():
+            raise StorageError(f"{label} is missing or redirects outside storage; rerun with build=True")
+    if (not _same_path(stage_build_root, build_root)
+            or not _same_path(stage_source_root, snapshot_root)
+            or not _same_path(stage_workspace_root, manifest.get("frontend_workspace_root", ""))
+            or not _same_path(stage_cache_root, manifest.get("frontend_cache_root", ""))):
+        raise StorageError("Native FEM frontend stage is bound to different build inputs; rerun with build=True")
+    stage_inventory = stage.get("source_inventory_sha256")
+    if (not isinstance(stage_inventory, str) or not SHA256_RE.fullmatch(stage_inventory)
+            or manifest.get("frontend_source_sha256") != stage_inventory):
+        raise StorageError("Native FEM frontend source inventory is not pinned by the build manifest; rerun with build=True")
+    stage_frozen = stage.get("build_source_snapshot")
+    if (not isinstance(stage_frozen, dict)
+            or set(stage_frozen) != {"record_path", "inventory_sha256", "source_root"}
+            or stage_frozen != frozen):
+        raise StorageError("Native FEM frontend stage is bound to a different source snapshot; rerun with build=True")
+    stage_port = stage.get("web_port")
+    if type(stage_port) is not int or not 1 <= stage_port <= 65535:
+        raise StorageError("Native FEM dev frontend stage has no valid saved web port; rerun with build=True")
+    app_root = validate_path(
+        stage_workspace_root / "apps" / "control-room",
+        stage_workspace_root,
+        "native FEM frontend application",
+    )
+    dev_link = app_root / f".next-control-room-{stage_port}"
+    dev_next_root = validate_path(
+        stage_cache_root / "next", stage_cache_root, "native FEM dev frontend cache root",
+    )
+    if is_link(dev_next_root) or not dev_next_root.is_dir():
+        raise StorageError("Native FEM dev frontend cache root is missing or redirects outside storage; rerun with build=True")
+    dev_target = validate_path(
+        dev_next_root / f"dev-{stage_port}", dev_next_root, "native FEM dev frontend port cache",
+    )
+    if (not is_link(dev_link) or is_link(dev_target)
+            or not dev_target.is_dir()
+            or not _same_path(dev_link.resolve(), dev_target.resolve())):
+        raise StorageError("Native FEM dev frontend stage has no valid saved port link; rerun with build=True")
+    if web_port not in (0, stage_port):
+        raise StorageError(
+            f"Requested web port {web_port} differs from the pinned frontend stage port {stage_port}; "
+            "rerun with build=True for a different port"
+        )
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", stage_port))
+        except OSError as error:
+            raise StorageError(
+                f"Pinned native FEM frontend port {stage_port} is occupied; refusing to kill or rebuild"
+            ) from error
+    return manifest_sha256, stage_port
+
+
 def atomic_json(path, data, *, retry_windows_replace=False):
     if type(retry_windows_replace) is not bool:
         raise StorageError("Invalid metadata replacement retry option")
@@ -2526,6 +2681,15 @@ def run_windows_fem(
     # Initialize the canonical storage tree before creating a run directory;
     # no output is allowed to appear before the managed marker and layout have
     # passed their final mutation-boundary checks.
+    reuse_manifest_identity = None
+    if build_mode == "false" and frontend == "dev" and run_mode == "interactive":
+        # A separately invoked dev runtime must reuse the port-owned frontend
+        # stage.  Validate the sealed stage before creating any run output and
+        # pin the exact manifest digest into the child handoff.
+        reuse_manifest_identity, web_port = _native_fem_interactive_frontend_reuse(
+            layout, web_port, expected_build_id,
+        )
+        expected_build_id = reuse_manifest_identity
     initialize(layout)
     resolved_output.mkdir(parents=True, exist_ok=True)
     if web_port == 0 and run_mode == "interactive":
