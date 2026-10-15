@@ -399,15 +399,19 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     }
 
     await enableMagnitudeSurfaceColoring(page, fixture, "fem-empty");
-    const fieldResource = await waitForFdmFieldResource(page, quantityId);
-    if (!fieldResource.hasValues) {
-      throw new Error(`FEM FMVP field resource did not expose decoded values: ${JSON.stringify(fieldResource)}.`);
+    const fieldResource = await waitForFdmFieldResource(page, quantityId, {
+      component: "full",
+      partId: "part-empty-range",
+      scopeKind: "part",
+    });
+    if (!fieldResource.hasTargetPart || !fieldResource.hasValues) {
+      throw new Error(`FEM FMVP field resource did not expose decoded values for part-empty-range: ${JSON.stringify(fieldResource)}.`);
     }
     assertFieldRequest(fixture, {
       component: "full",
       quantityId,
-      scopeId: null,
-      scopeKind: "full",
+      scopeId: "part-empty-range",
+      scopeKind: "part",
     });
     const emptyOverride = assertMagnitudeThicknessOverride(fixture, "fem-empty");
     await assertHealthyCanvas(page, "empty-range FEM field-color request");
@@ -1539,17 +1543,64 @@ async function requestFdmField(page, quantityId) {
   }, quantityId);
 }
 
-async function waitForFdmFieldResource(page, quantityId) {
-  return page.waitForFunction((quantity) => {
+async function waitForFdmFieldResource(page, quantityId, targetPart = null) {
+  return page.waitForFunction(({ quantity, targetPart: expectedPart }) => {
     const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    const matchingKeys = Object.keys(audit?.readViewportAuditRuntime?.().listenerCounts ?? {}).filter((candidate) => candidate.includes(`/data/fields/${quantity}/samples/vector?`));
+    const requestPath = `/data/fields/${encodeURIComponent(quantity)}/samples/vector?`;
+    const matchingKeys = Object.keys(
+      audit?.readViewportAuditRuntime?.().listenerCounts ?? {},
+    ).filter((candidate) => {
+      if (
+        expectedPart &&
+        !candidate.includes("#viewport-3d:part-field-vectors:")
+      ) {
+        return false;
+      }
+      let requestOffset = candidate.indexOf(requestPath);
+      if (requestOffset < 0) return false;
+      if (!expectedPart) return true;
+
+      while (requestOffset >= 0) {
+        const queryStart = requestOffset + requestPath.length;
+        const queryEnd = candidate.indexOf("|", queryStart);
+        const query = new URLSearchParams(
+          candidate.slice(queryStart, queryEnd < 0 ? undefined : queryEnd),
+        );
+        if (
+          query.get("component") === expectedPart.component &&
+          query.get("scope_id") === expectedPart.partId &&
+          query.get("scope_kind") === expectedPart.scopeKind
+        ) {
+          return true;
+        }
+        if (queryEnd < 0) break;
+        requestOffset = candidate.indexOf(requestPath, queryEnd + 1);
+      }
+      return false;
+    });
     const key = matchingKeys[0];
     if (!key) return null;
     const resource = audit?.readViewportAuditResource?.(key);
     if (!resource || resource.status === "loading") return null;
+    if (expectedPart) {
+      const partEnvelopes = resource.data;
+      const hasTargetPart =
+        partEnvelopes instanceof Map &&
+        partEnvelopes.has(expectedPart.partId);
+      const payload = hasTargetPart
+        ? partEnvelopes.get(expectedPart.partId)?.data
+        : null;
+      return {
+        hasTargetPart,
+        hasValues: Boolean(payload?.values?.length),
+        key,
+        status: resource.status,
+        targetPartId: expectedPart.partId,
+      };
+    }
     const payload = resource.data?.data?.values ? resource.data.data : resource.data;
     return { hasValues: Boolean(payload?.values?.length), key, status: resource.status };
-  }, quantityId, { timeout: timeoutMs }).then((handle) => handle.jsonValue());
+  }, { quantity: quantityId, targetPart }, { timeout: timeoutMs }).then((handle) => handle.jsonValue());
 }
 
 async function invalidateFieldResource(page, resourceKey) {
@@ -2393,4 +2444,5 @@ function signalChildTree(child, signal) {
 }
 function reservePort(port) { return new Promise((resolve, reject) => { const server = createServer(); server.once("error", reject); server.listen(port, process.env.CONTROL_ROOM_TARGET_SMOKE_BIND_HOST ?? "127.0.0.1", () => { const address = server.address(); server.close((error) => error ? reject(error) : resolve(address.port)); }); }); }
 async function waitForHttp(url, child, readSpawnError, readStderr) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { const spawnError = readSpawnError(); if (spawnError) throw new Error(`Target smoke server failed to spawn: ${spawnError.message}.`); if (child.exitCode != null) throw new Error(`Target smoke server exited with ${child.exitCode}: ${readStderr() || "no stderr"}`); try { if ((await fetch(url)).status < 500) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 200)); } throw new Error(`Timed out waiting for ${url}: ${readStderr() || "no stderr"}`); }
+
 
