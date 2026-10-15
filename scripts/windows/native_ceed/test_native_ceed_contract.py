@@ -165,6 +165,31 @@ def main() -> int:
             "the DLL install location is missing")
     require('ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"' in cmake,
             "the MSVC import-library install location is missing")
+    require("CEED_WINDOWS_DATA_EXPORTS_DEF_CONTENT" in cmake,
+            "the Windows data-export module definition is missing")
+    require('"${CEED_WINDOWS_DATA_EXPORTS_DEF}"' in cmake,
+            "the generated Windows data-export definition is not a DLL source")
+    sources_offset = cmake.index("set(CEED_SOURCES")
+    require(
+        cmake.index("string(CONCAT CEED_WINDOWS_DATA_EXPORTS_DEF_CONTENT") < sources_offset,
+        "the data-export definition must be generated before the DLL source list",
+    )
+    require(
+        cmake.find('"${CEED_WINDOWS_DATA_EXPORTS_DEF}"', sources_offset) > sources_offset,
+        "the generated data-export definition is not included in CEED_SOURCES",
+    )
+    for data_symbol in (
+        "CEED_BASIS_NONE",
+        "CEED_ELEMRESTRICTION_NONE",
+        "CEED_REQUEST_IMMEDIATE",
+        "CEED_STRIDES_BACKEND",
+        "CEED_VECTOR_ACTIVE",
+        "CEED_VECTOR_NONE",
+    ):
+        require(
+            f'"  {data_symbol} DATA\\n"' in cmake,
+            f"the Windows import library omits data export {data_symbol}",
+        )
     require("native-ceed-adapter-manifest.txt" in cmake,
             "the installed adapter provenance manifest is missing")
     for manifest_field in ("windows_abi=x64-msvc", "/gpu/cuda/shared", "/cpu/self/ref/serial"):

@@ -278,6 +278,24 @@ string(CONCAT CEED_PUBLIC_HEADER_CONTENT
 fullmag_write_generated_file_if_different(
     "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed/ceed.h"
     "${CEED_PUBLIC_HEADER_CONTENT}")
+
+# Explicitly export libCEED public data sentinels to the import library;
+# MFEM consumes these dllimport symbols, while the pinned C sources remain
+# unchanged.
+string(CONCAT CEED_WINDOWS_DATA_EXPORTS_DEF_CONTENT
+    "LIBRARY ceed\n"
+    "EXPORTS\n"
+    "  CEED_BASIS_NONE DATA\n"
+    "  CEED_ELEMRESTRICTION_NONE DATA\n"
+    "  CEED_REQUEST_IMMEDIATE DATA\n"
+    "  CEED_STRIDES_BACKEND DATA\n"
+    "  CEED_VECTOR_ACTIVE DATA\n"
+    "  CEED_VECTOR_NONE DATA\n")
+set(CEED_WINDOWS_DATA_EXPORTS_DEF
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed-windows-data.def")
+fullmag_write_generated_file_if_different(
+    "${CEED_WINDOWS_DATA_EXPORTS_DEF}"
+    "${CEED_WINDOWS_DATA_EXPORTS_DEF_CONTENT}")
 configure_file(
     "${CMAKE_CURRENT_LIST_DIR}/ceed_jit_source_root_install.c.in"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed-jit-source-root-install.c"
@@ -292,6 +310,7 @@ set(CEED_SOURCES
     ${CEED_CUDA_KERNEL_SOURCES}
     "${CMAKE_CURRENT_BINARY_DIR}/generated/interface/ceed-windows-core.c"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/interface/ceed-windows-jit-tools.c"
+    "${CEED_WINDOWS_DATA_EXPORTS_DEF}"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed-jit-source-root-install.c"
     "${CMAKE_CURRENT_LIST_DIR}/ceed_windows_compat.c")
 
