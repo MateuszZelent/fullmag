@@ -425,6 +425,7 @@ def test_stale_full_manifest_exit_zero_publishes_no_receipt() -> None:
         )
         launcher = Path(layout["repo_root"]) / "scripts" / "windows" / "run_fullmag.ps1"
         _write(launcher, "param()")
+        legacy_state = _write(Path(layout["repo_root"]) / ".fullmag" / "existing-state.json", b"preserve-existing-state")
         stale_attempt = "1" * 32
         current_attempt = "2" * 32
         stale_manifest = _package(layout, stale_attempt)
@@ -440,14 +441,12 @@ def test_stale_full_manifest_exit_zero_publishes_no_receipt() -> None:
         original_initialize = storage.initialize
         original_heavy_lock = storage.managed_heavy_lock
         original_build_lock = storage.build_lock
-        original_links = storage.validate_prepared_links_for_run
         original_git = storage.git
         original_logged = storage._run_logged_command
         storage._is_native_windows = lambda: True
         storage.initialize = lambda _layout: None
         storage.managed_heavy_lock = lambda *_args, **_kwargs: nullcontext()
         storage.build_lock = lambda *_args, **_kwargs: nullcontext()
-        storage.validate_prepared_links_for_run = lambda _layout: None
 
         def fake_git(_repo, *args):
             return "a" * 40 if args == ("rev-parse", "HEAD") else ""
@@ -476,10 +475,10 @@ def test_stale_full_manifest_exit_zero_publishes_no_receipt() -> None:
             storage.initialize = original_initialize
             storage.managed_heavy_lock = original_heavy_lock
             storage.build_lock = original_build_lock
-            storage.validate_prepared_links_for_run = original_links
             storage.git = original_git
             storage._run_logged_command = original_logged
         assert result == 1
+        assert legacy_state.read_bytes() == b"preserve-existing-state"
         current_receipt = Path(layout["build_root"]) / "windows-full-runtime" / "receipts" / f"{current_attempt}.json"
         assert not current_receipt.exists()
         assert result_record.get("state") == "failed"

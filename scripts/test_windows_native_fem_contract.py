@@ -44,7 +44,16 @@ class NativeFemContractTests(unittest.TestCase):
             yield
         return scope()
 
-    def test_native_fem_build_and_receipt_are_closed_and_manifest_bound(self):
+    def _fixture_git(self, _repo, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(self.repo)
+        if args == ("rev-parse", "HEAD"):
+            return "0" * 40
+        if args == ("status", "--porcelain", "--untracked-files=normal"):
+            return ""
+        raise AssertionError(args)
+
+    def _assert_closed_native_fem_build_and_receipt(self):
         calls = []
         manifest = (
             Path(self.layout["build_root"])
@@ -52,13 +61,6 @@ class NativeFemContractTests(unittest.TestCase):
             / "build-manifest.json"
         )
         manifest_raw = None
-
-        def fake_git(_repo, *args):
-            if args == ("rev-parse", "HEAD"):
-                return "0" * 40
-            if args == ("status", "--porcelain", "--untracked-files=normal"):
-                return ""
-            raise AssertionError(args)
 
         def fake_build(command, _repo, child_env, *_args, **_kwargs):
             nonlocal manifest_raw
@@ -70,7 +72,7 @@ class NativeFemContractTests(unittest.TestCase):
 
         with patch.object(storage, "_is_native_windows", return_value=True), \
              patch.object(storage, "file_lock", self._unlocked), \
-             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage, "git", side_effect=self._fixture_git), \
              patch.object(storage, "_run_logged_command", side_effect=fake_build):
             result = storage.run_windows_fem(
                 self.layout,
@@ -107,6 +109,25 @@ class NativeFemContractTests(unittest.TestCase):
             receipt["build_manifest_sha256"], hashlib.sha256(manifest_raw).hexdigest()
         )
 
+    def test_native_fem_build_and_receipt_are_closed_and_manifest_bound(self):
+        self._assert_closed_native_fem_build_and_receipt()
+
+    def test_native_fem_preserves_existing_checkout_compatibility_state(self):
+        legacy = self.repo / ".fullmag"
+        legacy.mkdir()
+        preserved = legacy / "existing-state.json"
+        preserved.write_bytes(b'{"owner":"another-workflow"}\n')
+        original = preserved.read_bytes()
+        with self.assertRaisesRegex(storage.StorageError, "Existing real path"):
+            storage.validate_prepared_links_for_run(self.layout)
+
+        self._assert_closed_native_fem_build_and_receipt()
+
+        self.assertTrue(legacy.is_dir())
+        self.assertEqual(preserved.read_bytes(), original)
+        with self.assertRaisesRegex(storage.StorageError, "Existing real path"):
+            storage.validate_prepared_links_for_run(self.layout)
+
     def test_native_fem_auto_intent_reaches_child_without_losing_gpu_resolution(self):
         environments = []
 
@@ -121,7 +142,7 @@ class NativeFemContractTests(unittest.TestCase):
         with patch.object(storage, "_is_native_windows", return_value=True), \
              patch.object(storage, "_resolve_windows_fem_device", return_value="gpu"), \
              patch.object(storage, "file_lock", self._unlocked), \
-             patch.object(storage, "git", return_value="0" * 40), \
+             patch.object(storage, "git", side_effect=self._fixture_git), \
              patch.object(storage, "_run_logged_command", side_effect=fake_build), \
              patch.dict(os.environ, {"FULLMAG_FEM_REQUESTED_DEVICE": "cpu"}):
             result = storage.run_windows_fem(

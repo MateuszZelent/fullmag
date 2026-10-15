@@ -1556,7 +1556,10 @@ def _run_managed_command(
         # `prepare-links` may have run in a separate shell and lock scope.  A
         # different lane can therefore have rebound the shared target link in
         # between; never execute a command against that stale profile.
-        if not (native_workspace_paths or native_installer_paths):
+        # Manifest-bound native routes use explicit runtime paths; compatibility
+        # links may still belong to another lane in this checkout.
+        if not (native_workspace_paths or native_installer_paths
+                or native_fem_paths or native_full_workspace_paths):
             validate_prepared_links_for_run(layout)
         record = validate_path(Path(layout["build_root"]) / "build-status.json", layout["build_storage_root"], "build status")
         validate_existing_build_status(record, layout)
