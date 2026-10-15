@@ -1,0 +1,36 @@
+name: authoring-rdmi-pbc-contracts
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/eigensolve-dispersion-plan-20260912']
+    paths:
+      - 'crates/fullmag-authoring/**'
+      - 'crates/fullmag-ir/src/execution.rs'
+      - '.github/workflows/authoring-rdmi-pbc-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  authoring-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify rotated DMI authoring PBC and scope contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/fullmag_storage.py run --profile linux-host -- cargo test --locked -p fullmag-authoring rotated_interfacial_dmi -- --nocapture | tee "$RUNNER_TEMP/authoring-rdmi-pbc.log"
+          grep -F "rotated_interfacial_dmi_without_exchange_requires_explicit_all_periodic_axes ... ok" "$RUNNER_TEMP/authoring-rdmi-pbc.log"
+          grep -F "rotated_interfacial_dmi_full_pbc_does_not_bypass_scope_exclusivity ... ok" "$RUNNER_TEMP/authoring-rdmi-pbc.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: authoring-rdmi-pbc-${{ github.run_id }}
+          path: ${{ runner.temp }}/authoring-rdmi-pbc.log

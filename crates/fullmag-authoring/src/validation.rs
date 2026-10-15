@@ -362,14 +362,19 @@ fn validate_scene_document_with_mode(
 fn validate_dmi_scope_exclusivity(
     scene: &SceneDocument,
 ) -> Result<(), SceneDocumentValidationError> {
-    // SceneDocument currently has no periodicity field, so its magnetic
-    // boundary is conservatively treated as open.  The FDM planner remains
-    // the source of truth for the fully-periodic exception once PBC is in IR.
+    // Only an explicit all-periodic axis policy removes this authoring-level
+    // open-axis requirement. Missing/null PBC remains open. The planner still
+    // validates material-mask boundaries and the selected backend realization.
+    let fully_periodic_axes = matches!(
+        &scene.study.pbc,
+        Some(Some(pbc)) if pbc.axes.iter().all(|axis| *axis == fullmag_ir::AxisBoundary::Periodic)
+    );
     if scene
         .study
         .rotated_interfacial_dmi
         .is_some_and(|d| d != 0.0)
         && !scene.study.exchange_enabled
+        && !fully_periodic_axes
     {
         return Err(SceneDocumentValidationError::new(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
@@ -4285,6 +4290,62 @@ mod tests {
         scene.study.rotated_interfacial_dmi = Some(0.0);
         validate_scene_document_for_authoring(&scene)
             .expect("zero rotated DMI is a no-op and must not require Exchange");
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_without_exchange_requires_explicit_all_periodic_axes() {
+        let mut scene = region_owned_scene();
+        scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+        scene.study.exchange_enabled = false;
+
+        // All eight axis combinations: a single open axis keeps the guard.
+        for periodic_mask in 0u8..8 {
+            scene.study.pbc = Some(Some(fullmag_ir::FdmPeriodicityIR {
+                axes: std::array::from_fn(|axis| {
+                    if periodic_mask & (1 << axis) != 0 {
+                        fullmag_ir::AxisBoundary::Periodic
+                    } else {
+                        fullmag_ir::AxisBoundary::Open
+                    }
+                }),
+                demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+                image_counts: Some([1; 3]),
+            }));
+            let result = validate_scene_document_for_authoring(&scene);
+            if periodic_mask == 7 {
+                result.expect("explicit all-periodic axes must pass the authoring guard");
+            } else {
+                let error = result.expect_err("an open axis must still require Exchange");
+                assert_eq!(error.message, "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition");
+            }
+        }
+
+        for absent_or_null in [None, Some(None)] {
+            scene.study.pbc = absent_or_null;
+            let error = validate_scene_document_for_authoring(&scene)
+                .expect_err("absent or explicit null PBC must not imply periodic axes");
+            assert_eq!(error.message, "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition");
+        }
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_full_pbc_does_not_bypass_scope_exclusivity() {
+        let mut scene = region_owned_scene();
+        scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+        scene.study.exchange_enabled = false;
+        scene.study.pbc = Some(Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [fullmag_ir::AxisBoundary::Periodic; 3],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([1; 3]),
+        }));
+        scene.objects[0].physics_stack.push(crate::ScriptBuilderMagneticInteractionEntry {
+            kind: crate::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+            enabled: true,
+            params: None,
+        });
+        let error = validate_scene_document_for_authoring(&scene)
+            .expect_err("full PBC must not permit conflicting DMI channels");
+        assert!(error.message.contains("cannot coexist with active object-scoped"));
     }
 
     fn valid_closed_current_view_value() -> Value {
