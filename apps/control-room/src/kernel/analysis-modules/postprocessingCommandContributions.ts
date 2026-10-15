@@ -10,8 +10,16 @@ import {
   referencePointPairsValidationError,
 } from "@/shared/domain/analysis/referenceImport";
 
+import type {
+  AnalysisResultDatasetManifestResource,
+  PostprocessingDefinition,
+} from "@/kernel/api/apiTypes";
+import type { PublishedModeVisualizationSelectionRef } from "./postprocessingDefinitions";
+
 import {
   importedReferenceDefinition,
+  modeVisualizationAnalysisResultSelection,
+  modeVisualizationDefinitionFromAnalysisResult,
   modeVisualizationDefinitionFromSelection,
   modeVisualizationOwnerMatch,
 } from "./postprocessingDefinitions";
@@ -137,25 +145,55 @@ interface UnpinInput {
 
 function pinDisabledReason(context: CommandContext): string | null {
   if (!context.api) return "Control Room API is not available.";
-  const result = modeVisualizationDefinitionFromSelection(context.selection?.get() ?? null);
-  return result.ok ? null : result.reason;
+  const selection = context.selection?.get() ?? null;
+  if (selection?.ref?.type === "analysis-result") {
+    const published = modeVisualizationAnalysisResultSelection(selection);
+    return published.ok ? null : published.reason;
+  }
+  const legacy = modeVisualizationDefinitionFromSelection(selection);
+  return legacy.ok ? null : legacy.reason;
+}
+
+function samePublishedDatasetManifest(
+  left: AnalysisResultDatasetManifestResource,
+  right: AnalysisResultDatasetManifestResource,
+): boolean {
+  return (
+    left.run_id === right.run_id &&
+    left.stage_id === right.stage_id &&
+    left.dataset_id === right.dataset_id &&
+    left.dataset_revision === right.dataset_revision
+  );
 }
 
 async function pinModeVisualization(context: CommandContext): Promise<CommandResult> {
   const reason = pinDisabledReason(context);
-  const result = modeVisualizationDefinitionFromSelection(context.selection?.get() ?? null);
-  if (reason || !result.ok || !context.api) {
+  if (reason || !context.api) {
     return { message: reason ?? "Mode visualization cannot be pinned.", status: "failed" };
   }
+  const selection = context.selection?.get() ?? null;
+  const legacy = modeVisualizationDefinitionFromSelection(selection);
+  if (!legacy.ok) {
+    const published = modeVisualizationAnalysisResultSelection(selection);
+    if (!published.ok) return { message: published.reason, status: "failed" };
+    return pinPublishedResultModeVisualization(context, selection, published.selection);
+  }
+  return pinResolvedModeVisualization(context, legacy.definition);
+}
+
+async function pinResolvedModeVisualization(
+  context: CommandContext,
+  definition: PostprocessingDefinition,
+): Promise<CommandResult> {
   const obsoleteBeforeRead = obsoleteSessionResult(context);
   if (obsoleteBeforeRead) return obsoleteBeforeRead;
   const options = context.sessionScopeKey ? { sessionScopeKey: context.sessionScopeKey } : undefined;
-  const definitions = context.api.analysis.postprocessing.definitions;
+  const definitions = context.api!.analysis.postprocessing.definitions;
   const current = await definitions.list(options);
   const obsoleteAfterRead = obsoleteSessionResult(context);
   if (obsoleteAfterRead) return obsoleteAfterRead;
-  const ownerMatches = current.definitions.map((definition) =>
-    modeVisualizationOwnerMatch(definition, result.definition),
+  const ownerMatches = current.definitions.map((saved) =>
+    modeVisualizationOwnerMatch(saved, definition),
   );
   if (ownerMatches.includes("exact")) {
     return { message: "This mode visualization is already pinned.", status: "completed" };
@@ -167,15 +205,78 @@ async function pinModeVisualization(context: CommandContext): Promise<CommandRes
       status: "failed",
     };
   }
+  const obsoleteBeforeWrite = obsoleteSessionResult(context);
+  if (obsoleteBeforeWrite) return obsoleteBeforeWrite;
   const created = await definitions.create({
-    definition: result.definition,
+    definition,
     expected_scene_revision: current.scene_revision,
   }, options);
   const obsoleteAfterWrite = obsoleteSessionResult(context);
   if (obsoleteAfterWrite) return obsoleteAfterWrite;
   context.authoringHistory?.clear();
-  invalidatePostprocessingDefinitionMutation(context, created.scene_revision);
+  try {
+    invalidatePostprocessingDefinitionMutation(context, created.scene_revision);
+  } catch {
+    return {
+      message: `Pinned ${created.definition.label}. Refresh the results view to see it.`,
+      status: "completed",
+    };
+  }
   return { message: `Pinned ${created.definition.label}.`, status: "completed" };
+}
+
+async function pinPublishedResultModeVisualization(
+  context: CommandContext,
+  selection: Parameters<typeof modeVisualizationDefinitionFromAnalysisResult>[0],
+  ref: PublishedModeVisualizationSelectionRef,
+): Promise<CommandResult> {
+  const obsoleteBeforeManifestRead = obsoleteSessionResult(context);
+  if (obsoleteBeforeManifestRead) return obsoleteBeforeManifestRead;
+  const options = context.sessionScopeKey ? { sessionScopeKey: context.sessionScopeKey } : undefined;
+  try {
+    const results = context.api!.analysis.results;
+    const manifest = await results.dataset(ref.runId, ref.datasetId, options);
+    const obsoleteAfterManifestRead = obsoleteSessionResult(context);
+    if (obsoleteAfterManifestRead) return obsoleteAfterManifestRead;
+    if (
+      manifest.run_id !== ref.runId ||
+      manifest.stage_id !== ref.stageId ||
+      manifest.dataset_id !== ref.datasetId ||
+      manifest.dataset_revision !== ref.datasetRevision
+    ) {
+      return { message: "The published dataset manifest no longer matches the selected result.", status: "failed" };
+    }
+
+    const obsoleteBeforeItemRead = obsoleteSessionResult(context);
+    if (obsoleteBeforeItemRead) return obsoleteBeforeItemRead;
+    const item = await results.item(ref.runId, ref.datasetId, ref.itemId, options);
+    const obsoleteAfterItemRead = obsoleteSessionResult(context);
+    if (obsoleteAfterItemRead) return obsoleteAfterItemRead;
+
+    const obsoleteBeforeManifestRecheck = obsoleteSessionResult(context);
+    if (obsoleteBeforeManifestRecheck) return obsoleteBeforeManifestRecheck;
+    const currentManifest = await results.dataset(ref.runId, ref.datasetId, options);
+    const obsoleteAfterManifestRecheck = obsoleteSessionResult(context);
+    if (obsoleteAfterManifestRecheck) return obsoleteAfterManifestRecheck;
+    if (
+      !samePublishedDatasetManifest(manifest, currentManifest) ||
+      currentManifest.run_id !== ref.runId ||
+      currentManifest.stage_id !== ref.stageId ||
+      currentManifest.dataset_id !== ref.datasetId ||
+      currentManifest.dataset_revision !== ref.datasetRevision
+    ) {
+      return { message: "The published dataset changed while its item was being verified.", status: "failed" };
+    }
+
+    const resolved = modeVisualizationDefinitionFromAnalysisResult(selection, currentManifest, item);
+    if (!resolved.ok) return { message: resolved.reason, status: "failed" };
+    return await pinResolvedModeVisualization(context, resolved.definition);
+  } catch (error) {
+    const obsolete = obsoleteSessionResult(context);
+    if (obsolete) return obsolete;
+    const detail = error instanceof Error && error.message.length > 0 ? error.message : "Unknown error.";
+    return { message: "Mode visualization pin failed: " + detail, status: "failed" };
+  }
 }
 
 function asUnpinInput(input: unknown): UnpinInput | null {

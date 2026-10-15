@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SceneResource } from "@/kernel/api/apiTypes";
+import type {
+  AnalysisResultDatasetManifestResource,
+  AnalysisResultSpectralItemSummary,
+  SceneResource,
+} from "@/kernel/api/apiTypes";
 import { AuthoringHistoryController } from "@/kernel/authoring/AuthoringHistoryController";
+import { resultDatasetItemSelection } from "@/modules/results-navigator/ResultDatasetBrowser";
 
 import {
   ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
@@ -27,7 +32,7 @@ function modeSelection(includeCanonicalDatasetIdentity = true) {
       analysisStageId: "stage-1",
       artifactRevision: 7,
       ...(includeCanonicalDatasetIdentity
-        ? { datasetId: "stage-1", datasetRevision: "7" }
+        ? { datasetId: "catalog:eigen-dispersion", datasetRevision: "catalog-revision-7" }
         : {}),
       fieldId,
       sampleId: "sample-0001",
@@ -54,7 +59,7 @@ function savedModeDefinition(
     label: "Mode 1",
     data_ref: {
       run_id: "run-1",
-      dataset_id: "stage-1",
+      dataset_id: "catalog:eigen-dispersion",
       dataset_revision: datasetRevision,
       field_id: fieldId,
       ...(optionalOwner.sampleId !== undefined
@@ -150,7 +155,7 @@ describe("pin mode visualization command owner deduplication", () => {
     const command = pinCommand();
     expect(command).toBeDefined();
     if (!command) return;
-    const fixture = commandContext([savedModeDefinition("7")]);
+    const fixture = commandContext([savedModeDefinition("catalog-revision-7")]);
 
     const result = await command.run(fixture.context);
 
@@ -166,7 +171,7 @@ describe("pin mode visualization command owner deduplication", () => {
     const command = pinCommand();
     expect(command).toBeDefined();
     if (!command) return;
-    const fixture = commandContext([savedModeDefinition("6")]);
+    const fixture = commandContext([savedModeDefinition("catalog-revision-6")]);
     fixture.create.mockResolvedValue({
       definition: { label: "Mode 1" },
       scene_revision: 12,
@@ -178,8 +183,8 @@ describe("pin mode visualization command owner deduplication", () => {
     expect(fixture.create).toHaveBeenCalledWith(expect.objectContaining({
       definition: expect.objectContaining({
         data_ref: expect.objectContaining({
-          dataset_id: "stage-1",
-          dataset_revision: "7",
+          dataset_id: "catalog:eigen-dispersion",
+          dataset_revision: "catalog-revision-7",
           field_id: fieldId,
           run_id: "run-1",
           sample_id: "sample-0001",
@@ -197,7 +202,7 @@ describe("pin mode visualization command owner deduplication", () => {
     const command = pinCommand();
     expect(command).toBeDefined();
     if (!command) return;
-    const fixture = commandContext([savedModeDefinition("7", owner)]);
+    const fixture = commandContext([savedModeDefinition("catalog-revision-7", owner)]);
 
     const result = await command.run(fixture.context);
 
@@ -215,7 +220,7 @@ describe("pin mode visualization command owner deduplication", () => {
     expect(command).toBeDefined();
     if (!command) return;
     const fixture = commandContext([
-      savedModeDefinition("7", { itemId: "mode-other" }),
+      savedModeDefinition("catalog-revision-7", { itemId: "mode-other" }),
     ]);
     fixture.create.mockResolvedValue({
       definition: { label: "Mode 1" },
@@ -227,6 +232,320 @@ describe("pin mode visualization command owner deduplication", () => {
     expect(result.status).toBe("completed");
     expect(fixture.create).toHaveBeenCalledTimes(1);
     expectSceneRevisionInvalidations(fixture.invalidate.mock.calls, 12);
+  });
+});
+
+type PublishedProductKind = "modal_eigen" | "driven_response";
+
+function publishedDataset(
+  productKind: PublishedProductKind,
+  wavevectorCardinality: number | null,
+  fieldsAvailable = true,
+): AnalysisResultDatasetManifestResource {
+  const itemKind = productKind === "modal_eigen" ? "eigen_mode" : "driven_frequency_point";
+  return {
+    run_id: "run-1",
+    stage_id: "stage-is-not-dataset",
+    dataset_id: "catalog:eigen-dispersion",
+    dataset_revision: "catalog-revision-7",
+    product_kind: productKind,
+    item_kinds: [itemKind],
+    axes: wavevectorCardinality === null
+      ? [{ axis_id: "frequency", role: "spectral", cardinality: 4 }]
+      : [{ axis_id: "wavevector", role: "wavevector", cardinality: wavevectorCardinality }],
+    capabilities: { fields: fieldsAvailable },
+  } as unknown as AnalysisResultDatasetManifestResource;
+}
+
+function publishedItem(
+  productKind: PublishedProductKind,
+): AnalysisResultSpectralItemSummary {
+  const itemKind = productKind === "modal_eigen" ? "eigen_mode" : "driven_frequency_point";
+  const fieldRef = {
+    field_id: fieldId,
+    field_revision: "field-revision-3",
+    resource_key: "analysis-result:field:canonical-3",
+    status: "ready",
+    quantity_id: "m",
+    representation: "vector3",
+    mesh_ref: {
+      mesh_id: "mesh-1",
+      mesh_revision: "mesh-revision-2",
+      topology_fingerprint: "mesh-topology-2",
+    },
+  };
+  return {
+    item_id: "mode-0000",
+    item_kind: itemKind,
+    branch_id: "branch-0001",
+    sample_id: "sample-0001",
+    frequency_hz: 1.20251e10,
+    source_revision: "item-source-revision-99",
+    field_ref,
+  } as unknown as AnalysisResultSpectralItemSummary;
+}
+
+function selectionFromPublishedItem(
+  manifest: AnalysisResultDatasetManifestResource,
+  item: AnalysisResultSpectralItemSummary,
+) {
+  const ref = resultDatasetItemSelection(manifest, {
+    branchId: item.branch_id ?? null,
+    coordinateRefs: [],
+    displayIndex: 0,
+    fieldId: item.field_ref?.field_id ?? null,
+    fieldRef: item.field_ref ?? null,
+    itemId: item.item_id,
+    itemKindCode: item.item_kind,
+    sampleId: item.sample_id,
+    sampleIndex: 0,
+  } as never);
+  return {
+    kind: ref.kind,
+    label: ref.itemId ?? ref.sampleId ?? ref.datasetId,
+    nodeId: ref.nodeId,
+    objectId: null,
+    ref,
+  };
+}
+
+function publishedPinFixture(
+  productKind: PublishedProductKind = "modal_eigen",
+  wavevectorCardinality: number | null = 2,
+) {
+  const manifest = publishedDataset(productKind, wavevectorCardinality);
+  const item = publishedItem(productKind);
+  const selection = selectionFromPublishedItem(manifest, item);
+  const dataset = vi.fn().mockResolvedValue(manifest);
+  const readItem = vi.fn().mockResolvedValue(item);
+  const list = vi.fn().mockResolvedValue({ definitions: [], scene_revision: 11 });
+  const create = vi.fn().mockResolvedValue({
+    definition: { label: "Mode 1" },
+    scene_revision: 12,
+  });
+  const invalidate = vi.fn();
+  let current = true;
+  const context = {
+    api: {
+      analysis: {
+        results: { dataset, item: readItem },
+        postprocessing: { definitions: { list, create } },
+      },
+    },
+    selection: { get: () => selection },
+    resources: { invalidate },
+    sessionScopeKey: "session=owner&epoch=captured&request_scope_epoch=request",
+    isCurrentSessionScope: () => current,
+  };
+  const command = pinCommand()!;
+  return {
+    context,
+    command,
+    create,
+    dataset,
+    expire: () => { current = false; },
+    invalidate,
+    item,
+    list,
+    manifest,
+    readItem,
+    selection,
+  };
+}
+
+describe("pins from the typed Results item producer", () => {
+  it.each([
+    ["dispersion eigenmode", "modal_eigen", 2, "analysis.dispersion", "analysis.dispersion.mode_visualization.v1"],
+    ["resonance eigenmode", "modal_eigen", null, "analysis.resonance", "analysis.resonance.mode_visualization.v1"],
+    ["dispersion driven response", "driven_response", 2, "analysis.dispersion", "analysis.dispersion.mode_visualization.v1"],
+    ["resonance driven response", "driven_response", null, "analysis.resonance", "analysis.resonance.mode_visualization.v1"],
+  ] as const)(
+    "uses the canonical manifest route for %s",
+    async (_name, productKind, wavevectorCardinality, moduleId, schema) => {
+      const fixture = publishedPinFixture(productKind, wavevectorCardinality);
+      const result = await fixture.command.run(fixture.context as never);
+
+      expect(result.status).toBe("completed");
+      expect(fixture.dataset).toHaveBeenNthCalledWith(
+        1,
+        "run-1",
+        "catalog:eigen-dispersion",
+        { sessionScopeKey: fixture.context.sessionScopeKey },
+      );
+      expect(fixture.dataset).toHaveBeenCalledTimes(2);
+      expect(fixture.readItem).toHaveBeenCalledExactlyOnceWith(
+        "run-1",
+        "catalog:eigen-dispersion",
+        "mode-0000",
+        { sessionScopeKey: fixture.context.sessionScopeKey },
+      );
+      const request = fixture.create.mock.calls[0]?.[0] as {
+        definition: {
+          module_id: string;
+          definition_schema: string;
+          data_ref: Record<string, unknown>;
+        };
+      };
+      expect(request.definition).toMatchObject({
+        module_id: moduleId,
+        definition_schema: schema,
+        data_ref: {
+          run_id: "run-1",
+          dataset_id: "catalog:eigen-dispersion",
+          dataset_revision: "catalog-revision-7",
+          field_id: fieldId,
+          sample_id: "sample-0001",
+          item_id: "mode-0000",
+        },
+      });
+      expect(request.definition.data_ref).not.toHaveProperty("stage_id");
+      expect(request.definition.data_ref).not.toHaveProperty("artifact_revision");
+      expect(request.definition.data_ref.dataset_id).not.toBe(fixture.manifest.stage_id);
+      expect(request.definition.data_ref.dataset_revision).not.toBe(fixture.item.source_revision);
+      expect(fixture.create).toHaveBeenCalledWith(
+        expect.objectContaining({ expected_scene_revision: 11 }),
+        { sessionScopeKey: fixture.context.sessionScopeKey },
+      );
+    },
+  );
+
+  it("fails closed when the item or its selected field owner differs", async () => {
+    const fixture = publishedPinFixture();
+    const item = fixture.item;
+    const mismatches = [
+      { ...item, item_id: "foreign-item" },
+      { ...item, sample_id: "foreign-sample" },
+      { ...item, branch_id: "foreign-branch" },
+      { ...item, item_kind: "driven_frequency_point" },
+      { ...item, field_ref: { ...item.field_ref!, field_id: "foreign-field" } },
+      { ...item, field_ref: { ...item.field_ref!, field_revision: "foreign-revision" } },
+      { ...item, field_ref: { ...item.field_ref!, resource_key: "foreign-owner" } },
+      { ...item, field_ref: { ...item.field_ref!, status: "pending" } },
+      { ...item, field_ref: null },
+    ];
+    for (const mismatch of mismatches) {
+      fixture.readItem.mockResolvedValueOnce(mismatch as AnalysisResultSpectralItemSummary);
+      const result = await fixture.command.run(fixture.context as never);
+      expect(result.status).toBe("failed");
+    }
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rejects a changed selected dataset revision before reading its item", async () => {
+    const fixture = publishedPinFixture();
+    fixture.dataset.mockResolvedValueOnce({
+      ...fixture.manifest,
+      dataset_revision: "foreign-revision",
+    });
+    const result = await fixture.command.run(fixture.context as never);
+
+    expect(result.status).toBe("failed");
+    expect(fixture.readItem).not.toHaveBeenCalled();
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the exact dataset manifest after the item and rejects a revision change", async () => {
+    const fixture = publishedPinFixture();
+    fixture.dataset
+      .mockResolvedValueOnce(fixture.manifest)
+      .mockResolvedValueOnce({ ...fixture.manifest, dataset_revision: "new-revision" });
+    const result = await fixture.command.run(fixture.context as never);
+
+    expect(result.status).toBe("failed");
+    expect(fixture.dataset).toHaveBeenCalledTimes(2);
+    expect(fixture.readItem).toHaveBeenCalledTimes(1);
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unavailable mode-visualization template without mutating definitions", async () => {
+    const fixture = publishedPinFixture();
+    fixture.dataset.mockResolvedValue({
+      ...fixture.manifest,
+      capabilities: { fields: false },
+    });
+    const result = await fixture.command.run(fixture.context as never);
+
+    expect(result.status).toBe("failed");
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates a typed pin by its complete canonical owner", async () => {
+    const fixture = publishedPinFixture();
+    fixture.list.mockResolvedValue({
+      definitions: [savedModeDefinition("catalog-revision-7")],
+      scene_revision: 11,
+    });
+
+    const result = await fixture.command.run(fixture.context as never);
+
+    expect(result.status).toBe("completed");
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("keeps an acknowledged pin completed when resource invalidation throws", async () => {
+    const fixture = publishedPinFixture();
+    const history = seededAuthoringHistory();
+    const generation = history.getGeneration();
+    fixture.invalidate.mockImplementation(() => {
+      throw new Error("resource invalidation failed");
+    });
+
+    const result = await fixture.command.run({
+      ...fixture.context,
+      authoringHistory: history,
+    } as never);
+
+    expect(result).toMatchObject({
+      message: "Pinned Mode 1. Refresh the results view to see it.",
+      status: "completed",
+    });
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+    expect(fixture.invalidate).toHaveBeenCalledTimes(1);
+    expect(history.getGeneration()).toBe(generation + 1);
+  });
+
+  it("keeps a rejected typed pin failed without clearing history or invalidating", async () => {
+    const fixture = publishedPinFixture();
+    const history = seededAuthoringHistory();
+    const generation = history.getGeneration();
+    fixture.create.mockRejectedValueOnce(new Error("pin write rejected"));
+
+    const result = await fixture.command.run({
+      ...fixture.context,
+      authoringHistory: history,
+    } as never);
+
+    expect(result).toMatchObject({
+      message: "Mode visualization pin failed: pin write rejected",
+      status: "failed",
+    });
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+    expect(history.getGeneration()).toBe(generation);
+    expect(history.canUndo()).toBe(true);
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("does not read or write into a new session when the item read is pending", async () => {
+    const fixture = publishedPinFixture();
+    const pendingItem = deferred<AnalysisResultSpectralItemSummary>();
+    fixture.readItem.mockReturnValueOnce(pendingItem.promise);
+    const result = fixture.command.run(fixture.context as never);
+    expect(fixture.readItem).toHaveBeenCalledTimes(1);
+    fixture.expire();
+    pendingItem.resolve(fixture.item);
+
+    expect((await result).status).toBe("cancelled");
+    expect(fixture.dataset).toHaveBeenCalledTimes(1);
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
   });
 });
 
@@ -556,7 +875,7 @@ describe.each(scopedCommands)("postprocessing mutation history invalidation: %s"
 
 it("does not clear authoring history for an already pinned mode", async () => {
   const history = seededAuthoringHistory();
-  const fixture = commandContext([savedModeDefinition("7")], vi.fn(), history);
+  const fixture = commandContext([savedModeDefinition("catalog-revision-7")], vi.fn(), history);
   const command = pinCommand();
   if (!command) throw new Error("Pin command is not registered");
   const result = await command.run(fixture.context);

@@ -1,4 +1,9 @@
-import type { PostprocessingDefinition } from "@/kernel/api/apiTypes";
+import type {
+  AnalysisResultDatasetManifestResource,
+  AnalysisResultSpectralItemSummary,
+  PostprocessingDefinition,
+} from "@/kernel/api/apiTypes";
+import type { AnalysisResultSelectionRef } from "@/shared/domain/analysis/results";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   isReferenceAxisUnit,
@@ -8,7 +13,13 @@ import {
 } from "@/shared/domain/analysis/referenceImport";
 
 import { ANALYSIS_FEATURE_MANIFESTS } from "./analysisModuleManifests";
-import type { AnalysisModuleId, AnalysisNodeKind } from "./analysisModuleContract";
+import { matchDataset, templateAvailability } from "./analysisDatasetMatching";
+import type {
+  AnalysisFeatureManifest,
+  AnalysisModuleId,
+  AnalysisNodeKind,
+  MatchableDataset,
+} from "./analysisModuleContract";
 import { analysisModuleIdForNodeKind } from "./analysisSurfaceRouting";
 
 /**
@@ -174,6 +185,254 @@ export function modeVisualizationDefinitionFromSelection(
       definition_schema: schema,
       node_kind: nodeKind,
       label: `${selection.label ?? "Mode"}${frequency}`,
+      data_ref: dataRef,
+      settings: { placement: "beside" },
+    },
+  };
+}
+
+export type PublishedModeVisualizationSelectionRef = AnalysisResultSelectionRef & {
+  itemKind: "eigen_mode" | "driven_frequency_point";
+  itemId: string;
+  sampleId: string;
+  fieldId: string;
+  fieldRevision: string;
+  fieldRef: NonNullable<AnalysisResultSelectionRef["fieldRef"]> & {
+    field_id: string;
+    field_revision: string;
+    resource_key: string;
+    status: "ready";
+  };
+};
+
+export type ModeVisualizationAnalysisResultSelectionResult =
+  | { ok: true; selection: PublishedModeVisualizationSelectionRef }
+  | { ok: false; reason: string };
+
+function nonEmptyPublishedIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Minimum typed item selection accepted by the async published-resource path. */
+export function modeVisualizationAnalysisResultSelection(
+  selection: Pick<Selection, "kind" | "label" | "ref"> | null,
+): ModeVisualizationAnalysisResultSelectionResult {
+  const ref = selection?.ref;
+  if (
+    selection?.kind !== "analysis.result" ||
+    ref?.type !== "analysis-result" ||
+    ref.kind !== "analysis.result" ||
+    (ref.focus !== "item" && ref.focus !== "field")
+  ) {
+    return { ok: false, reason: "Select a published mode or response field in the Results tree." };
+  }
+  const itemId = ref.itemId;
+  const sampleId = ref.sampleId;
+  const fieldId = ref.fieldId;
+  const fieldRevision = ref.fieldRevision;
+  const itemKind = ref.itemKind;
+  if (
+    !nonEmptyPublishedIdentity(ref.runId) ||
+    !nonEmptyPublishedIdentity(ref.stageId) ||
+    !nonEmptyPublishedIdentity(ref.datasetId) ||
+    !nonEmptyPublishedIdentity(ref.datasetRevision) ||
+    !nonEmptyPublishedIdentity(itemId) ||
+    !nonEmptyPublishedIdentity(sampleId) ||
+    !nonEmptyPublishedIdentity(fieldId) ||
+    !nonEmptyPublishedIdentity(fieldRevision) ||
+    (itemKind !== "eigen_mode" && itemKind !== "driven_frequency_point")
+  ) {
+    return { ok: false, reason: "The selected result lacks a complete published item and field identity." };
+  }
+  const fieldRef = ref.fieldRef;
+  if (!fieldRef || fieldRef.status !== "ready") {
+    return { ok: false, reason: "The selected result field is not ready for visualization." };
+  }
+  const resourceKey = fieldRef.resource_key;
+  if (
+    fieldRef.field_id !== fieldId ||
+    fieldRef.field_revision !== fieldRevision ||
+    !nonEmptyPublishedIdentity(resourceKey)
+  ) {
+    return { ok: false, reason: "The selected result field identity is incomplete or inconsistent." };
+  }
+  return {
+    ok: true,
+    selection: {
+      ...ref,
+      itemKind,
+      itemId,
+      sampleId,
+      fieldId,
+      fieldRevision,
+      fieldRef: {
+        ...fieldRef,
+        field_id: fieldId,
+        field_revision: fieldRevision,
+        resource_key: resourceKey,
+        status: "ready",
+      },
+    },
+  };
+}
+
+function matchableDataset(
+  manifest: AnalysisResultDatasetManifestResource,
+): MatchableDataset {
+  return {
+    dataset_id: manifest.dataset_id,
+    product_kind: manifest.product_kind,
+    item_kinds: manifest.item_kinds,
+    axes: manifest.axes.map((axis) => ({
+      cardinality: axis.cardinality,
+      role: axis.role,
+    })),
+    capabilities: manifest.capabilities,
+  };
+}
+
+interface ModeVisualizationTarget {
+  manifest: AnalysisFeatureManifest;
+  nodeKind: AnalysisNodeKind;
+  schema: string;
+}
+
+function modeVisualizationTarget(
+  manifest: AnalysisResultDatasetManifestResource,
+  candidates: readonly AnalysisFeatureManifest[],
+): { ok: true; target: ModeVisualizationTarget } | { ok: false; reason: string } {
+  const dataset = matchableDataset(manifest);
+  const available: ModeVisualizationTarget[] = [];
+  for (const feature of candidates) {
+    const nodeKind = (feature.id + ".mode_visualization") as AnalysisNodeKind;
+    const schema = feature.definitionSchemas[nodeKind];
+    const templates = feature.nodeTemplates.filter((template) => template.kind === nodeKind);
+    const template = templates[0];
+    const availability = templateAvailability(feature, dataset).filter(
+      (entry) => entry.template.kind === nodeKind,
+    );
+    if (
+      !matchDataset(feature, dataset).matched ||
+      typeof schema !== "string" ||
+      schema.trim().length === 0 ||
+      templates.length !== 1 ||
+      !template ||
+      template.role !== "field-visualization" ||
+      template.instantiation !== "user" ||
+      availability.length !== 1 ||
+      availability[0]?.available !== true
+    ) {
+      continue;
+    }
+    available.push({ manifest: feature, nodeKind, schema });
+  }
+  if (available.length === 0) {
+    return {
+      ok: false,
+      reason: "The selected dataset has no available analysis module mode-visualization template.",
+    };
+  }
+  if (available.length !== 1) {
+    return {
+      ok: false,
+      reason: "The selected dataset matches multiple available mode-visualization modules.",
+    };
+  }
+  const target = available[0];
+  if (!target) {
+    return {
+      ok: false,
+      reason: "The selected dataset has no available analysis module mode-visualization template.",
+    };
+  }
+  return { ok: true, target };
+}
+
+function samePublishedFieldOwner(
+  left: AnalysisResultSelectionRef["fieldRef"],
+  right: AnalysisResultSpectralItemSummary["field_ref"],
+): boolean {
+  if (!left || !right) return false;
+  return (
+    left.field_id === right.field_id &&
+    left.field_revision === right.field_revision &&
+    left.resource_key === right.resource_key &&
+    left.status === right.status &&
+    left.quantity_id === right.quantity_id &&
+    left.representation === right.representation &&
+    left.mesh_ref?.mesh_id === right.mesh_ref?.mesh_id &&
+    left.mesh_ref?.mesh_revision === right.mesh_ref?.mesh_revision &&
+    left.mesh_ref?.topology_fingerprint === right.mesh_ref?.topology_fingerprint
+  );
+}
+
+/**
+ * Builds a pin only after the caller has read the canonical dataset manifest
+ * and item resources. Item source_revision is intentionally not treated as
+ * dataset_revision; the latter is copied solely from the exact manifest.
+ */
+export function modeVisualizationDefinitionFromAnalysisResult(
+  selection: Pick<Selection, "kind" | "label" | "ref"> | null,
+  manifest: AnalysisResultDatasetManifestResource,
+  item: AnalysisResultSpectralItemSummary,
+  candidates: readonly AnalysisFeatureManifest[] = ANALYSIS_FEATURE_MANIFESTS,
+): ModeVisualizationDefinitionResult {
+  const selected = modeVisualizationAnalysisResultSelection(selection);
+  if (!selected.ok) return selected;
+  const ref = selected.selection;
+  if (
+    manifest.run_id !== ref.runId ||
+    manifest.stage_id !== ref.stageId ||
+    manifest.dataset_id !== ref.datasetId ||
+    manifest.dataset_revision !== ref.datasetRevision
+  ) {
+    return { ok: false, reason: "The published dataset manifest no longer matches the selected result." };
+  }
+  const itemKind = ref.itemKind;
+  const expectedItemKind =
+    (manifest.product_kind === "modal_eigen" && itemKind === "eigen_mode") ||
+    (manifest.product_kind === "driven_response" && itemKind === "driven_frequency_point");
+  if (!itemKind || !expectedItemKind || !manifest.item_kinds.includes(itemKind)) {
+    return { ok: false, reason: "The selected item kind does not match the published dataset product." };
+  }
+  const itemFieldRef = item.field_ref;
+  if (
+    item.item_id !== ref.itemId ||
+    item.item_kind !== itemKind ||
+    item.sample_id !== ref.sampleId ||
+    (ref.branchId !== undefined && item.branch_id !== ref.branchId) ||
+    !itemFieldRef ||
+    itemFieldRef.status !== "ready" ||
+    itemFieldRef.field_id !== ref.fieldId ||
+    itemFieldRef.field_revision !== ref.fieldRevision ||
+    !samePublishedFieldOwner(ref.fieldRef, itemFieldRef)
+  ) {
+    return { ok: false, reason: "The published item or field identity does not match the selection." };
+  }
+  const target = modeVisualizationTarget(manifest, candidates);
+  if (!target.ok) return target;
+  const dataRef: ModeVisualizationDataRef = {
+    run_id: manifest.run_id,
+    dataset_id: manifest.dataset_id,
+    dataset_revision: manifest.dataset_revision,
+    field_id: itemFieldRef.field_id,
+    sample_id: item.sample_id,
+    item_id: item.item_id,
+  };
+  const frequency =
+    typeof item.frequency_hz === "number" && Number.isFinite(item.frequency_hz)
+      ? " · " + (item.frequency_hz / 1e9).toFixed(4) + " GHz"
+      : "";
+  return {
+    ok: true,
+    definition: {
+      definition_id: pinnedModeVisualizationId(target.manifest.id, dataRef),
+      revision: 0,
+      module_id: target.manifest.id,
+      module_version: target.manifest.version,
+      definition_schema: target.schema,
+      node_kind: target.nodeKind,
+      label: selection?.label?.trim() || item.item_id + frequency,
       data_ref: dataRef,
       settings: { placement: "beside" },
     },

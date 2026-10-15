@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type {
+  AnalysisResultDatasetManifestResource,
+  AnalysisResultSpectralItemSummary,
+} from "@/kernel/api/apiTypes";
+import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 import { MAX_REFERENCE_POINTS } from "@/shared/domain/analysis/referenceImport";
+
+import { DISPERSION_ANALYSIS_MANIFEST } from "./analysisModuleManifests";
 
 import type { ImportedReferenceInput } from "./postprocessingDefinitions";
 import {
@@ -8,6 +15,7 @@ import {
   importedReferenceDefinition,
   importedReferencePoints,
   modeVisualizationOwnerMatch,
+  modeVisualizationDefinitionFromAnalysisResult,
   modeVisualizationDefinitionFromSelection,
   pinnedModeVisualizationId,
   sameModeVisualizationOwner,
@@ -31,6 +39,61 @@ function modeSelection(kind: string, overrides: Record<string, unknown> = {}) {
       ...overrides,
     },
   };
+}
+
+function typedDatasetManifest(
+  fieldsAvailable = true,
+): AnalysisResultDatasetManifestResource {
+  return {
+    run_id: "run-1",
+    stage_id: "stage-is-not-dataset",
+    dataset_id: "catalog:eigen-dispersion",
+    dataset_revision: "catalog-revision-7",
+    product_kind: "modal_eigen",
+    item_kinds: ["eigen_mode"],
+    axes: [{ axis_id: "wavevector", role: "wavevector", cardinality: 3 }],
+    capabilities: { fields: fieldsAvailable },
+  } as unknown as AnalysisResultDatasetManifestResource;
+}
+
+function typedItem(): AnalysisResultSpectralItemSummary {
+  return {
+    item_id: "mode-0000",
+    item_kind: "eigen_mode",
+    sample_id: "sample-0001",
+    frequency_hz: 1.20251e10,
+    source_revision: "item-source-revision-99",
+    field_ref: {
+      field_id: "analysis:eigen:sample-0001:mode-0000",
+      field_revision: "field-revision-3",
+      resource_key: "analysis-result:field:canonical-3",
+      status: "ready",
+      quantity_id: "m",
+      representation: "vector3",
+      mesh_ref: {
+        mesh_id: "mesh-1",
+        mesh_revision: "mesh-revision-2",
+        topology_fingerprint: "mesh-topology-2",
+      },
+    },
+  } as unknown as AnalysisResultSpectralItemSummary;
+}
+
+function typedSelection(manifest: AnalysisResultDatasetManifestResource, item: AnalysisResultSpectralItemSummary) {
+  const ref = analysisResultSelectionRef({
+    datasetId: manifest.dataset_id,
+    datasetRevision: manifest.dataset_revision,
+    fieldId: item.field_ref?.field_id,
+    fieldRef: item.field_ref ?? undefined,
+    fieldRevision: item.field_ref?.field_revision,
+    focus: "item",
+    itemId: item.item_id,
+    itemKind: item.item_kind,
+    runId: manifest.run_id,
+    sampleId: item.sample_id,
+    stageId: manifest.stage_id,
+  });
+  return { kind: ref.kind, label: "Mode 1", ref };
 }
 
 describe("pinned mode visualization definitions", () => {
@@ -196,6 +259,106 @@ describe("pinned mode visualization definitions", () => {
       modeSelection("results.resonance.modal.mode") as never,
     );
     expect(result.ok && result.definition.node_kind).toBe("analysis.resonance.mode_visualization");
+  });
+
+  it("builds a typed pin from the real published manifest, item, and field owner", () => {
+    const manifest = typedDatasetManifest();
+    const item = typedItem();
+    const result = modeVisualizationDefinitionFromAnalysisResult(
+      typedSelection(manifest, item) as never,
+      manifest,
+      item,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition).toMatchObject({
+      module_id: "analysis.dispersion",
+      definition_schema: "analysis.dispersion.mode_visualization.v1",
+      node_kind: "analysis.dispersion.mode_visualization",
+      data_ref: {
+        run_id: "run-1",
+        dataset_id: "catalog:eigen-dispersion",
+        dataset_revision: "catalog-revision-7",
+        field_id: "analysis:eigen:sample-0001:mode-0000",
+        sample_id: "sample-0001",
+        item_id: "mode-0000",
+      },
+    });
+    expect(result.definition.data_ref).not.toHaveProperty("stage_id");
+    expect(result.definition.data_ref).not.toHaveProperty("artifact_revision");
+    expect(result.definition.data_ref.dataset_id).not.toBe(manifest.stage_id);
+    expect(result.definition.data_ref.dataset_revision).not.toBe(item.source_revision);
+  });
+
+  it("rejects ambiguous matching modules and unavailable mode templates", () => {
+    const manifest = typedDatasetManifest();
+    const item = typedItem();
+    const selection = typedSelection(manifest, item) as never;
+    const ambiguous = modeVisualizationDefinitionFromAnalysisResult(
+      selection,
+      manifest,
+      item,
+      [DISPERSION_ANALYSIS_MANIFEST, DISPERSION_ANALYSIS_MANIFEST],
+    );
+    const unavailableManifest = {
+      ...DISPERSION_ANALYSIS_MANIFEST,
+      nodeTemplates: DISPERSION_ANALYSIS_MANIFEST.nodeTemplates.map((template) =>
+        template.kind === "analysis.dispersion.mode_visualization"
+          ? {
+              ...template,
+              availableWhen: {
+                productKinds: ["modal_eigen"] as const,
+                absentAxes: ["wavevector"],
+              },
+            }
+          : template,
+      ),
+    };
+    const unavailable = modeVisualizationDefinitionFromAnalysisResult(
+      selection,
+      manifest,
+      item,
+      [unavailableManifest],
+    );
+
+    expect(ambiguous).toMatchObject({
+      ok: false,
+      reason: "The selected dataset matches multiple available mode-visualization modules.",
+    });
+    expect(unavailable).toMatchObject({
+      ok: false,
+      reason: "The selected dataset has no available analysis module mode-visualization template.",
+    });
+  });
+
+  it("requires a user-instantiated field-visualization template", () => {
+    const manifest = typedDatasetManifest();
+    const item = typedItem();
+    const selection = typedSelection(manifest, item) as never;
+    const invalidTemplates = [
+      { instantiation: "auto", role: "field-visualization" },
+      { instantiation: "user", role: "plot-feature" },
+    ] as const;
+
+    for (const invalid of invalidTemplates) {
+      const candidate = {
+        ...DISPERSION_ANALYSIS_MANIFEST,
+        nodeTemplates: DISPERSION_ANALYSIS_MANIFEST.nodeTemplates.map((template) =>
+          template.kind === "analysis.dispersion.mode_visualization"
+            ? { ...template, ...invalid }
+            : template,
+        ),
+      };
+      const result = modeVisualizationDefinitionFromAnalysisResult(
+        selection,
+        manifest,
+        item,
+        [candidate],
+      );
+
+      expect(result).toMatchObject({ ok: false });
+    }
   });
 
   it("refuses selections without a field or a published identity", () => {
