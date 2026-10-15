@@ -1357,6 +1357,40 @@ def _validate_case_artifacts(case_dir: Path, case: str) -> dict[str, Any]:
             "size": artifact.stat().st_size,
             "sha256": _sha256_file(artifact),
         }
+    optional_spectrum_v3 = case_dir / "eigen/spectrum.v3.json"
+    if optional_spectrum_v3.exists() or _is_reparse(optional_spectrum_v3):
+        label = f"benchmark case artifact {case}/eigen/spectrum.v3.json"
+        _regular_file(optional_spectrum_v3, label)
+        before = optional_spectrum_v3.stat()
+        if before.st_size == 0:
+            raise BenchmarkError(
+                f"benchmark case artifact is empty: {case}/eigen/spectrum.v3.json"
+            )
+        spectrum_v3_sha256 = _sha256_file(optional_spectrum_v3)
+        _regular_file(optional_spectrum_v3, label)
+        after = optional_spectrum_v3.stat()
+        before_signature = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        after_signature = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if before_signature != after_signature:
+            raise BenchmarkError(
+                f"benchmark case artifact changed while hashing: {case}/eigen/spectrum.v3.json"
+            )
+        required_hashes["eigen/spectrum.v3.json"] = {
+            "size": before.st_size,
+            "sha256": spectrum_v3_sha256,
+        }
     spectrum = _json_file(case_dir / "eigen/spectrum.v2.json", f"{case} spectrum")
     branches = _json_file(case_dir / "eigen/branches.v2.json", f"{case} branches")
     _json_file(

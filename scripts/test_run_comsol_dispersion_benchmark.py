@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 import ntpath
 from pathlib import Path
@@ -300,8 +301,89 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                     (mode.parent / "physical_potential.v1.json").write_text("{}", encoding="utf-8")
                 result = benchmark._validate_case_artifacts(case_dir, case)
                 self.assertEqual(result["dispersion_rows"], 1)
+                if case == "c0":
+                    self.assertNotIn(
+                        "eigen/spectrum.v3.json",
+                        result["required_artifact_hashes"],
+                    )
             with self.assertRaises(benchmark.BenchmarkError):
                 benchmark._validate_case_artifacts(root / "c0", "c1")
+
+    def _write_valid_c0_case(self, case_dir: Path) -> None:
+        case_dir.mkdir(parents=True)
+        for relative in benchmark.REQUIRED_CASE_ARTIFACTS:
+            path = case_dir / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if relative == "eigen/spectrum.v2.json":
+                path.write_text(json.dumps({"schema_version": "eigen_spectrum.v2"}), encoding="utf-8")
+            elif relative == "eigen/branches.v2.json":
+                path.write_text(json.dumps({"schema_version": "eigen_branches.v2"}), encoding="utf-8")
+            elif relative == "eigen/dispersion.csv":
+                path.write_text("kx_rad_per_m,ky_rad_per_m,frequency_hz\n0,0,1\n", encoding="utf-8")
+            else:
+                path.write_text("{}", encoding="utf-8")
+        mode = case_dir / "eigen/mode_fields/sample_0000/mode_0000/vector.bin"
+        mode.parent.mkdir(parents=True, exist_ok=True)
+        mode.write_bytes(b"mode")
+
+    def test_optional_spectrum_v3_is_raw_hash_bound_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory) / "c0"
+            self._write_valid_c0_case(case_dir)
+            legacy = benchmark._validate_case_artifacts(case_dir, "c0")
+            self.assertNotIn(
+                "eigen/spectrum.v3.json",
+                legacy["required_artifact_hashes"],
+            )
+
+            payload = b'{"schema_version":"eigen_spectrum.v3"}\n'
+            spectrum_v3 = case_dir / "eigen/spectrum.v3.json"
+            spectrum_v3.write_bytes(payload)
+            result = benchmark._validate_case_artifacts(case_dir, "c0")
+            self.assertNotIn("eigen/spectrum.v3.json", result["required_artifacts"])
+            self.assertEqual(
+                result["required_artifact_hashes"]["eigen/spectrum.v3.json"],
+                {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()},
+            )
+
+    def test_optional_spectrum_v3_rejects_invalid_or_changing_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for invalid_kind in ("directory", "reparse", "empty"):
+                with self.subTest(invalid_kind=invalid_kind):
+                    case_dir = root / invalid_kind
+                    self._write_valid_c0_case(case_dir)
+                    spectrum_v3 = case_dir / "eigen/spectrum.v3.json"
+                    if invalid_kind == "directory":
+                        spectrum_v3.mkdir()
+                    elif invalid_kind == "empty":
+                        spectrum_v3.write_bytes(b"")
+                    else:
+                        spectrum_v3.write_bytes(b"valid")
+                    if invalid_kind == "reparse":
+                        is_reparse = lambda path: Path(path) == spectrum_v3
+                        with patch.object(benchmark, "_is_reparse", side_effect=is_reparse):
+                            with self.assertRaises(benchmark.BenchmarkError):
+                                benchmark._validate_case_artifacts(case_dir, "c0")
+                    else:
+                        with self.assertRaises(benchmark.BenchmarkError):
+                            benchmark._validate_case_artifacts(case_dir, "c0")
+
+            case_dir = root / "changing"
+            self._write_valid_c0_case(case_dir)
+            spectrum_v3 = case_dir / "eigen/spectrum.v3.json"
+            spectrum_v3.write_bytes(b"before hash")
+            real_sha256_file = benchmark._sha256_file
+
+            def mutate_after_hash(path: Path) -> str:
+                digest = real_sha256_file(path)
+                if path == spectrum_v3:
+                    path.write_bytes(b"changed while hashing")
+                return digest
+
+            with patch.object(benchmark, "_sha256_file", side_effect=mutate_after_hash):
+                with self.assertRaisesRegex(benchmark.BenchmarkError, "changed while hashing"):
+                    benchmark._validate_case_artifacts(case_dir, "c0")
 
     def test_external_scientific_evidence_is_staged_and_hash_bound(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -665,6 +747,9 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             root = Path(directory)
             context = self.fake_context(root)
             output_dir = root / "output"
+            model = context.source_tree / "tests/standard_problems/mumag/comsol_nonzero_k_dispersion/problem.py"
+            model.parent.mkdir(parents=True)
+            model.write_text("# scientific gate receipt fixture\n", encoding="utf-8")
             failed_gate = {
                 "schema_version": benchmark.SCIENTIFIC_GATE_SCHEMA,
                 "status": "not_qualified",
@@ -676,6 +761,10 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                 "run",
                 return_value=SimpleNamespace(returncode=0),
             ), patch.object(
+                benchmark,
+                "resolve_runtime_artifact_root",
+                return_value=(output_dir / "c0", {"status": "fixture_bound"}),
+            ) as resolve_output, patch.object(
                 benchmark,
                 "_validate_case_artifacts",
                 side_effect=lambda case_dir, case: {"case": case},
@@ -704,6 +793,9 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                     ["docker", "compose"],
                     timeout_seconds=30.0,
                 )
+            resolve_output.assert_called_once_with(
+                output_dir, "c0", hashlib.sha256(model.read_bytes()).hexdigest()
+            )
             self.assertEqual(result_code, 0)
             result = json.loads((output_dir / "run-result.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], "completed_unqualified")
