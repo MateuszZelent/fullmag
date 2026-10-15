@@ -170,17 +170,21 @@ describe("RealtimeInvalidationBridge", () => {
         sessionEpoch: `epoch-${reason}`,
         sessionId: `session-${reason}`,
       };
+      const currentSessionKey = sessionScopedResourceKey(
+        sessionIdentity,
+        SESSION_CURRENT_PATH,
+      );
       const catalogKey = analysisResultDatasetCatalogKey(
         sessionIdentity,
         `run-${reason}`,
         "::complete-catalog",
       );
-      resources.subscribe(SESSION_CURRENT_PATH, () => {});
+      resources.subscribe(currentSessionKey, () => {});
       resources.subscribe(catalogKey, () => {});
 
       bridge.handleScopeMismatch(reason);
 
-      expect(resources.getRevision(SESSION_CURRENT_PATH)).toEqual(
+      expect(resources.getRevision(currentSessionKey)).toEqual(
         expect.stringMatching(new RegExp(`^realtime:scope-mismatch:${reason}:`)),
       );
       expect(resources.getRevision(catalogKey)).toEqual(

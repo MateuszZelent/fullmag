@@ -183,6 +183,11 @@ describe("RealtimeClient", () => {
       session_id: "session-b",
       type: "hello",
     }));
+    const revisionAfterCurrentHello = resources.getRevision(catalogKey);
+    expect(revisionAfterCurrentHello).toEqual(
+      expect.stringMatching(/^session:session-b:\d+$/),
+    );
+
     socket.emit("message", JSON.stringify({
       payload: { changes: [] },
       session_id: "session-a",
@@ -193,7 +198,7 @@ describe("RealtimeClient", () => {
     expect(onScopeMismatch).toHaveBeenCalledTimes(1);
     expect(onScopeMismatch).toHaveBeenCalledWith("foreign_session");
     expect(socket.close).toHaveBeenCalledTimes(1);
-    expect(resources.getRevision(catalogKey)).toBeNull();
+    expect(resources.getRevision(catalogKey)).toBe(revisionAfterCurrentHello);
   });
 
   it("closes a mismatched socket even if its scope callback throws", () => {
