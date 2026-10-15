@@ -112,7 +112,7 @@ Under a stationary external field and zero direct current torque ($\boldsymbol{\
 | $\mathbf{M}$ | Dimensional magnetization vector | $\mathrm{A\,m^{-1}}$ | $\mathbf{M} = M_s \mathbf{m}$ |
 | $M_s$ | Saturation magnetization | $\mathrm{A\,m^{-1}}$ | Region-owned material property |
 | $\mathbf{H}_{\mathrm{eff}}$ | Total effective magnetic field | $\mathrm{A\,m^{-1}}$ | Sum of active interaction fields |
-| $\gamma_0$ | Reduced gyromagnetic ratio (`gamma`) | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Default $2.211\times 10^{5}\,\mathrm{m\,A^{-1}\,s^{-1}} \approx \mu_0 |\gamma_e|$ |
+| $\gamma_0$ | Reduced gyromagnetic ratio (`gamma`) | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Default $2.211\times 10^{5}\,\mathrm{m\,A^{-1}\,s^{-1}} \approx \mu_0 \lvert\gamma_e\rvert$ |
 | $\alpha$ | Gilbert damping parameter | $1$ | Non-negative material scalar or spatial field |
 | $s_{\mathrm{prec}}$ | Precession factor | $1$ | $1$ in physical time evolution; $0$ in pure-damping relaxation |
 | $\boldsymbol{\tau}_{\mathrm{direct}}$ | Direct current-induced spin-torque rate | $\mathrm{s^{-1}}$ | Optional Slonczewski, Zhang–Li, and SOT contributions |

@@ -64,8 +64,8 @@ The following rows are the exhaustive public-signature contract for this page; e
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `point` | `Sequence[int | float]` | `required` | $\mathrm{m}$ | every component is converted with `float()`; the resulting list must have length three; no finite check | nearest-query point | FEM CPU/GPU capability-gated | `mesh.selectors[].point` |
-| `geometry` | `str | None` | `None` | $1$ | supplied value is coerced with `str(value).strip()` and rejected if empty | restrict candidate component | FEM CPU/GPU capability-gated | `mesh.selectors[].geometry` |
+| `point` | `Sequence[int \| float]` | `required` | $\mathrm{m}$ | every component is converted with `float()`; the resulting list must have length three; no finite check | nearest-query point | FEM CPU/GPU capability-gated | `mesh.selectors[].point` |
+| `geometry` | `str \| None` | `None` | $1$ | supplied value is coerced with `str(value).strip()` and rejected if empty | restrict candidate component | FEM CPU/GPU capability-gated | `mesh.selectors[].geometry` |
 | `count` | `int` | `1` | $1$ | supplied value is coerced with `int(value)`, then rejected below `1` | number passed to closest-entity query | FEM CPU/GPU capability-gated | `mesh.selectors[].count` |
 
 ```python

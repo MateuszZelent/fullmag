@@ -5,6 +5,7 @@ import json
 import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import numpy as np
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages/fullmag-py/src"))
@@ -17,6 +18,8 @@ from fullmag.meshing._gmsh_swept import (
 
 # Public DE fixture: 10 nm film and 2 um authored air padding per side.
 _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M = 5e-9 + 2e-6
+_PUBLIC_DE_FILM_HALF_THICKNESS_M = 5e-9
+_PUBLIC_BOX_PLANE_ATOL_M = 1e-16
 
 
 def _realize_public_de_smoke_box(
@@ -69,27 +72,311 @@ def _realize_public_de_smoke_box(
         fm.reset()
 
 
+def _assert_values_on_planes(values, planes, *, description):
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    planes = np.sort(np.asarray(planes, dtype=np.float64).reshape(-1))
+    assert planes.size > 0, f"{description}: no reference planes were supplied"
+
+    right = np.searchsorted(planes, values, side="left")
+    left_indices = np.clip(right - 1, 0, planes.size - 1)
+    right_indices = np.clip(right, 0, planes.size - 1)
+    left_distance = np.abs(values - planes[left_indices])
+    right_distance = np.abs(values - planes[right_indices])
+    nearest = np.where(left_distance <= right_distance,
+                       planes[left_indices], planes[right_indices])
+    np.testing.assert_allclose(
+        nearest,
+        values,
+        atol=_PUBLIC_BOX_PLANE_ATOL_M,
+        rtol=0,
+        err_msg=description,
+    )
+
+
+def _assert_tetrahedra_do_not_cross_cad_planes(tetrahedron_z, planes, *, domain_name):
+    tetrahedron_z = np.asarray(tetrahedron_z, dtype=np.float64)
+    planes = np.sort(np.asarray(planes, dtype=np.float64).reshape(-1))
+    assert tetrahedron_z.ndim == 2 and tetrahedron_z.shape[1] == 4
+    assert planes.size > 0
+
+    lower_z = np.min(tetrahedron_z, axis=1)
+    upper_z = np.max(tetrahedron_z, axis=1)
+    next_plane_indices = np.searchsorted(
+        planes,
+        lower_z + _PUBLIC_BOX_PLANE_ATOL_M,
+        side="right",
+    )
+    has_candidate = next_plane_indices < planes.size
+    candidate_indices = np.minimum(next_plane_indices, planes.size - 1)
+    crosses_plane = has_candidate & (
+        planes[candidate_indices] < upper_z - _PUBLIC_BOX_PLANE_ATOL_M
+    )
+    if np.any(crosses_plane):
+        cell_index = int(np.flatnonzero(crosses_plane)[0])
+        plane = float(planes[candidate_indices[cell_index]])
+        raise AssertionError(
+            f"{domain_name} tetrahedron {cell_index} crosses CAD partition "
+            f"plane z={plane:.17g} m"
+        )
+
+
+def _partition_indices(centroids, planes, *, domain_name):
+    indices = np.searchsorted(planes, centroids, side="right") - 1
+    if np.any(indices < 0) or np.any(indices >= planes.size - 1):
+        raise AssertionError(f"{domain_name} tetrahedron centroid falls outside CAD bounds")
+    return indices
+
+
 def _assert_public_box_planes(mesh, *, layers, expected, maximum_air_step):
     nodes = np.asarray(mesh.nodes)
     cells = np.asarray(mesh.elements)
     markers = np.asarray(mesh.element_markers)
+    partition_planes = np.asarray(expected, dtype=np.float64)
     actual = np.unique(np.round(nodes[:, 2], decimals=17))
-    np.testing.assert_allclose(actual, expected, atol=1e-16, rtol=0)
+    _assert_values_on_planes(
+        partition_planes,
+        actual,
+        description="a requested CAD partition plane is missing from mesh nodes",
+    )
     assert actual[0] == pytest.approx(-_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, abs=1e-16)
     assert actual[-1] == pytest.approx(_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, abs=1e-16)
     assert np.all(np.diff(actual) > 0)
 
+    film_half_thickness = _PUBLIC_DE_FILM_HALF_THICKNESS_M
+    film_planes = partition_planes[
+        (partition_planes >= -film_half_thickness - _PUBLIC_BOX_PLANE_ATOL_M)
+        & (partition_planes <= film_half_thickness + _PUBLIC_BOX_PLANE_ATOL_M)
+    ]
+    expected_film_planes = np.linspace(
+        -film_half_thickness,
+        film_half_thickness,
+        layers + 1,
+        dtype=np.float64,
+    )
+    np.testing.assert_allclose(
+        film_planes,
+        expected_film_planes,
+        atol=_PUBLIC_BOX_PLANE_ATOL_M,
+        rtol=0,
+        err_msg="the requested CAD plan must contain exactly the film's L+1 planes",
+    )
+
     body = cells[markers == 1]
     body_z = nodes[body, 2]
+    _assert_values_on_planes(
+        body_z.reshape(-1),
+        film_planes,
+        description="magnetic nodes have a z level outside the requested film planes",
+    )
+    _assert_values_on_planes(
+        film_planes,
+        body_z.reshape(-1),
+        description="a requested film plane has no magnetic node",
+    )
     assert len(np.unique(np.round(body_z.reshape(-1), 17))) == layers + 1
     assert np.max(np.ptp(body_z, axis=1)) <= 10e-9 / layers + 1e-15
 
     xyz = nodes[cells]
     volumes = np.linalg.det(xyz[:, 1:] - xyz[:, :1]) / 6
     assert np.all(volumes > 0)
-    air = markers == 0
-    air_z_spans = np.ptp(xyz[air, :, 2], axis=1)
+
+    body_tetrahedron_z = xyz[markers == 1, :, 2]
+    air_tetrahedron_z = xyz[markers == 0, :, 2]
+    _assert_tetrahedra_do_not_cross_cad_planes(
+        body_tetrahedron_z,
+        partition_planes,
+        domain_name="magnetic",
+    )
+    _assert_tetrahedra_do_not_cross_cad_planes(
+        air_tetrahedron_z,
+        partition_planes,
+        domain_name="air",
+    )
+
+    body_centroids = np.mean(body_tetrahedron_z, axis=1)
+    body_interval_indices = _partition_indices(
+        body_centroids,
+        film_planes,
+        domain_name="magnetic",
+    )
+    body_interval_counts = np.bincount(body_interval_indices, minlength=layers)
+    assert np.all(body_interval_counts > 0), "every magnetic CAD layer must contain a tetrahedron"
+
+    air_z_spans = np.ptp(air_tetrahedron_z, axis=1)
     assert np.max(air_z_spans) <= maximum_air_step * (1 + 1e-12)
+
+    air_centroids = np.mean(air_tetrahedron_z, axis=1)
+    air_interval_indices = _partition_indices(
+        air_centroids,
+        partition_planes,
+        domain_name="air",
+    )
+    air_interval_counts = np.bincount(
+        air_interval_indices,
+        minlength=partition_planes.size - 1,
+    )
+    external_air_intervals = (
+        (partition_planes[1:] <= film_planes[0] + _PUBLIC_BOX_PLANE_ATOL_M)
+        | (partition_planes[:-1] >= film_planes[-1] - _PUBLIC_BOX_PLANE_ATOL_M)
+    )
+    missing_air_intervals = np.flatnonzero(
+        external_air_intervals & (air_interval_counts == 0)
+    )
+    assert missing_air_intervals.size == 0, (
+        "every exterior air partition must contain an air tetrahedron; "
+        f"missing intervals={missing_air_intervals.tolist()}"
+    )
+    air_node_ids = np.unique(cells[markers == 0].reshape(-1))
+    exterior_air_planes = partition_planes[
+        (partition_planes <= film_planes[0] + _PUBLIC_BOX_PLANE_ATOL_M)
+        | (partition_planes >= film_planes[-1] - _PUBLIC_BOX_PLANE_ATOL_M)
+    ]
+    _assert_values_on_planes(
+        exterior_air_planes,
+        nodes[air_node_ids, 2],
+        description="an exterior CAD partition plane has no incident air node",
+    )
+
+
+def _synthetic_partitioned_box_mesh():
+    zmin = -_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M
+    zmax = _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M
+    film_bottom = -_PUBLIC_DE_FILM_HALF_THICKNESS_M
+    film_midplane = 0.0
+    film_top = _PUBLIC_DE_FILM_HALF_THICKNESS_M
+    extra_air_plane = -1e-6
+    expected = np.asarray(
+        [zmin, film_bottom, film_midplane, film_top, zmax],
+        dtype=np.float64,
+    )
+    tetrahedron_specs = [
+        (0, zmin, extra_air_plane, 1e-7),
+        (0, extra_air_plane, film_bottom, 1e-7),
+        (1, film_bottom, film_midplane, 1e-8),
+        (1, film_midplane, film_top, 1e-8),
+        (0, film_top, zmax, 1e-7),
+    ]
+    nodes = []
+    cells = []
+    markers = []
+    for marker, lower_z, upper_z, side in tetrahedron_specs:
+        first_node = len(nodes)
+        nodes.extend(
+            (
+                (0.0, 0.0, lower_z),
+                (side, 0.0, lower_z),
+                (0.0, side, lower_z),
+                (0.0, 0.0, upper_z),
+            )
+        )
+        cells.append(list(range(first_node, first_node + 4)))
+        markers.append(marker)
+    mesh = SimpleNamespace(
+        nodes=np.asarray(nodes, dtype=np.float64),
+        elements=np.asarray(cells, dtype=np.int32),
+        element_markers=np.asarray(markers, dtype=np.int32),
+    )
+    return mesh, expected
+
+
+def test_public_box_plane_assertion_accepts_extra_air_z_nodes():
+    mesh, expected = _synthetic_partitioned_box_mesh()
+
+    assert -1e-6 in np.asarray(mesh.nodes)[:, 2]
+    assert -1e-6 not in expected
+    _assert_public_box_planes(
+        mesh,
+        layers=2,
+        expected=expected,
+        maximum_air_step=_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M,
+    )
+
+
+def test_public_box_plane_assertion_rejects_missing_cad_partition_plane():
+    mesh, expected = _synthetic_partitioned_box_mesh()
+    mesh.nodes[mesh.nodes[:, 2] == 0.0, 2] = 1e-9
+
+    with pytest.raises(AssertionError, match="CAD partition plane is missing"):
+        _assert_public_box_planes(
+            mesh,
+            layers=2,
+            expected=expected,
+            maximum_air_step=_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M,
+        )
+
+
+def test_public_box_plane_assertion_rejects_extra_magnetic_node_plane():
+    mesh, expected = _synthetic_partitioned_box_mesh()
+    first_body_cell = mesh.elements[mesh.element_markers == 1][0]
+    mesh.nodes[first_body_cell[0], 2] = -2.5e-9
+
+    with pytest.raises(AssertionError, match="magnetic nodes have a z level outside"):
+        _assert_public_box_planes(
+            mesh,
+            layers=2,
+            expected=expected,
+            maximum_air_step=_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M,
+        )
+
+
+def test_public_box_plane_assertion_rejects_near_duplicate_magnetic_plane():
+    mesh, expected = _synthetic_partitioned_box_mesh()
+    first_body_cell = mesh.elements[mesh.element_markers == 1][0]
+    mesh.nodes[first_body_cell[3], 2] = 1e-17
+
+    body_z = mesh.nodes[mesh.elements[mesh.element_markers == 1], 2]
+    film_planes = expected[1:4]
+    actual_planes = np.unique(np.round(mesh.nodes[:, 2], decimals=17))
+    _assert_values_on_planes(
+        expected,
+        actual_planes,
+        description="a requested CAD partition plane is missing from mesh nodes",
+    )
+    _assert_values_on_planes(
+        body_z.reshape(-1),
+        film_planes,
+        description="magnetic nodes have a z level outside the requested film planes",
+    )
+    _assert_values_on_planes(
+        film_planes,
+        body_z.reshape(-1),
+        description="a requested film plane has no magnetic node",
+    )
+    assert len(np.unique(np.round(body_z.reshape(-1), 17))) == 4
+
+    with pytest.raises(AssertionError):
+        _assert_public_box_planes(
+            mesh,
+            layers=2,
+            expected=expected,
+            maximum_air_step=_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M,
+        )
+
+
+def test_public_box_plane_assertion_rejects_tetrahedron_crossing_partition():
+    with pytest.raises(AssertionError, match="tetrahedron 0 crosses CAD partition"):
+        _assert_tetrahedra_do_not_cross_cad_planes(
+            np.asarray([[-1e-9, -0.5e-9, 0.5e-9, 1e-9]]),
+            np.asarray([-5e-9, 0.0, 5e-9]),
+            domain_name="air",
+        )
+
+
+def test_public_box_plane_assertion_rejects_dangling_air_partition_plane():
+    mesh, expected = _synthetic_partitioned_box_mesh()
+    missing_upper_air = SimpleNamespace(
+        nodes=mesh.nodes,
+        elements=mesh.elements[:-1],
+        element_markers=mesh.element_markers[:-1],
+    )
+
+    with pytest.raises(AssertionError, match="every exterior air partition"):
+        _assert_public_box_planes(
+            missing_upper_air,
+            layers=2,
+            expected=expected,
+            maximum_air_step=_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M,
+        )
 
 
 def test_graded_planes_keep_film_and_outer_bounds():

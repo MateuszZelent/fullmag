@@ -399,10 +399,6 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
   }, [runtimeResourceData]);
 
   useEffect(() => {
-    if (startupVisible) {
-      return;
-    }
-
     function handleKeyDown(event: KeyboardEvent): void {
       const context = createCommandContext("shortcut", kernel, {
         resourceData: runtimeResourceDataRef.current,
@@ -414,7 +410,7 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [kernel, sessionScopeKey, startupVisible]);
+  }, [kernel, sessionScopeKey]);
 
   return null;
 }

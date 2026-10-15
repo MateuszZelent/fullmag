@@ -119,11 +119,11 @@ Canonical path: `object.mesh.thin_film(topology="prismatic", ...)`
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `topology` | str | None | None | $1$ | `"prismatic"` | selects the prism mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `order` | str | None | None | $1$ | `1` (P1) | linear order only | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `exact_layers` | bool | None | None | $1$ | `True` in strict (`False` only in extended) | require the exact layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `transition` | str | None | None | $1$ | `"pyramid_to_tetrahedra"` | transition into domain tetrahedra | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `layers` | str | None | None | $1$ | positive integer | prism layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `topology` | `str \| None` | `None` | $1$ | `"prismatic"` | selects the prism mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `order` | `int \| None` | `None` | $1$ | `1` (P1) | linear order only | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `exact_layers` | `bool \| None` | `None` | $1$ | `True` in strict (`False` only in extended) | require the exact layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `transition` | `str \| None` | `None` | $1$ | `"pyramid_to_tetrahedra"` | transition into domain tetrahedra | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `layers` | `int \| None` | `None` | $1$ | positive integer | prism layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 The equivalent advanced recipe (`PerObjectMeshRecipe`) must set consistently:
 `mesh_strategy="swept_prism"`, `through_thickness_elements=layers`,

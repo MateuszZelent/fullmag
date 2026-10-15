@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object cubic_
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,9 +54,9 @@ fm.CubicAnisotropy(kc1, kc2=0.0, kc3=0.0, axis1=(1,0,0), axis2=(0,1,0))
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```fm.CubicAnisotropy.kc1/kc2/kc3``` | ```float``` | ```kc1 required; others 0.0``` | ```J/m^3``` | finite | cubic anisotropy constants | FEM/FDM CPU/GPU: IR; resolved support required | ```kc1/kc2/kc3``` |
-| ```fm.CubicAnisotropy.axis1``` | ```tuple[float,float,float]``` | ```(1,0,0)``` | ```1``` | finite non-zero; normalized | first cubic axis | FEM/FDM CPU/GPU: IR; resolved support required | ```axis1``` |
-| ```fm.CubicAnisotropy.axis2``` | ```tuple[float,float,float]``` | ```(0,1,0)``` | ```1``` | finite non-zero; normalized | second cubic axis | FEM/FDM CPU/GPU: IR; resolved support required | ```axis2``` |
+| `fm.CubicAnisotropy.kc1/kc2/kc3` | `float` | `kc1 required; others 0.0` | `J/m^3` | finite | cubic anisotropy constants | FEM/FDM CPU/GPU: IR; resolved support required | `kc1/kc2/kc3` |
+| `fm.CubicAnisotropy.axis1` | `tuple[float,float,float]` | `(1,0,0)` | `1` | finite non-zero; normalized | first cubic axis | FEM/FDM CPU/GPU: IR; resolved support required | `axis1` |
+| `fm.CubicAnisotropy.axis2` | `tuple[float,float,float]` | `(0,1,0)` | `1` | finite non-zero; normalized | second cubic axis | FEM/FDM CPU/GPU: IR; resolved support required | `axis2` |
 
 ### Stage-first example
 

@@ -291,6 +291,10 @@ verify-windows-project-document:
 verify-windows-project-document-frozen build_id:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only --frozen-native-build-id "{{build_id}}"
 
+# Real product workspace and project archive lifecycle without a runtime session.
+verify-windows-project-document-browser build_id:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only --frozen-native-build-id "{{build_id}}" --project-document-browser
+
 # Preserve a verified old API package for an owned subsequent restart proof.
 archive-windows-native-build build_id:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only --frozen-native-build-id "{{build_id}}" --archive-frozen-bundle
@@ -561,6 +565,10 @@ verify-study-execution-profile-browser:
 # Production Explorer tree against controlled scene inputs; no solver or unit builds.
 verify-explorer-physics-reporting-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3259 --scenario explorer-physics-reporting
+
+# Production preparation status, Inspector and viewport; controlled preparation, no solver.
+verify-preparation-workspace-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3268 --scenario preparation-workspace
 
 # Production antenna Inspector and resource hooks in an isolated browser fixture.
 verify-antenna-source-spectrum-browser:

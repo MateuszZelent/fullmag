@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object therma
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,8 +54,8 @@ fm.ThermalNoise(temperature, seed=None)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```fm.ThermalNoise.temperature``` | ```float``` | ```required``` | ```K``` | strictly positive | bath temperature | FEM/FDM CPU/GPU: IR; stochastic runtime qualification required | ```temperature``` |
-| ```fm.ThermalNoise.seed``` | ```int or None``` | ```None``` | ```1``` | positive integer when supplied | reproducibility seed | FEM/FDM CPU/GPU: IR; stochastic runtime qualification required | ```seed``` |
+| `fm.ThermalNoise.temperature` | `float` | `required` | `K` | strictly positive | bath temperature | FEM/FDM CPU/GPU: IR; stochastic runtime qualification required | `temperature` |
+| `fm.ThermalNoise.seed` | `int or None` | `None` | `1` | positive integer when supplied | reproducibility seed | FEM/FDM CPU/GPU: IR; stochastic runtime qualification required | `seed` |
 
 ### Stage-first example
 

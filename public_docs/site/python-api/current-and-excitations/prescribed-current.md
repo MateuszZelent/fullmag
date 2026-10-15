@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object curren
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,10 +54,10 @@ fm.CurrentTransport(name=..., model="prescribed_density", current_density=...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | transport module ID | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```model``` | ```str``` | ```prescribed_density``` | ```1``` | supported model name | current closure | FEM/FDM CPU/GPU: IR; resolved module | ```model``` |
-| ```current_density``` | ```tuple[float,float,float]``` | ```None``` | ```A/m^2``` | required for prescribed_density; finite | prescribed current density | FEM/FDM CPU/GPU: IR; resolved module | ```current_density``` |
-| ```coupling``` | ```str``` | ```one_way``` | ```1``` | one_way or bidirectional | coupling direction | FEM/FDM CPU/GPU: IR; resolved module | ```coupling``` |
+| `name` | `str` | `required` | `1` | non-empty | transport module ID | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `model` | `str` | `prescribed_density` | `1` | supported model name | current closure | FEM/FDM CPU/GPU: IR; resolved module | `model` |
+| `current_density` | `tuple[float,float,float]` | `None` | `A/m^2` | required for prescribed_density; finite | prescribed current density | FEM/FDM CPU/GPU: IR; resolved module | `current_density` |
+| `coupling` | `str` | `one_way` | `1` | one_way or bidirectional | coupling direction | FEM/FDM CPU/GPU: IR; resolved module | `coupling` |
 
 ### Stage-first example
 

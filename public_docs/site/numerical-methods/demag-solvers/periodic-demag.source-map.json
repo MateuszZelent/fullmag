@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/demag-solvers/periodic-demag.md",
-    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99",
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
     "source_of_truth": "Current repository source declarations and public Python API contracts."
   },
   "backend_matrix": [
@@ -13,7 +13,7 @@
   "equations": [
     {"id": "eq-numerical-periodic-demag-reduction", "symbols": ["Ap", "P", "Ao", "bp", "b", "up"], "sources": ["fem"]},
     {"id": "eq-numerical-periodic-demag-field-energy", "symbols": ["Hd", "P", "up", "Ed", "mu0", "Omega", "M"], "sources": ["fem"]},
-    {"id": "eq-numerical-periodic-demag-fdm-sum", "symbols": ["Hd", "ri", "I", "N", "M", "t", "n"], "sources": ["fdm"]}
+    {"id": "eq-numerical-periodic-demag-fdm-sum", "symbols": ["Hd", "ri", "I", "N", "M", "t", "nx", "ny", "nz"], "sources": ["fdm"]}
   ],
   "symbols": [
     {"id": "Ap", "latex": "$A_p$", "meaning": "reduced periodic FEM stiffness operator", "si_unit": "$\\mathrm{m}$"},
@@ -29,7 +29,9 @@
     {"id": "ri", "latex": "$\\mathbf r_i$", "meaning": "FDM cell-center position", "si_unit": "$\\mathrm{m}$"},
     {"id": "t", "latex": "$\\mathbf t_{\\boldsymbol\\ell}$", "meaning": "periodic translation vector", "si_unit": "$\\mathrm{m}$"},
     {"id": "I", "latex": "$\\mathcal I$", "meaning": "finite image-index set", "si_unit": "$1$"},
-    {"id": "n", "latex": "$n_x,n_y,n_z$", "meaning": "image counts along each axis", "si_unit": "$1$"},
+    {"id": "nx", "latex": "$n_x$", "meaning": "periodic image count along $x$", "si_unit": "$1$"},
+    {"id": "ny", "latex": "$n_y$", "meaning": "periodic image count along $y$", "si_unit": "$1$"},
+    {"id": "nz", "latex": "$n_z$", "meaning": "periodic image count along $z$", "si_unit": "$1$"},
     {"id": "N", "latex": "$\\mathbf N$", "meaning": "demagnetizing tensor kernel", "si_unit": "$1$"},
     {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
   ],

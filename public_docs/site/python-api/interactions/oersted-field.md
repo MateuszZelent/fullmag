@@ -33,7 +33,7 @@ The physical term or constraint is represented by the canonical IR object oerste
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -53,9 +53,9 @@ fm.OerstedField(source, model="from_current_solution", id=None)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```source``` | ```str``` | ```required``` | ```1``` | non-empty current transport source | current solution identifier | FEM/FDM CPU/GPU: IR; solved transport runtime required | ```source``` |
-| ```model``` | ```str``` | ```from_current_solution``` | ```1``` | current source model | field reconstruction model | FEM/FDM CPU/GPU: IR; solved transport runtime required | ```model``` |
-| ```id``` | ```str or None``` | ```None``` | ```1``` | non-empty when supplied; otherwise derived | stable interaction identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```id``` |
+| `source` | `str` | `required` | `1` | non-empty current transport source | current solution identifier | FEM/FDM CPU/GPU: IR; solved transport runtime required | `source` |
+| `model` | `str` | `from_current_solution` | `1` | current source model | field reconstruction model | FEM/FDM CPU/GPU: IR; solved transport runtime required | `model` |
+| `id` | `str or None` | `None` | `1` | non-empty when supplied; otherwise derived | stable interaction identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `id` |
 
 ### Stage-first example
 

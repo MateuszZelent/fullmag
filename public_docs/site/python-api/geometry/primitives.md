@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object geomet
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,13 +54,13 @@ fm.Box, fm.Cylinder, fm.Ellipsoid, fm.Sphere, fm.Ellipse
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```Box.size``` | ```tuple[float,float,float]``` | ```required``` | ```m``` | three positive components | box dimensions | FEM CPU/GPU: IR; FDM CPU/GPU: mesh/resolver-specific | ```size``` |
-| ```Box.name``` | ```str``` | ```box``` | ```1``` | non-empty | stable geometry name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```Cylinder.radius/height``` | ```float``` | ```required``` | ```m``` | positive | cylinder dimensions | FEM/FDM CPU/GPU: IR; resolver-specific | ```radius/height``` |
-| ```Cylinder.axis``` | ```tuple[float,float,float]``` | ```(0,0,1)``` | ```1``` | finite non-zero; normalized | cylinder axis | FEM/FDM CPU/GPU: IR; resolver-specific | ```axis``` |
-| ```Ellipsoid.rx/ry/rz``` | ```float``` | ```required``` | ```m``` | positive | principal radii | FEM/FDM CPU/GPU: IR; resolver-specific | ```radii``` |
-| ```Sphere.radius``` | ```float``` | ```required``` | ```m``` | positive | sphere radius | FEM/FDM CPU/GPU: IR; resolver-specific | ```radius``` |
-| ```Ellipse.rx/ry/height``` | ```float``` | ```required``` | ```m``` | positive | extruded ellipse dimensions | FEM/FDM CPU/GPU: IR; resolver-specific | ```radii/height``` |
+| `Box.size` | `tuple[float,float,float]` | `required` | `m` | three positive components | box dimensions | FEM CPU/GPU: IR; FDM CPU/GPU: mesh/resolver-specific | `size` |
+| `Box.name` | `str` | `box` | `1` | non-empty | stable geometry name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `Cylinder.radius/height` | `float` | `required` | `m` | positive | cylinder dimensions | FEM/FDM CPU/GPU: IR; resolver-specific | `radius/height` |
+| `Cylinder.axis` | `tuple[float,float,float]` | `(0,0,1)` | `1` | finite non-zero; normalized | cylinder axis | FEM/FDM CPU/GPU: IR; resolver-specific | `axis` |
+| `Ellipsoid.rx/ry/rz` | `float` | `required` | `m` | positive | principal radii | FEM/FDM CPU/GPU: IR; resolver-specific | `radii` |
+| `Sphere.radius` | `float` | `required` | `m` | positive | sphere radius | FEM/FDM CPU/GPU: IR; resolver-specific | `radius` |
+| `Ellipse.rx/ry/height` | `float` | `required` | `m` | positive | extruded ellipse dimensions | FEM/FDM CPU/GPU: IR; resolver-specific | `radii/height` |
 
 ### Stage-first example
 
@@ -89,11 +89,11 @@ The example intentionally exposes the object-level boundary. In a full stage, at
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```Box.size_or_x``` | ```float or sequence or None``` | ```None``` | ```m``` | positive scalar or three-vector form | size or x dimension | FEM/FDM CPU/GPU: IR; resolver-specific | ```size``` |
-| ```Box.y``` | ```float or None``` | ```None``` | ```m``` | positive when scalar form is used | y dimension | FEM/FDM CPU/GPU: IR; resolver-specific | ```size``` |
-| ```Box.z``` | ```float or None``` | ```None``` | ```m``` | positive when scalar form is used | z dimension | FEM/FDM CPU/GPU: IR; resolver-specific | ```size``` |
-| ```Box.size``` | ```sequence or None``` | ```None``` | ```m``` | positive three-vector when supplied | keyword size | FEM/FDM CPU/GPU: IR; resolver-specific | ```size``` |
-| ```Box.name``` | ```str``` | ```box``` | ```1``` | non-empty | stable geometry name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
+| `Box.size_or_x` | `float or sequence or None` | `None` | `m` | positive scalar or three-vector form | size or x dimension | FEM/FDM CPU/GPU: IR; resolver-specific | `size` |
+| `Box.y` | `float or None` | `None` | `m` | positive when scalar form is used | y dimension | FEM/FDM CPU/GPU: IR; resolver-specific | `size` |
+| `Box.z` | `float or None` | `None` | `m` | positive when scalar form is used | z dimension | FEM/FDM CPU/GPU: IR; resolver-specific | `size` |
+| `Box.size` | `sequence or None` | `None` | `m` | positive three-vector when supplied | keyword size | FEM/FDM CPU/GPU: IR; resolver-specific | `size` |
+| `Box.name` | `str` | `box` | `1` | non-empty | stable geometry name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
 
 (python-api-geometry-primitives-problem-ir)=
 ## ProblemIR

@@ -1181,12 +1181,15 @@ function checkCommandShortcutConnector() {
     "const runtimeResourceDataRef = useRef(runtimeResourceData)",
     "runtimeResourceDataRef.current = runtimeResourceData",
     "resourceData: runtimeResourceDataRef.current",
-    "}, [kernel, sessionScopeKey, startupVisible]);",
+    "enabled: !startupVisible",
+    "dispatchShortcutCommand(kernel.commands, event, context)",
+    "}, [kernel, sessionScopeKey]);",
   ]);
   forbidTokens(block, "CommandShortcutConnector", [
     "useSessionStatus()",
     "resolveSimulationStartupOverlayState",
     "startupState.isVisible",
+    "if (startupVisible)",
     "}, [kernel, runtimeResourceData, startupVisible]);",
     "}, [kernel, runtimeResourceData, startupState.isVisible]);",
   ]);

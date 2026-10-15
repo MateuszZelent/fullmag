@@ -1,4 +1,5 @@
 use super::*;
+use fullmag_ir::{ExecutionFieldOriginIR, ExecutionRequestLayerIR};
 
 #[test]
 fn reference_lookup_pins_exact_version_and_preserves_profile_origins() {

@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object univer
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,12 +54,12 @@ fm.pbc(...) and StudyUniverseHandle.mesh(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```pbc.x/y/z``` | ```bool``` | ```False``` | ```1``` | boolean | periodic axis flags | FEM/FDM CPU/GPU: IR; resolver-specific | ```periodic axes``` |
-| ```pbc.demag``` | ```str``` | ```open``` | ```1``` | supported demag mode | open-domain demag choice | FEM/FDM CPU/GPU: IR; resolver-specific | ```demag``` |
-| ```pbc.images``` | ```int or None``` | ```None``` | ```1``` | positive when supplied | periodic image count | FEM/FDM CPU/GPU: IR; resolver-specific | ```images``` |
-| ```mesh.cell_size``` | ```tuple[float,float,float] or None``` | ```None``` | ```m``` | positive components | structured cell size | FDM CPU/GPU: IR; FEM resolver-specific | ```cell_size``` |
-| ```mesh.hmax/hmin``` | ```float or None``` | ```None``` | ```m``` | positive when supplied; hmin <= hmax | unstructured size bounds | FEM CPU/GPU: IR; FDM resolver-specific | ```hmax/hmin``` |
-| ```mesh.growth_rate``` | ```float or None``` | ```None``` | ```1``` | positive when supplied | mesh grading growth | FEM/FDM CPU/GPU: IR; resolver-specific | ```growth_rate``` |
+| `pbc.x/y/z` | `bool` | `False` | `1` | boolean | periodic axis flags | FEM/FDM CPU/GPU: IR; resolver-specific | `periodic axes` |
+| `pbc.demag` | `str` | `open` | `1` | supported demag mode | open-domain demag choice | FEM/FDM CPU/GPU: IR; resolver-specific | `demag` |
+| `pbc.images` | `int or None` | `None` | `1` | positive when supplied | periodic image count | FEM/FDM CPU/GPU: IR; resolver-specific | `images` |
+| `mesh.cell_size` | `tuple[float,float,float] or None` | `None` | `m` | positive components | structured cell size | FDM CPU/GPU: IR; FEM resolver-specific | `cell_size` |
+| `mesh.hmax/hmin` | `float or None` | `None` | `m` | positive when supplied; hmin <= hmax | unstructured size bounds | FEM CPU/GPU: IR; FDM resolver-specific | `hmax/hmin` |
+| `mesh.growth_rate` | `float or None` | `None` | `1` | positive when supplied | mesh grading growth | FEM/FDM CPU/GPU: IR; resolver-specific | `growth_rate` |
 
 ### Stage-first example
 

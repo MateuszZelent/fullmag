@@ -43,12 +43,6 @@ Mumax3 `Config` constructors.
 (mumax3-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-mumax3-vortex-wall-profile
-
-q_{\mathrm{IR}} = \mathrm{mumax3-vortex-wall-profile}(\text{qualified inputs})
-```
-
 ## Mumax3-compatible vortex wall
 
 The complete stage-first Python scenario below constructs

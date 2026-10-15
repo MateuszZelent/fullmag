@@ -33,7 +33,7 @@ The physical term or constraint is represented by the canonical IR object spin_o
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -53,12 +53,12 @@ fm.PrescribedSpinOrbitTorque(name, target, drive, ..., free_layer_thickness_m)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | torque module identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```target``` | ```RegionRef``` | ```required``` | ```1``` | typed region reference | free-layer target | FEM/FDM CPU/GPU: IR; resolver-specific | ```target``` |
-| ```drive``` | ```SignedScalarDrive or VectorCurrentDrive``` | ```required``` | ```A/m^2 or source``` | typed drive | FEM/FDM CPU/GPU: IR; resolver-specific | drive | ```see_constructor_to_ir``` |
-| ```xi_dl``` | ```float``` | ```required``` | ```1``` | finite | damping-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | ```xi_dl``` |
-| ```xi_fl``` | ```float``` | ```0.0``` | ```1``` | finite | field-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | ```xi_fl``` |
-| ```free_layer_thickness_m``` | ```float``` | ```required``` | ```m``` | positive | free-layer thickness | FEM/FDM CPU/GPU: IR; resolver-specific | ```free_layer_thickness_m``` |
+| `name` | `str` | `required` | `1` | non-empty | torque module identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `target` | `RegionRef` | `required` | `1` | typed region reference | free-layer target | FEM/FDM CPU/GPU: IR; resolver-specific | `target` |
+| `drive` | `SignedScalarDrive or VectorCurrentDrive` | `required` | `A/m^2 or source` | typed drive | FEM/FDM CPU/GPU: IR; resolver-specific | drive | `see_constructor_to_ir` |
+| `xi_dl` | `float` | `required` | `1` | finite | damping-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | `xi_dl` |
+| `xi_fl` | `float` | `0.0` | `1` | finite | field-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | `xi_fl` |
+| `free_layer_thickness_m` | `float` | `required` | `m` | positive | free-layer thickness | FEM/FDM CPU/GPU: IR; resolver-specific | `free_layer_thickness_m` |
 
 ### Stage-first example
 

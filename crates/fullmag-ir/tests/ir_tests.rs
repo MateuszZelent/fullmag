@@ -2253,6 +2253,44 @@ fn regional_field_drive_validation_is_fail_closed() {
 }
 
 #[test]
+fn regional_field_drive_activation_can_scope_to_a_disabled_declared_stage() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "study_pipeline".into(),
+        serde_json::json!({
+            "nodes": [{
+                "node_kind": "group",
+                "id": "disabled-group",
+                "enabled": false,
+                "children": [{
+                    "node_kind": "primitive",
+                    "id": "disabled-child"
+                }]
+            }]
+        }),
+    );
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "disabled-stage-drive".into(),
+        name: "Disabled stage drive".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds {
+            stage_ids: vec!["disabled-child".into()],
+        },
+        migration: None,
+    });
+
+    ir.validate()
+        .expect("declared field-drive scopes may reference disabled stages");
+}
+
+#[test]
 fn regional_field_drive_rejects_non_finite_waveform_frequencies() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.field_drives.push(RegionalFieldDriveIR {

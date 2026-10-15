@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 
 import {
-  WorkspaceStartupGateView,
+  SimulationStartupOverlayView,
   useSimulationStartupOverlayState,
 } from "./SimulationStartupOverlay";
 import { useSessionCollection } from "../resources/useSessionCollection";
@@ -146,20 +146,16 @@ function ActiveWorkspaceShell() {
   return (
     <>
       <SlotHost slotId="app-menu" />
-      <WorkspaceStartupGateView
-        preserveMountedWorkspace
-        state={startupState}
-      >
-        <SlotHost slotId="ribbon" />
-        <WorkspaceRenderProfiler id="WorkspaceDockLayout">
-          <WorkspaceDockLayout />
-        </WorkspaceRenderProfiler>
-        <SlotHost slotId="status-bar" />
-        {homeOpen ? <HomeOverlay /> : null}
-        <div className="fm-workspace-overlay-host">
-          <SlotHost slotId="overlay" />
-        </div>
-      </WorkspaceStartupGateView>
+      <SlotHost slotId="ribbon" />
+      <WorkspaceRenderProfiler id="WorkspaceDockLayout">
+        <WorkspaceDockLayout />
+      </WorkspaceRenderProfiler>
+      <SlotHost slotId="status-bar" />
+      {homeOpen ? <HomeOverlay /> : null}
+      <div className="fm-workspace-overlay-host">
+        <SlotHost slotId="overlay" />
+        <SimulationStartupOverlayView state={startupState} />
+      </div>
     </>
   );
 }

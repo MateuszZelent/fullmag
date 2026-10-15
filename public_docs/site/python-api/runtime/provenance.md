@@ -40,6 +40,7 @@ from a `completed` one.
 | `RuntimeSelection.backend_target` | `BackendTarget` | `auto` | $1$ | Enum value; normalized by runtime selection. | Requested backend family. | FEM/FDM CPU/GPU; planner resolves capability. | `backend_policy.requested_backend` |
 | `RuntimeSelection.execution_mode` | `ExecutionMode` | `strict` | $1$ | Enum value; normalized by runtime selection. | Requested execution mode. | FEM/FDM CPU/GPU; planner resolves capability. | `backend_policy.execution_mode` |
 | `Result.status` | `str` | required | $1$ | One of `completed`, `planned`, or `not-executable`. | Resolved execution outcome. | FEM/FDM CPU/GPU runtime record. | `runtime.status` |
+
 | Record | Meaning |
 |---|---|
 | requested backend/mode/precision | What the script asked for |

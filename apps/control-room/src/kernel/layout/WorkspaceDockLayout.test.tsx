@@ -26,7 +26,6 @@ import { VisualizationDebugController } from "../visualization/VisualizationDebu
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
 import { LayoutController } from "./LayoutController";
-import { WorkspaceStartupInteractionContext } from "./SimulationStartupOverlay";
 import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
 
 function TestModule() {
@@ -108,37 +107,47 @@ describe("WorkspaceDockLayout", () => {
     expect(html).toContain("data-slot-id=\"viewport-aux\"");
   });
 
-  it("inerts underlying dock panels while startup blocks interaction", () => {
+  it("keeps workspace dock panels interactive", () => {
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={makeKernel()}>
-        <WorkspaceStartupInteractionContext.Provider value>
-          <WorkspaceDockLayout />
-        </WorkspaceStartupInteractionContext.Provider>
+        <WorkspaceDockLayout />
       </KernelContext.Provider>,
     );
 
-    expect(html).toContain("inert");
-    expect(html).not.toContain('data-startup-diagnostics="visible"');
+    const workspaceBodyTag = html.match(
+      /<div[^>]*class="fm-workspace-body"[^>]*>/,
+    )?.[0];
+    const dockColumnTags = Array.from(
+      html.matchAll(/<div[^>]*class="fm-dock-column"[^>]*>/g),
+      (match) => match[0],
+    );
+
+    expect(html).toContain("data-slot-id=\"viewport-main\"");
+    expect(html).not.toContain(" inert");
+    expect(workspaceBodyTag).toBeDefined();
+    expect(workspaceBodyTag ?? "").not.toMatch(/\s(?:inert|aria-hidden)(?:=|\s|>)/);
+    expect(dockColumnTags.length).toBeGreaterThan(0);
+    for (const tag of dockColumnTags) {
+      expect(tag).not.toMatch(/\s(?:inert|aria-hidden)(?:=|\s|>)/);
+    }
   });
 
-  it("lifts the existing diagnostics panel without mounting a second slot", () => {
+  it("keeps diagnostics in the existing bottom panel without mounting a second slot", () => {
     const kernel = makeKernel();
     kernel.layout.openBottomPanel("diagnostics");
 
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={kernel}>
-        <WorkspaceStartupInteractionContext.Provider value>
-          <WorkspaceDockLayout />
-        </WorkspaceStartupInteractionContext.Provider>
+        <WorkspaceDockLayout />
       </KernelContext.Provider>,
     );
 
-    expect(html).toContain('data-startup-diagnostics="visible"');
+    expect(html).not.toContain("data-startup-diagnostics");
     expect(html.match(/data-slot-id="panel-bottom"/g)).toHaveLength(1);
     const bottomPanelTag = html.match(
       /<div[^>]*class="fm-workspace-bottom-panel"[^>]*>/,
     )?.[0];
-    expect(bottomPanelTag).toContain('data-startup-diagnostics="visible"');
+    expect(bottomPanelTag).toBeDefined();
     expect(bottomPanelTag).not.toContain("inert");
   });
 });

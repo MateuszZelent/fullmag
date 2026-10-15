@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object magnet
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,10 +54,10 @@ fm.MagnetostrictionLaw(name, kind="cubic", B1=None, B2=None, lambda_s=None)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | law identifier | FEM CPU/GPU: IR; FDM not currently resolved | ```name``` |
-| ```kind``` | ```str``` | ```cubic``` | ```1``` | cubic or isotropic | law family | FEM CPU/GPU: IR; FDM not currently resolved | ```kind``` |
-| ```B1/B2``` | ```float or None``` | ```None``` | ```Pa``` | both required for cubic; finite | cubic coefficients | FEM CPU/GPU: IR; FDM not currently resolved | ```B1/B2``` |
-| ```lambda_s``` | ```float or None``` | ```None``` | ```1``` | required for isotropic; finite | saturation magnetostriction | FEM CPU/GPU: IR; FDM not currently resolved | ```lambda_s``` |
+| `name` | `str` | `required` | `1` | non-empty | law identifier | FEM CPU/GPU: IR; FDM not currently resolved | `name` |
+| `kind` | `str` | `cubic` | `1` | cubic or isotropic | law family | FEM CPU/GPU: IR; FDM not currently resolved | `kind` |
+| `B1/B2` | `float or None` | `None` | `Pa` | both required for cubic; finite | cubic coefficients | FEM CPU/GPU: IR; FDM not currently resolved | `B1/B2` |
+| `lambda_s` | `float or None` | `None` | `1` | required for isotropic; finite | saturation magnetostriction | FEM CPU/GPU: IR; FDM not currently resolved | `lambda_s` |
 
 ### Stage-first example
 

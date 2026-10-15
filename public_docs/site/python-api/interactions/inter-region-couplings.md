@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object coupli
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,13 +54,13 @@ fm.CouplingRegistry().exchange/rkky/interlayer_exchange(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```source/target``` | ```str or endpoint``` | ```required``` | ```1``` | typed, non-empty endpoints | coupling endpoints | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | ```source/target``` |
-| ```mode``` | ```str``` | ```harmonic_mean``` | ```1``` | source validation modes | cross-interface averaging mode | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | ```mode``` |
-| ```scale``` | ```float or None``` | ```None``` | ```1``` | finite when supplied | exchange scale | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | ```scale``` |
-| ```J1/J2``` | ```float``` | ```J1 required; J2 None``` | ```J/m^2``` | finite when supplied | RKKY/interlayer constants | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | ```J1/J2``` |
-| ```coupling_id``` | ```str or None``` | ```None``` | ```1``` | non-empty when supplied | stable coupling ID | FEM/FDM CPU/GPU: IR; resolver-specific | ```coupling_id``` |
-| ```enabled``` | ```bool``` | ```True``` | ```1``` | boolean | activation flag | FEM/FDM CPU/GPU: IR; resolver-specific | ```enabled``` |
-| ```capability_policy``` | ```str``` | ```require_runtime``` | ```1``` | supported policy | runtime capability policy | FEM/FDM CPU/GPU: IR; resolver-specific | ```capability_policy``` |
+| `source/target` | `str or endpoint` | `required` | `1` | typed, non-empty endpoints | coupling endpoints | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | `source/target` |
+| `mode` | `str` | `harmonic_mean` | `1` | source validation modes | cross-interface averaging mode | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | `mode` |
+| `scale` | `float or None` | `None` | `1` | finite when supplied | exchange scale | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | `scale` |
+| `J1/J2` | `float` | `J1 required; J2 None` | `J/m^2` | finite when supplied | RKKY/interlayer constants | FEM/FDM CPU/GPU: IR; capability policy resolves runtime | `J1/J2` |
+| `coupling_id` | `str or None` | `None` | `1` | non-empty when supplied | stable coupling ID | FEM/FDM CPU/GPU: IR; resolver-specific | `coupling_id` |
+| `enabled` | `bool` | `True` | `1` | boolean | activation flag | FEM/FDM CPU/GPU: IR; resolver-specific | `enabled` |
+| `capability_policy` | `str` | `require_runtime` | `1` | supported policy | runtime capability policy | FEM/FDM CPU/GPU: IR; resolver-specific | `capability_policy` |
 
 ### Stage-first example
 

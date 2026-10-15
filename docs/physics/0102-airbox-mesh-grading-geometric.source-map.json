@@ -321,7 +321,7 @@
       "id": "scoped-layer-geometry-only",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Creates scoped exact CAD partitions with geometry-only extrusion, then applies owner-volume floors/upper targets and air-volume grading in one conforming 3D mesh; GHA qualification remains pending. CAD partitioning alone does not prove exact magnetic mesh planes; public Box/DE integration fixtures currently fail the unchanged layer-count guard. Constraint candidates must preserve all owner/air and topology gates.",
+      "responsibility": "Constructs magnetic CAD intervals first from the body lower cap, extends air upward and downward, and restores increasing-z volume bookkeeping. Scoped magnetic intervals have one recombined prism layer and exterior air is geometry-only; shared coordinate ordering converts prisms without adding nodes. Owner-volume floors/upper targets and air-volume grading remain independent. The body-first diagnostic preserves owner XY for air targets 30/50 nm; production Box 45/45, owner-fields 2/2 and scoped-ring 2/2 passed with stable sources; full Python CI and solver/device qualification remain separate gates.",
       "evidence_status": "implemented"
     },
     {

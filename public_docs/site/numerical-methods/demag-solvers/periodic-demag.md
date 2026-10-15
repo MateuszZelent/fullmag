@@ -80,7 +80,9 @@ interchangeable with the FEM null-space treatment.
 | $\mathbf r_i$ | FDM cell-center position | $\mathrm{m}$ |
 | $\mathbf t_{\boldsymbol\ell}$ | periodic translation vector | $\mathrm{m}$ |
 | $\mathcal I$ | finite image-index set | $1$ |
-| $n_x,n_y,n_z$ | image counts along each axis | $1$ |
+| $n_x$ | periodic image count along $x$ | $1$ |
+| $n_y$ | periodic image count along $y$ | $1$ |
+| $n_z$ | periodic image count along $z$ | $1$ |
 | $\mathbf N$ | demagnetizing tensor kernel | $1$ |
 | $\mathbf M$ | magnetization field | $\mathrm{A\,m^{-1}}$ |
 
@@ -156,7 +158,7 @@ should keep study construction and stage ordering visible.
 |---|---|---|---|---|---|---|---|
 | `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | $1$ | exactly three Boolean values | periodic status of x, y, z | FDM planner; FEM mesh planner consumes the same intent | `pbc.axes` |
 | `FdmPbc.demag` | `str` | `open` | $1$ | `open`, `truncated_images`, or `periodic_airbox_k0` | demagnetization boundary policy | FDM supports `open`/`truncated_images`; FEM supports the periodic airbox policy subject to qualification | `pbc.demag` |
-| `FdmPbc.image_counts` | `tuple[int,int,int] | None` | `None` | $1$ | exactly three non-negative integers; only with `truncated_images` | finite image counts $n_x,n_y,n_z$ | FDM CPU/GPU image policies as qualified | `pbc.image_counts` |
+| `FdmPbc.image_counts` | `tuple[int,int,int] \| None` | `None` | $1$ | exactly three non-negative integers; only with `truncated_images` | finite image counts $n_x,n_y,n_z$ | FDM CPU/GPU image policies as qualified | `pbc.image_counts` |
 | `study.pbc(..., x/y/z=...)` | `bool` flags | all `False` | $1$ | at least one axis for non-open policy | stage-first authoring facade for `FdmPbc.axes` | Python authoring; planner resolves backend legality | `pbc.axes` |
 
 (numerical-methods-periodic-demag-problem-ir)=
@@ -245,7 +247,7 @@ every periodic policy.
 
 ## Control Room workflow
 
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
 
 ## Source-code index
 

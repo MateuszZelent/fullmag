@@ -15,7 +15,7 @@ use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry};
 use serde_json::{json, Value};
 
 fn template() -> RunSpecification {
-    RunSpecification::new(
+    let mut specification = RunSpecification::new(
         ProjectSnapshot {
             project_id: ProjectId::parse("project-batch").unwrap(),
             definition_revision: 3,
@@ -40,7 +40,10 @@ fn template() -> RunSpecification {
                 storage_bytes: 1024,
             }),
         },
-    )
+    );
+    // Replay must reuse the same captured intent, including its source RunId.
+    specification.run_id = crate::RunId::parse("run-batch-template").unwrap();
+    specification
 }
 
 fn axis(name: &str, values: Vec<Value>, join: BatchAxisJoin) -> BatchAxis {
@@ -396,7 +399,7 @@ fn manifest_integrity_rejects_child_or_digest_tampering() {
         .validate_integrity()
         .unwrap_err()
         .to_string()
-        .contains("does not match the axis position"));
+        .contains("parameter tuple does not match its axis position"));
 
     let mut changed_digest = expand_independent_batch(request(vec![axis(
         "field",
@@ -779,17 +782,21 @@ fn output_storage_binding_rejects_missing_and_relative_paths() {
 fn materialization_binds_zhang_li_axis_to_named_executable_module() {
     let study = materialization_study();
     let mut problem = ProblemIR::bootstrap_example();
+    problem.magnets[0].object_id = Some("batch-magnet".into());
     problem.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
-        schema_version: None,
+        schema_version: Some("zhang_li_torque.v1".into()),
         id: Some("batch-zl".into()),
-        target: None,
-        formula_version: "zhang_li.legacy_fullmag.v0".into(),
-        operator_version: None,
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "batch-magnet".into(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.mumax3.v1".into(),
+        operator_version: Some("zl_mumax3_central_v1".into()),
         current_density: Some([1.0e11, 0.0, 0.0]),
         current_source: None,
         degree: 0.4,
         beta: 0.02,
-        lande_g: None,
+        lande_g: Some(2.0),
     }];
     let source_catalog = StudyProblemCatalog::from_entries(
         &study,

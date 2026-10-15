@@ -1,7 +1,8 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "source_of_truth": "docs/physics/0700-frequency-domain-linearized-llg.md"
   },
   "backend_matrix": [
     {
@@ -80,27 +81,27 @@
     {"id": "dm", "latex": "$\\delta\\mathbf m$", "meaning": "dynamic reduced-magnetization perturbation", "si_unit": "$1$"},
     {"id": "m0", "latex": "$\\mathbf m_0$", "meaning": "equilibrium reduced magnetization", "si_unit": "$1$"},
     {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex reduced-magnetization response amplitude", "si_unit": "$1$"},
-    {"id": "Mhat", "latex": "$\\widehat{\\mathbf M}$", "meaning": "complex physical magnetization response amplitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Mhat", "latex": "$\\widehat{\\mathbf M}$", "meaning": "complex physical magnetization response amplitude $M_s\\widehat{\\mathbf m}$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
     {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "hext", "latex": "$\\widehat{\\mathbf h}_{\\mathrm{ext}}$", "meaning": "complex excitation-field amplitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Aomega", "latex": "$\\mathsf A(\\omega)$", "meaning": "shifted complex tangent response operator", "si_unit": "operator-dependent"},
-    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent stiffness/dynamic matrix", "si_unit": "operator-dependent"},
-    {"id": "G", "latex": "$\\mathsf G$", "meaning": "gyrotropic, mass, and damping matrix", "si_unit": "operator-dependent"},
-    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "hext", "latex": "$\\widehat{\\mathbf h}_{\\mathrm{ext}}$", "meaning": "complex harmonic excitation-field amplitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Aomega", "latex": "$\\mathsf A(\\omega)$", "meaning": "shifted complex tangent response operator $\\mathsf K - \\mathrm i\\omega\\mathsf G$ (rate normalization)", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent rate-stiffness dynamic matrix (or $\\mathrm{J}$ in energy-Hessian form)", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "G", "latex": "$\\mathsf G$", "meaning": "damping-modified tangent metric $I - \\alpha_{\\mathrm{eff}}J$ (or $\\mathrm{J\\,s}$ in energy-Hessian form)", "si_unit": "$1$"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular drive frequency $2\\pi f$", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
     {"id": "t", "latex": "$t$", "meaning": "time", "si_unit": "$\\mathrm{s}$"},
-    {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "complex tangent-coordinate response", "si_unit": "$1$"},
-    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "assembled harmonic right-hand side", "si_unit": "operator-dependent"},
-    {"id": "C", "latex": "$\\mathsf C$", "meaning": "drive coupling operator", "si_unit": "operator-dependent"},
-    {"id": "e1", "latex": "$\\mathbf e_1$", "meaning": "first local tangent basis vector", "si_unit": "$1$"},
-    {"id": "e2", "latex": "$\\mathbf e_2$", "meaning": "second local tangent basis vector", "si_unit": "$1$"},
-    {"id": "chiM", "latex": "$\\widehat{\\boldsymbol\\chi}_M$", "meaning": "physical magnetization susceptibility, M response divided by H drive", "si_unit": "$1$"},
-    {"id": "chim", "latex": "$\\widehat{\\boldsymbol\\chi}_m$", "meaning": "reduced-magnetization response divided by H drive", "si_unit": "$\\mathrm{m\\,A^{-1}}$"},
-    {"id": "chiv1", "latex": "$\\chi_{\\mathrm{v1}}$", "meaning": "current dense v1 scalar projection h^H m / h^H h", "si_unit": "$\\mathrm{m\\,A^{-1}}$ (implemented; writer currently labels it dimensionless)"},
-    {"id": "pabs", "latex": "$p_{\\mathrm{abs}}$", "meaning": "cycle-averaged absorbed magnetic power density", "si_unit": "$\\mathrm{W\\,m^{-3}}$ after complete SI scaling and spatial reduction"},
+    {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "complex tangent-coordinate response vector", "si_unit": "$1$"},
+    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "assembled harmonic drive right-hand side vector (rate normalization)", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "C", "latex": "$\\mathsf C$", "meaning": "gyromagnetic tangent drive-coupling operator $\\gamma_0 J T^\\top$", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "e1", "latex": "$\\mathbf e_1$", "meaning": "first local orthonormal tangent basis vector", "si_unit": "$1$"},
+    {"id": "e2", "latex": "$\\mathbf e_2$", "meaning": "second local orthonormal tangent basis vector", "si_unit": "$1$"},
+    {"id": "chiM", "latex": "$\\widehat{\\boldsymbol\\chi}_M$", "meaning": "physical Polder susceptibility tensor ($\\widehat{\\mathbf M}$ per $\\widehat{\\mathbf h}_{\\mathrm{ext}}$)", "si_unit": "$1$"},
+    {"id": "chim", "latex": "$\\widehat{\\boldsymbol\\chi}_m$", "meaning": "reduced-magnetization susceptibility tensor ($\\widehat{\\mathbf m}$ per $\\widehat{\\mathbf h}_{\\mathrm{ext}}$)", "si_unit": "$\\mathrm{m\\,A^{-1}}$"},
+    {"id": "chiv1", "latex": "$\\chi_{\\mathrm{v1}}$", "meaning": "projected scalar reduced susceptibility $\\widehat{\\mathbf h}_{\\mathrm{ext}}^H\\widehat{\\mathbf m}/\\widehat{\\mathbf h}_{\\mathrm{ext}}^H\\widehat{\\mathbf h}_{\\mathrm{ext}}$", "si_unit": "$\\mathrm{m\\,A^{-1}}$"},
+    {"id": "pabs", "latex": "$p_{\\mathrm{abs}}$", "meaning": "cycle-averaged absorbed magnetic power density", "si_unit": "$\\mathrm{W\\,m^{-3}}$"},
     {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "residual", "latex": "$\\mathbf r$", "meaning": "original-operator algebraic residual", "si_unit": "right-hand-side-dependent"},
-    {"id": "eps", "latex": "$\\varepsilon_{\\mathrm{true}}$", "meaning": "true relative residual", "si_unit": "$1$"},
-    {"id": "bscale", "latex": "$b_{\\mathrm{scale}}$", "meaning": "absolute residual normalization floor", "si_unit": "same as right-hand side"}
+    {"id": "residual", "latex": "$\\mathbf r$", "meaning": "unpreconditioned original-operator residual $\\widehat{\\mathbf b} - \\mathsf A(\\omega)\\widehat{\\mathbf q}$", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "eps", "latex": "$\\varepsilon_{\\mathrm{true}}$", "meaning": "dimensionless true relative linear-solve residual", "si_unit": "$1$"},
+    {"id": "bscale", "latex": "$b_{\\mathrm{scale}}$", "meaning": "absolute right-hand-side residual normalization floor", "si_unit": "$\\mathrm{s^{-1}}$"}
   ],
   "sources": [
     {"id": "stage_spec", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class FrequencyResponseStageSpec", "responsibility": "Public frequency-response stage schema."},

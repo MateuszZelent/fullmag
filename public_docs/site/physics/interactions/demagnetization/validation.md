@@ -151,9 +151,9 @@ Use more than one metric:
 
 | Quantity | Definition | Why it is required |
 |---|---|---|
-| Field absolute error | $|\mathbf H-\mathbf H_{\mathrm{ref}}\|_2$ | Detects errors near zero without unstable relative division. |
-| Field relative error | $|\mathbf H-\mathbf H_{\mathrm{ref}}\|_2/(\|\mathbf H_{\mathrm{ref}}\|_2+H_*)$ | Compares scale after declaring positive reference floor $H_*$. |
-| Energy error | $|E-E_{\mathrm{ref}}|/(|E_{\mathrm{ref}}|+E_*)$ | Tests the global reduction independently of pointwise field error. |
+| Field absolute error | $\lVert\mathbf H-\mathbf H_{\mathrm{ref}}\rVert_2$ | Detects errors near zero without unstable relative division. |
+| Field relative error | $\lVert\mathbf H-\mathbf H_{\mathrm{ref}}\rVert_2/(\lVert\mathbf H_{\mathrm{ref}}\rVert_2+H_*)$ | Compares scale after declaring positive reference floor $H_*$. |
+| Energy error | $\lvert E-E_{\mathrm{ref}}\rvert/(\lvert E_{\mathrm{ref}}\rvert+E_*)$ | Tests the global reduction independently of pointwise field error. |
 | Maxwell residual | Norm of $r$ and curl residual | Detects a plausible energy with an invalid field. |
 | Refinement slope | Observed error versus grid/mesh scale | Distinguishes convergence from accidental agreement. |
 
@@ -205,12 +205,11 @@ as a production qualification claim without current evidence.
 
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
 
 ## Python/API crosswalk
 
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
-ot applicable here and must be taken from the terminal API page.
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
 
 ## Bibliography and source scope
 

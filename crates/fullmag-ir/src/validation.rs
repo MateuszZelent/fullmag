@@ -131,25 +131,165 @@ fn validate_v04_magnetization_constraints(problem: &ProblemIRV04, errors: &mut V
 pub(crate) fn pipeline_stage_ids(
     metadata: &BTreeMap<String, serde_json::Value>,
 ) -> BTreeSet<String> {
-    metadata
+    pipeline_stage_membership(metadata)
+        .map(|(declared, _)| declared)
+        .unwrap_or_default()
+}
+
+fn enabled_pipeline_stage_ids(
+    metadata: &BTreeMap<String, serde_json::Value>,
+) -> Option<BTreeSet<String>> {
+    pipeline_stage_membership(metadata).map(|(_, enabled)| enabled)
+}
+
+fn pipeline_stage_membership(
+    metadata: &BTreeMap<String, serde_json::Value>,
+) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
+    let nodes = metadata
         .get("study_pipeline")
         .and_then(|value| value.get("nodes"))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|node| node.get("id").and_then(serde_json::Value::as_str))
-        .map(str::to_string)
-        .collect()
+        .and_then(serde_json::Value::as_array)?;
+    let mut declared = BTreeSet::new();
+    let mut enabled = BTreeSet::new();
+    collect_pipeline_stage_membership(nodes, true, true, &mut declared, &mut enabled);
+    Some((declared, enabled))
+}
+
+fn collect_pipeline_stage_membership(
+    nodes: &[serde_json::Value],
+    parent_enabled: bool,
+    top_level: bool,
+    declared: &mut BTreeSet<String>,
+    enabled: &mut BTreeSet<String>,
+) {
+    for node in nodes {
+        let id = node.get("id").and_then(serde_json::Value::as_str);
+        let node_kind = node
+            .get("node_kind")
+            .and_then(serde_json::Value::as_str);
+        let children = node
+            .get("children")
+            .and_then(serde_json::Value::as_array);
+        let has_children = node.get("children").is_some();
+        let local_enabled = node
+            .get("enabled")
+            .map_or(true, |value| value.as_bool().unwrap_or(false));
+        let effectively_enabled = parent_enabled && local_enabled;
+
+        if let Some(id) = id {
+            declared.insert(id.to_owned());
+            let is_stage_owner = matches!(node_kind, Some("primitive" | "macro"))
+                || (top_level && node.get("node_kind").is_none() && !has_children);
+            if effectively_enabled && is_stage_owner {
+                enabled.insert(id.to_owned());
+            }
+        }
+
+        if let Some(children) = children.filter(|_| {
+            node_kind == Some("group") || node.get("node_kind").is_none()
+        }) {
+            collect_pipeline_stage_membership(
+                children,
+                effectively_enabled,
+                false,
+                declared,
+                enabled,
+            );
+        }
+    }
 }
 
 pub(crate) fn declared_pipeline_stage_ids(
     metadata: &BTreeMap<String, serde_json::Value>,
 ) -> Option<BTreeSet<String>> {
-    metadata
-        .get("study_pipeline")
-        .and_then(|value| value.get("nodes"))
-        .and_then(serde_json::Value::as_array)
-        .map(|_| pipeline_stage_ids(metadata))
+    pipeline_stage_membership(metadata).map(|(declared, _)| declared)
+}
+
+#[cfg(test)]
+mod pipeline_stage_membership_tests {
+    use super::*;
+
+    fn metadata(nodes: serde_json::Value) -> BTreeMap<String, serde_json::Value> {
+        BTreeMap::from([("study_pipeline".into(), serde_json::json!({"nodes": nodes}))])
+    }
+
+    fn active_stage_errors(nodes: serde_json::Value, active_stage_id: &str) -> Vec<String> {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata = metadata(nodes);
+        problem.problem_meta.runtime_metadata.insert(
+            "active_stage_id".into(),
+            serde_json::Value::String(active_stage_id.into()),
+        );
+        let mut errors = Vec::new();
+        validate_field_drives(&problem, &mut errors);
+        errors
+    }
+
+    fn nested_pipeline() -> serde_json::Value {
+        serde_json::json!([
+            {"id": "legacy-root"},
+            {
+                "node_kind": "group",
+                "id": "enabled-group",
+                "children": [
+                    {"node_kind": "primitive", "id": "nested-stage"},
+                    {"node_kind": "macro", "id": "nested-macro"},
+                    {"node_kind": "primitive", "id": "disabled-child", "enabled": false}
+                ]
+            },
+            {
+                "node_kind": "group",
+                "id": "disabled-ancestor",
+                "enabled": false,
+                "children": [
+                    {"node_kind": "primitive", "id": "disabled-descendant"}
+                ]
+            }
+        ])
+    }
+
+    #[test]
+    fn declared_membership_recurses_and_keeps_disabled_scope_ids() {
+        let metadata = metadata(nested_pipeline());
+        let expected = BTreeSet::from([
+            "legacy-root".to_string(),
+            "enabled-group".to_string(),
+            "nested-stage".to_string(),
+            "nested-macro".to_string(),
+            "disabled-child".to_string(),
+            "disabled-ancestor".to_string(),
+            "disabled-descendant".to_string(),
+        ]);
+
+        assert_eq!(pipeline_stage_ids(&metadata), expected);
+        assert_eq!(declared_pipeline_stage_ids(&metadata), Some(expected));
+    }
+
+    #[test]
+    fn active_stage_id_requires_an_effectively_enabled_stage_owner() {
+        let nodes = nested_pipeline();
+        for active in ["legacy-root", "nested-stage", "nested-macro"] {
+            let errors = active_stage_errors(nodes.clone(), active);
+            assert!(
+                !errors.iter().any(|error| error.contains("runtime_metadata.active_stage_id")),
+                "enabled stage owner '{active}' was rejected: {errors:?}"
+            );
+        }
+
+        for active in [
+            "enabled-group",
+            "disabled-child",
+            "disabled-ancestor",
+            "disabled-descendant",
+            "unknown-stage",
+        ] {
+            let errors = active_stage_errors(nodes.clone(), active);
+            assert!(
+                errors.iter().any(|error| error.contains("runtime_metadata.active_stage_id")),
+                "invalid active stage '{active}' was accepted"
+            );
+        }
+    }
 }
 
 fn validate_magnetization_constraints<ObjectIds, RegionIds>(
@@ -1660,7 +1800,8 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
         .iter()
         .map(|region| (region.owner_object.as_str(), region.region_id.as_str()))
         .collect();
-    let pipeline_stage_ids = declared_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
+    let declared_stage_ids = declared_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
+    let enabled_stage_ids = enabled_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
     let active_stage_id = problem
         .problem_meta
         .runtime_metadata
@@ -1698,7 +1839,7 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
     }
     if let Some(stage_id) = active_stage_id {
         if stage_id.trim().is_empty()
-            || pipeline_stage_ids
+            || enabled_stage_ids
                 .as_ref()
                 .is_some_and(|ids| !ids.contains(stage_id))
         {
@@ -1773,7 +1914,7 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
         validate_drive_activation(
             &format!("field_drives[{index}]"),
             &drive.activation,
-            pipeline_stage_ids.as_ref(),
+            declared_stage_ids.as_ref(),
             errors,
         );
         if drive

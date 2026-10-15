@@ -69,18 +69,18 @@ The following rows are the exhaustive public-signature contract for this page; e
 
 | Python | Type | Default | SI unit | Validation and coercion | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `mesh_strategy` | `str | None` | `None` | 1 | stored directly; typed prism/hex fields require `swept_prism`/`swept_hex` respectively | requested generator family | FEM CPU/GPU capability-gated | `per_geometry[].mesh_strategy` |
-| `topology` | `Literal["tetrahedral", "prismatic"] | None` | `None` | 1 | exact vocabulary; tetrahedral rejects swept-element fields | requested topology | FEM CPU/GPU capability-gated | `per_geometry[].topology` |
-| `through_thickness_elements` | `int | None` | `None` | layers | non-Boolean integer >= 1 | requested layer count | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_elements` |
-| `through_thickness_distribution` | `Literal["fixed", "linear", "exponential"] | None` | `None` | 1 | exact vocabulary; exact count accepts only `fixed` | spacing distribution | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_distribution` |
-| `through_thickness_element_ratio` | `float | None` | `None` | 1 | non-Boolean finite positive; exact count permits only `1.0` | grading ratio | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_element_ratio` |
-| `through_thickness_symmetric` | `bool | None` | `None` (stored default `False`) | 1 | non-`None` value must be bool; exact count rejects `True` | symmetric grading | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_symmetric` |
-| `sweep_face_meshing` | `Literal["triangular", "quadrilateral"] | None` | `None` | 1 | prism requires triangular and hex requires quadrilateral | source-face topology | FEM CPU/GPU capability-gated | `per_geometry[].sweep_face_meshing` |
-| `sweep_direction` | `Literal["auto", "x", "y", "z"] | None` | `None` | 1 | exact vocabulary; required for complete typed layered intent | sweep axis | FEM CPU/GPU capability-gated | `per_geometry[].sweep_direction` |
-| `element_family` | `Literal["prism", "hex"] | None` | `None` | 1 | prism requires P1/triangular/`swept_prism`; hex requires quadrilateral/`swept_hex` | volume family | FEM CPU/GPU capability-gated | `per_geometry[].element_family` |
-| `transition_policy` | `Literal["pyramid_to_tetrahedra", "reject"] | None` | `None` | 1 | prismatic topology permits only `pyramid_to_tetrahedra`; hex rejects it | transition contract | FEM CPU/GPU capability-gated | `per_geometry[].transition_policy` |
-| `exact_layer_count` | `bool | None` | `None` | 1 | non-`None` value must be bool; strict prismatic mode rejects `False` and requires complete typed intent | certificate request | FEM CPU/GPU capability-gated | `per_geometry[].exact_layer_count` |
-| `order` | `int | None` | `None` | 1 | prismatic intent permits only `1` | FEM order request | FEM CPU/GPU capability-gated | `per_geometry[].order` |
+| `mesh_strategy` | `str \| None` | `None` | 1 | stored directly; typed prism/hex fields require `swept_prism`/`swept_hex` respectively | requested generator family | FEM CPU/GPU capability-gated | `per_geometry[].mesh_strategy` |
+| `topology` | `Literal["tetrahedral", "prismatic"] \| None` | `None` | 1 | exact vocabulary; tetrahedral rejects swept-element fields | requested topology | FEM CPU/GPU capability-gated | `per_geometry[].topology` |
+| `through_thickness_elements` | `int \| None` | `None` | layers | non-Boolean integer >= 1 | requested layer count | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_elements` |
+| `through_thickness_distribution` | `Literal["fixed", "linear", "exponential"] \| None` | `None` | 1 | exact vocabulary; exact count accepts only `fixed` | spacing distribution | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_distribution` |
+| `through_thickness_element_ratio` | `float \| None` | `None` | 1 | non-Boolean finite positive; exact count permits only `1.0` | grading ratio | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_element_ratio` |
+| `through_thickness_symmetric` | `bool \| None` | `None` (stored default `False`) | 1 | non-`None` value must be bool; exact count rejects `True` | symmetric grading | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_symmetric` |
+| `sweep_face_meshing` | `Literal["triangular", "quadrilateral"] \| None` | `None` | 1 | prism requires triangular and hex requires quadrilateral | source-face topology | FEM CPU/GPU capability-gated | `per_geometry[].sweep_face_meshing` |
+| `sweep_direction` | `Literal["auto", "x", "y", "z"] \| None` | `None` | 1 | exact vocabulary; required for complete typed layered intent | sweep axis | FEM CPU/GPU capability-gated | `per_geometry[].sweep_direction` |
+| `element_family` | `Literal["prism", "hex"] \| None` | `None` | 1 | prism requires P1/triangular/`swept_prism`; hex requires quadrilateral/`swept_hex` | volume family | FEM CPU/GPU capability-gated | `per_geometry[].element_family` |
+| `transition_policy` | `Literal["pyramid_to_tetrahedra", "reject"] \| None` | `None` | 1 | prismatic topology permits only `pyramid_to_tetrahedra`; hex rejects it | transition contract | FEM CPU/GPU capability-gated | `per_geometry[].transition_policy` |
+| `exact_layer_count` | `bool \| None` | `None` | 1 | non-`None` value must be bool; strict prismatic mode rejects `False` and requires complete typed intent | certificate request | FEM CPU/GPU capability-gated | `per_geometry[].exact_layer_count` |
+| `order` | `int \| None` | `None` | 1 | prismatic intent permits only `1` | FEM order request | FEM CPU/GPU capability-gated | `per_geometry[].order` |
 
 ```python
 # %%

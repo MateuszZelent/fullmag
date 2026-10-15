@@ -231,6 +231,45 @@ class SnapshotChecks(unittest.TestCase):
                 self.make()
         self.assertFalse(list((self.build / "source-snapshots").glob("*/record.json")))
 
+    def test_native_edit_while_copying_frontend_keeps_already_sealed_inputs(self):
+        frontend = self.repo / "apps/control-room/app/page.tsx"
+        frontend.parent.mkdir(parents=True)
+        frontend.write_bytes(b"export default function Page() {}\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "frontend after native seal fixture")
+        native_before = self.file.read_bytes()
+        backend_before = build_snapshot.fingerprint(self.repo)["sha256"]
+        copy = build_snapshot._copy_file
+        copied = []
+
+        def editing_after_seal(source, destination):
+            copied.append(source)
+            if source == frontend:
+                self.assertIn(self.file, copied)
+                self.file.write_bytes(b"pub const VALUE: u8 = 42;\n")
+            return copy(source, destination)
+
+        with patch.object(build_snapshot, "_copy_file", side_effect=editing_after_seal):
+            metadata = self.make()
+        frozen = Path(metadata["source_root"])
+        self.assertEqual((frozen / "crates/demo/src/lib.rs").read_bytes(), native_before)
+        self.assertEqual(metadata["backend_source_sha256"], backend_before)
+        self.assertNotEqual(build_snapshot.fingerprint(self.repo)["sha256"], backend_before)
+        self.assertEqual(build_snapshot.verify_snapshot(metadata, self.build), metadata)
+
+    def test_native_edit_during_protected_copy_is_still_rejected(self):
+        copy = build_snapshot._copy_file
+
+        def editing_before_seal(source, destination):
+            if source == self.file:
+                self.file.write_bytes(b"pub const VALUE: u8 = 42;\n")
+            return copy(source, destination)
+
+        with patch.object(build_snapshot, "_copy_file", side_effect=editing_before_seal):
+            with self.assertRaises(build_snapshot.SourceChangedSnapshot):
+                self.make()
+        self.assertFalse(list((self.build / "source-snapshots").glob("*/record.json")))
+
     def test_traversal_and_record_tampering_rejected(self):
         with patch.object(build_snapshot, "_paths", return_value=["../outside"]):
             with self.assertRaises(build_snapshot.SnapshotError):

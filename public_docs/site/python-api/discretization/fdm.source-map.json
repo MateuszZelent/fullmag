@@ -39,7 +39,7 @@
     "parameters": [
       {
         "python": "FDM.cell",
-        "type": "`three positive floats or `None``",
+        "type": "`tuple[float, float, float] | None`",
         "default": "`None`",
         "si_unit": "\\mathrm{m}",
         "validation": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
@@ -49,7 +49,7 @@
       },
       {
         "python": "FDM.default_cell",
-        "type": "`three positive floats or `None``",
+        "type": "`tuple[float, float, float] | None`",
         "default": "`None`",
         "si_unit": "\\mathrm{m}",
         "validation": "Default cell size when per-magnet grids are present.",
@@ -59,7 +59,7 @@
       },
       {
         "python": "FDM.per_magnet",
-        "type": "`mapping or `None``",
+        "type": "`Mapping[str, Any] | None`",
         "default": "`None`",
         "si_unit": "1",
         "validation": "Optional explicit per-magnet FDM grids.",

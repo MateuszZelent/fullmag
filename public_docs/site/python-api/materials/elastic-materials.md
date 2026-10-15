@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object elasti
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,10 +54,10 @@ fm.ElasticMaterial(name, C11, C12, C44, rho, eta_mech=None)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | material identifier | FEM CPU/GPU: IR; FDM not currently resolved | ```name``` |
-| ```C11/C12/C44``` | ```float``` | ```required``` | ```Pa``` | positive | cubic elastic constants | FEM CPU/GPU: IR; FDM not currently resolved | ```c11/c12/c44``` |
-| ```rho``` | ```float``` | ```required``` | ```kg/m^3``` | positive | mass density | FEM CPU/GPU: IR; FDM not currently resolved | ```density``` |
-| ```eta_mech``` | ```float or None``` | ```None``` | ```Pa s or model-specific``` | non-negative when supplied | mechanical damping | FEM CPU/GPU: IR; FDM not currently resolved | ```mechanical_damping``` |
+| `name` | `str` | `required` | `1` | non-empty | material identifier | FEM CPU/GPU: IR; FDM not currently resolved | `name` |
+| `C11/C12/C44` | `float` | `required` | `Pa` | positive | cubic elastic constants | FEM CPU/GPU: IR; FDM not currently resolved | `c11/c12/c44` |
+| `rho` | `float` | `required` | `kg/m^3` | positive | mass density | FEM CPU/GPU: IR; FDM not currently resolved | `density` |
+| `eta_mech` | `float or None` | `None` | `Pa s or model-specific` | non-negative when supplied | mechanical damping | FEM CPU/GPU: IR; FDM not currently resolved | `mechanical_damping` |
 
 ### Stage-first example
 

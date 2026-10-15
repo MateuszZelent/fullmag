@@ -3981,16 +3981,19 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
         .expect("accepted batch manifest is durable");
     let mut manifest: fullmag_application::BatchExpansionManifest =
         serde_json::from_slice(&manifest_bytes).unwrap();
-    let initial_progress = fullmag_session::FmsBatchExpansionProgress::new(
-        &batch_intent,
-        u64::try_from(manifest.cases.len()).unwrap(),
-        0,
-        1,
-    )
-    .unwrap();
+    let initial_progress = store
+        .read_batch_expansion_progress(&batch_intent.batch_id)
+        .unwrap()
+        .expect("accepted batch submission seeds durable expansion progress");
     assert_eq!(
-        store.commit_batch_expansion_progress(0, &initial_progress).unwrap(),
-        fullmag_session::BatchExpansionProgressCommitDisposition::Accepted
+        initial_progress.total_cases,
+        u64::try_from(manifest.cases.len()).unwrap()
+    );
+    assert_eq!(initial_progress.sequence, 1);
+    assert_eq!(initial_progress.next_case_index, 0);
+    assert_eq!(
+        initial_progress.state,
+        fullmag_session::FmsBatchExpansionState::Pending
     );
 
     // Recreate the publisher crash window: the child intent commits before

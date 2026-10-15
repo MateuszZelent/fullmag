@@ -42,6 +42,22 @@ kopiowania nie wymuszają ponowienia capture. Źródła natywne oraz zależnośc
 krótkim etapie kopiowania. Tylko wyścig capture można ponowić, najwyżej trzy
 razy; błąd kompilacji nie uruchamia automatycznej kolejnej próby.
 
+Aktualizacja 15.10.2026: chronione wejścia są kopiowane jako pierwsze, a pełne
+confirm_origin zamyka ich spójny etap przed kopiowaniem frontend/docs/testów.
+Długie kopiowanie niechronionych plików nie przedłuża już zależności od live
+checkoutu. Każdy skopiowany plik nadal należy do pełnego inventory i podlega
+kontroli integralności; chronione wejścia i zależności nadal muszą zgadzać się
+przed ich utrwaleniem. Nie zmniejszono tej kontroli ani nie dodano ponowienia
+kompilatora. Ciągłe zmiany w samym chronionym etapie nadal mogą wyczerpać trzy
+próby — nie jest to atomowy snapshot systemu plików.
+
+Interpretowana macierz snapshotu: **17/17 PASS**, w tym nowa para regresji
+native edit during protected copy → odmowa oraz native edit while copying
+frontend after seal → zachowane pierwotne bajty/digest i poprawna weryfikacja
+kopii. Receipt:
+`builds/fullmag-0950f4dca4ffe38f/windows-control-room-source-check/native-snapshot-contracts/87783baabc2e4278b48db639e935a26a/receipt.json`.
+To nie jest dowód ukończonej natywnej kompilacji ani kwalifikacji wydania.
+
 Jedyny zapisywalny wyjątek w drzewie kompilatora obejmuje cztery standardowe
 pliki JSON generowane przez Tauri w `apps/desktop/src-tauri/gen/schemas`.
 Są ograniczone nazwą, rozmiarem i formatem, oznaczone jako wyniki kompilatora

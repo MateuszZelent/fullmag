@@ -246,6 +246,10 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
     *"scripts/verify_development_backend_api.py"*)
+    frozen_project_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --project-document-only --frozen-native-build-id "([0-9a-f]{64})" --project-document-browser$'
+    if [[ "${recipe}" =~ ${frozen_project_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --project-document-only --frozen-native-build-id "${BASH_REMATCH[1]}" --project-document-browser
+    fi
     frozen_project_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --project-document-only --frozen-native-build-id "([0-9a-f]{64})"( --archive-frozen-bundle)?$'
     if [[ "${recipe}" =~ ${frozen_project_pattern} ]]; then
       if ! is_windows_shell; then
@@ -451,6 +455,10 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_saved_fem_archive_roundtrip.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_pinned_dataset_browser.py"*)
+    preparation_workspace_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3268 --scenario preparation-workspace$'
+    if [[ "${recipe}" =~ ${preparation_workspace_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3268 --scenario preparation-workspace
+    fi
     antenna_spectrum_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3265 --scenario antenna-source-spectrum$'
     if [[ "${recipe}" =~ ${antenna_spectrum_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3265 --scenario antenna-source-spectrum

@@ -25,22 +25,29 @@ describe("KernelProvider performance contracts", () => {
       "resourceData: runtimeResourceDataRef.current",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, startupVisible]);",
+      "}, [kernel, sessionScopeKey]);",
     );
     expect(kernelProviderSource).not.toContain(
-      "}, [kernel, runtimeResourceData, startupVisible]);",
+      "}, [kernel, runtimeResourceData]);",
     );
     expect(kernelProviderSource).not.toContain(
       "}, [kernel, runtimeResourceData, startupState.isVisible]);",
     );
   });
 
-  it("uses startup visibility selectors only for interactions that must wait for the workspace", () => {
+  it("keeps shortcut handling available while preparation still gates runtime data", () => {
     expect(kernelProviderSource).toContain(
       "useSimulationStartupOverlayVisibility",
     );
     expect(kernelProviderSource).toContain(
       "const startupVisible = useSimulationStartupOverlayVisibility();",
+    );
+    expect(kernelProviderSource).toContain("enabled: !startupVisible");
+    expect(kernelProviderSource).not.toContain(
+      "if (startupVisible) {\n      return;\n    }",
+    );
+    expect(kernelProviderSource).toContain(
+      "dispatchShortcutCommand(kernel.commands, event, context);",
     );
     expect(kernelProviderSource).not.toContain(
       "function RealtimeConnector({ kernel }: { kernel: KernelApi }) {\n  const startupVisible",

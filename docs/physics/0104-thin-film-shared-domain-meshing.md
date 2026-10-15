@@ -142,7 +142,19 @@ uruchamia meshing3D. Nie nadaje nowego znaczenia `through_thickness_elements`:
 wynik musi przejść istniejący exact count, wszystkie węzły magnetyczne muszą
 leżeć na dokładnie zadanych płaszczyznach, każda warstwa musi być niepusta,
 a żaden tetraedr magnetyczny nie może przecinać wewnętrznej płaszczyzny.
-Dodatkowe poziomy z są błędem, nie dopuszczoną przybliżoną realizacją.
+Dodatkowe poziomy z **w siatce magnetycznego właściciela** są błędem,
+nie dopuszczoną przybliżoną realizacją. Parametr jest przypisany do
+`mesh_workflow.per_geometry[]`, nie do wszystkich węzłów wspólnego airboxa.
+Zewnętrzne przedziały powietrza siatkowane niezależnymi polami 3D mogą mieć
+węzły wewnątrz granic partycji CAD. Wszystkie zadane granice nadal muszą być
+obecne, żaden tetraedr nie może przekraczać granicy partycji, a zewnętrzne
+bounds i limity pionowego kroku pozostają bez zmian. Nie jest to obietnica
+strukturalnej siatki XY ani osłabienie exact layer count filmu.
+
+Poniższy opis pełnej meshed extrusion dokumentuje historyczny przypadek
+GHA 37911565494, a nie stan kwalifikacji obecnego kandydata. Bieżąca
+magnetic-only prism correction, geometry-only exterior air i jej otwarte
+bramki są opisane w [nocie 0102](0102-airbox-mesh-grading-geometric.md).
 Każdy zadany przedział GEO ma jawnie jedną warstwę ekstrudowania
 (`numElements=[1]`, znormalizowane `heights=[1.0]`, `recombine=True`).
 Dotyczy to także trasy scoped, lecz meshed extrusion nadal replikuje jedną

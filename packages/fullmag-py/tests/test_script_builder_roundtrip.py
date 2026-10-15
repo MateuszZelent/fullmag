@@ -656,7 +656,44 @@ class ScriptBuilderEigenOutputRoundTripTests(unittest.TestCase):
         self.assertLess(eigen_output, eigen_stage)
         self.assertLess(eigen_stage, autosave_action)
         self.assertLess(autosave_action, follow_up)
-        self.assertNotIn('study.save("m", every=2e-12)', rendered)
+
+        expected_outputs_by_stage = [
+            [
+                {"kind": "field", "name": "m", "every_seconds": 1e-12},
+                {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+            ],
+            [
+                {
+                    "kind": "eigen_spectrum",
+                    "quantity": "eigenfrequency",
+                    "scope": "global",
+                }
+            ],
+            [
+                {"kind": "field", "name": "m", "every_seconds": 1e-12},
+                {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+            ],
+            [
+                {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+                {"kind": "field", "name": "m", "every_seconds": 2e-12},
+            ],
+        ]
+        expected_final_outputs = [
+            {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+            {"kind": "field", "name": "m", "every_seconds": 2e-12},
+        ]
+        for candidate in (loaded, rewritten):
+            self.assertEqual(
+                [
+                    stage.problem.study.to_ir()["sampling"]["outputs"]
+                    for stage in candidate.stages
+                ],
+                expected_outputs_by_stage,
+            )
+            self.assertEqual(
+                candidate.problem.study.to_ir()["sampling"]["outputs"],
+                expected_final_outputs,
+            )
 
     def test_disabling_all_autosave_outputs_resets_between_eigen_stages(self) -> None:
         script = """
@@ -836,7 +873,6 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
             rewritten = _load_text(str(rendered), root, "rewritten.py")
 
-        self.assertNotIn('study.save("m", every=1e-12)', rendered)
         initial_stage = rendered.index("study.stages.add_relax(")
         autosave_action = rendered.index(
             'study.stages.autosave("m", every=1e-12, stage_id="enable-m-output")'
@@ -856,6 +892,10 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
                     for stage in candidate.stages
                 ],
                 expected_outputs_by_stage,
+            )
+            self.assertEqual(
+                candidate.problem.study.to_ir()["sampling"]["outputs"],
+                expected_later_outputs,
             )
 
     def test_stage_autosave_roundtrips_for_relax_and_run(self) -> None:

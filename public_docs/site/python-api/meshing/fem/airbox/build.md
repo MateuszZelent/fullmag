@@ -101,11 +101,11 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `study.build_domain_mesh()` | str | None | None | $1$ | `StudyBuilder.build_domain_mesh()` | materializes the shared domain mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.build_mesh()` | str | None | None | $1$ | `StudyBuilder.build_mesh()` | legacy mesh build entry point | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.save(path)` | str | None | None | $1$ | `StudyMeshHandle.save` | save the mesh artifact | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.load(path)` | str | None | None | $1$ | `StudyMeshHandle.load` | load the artifact; authoring-consistency validation | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.save_or_load(path)` | str | None | None | $1$ | `StudyMeshHandle.save_or_load` | cache: load when consistent, otherwise save | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.build_domain_mesh()` | `str \| None` | `None` | $1$ | `StudyBuilder.build_domain_mesh()` | materializes the shared domain mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.build_mesh()` | `str \| None` | `None` | $1$ | `StudyBuilder.build_mesh()` | legacy mesh build entry point | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.save(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.save` | save the mesh artifact | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.load(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.load` | load the artifact; authoring-consistency validation | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.save_or_load(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.save_or_load` | cache: load when consistent, otherwise save | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
 
 Failure behavior / invalidation:
 

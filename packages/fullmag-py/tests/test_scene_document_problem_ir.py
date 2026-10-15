@@ -279,7 +279,7 @@ study.geometry_object(fm.Box(20e-9, 10e-9, 5e-9, name='lead').translate((4e-9, 0
     assert problem_ir["object_regions"] == reference_ir["object_regions"]
 
 
-def test_scene_document_problem_ir_rejects_unrepresented_auxiliary_object_id(
+def test_scene_document_problem_ir_preserves_auxiliary_object_id(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "scene_auxiliary_identity_source.py"
@@ -299,18 +299,28 @@ study.geometry_object(fm.Box(20e-9, 10e-9, 5e-9), name='lead', type='conductor')
     auxiliary = next(obj for obj in scene["objects"] if obj["role"] == "conductor")
     auxiliary["id"] = "stable-lead-id"
 
-    with pytest.raises(
-        ValueError,
-        match="scene_document_auxiliary_object_id_unsupported",
-    ):
-        scene_document_to_problem_ir(
-            scene,
-            requested_backend="fdm",
-            requested_device="cpu",
-            requested_precision="double",
-            requested_mode="strict",
-            source_root=tmp_path,
-        )
+    problem_ir = scene_document_to_problem_ir(
+        scene,
+        requested_backend="fdm",
+        requested_device="cpu",
+        requested_precision="double",
+        requested_mode="strict",
+        source_root=tmp_path,
+    )
+    assert problem_ir["physics_objects"] == [
+        {
+            "schema_version": "physics_object.v1",
+            "object_id": "stable-lead-id",
+            "name": "lead",
+            "type": "conductor",
+            "geometry_id": "lead",
+            "material_assignment_ids": [],
+        }
+    ]
+    assert [magnet["object_id"] for magnet in problem_ir["magnets"]] == ["film"]
+    assert "stable-lead-id" not in {
+        magnet["object_id"] for magnet in problem_ir["magnets"]
+    }
 
 
 @pytest.mark.parametrize(

@@ -120,7 +120,14 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         compute_cancellation_only: bool = False,
         compute_host_initialization_only: bool = False,
         compute_scheduler_cancellation_only: bool = False,
-        archive_frozen_bundle: bool = False) -> int:
+        archive_frozen_bundle: bool = False,
+        project_document_browser: bool = False) -> int:
+    if project_document_browser and (
+        not project_document_only or frozen_native_build_id is None or archive_frozen_bundle
+    ):
+        raise storage.StorageError(
+            "Project document browser proof requires the separate frozen project-document scope"
+        )
     if workspace_browser_owner_bundle is not None:
         raise storage.StorageError(
             "Browser workspace verification was retired with the UI restart feature"
@@ -292,6 +299,9 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["source_binding"] = "verified_frozen_native_package"
         if project_document_only:
             receipt["scope"] = "runtime-free project archive create/open identity and canonical bytes; no UI hydration, restart, solver or release qualification"
+        if project_document_browser:
+            receipt["project_document_browser"] = True
+            receipt["scope"] = "real workspace New/Save/Open/Save/Close without RuntimeSession against a verified native API; no geometry authoring, launcher, solver or release qualification"
         if observer_pause_only:
             receipt["scope"] = "native observer pause protocol with actual threads; no API, process replacement, UI hydration, solver or release qualification"
         if restart_consumer_only:
@@ -445,7 +455,10 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
                          project_source_root=project_source_root,
-                         consumer_readiness_only=consumer_readiness_only)
+                         consumer_readiness_only=consumer_readiness_only,
+                         project_document_browser=project_document_browser,
+                         frontend_dependency_workspace=Path(manifest["frontend_workspace_root"])
+                         if project_document_browser else None)
             if (not project_document_only and not observer_pause_only
                     and not restart_consumer_only and not consumer_readiness_only
                     and not compute_cancellation_only
@@ -1655,7 +1668,9 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False,
              project_source_root: Path | None = None,
              consumer_readiness_only: bool = False,
-             start_freeze_race_only: bool = False) -> None:
+             start_freeze_race_only: bool = False,
+             project_document_browser: bool = False,
+             frontend_dependency_workspace: Path | None = None) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
     fixture_storage = run_root / "fixture-storage"
     status = fixture_storage / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
@@ -1992,6 +2007,13 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
         return
 
     if project_document_only:
+        if project_document_browser:
+            from windows.verify_project_document_browser import exercise as exercise_project_browser
+            if frontend_dependency_workspace is None:
+                raise storage.StorageError("Project browser proof requires verified frontend dependencies")
+            with_api("project-document-browser", {}, lambda get: exercise_project_browser(
+                repo, run_root, receipt, get, frontend_dependency_workspace))
+            return
         with_api("project-document", {}, project_document)
         from windows.verify_scene_stage_authoring import exercise as exercise_scene_stages
         with_api("scene-stage-authoring", {}, lambda get: exercise_scene_stages(get, checks, receipt, run_root))
@@ -2615,6 +2637,7 @@ if __name__ == "__main__":
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--cross-build-bundle", default="")
     parser.add_argument("--project-document-only", action="store_true")
+    parser.add_argument("--project-document-browser", action="store_true")
     parser.add_argument("--observer-pause-only", action="store_true")
     parser.add_argument("--restart-consumer-only", action="store_true")
     parser.add_argument("--consumer-readiness-only", action="store_true")
@@ -2640,7 +2663,8 @@ if __name__ == "__main__":
                               args.start_freeze_race_only, args.compute_cancellation_only,
                               args.compute_host_initialization_only,
                               args.compute_scheduler_cancellation_only,
-                              archive_frozen_bundle=args.archive_frozen_bundle))
+                              archive_frozen_bundle=args.archive_frozen_bundle,
+                              project_document_browser=args.project_document_browser))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

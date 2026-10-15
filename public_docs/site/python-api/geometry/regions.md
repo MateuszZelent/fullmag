@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object object
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,15 +54,15 @@ fm.Region(name, geometry) and fm.ObjectRegion(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```Region.name``` | ```str``` | ```required``` | ```1``` | non-empty | region name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```Region.geometry``` | ```Geometry``` | ```required``` | ```1``` | typed geometry | region shape | FEM/FDM CPU/GPU: IR; resolver-specific | ```shape``` |
-| ```ObjectRegion.owner_object``` | ```str or object``` | ```required``` | ```1``` | owner-scoped | owning object | FEM/FDM CPU/GPU: IR; resolver-specific | ```owner``` |
-| ```ObjectRegion.name``` | ```str``` | ```required``` | ```1``` | non-empty | region name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```ObjectRegion.region_id``` | ```str or None``` | ```None``` | ```1``` | stable when supplied | region identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```region_id``` |
-| ```ObjectRegion.frame``` | ```str``` | ```object``` | ```1``` | supported frame | coordinate frame | FEM/FDM CPU/GPU: IR; resolver-specific | ```frame``` |
-| ```ObjectRegion.enabled``` | ```bool``` | ```True``` | ```1``` | boolean | activation flag | FEM/FDM CPU/GPU: IR; resolver-specific | ```enabled``` |
-| ```ObjectRegion.priority``` | ```int``` | ```0``` | ```1``` | integer | overlap precedence | FEM/FDM CPU/GPU: IR; resolver-specific | ```priority``` |
-| ```ObjectRegion.realization_policy``` | ```str``` | ```inherit``` | ```1``` | supported policy | mesh/realization inheritance | FEM/FDM CPU/GPU: IR; resolver-specific | ```realization_policy``` |
+| `Region.name` | `str` | `required` | `1` | non-empty | region name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `Region.geometry` | `Geometry` | `required` | `1` | typed geometry | region shape | FEM/FDM CPU/GPU: IR; resolver-specific | `shape` |
+| `ObjectRegion.owner_object` | `str or object` | `required` | `1` | owner-scoped | owning object | FEM/FDM CPU/GPU: IR; resolver-specific | `owner` |
+| `ObjectRegion.name` | `str` | `required` | `1` | non-empty | region name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `ObjectRegion.region_id` | `str or None` | `None` | `1` | stable when supplied | region identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `region_id` |
+| `ObjectRegion.frame` | `str` | `object` | `1` | supported frame | coordinate frame | FEM/FDM CPU/GPU: IR; resolver-specific | `frame` |
+| `ObjectRegion.enabled` | `bool` | `True` | `1` | boolean | activation flag | FEM/FDM CPU/GPU: IR; resolver-specific | `enabled` |
+| `ObjectRegion.priority` | `int` | `0` | `1` | integer | overlap precedence | FEM/FDM CPU/GPU: IR; resolver-specific | `priority` |
+| `ObjectRegion.realization_policy` | `str` | `inherit` | `1` | supported policy | mesh/realization inheritance | FEM/FDM CPU/GPU: IR; resolver-specific | `realization_policy` |
 
 ### Stage-first example
 

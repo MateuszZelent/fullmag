@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object rf_dri
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,10 +54,10 @@ fm.RfDrive(current_a, frequency_hz=None, phase_rad=0.0, waveform=None)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```current_a``` | ```float``` | ```required``` | ```A``` | finite | drive current | FEM/FDM CPU/GPU: IR; resolver-specific | ```current``` |
-| ```frequency_hz``` | ```float or None``` | ```None``` | ```Hz``` | positive when supplied | frequency for convenience waveform | FEM/FDM CPU/GPU: IR; resolver-specific | ```waveform.frequency``` |
-| ```phase_rad``` | ```float``` | ```0.0``` | ```rad``` | finite | phase offset | FEM/FDM CPU/GPU: IR; resolver-specific | ```waveform.phase``` |
-| ```waveform``` | ```Waveform or None``` | ```None``` | ```1``` | typed when supplied | explicit waveform override | FEM/FDM CPU/GPU: IR; resolver-specific | ```waveform``` |
+| `current_a` | `float` | `required` | `A` | finite | drive current | FEM/FDM CPU/GPU: IR; resolver-specific | `current` |
+| `frequency_hz` | `float or None` | `None` | `Hz` | positive when supplied | frequency for convenience waveform | FEM/FDM CPU/GPU: IR; resolver-specific | `waveform.frequency` |
+| `phase_rad` | `float` | `0.0` | `rad` | finite | phase offset | FEM/FDM CPU/GPU: IR; resolver-specific | `waveform.phase` |
+| `waveform` | `Waveform or None` | `None` | `1` | typed when supplied | explicit waveform override | FEM/FDM CPU/GPU: IR; resolver-specific | `waveform` |
 
 ### Stage-first example
 

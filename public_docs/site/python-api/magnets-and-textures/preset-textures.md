@@ -55,12 +55,6 @@ preset.
 (python-api-magnets-and-textures-preset-textures-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-preset-texture-local-coordinate
-
-q_{\mathrm{IR}} = \mathrm{preset-texture-local-coordinate}(\text{qualified inputs})
-```
-
 ### Coordinate, mapping, plane, and transform pipeline
 
 For each active sample, the planner first selects $\mathbf x_\mathrm s$ from the object-space or
@@ -451,11 +445,11 @@ wavevector magnitude is retained.
 `fm.texture.antiskyrmion(...)` uses the same overflow-resistant radial profile as the skyrmion,
 but reverses the azimuthal winding:
 
-\[
+$$
 \psi=-\phi+\gamma_c,\qquad
 \mathbf m_\mathrm{local}=
 (\sin\theta\cos\psi,\ \sin\theta\sin\psi,\ -p\cos\theta).
-\]
+$$
 
 The implemented v2 preset is a Neel-type antiskyrmion ansatz. `chirality=+1` gives
 $\gamma_c=0$ and `chirality=-1` gives $\gamma_c=\pi$. It is sampled identically on FDM cell
@@ -474,18 +468,18 @@ centres and FEM magnetic nodes.
 
 `fm.texture.skyrmionium(...)` is a normalized two-wall, 2-pi target-state initializer. Defining
 
-\[
+$$
 a(s)=\arccos[-\tanh(s)],\qquad
 \theta(r)=a\!\left(\frac{r-R_\mathrm{in}}{\Delta}\right)
 +a\!\left(\frac{r-R_\mathrm{out}}{\Delta}\right),
-\]
+$$
 
 the local field is
 
-\[
+$$
 \mathbf m_\mathrm{local}=
 (\sin\theta\cos\psi,\ \sin\theta\sin\psi,\ s_\mathrm{bg}\cos\theta).
-\]
+$$
 
 The centre and far field have the same background orientation; the annulus between the two walls
 is reversed. The continuum target has zero net skyrmion number when the full far field is included.
@@ -506,18 +500,18 @@ is reversed. The continuum target has zero net skyrmion number when the full far
 `fm.texture.hopfion(...)` is a three-dimensional Hopf-map initializer. With normalized coordinates
 $X=x/R$, $Y=qy/R$, $Z=z/(R a_z)$, $\rho^2=X^2+Y^2+Z^2$, and $d=1+\rho^2$,
 
-\[
+$$
 z_1=\frac{2(X+iY)}{d},\qquad
 z_2=\frac{2Z+i(\rho^2-1)}{d},
-\]
+$$
 
-\[
+$$
 \mathbf h=
 \left(2\operatorname{Re}(z_1\overline{z_2}),
 2\operatorname{Im}(z_1\overline{z_2}),
 |z_1|^2-|z_2|^2\right),\qquad
 \mathbf m=-s_\mathrm{bg}\,\mathcal R_z(\varphi_0)\mathbf h.
-\]
+$$
 
 The field is normalized analytically and renormalized once numerically to suppress roundoff.
 `hopf_charge=-1` reflects the second stereographic coordinate and reverses the texture orientation.

@@ -205,7 +205,7 @@
       "id": "scoped-layer-meshed-extrusion",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Uses fixed meshed extrusion that copies one source-face triangulation through exact z levels; current finite ROI density gate fails.",
+      "responsibility": "Historical GHA 37911565494 full meshed-extrusion diagnosis: copying one source face did not establish finite ROI density. Current body-first magnetic-only construction and passing scoped meshing regressions are tracked in note 0102; this historical mapping does not claim solver qualification.",
       "evidence_status": "source_mechanism_reviewed_actual_density_failed"
     },
     {

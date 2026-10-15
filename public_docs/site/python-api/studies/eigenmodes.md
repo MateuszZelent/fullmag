@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: eigenmodes.source-map.json and reviewed source revision 5e99782acbb7fb3f65d0cad872e102bf67733103
+source_of_truth: docs/physics/0600-fem-eigenmodes-linearized-llg.md
 ---
 
 (public-docs-python-api-studies-eigenmodes)=
@@ -12,23 +12,25 @@ source_of_truth: eigenmodes.source-map.json and reviewed source revision 5e99782
 
 (python-api-studies-eigenmodes-problem-statement)=
 <!-- (problem-statement)= -->
-## 1. Physical problem and authoring contract
+## 1. Contract and scope
 
-This page documents the public Python authoring contract and canonical `ProblemIR` lowering for the
-spin-wave eigenmode study type (`Eigenmodes`, `EigenmodesStageSpec`, `FemEigenSolverPolicy`,
-`KPoint`, `KPath`, `BiasFieldSweep`, and `ModeTracking`). The complete operator mathematics,
-tangent-frame projection, coupled magnetostatic Schur-complement formulation, and modal
-qualification gates are owned by {doc}`../../numerical-methods/eigensolvers/index` and
-{doc}`../../numerical-methods/eigensolvers/linearized-llg`.
+`fm.Eigenmodes` and `study.stages.add_eigenmodes(...)` define the public Python authoring contract
+for linearized spin-wave eigenmode studies around a verified micromagnetic equilibrium
+$\mathbf m_0(\mathbf x)$. Together with the companion schemas `FemEigenSolverPolicy`, `KPoint`,
+`KPath`, `BiasFieldSweep`, and `ModeTracking`, this study type configures single-$\mathbf k$
+resonances, Brillouin-zone magnonic dispersion relations $f_n(\mathbf k)$, and static bias-field
+ferromagnetic resonance sweeps $f_n(\mathbf B_0)$.
+
+Full mathematical derivations of the tangent-plane projection, coupled $(q,\phi)$ Poisson-airbox
+Schur complement, real-split SLEPc shift-and-invert, and consistent-$P_1$ mass-weighted Hungarian
+branch tracking are given in {doc}`/numerical-methods/eigensolvers/linearized-llg` and
+{doc}`/numerical-methods/eigensolvers/modal-validation`.
 
 (python-api-studies-eigenmodes-governing-equations)=
 <!-- (governing-equations)= -->
 ## 2. Governing equations
 
-An `eigenmodes` stage linearizes the enabled effective-field operator about a static equilibrium
-$\mathbf m_0(\mathbf r)$ ($|\mathbf m_0| = 1$, $\mathbf m_0\times\mathbf H_{\mathrm{eff}}[\mathbf m_0] = \mathbf 0$),
-projects small perturbations $\delta\mathbf m = T\mathbf q$ onto the local two-component tangent
-frame $(\mathbf e_1, \mathbf e_2)$, and solves the generalized eigenvalue problem:
+The modal study solves the tangent-projected generalized eigenvalue problem around $\mathbf m_0$:
 
 ```{math}
 :label: eq-python-api-eigenmodes-pencil
@@ -36,20 +38,23 @@ frame $(\mathbf e_1, \mathbf e_2)$, and solves the generalized eigenvalue proble
 \qquad
 \lambda = \sigma + \mathrm i\omega,
 \qquad
-f = \frac{|\omega|}{2\pi}.
+f = \frac{\omega}{2\pi},
 ```
 
-The implemented operator identifiers are `"linearized_llg"` (canonical projected tangent operator)
-and `"full_2x2"` (explicit $2\times 2$ Herring–Kittel nodal block structure).
+where `operator="linearized_llg"` selects the scalar projected $N_m\times N_m$ operator along the
+primary tangent axis $\mathbf e_1$, and `operator="full_2x2"` selects the coupled $2N_m\times 2N_m$
+Herring–Kittel tangent-plane block pencil in $(\mathbf e_1, \mathbf e_2)$ required for elliptical
+precession, coupled Poisson-airbox magnetostatics (`include_demag=True`), and nonzero Bloch wave
+vectors ($\mathbf k \neq \mathbf 0$).
 
 (python-api-studies-eigenmodes-symbols-and-si-units)=
 <!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
 
 | Symbol | Meaning | SI unit |
-|---|---|---|
-| $\mathsf K$ | tangent stiffness/dynamic matrix | problem-dependent |
-| $\mathsf G$ | gyrotropic mass/operator matrix | problem-dependent |
+| --- | --- | --- |
+| $\mathsf K$ | tangent rate-stiffness dynamic matrix (or $\mathrm{J}$ in energy-Hessian form) | $\mathrm{s^{-1}}$ |
+| $\mathsf G$ | damping-modified tangent metric $I - \alpha_{\mathrm{eff}}J$ (or $\mathrm{J\,s}$ in energy-Hessian form) | $1$ |
 | $\mathbf q$ | discrete tangent eigenvector | $1$ |
 | $\lambda$ | complex eigenvalue | $\mathrm{s^{-1}}$ |
 | $\sigma$ | modal growth/decay real part | $\mathrm{s^{-1}}$ |
@@ -58,72 +63,82 @@ and `"full_2x2"` (explicit $2\times 2$ Herring–Kittel nodal block structure).
 
 (python-api-studies-eigenmodes-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
-## 4. Assumptions, boundary meaning, and validity limits
+## 4. Assumptions and validity
 
-| Choice | Mathematical meaning | What it does not mean |
-|---|---|---|
-| `equilibrium_source="relax"` | Consumes the converged equilibrium state from the preceding `relax` stage after checking the R4 torque gate. | It does not accept a relaxation stage that stopped only because `max_steps` was reached. |
-| `target="lowest"` vs `"nearest"` vs `"frequency_window"` | Selects lowest positive frequencies, modes nearest `target_frequency`, or modes inside `[frequency_min, frequency_max]`. | Target selection is not a convergence criterion; returned modes must still satisfy the coupled residual tolerance. |
-| `damping_policy="ignore"` vs `"include"` | Controls whether Gilbert damping $\alpha$ enters the linearized operator $B_\alpha = I + \alpha J$. | The two policies define different eigenproblems and cannot be compared as CPU/GPU parity runs. |
-| `spatial_representation="full_3d"` vs `"waveguide_2p5d"` | Selects full 3D unit-cell Bloch operators or 2.5D cross-sectional waveguide operators with shifted gradient $D_{\mathbf k} = \nabla_\perp - \mathrm i k\hat{\mathbf e}_\parallel$. | `waveguide_2p5d` requires translational invariance along the propagation axis. |
+* `count` must be a positive integer ($K \ge 1$).
+* `target="nearest"` requires a positive `target_frequency` (in $\mathrm{Hz}$).
+* `target="frequency_window"` requires both `frequency_min` and `frequency_max` with
+  $0 < f_{\min} < f_{\max}$.
+* `outputs` must include at least one modal output (`SaveMode`, `SaveSpectrum`, `SaveDispersion`,
+  or `SaveEigenDiagnostics`); driven `SaveResponse` outputs are rejected on `Eigenmodes`.
 
 (python-api-studies-eigenmodes-python-api)=
 <!-- (python-api)= -->
 ## 5. Python API and complete parameter reference
 
-### Executable stage workflow
+### Complete stage-first example
 
 ```python
-# %% Spin-wave eigenmodes and k-path dispersion about a relaxed equilibrium
+# %% Stage-first FEM modal study with Schur-complement policy and branch tracking
 import fullmag as fm
 
 nm = 1.0e-9
-
-# %% Study and FEM execution lane
 study = fm.study("eigenmodes_api_example")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.universe(mode="manual", size=(700 * nm, 250 * nm, 250 * nm))
+study.universe(mode="manual", size=(400 * nm, 150 * nm, 100 * nm))
 
-# %% Geometry, material, initial state, and interactions
-film = study.geometry(fm.Box(size=(500 * nm, 125 * nm, 3 * nm), name="film"), name="film")
+film = study.geometry(fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"), name="film")
 film.Ms = 800.0e3
 film.Aex = 13.0e-12
-film.alpha = 0.02
+film.alpha = 0.01
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.exchange()
-study.demag(model="airbox", variant="robin")
 
-# %% Relax to equilibrium, then solve for the lowest modes along a k-path
-study.stages.add_relax(stage_id="relax", algorithm="nonlinear_cg", max_steps=2000, tolT=1e-6)
+study.exchange()
+study.zeeman(field=(5.0e4, 0.0, 0.0))
+study.demag(model="airbox", variant="robin")
+study.stages.add_relax(stage_id="relax", algorithm="nonlinear_cg", max_steps=2000, tolT=1e-7)
+
+# %% Add eigenmodes stage with k-path dispersion and mode tracking
 study.stages.add_eigenmodes(
-    stage_id="eigen",
+    stage_id="eigen_dispersion",
     count=8,
-    target="lowest",
-    operator="linearized_llg",
+    target="nearest",
+    target_frequency=8.0e9,
+    operator="full_2x2",
     include_demag=True,
     equilibrium_source="relax",
     normalization="unit_l2",
     damping_policy="ignore",
-    bc="free",
+    spatial_representation="full_3d",
     k_sampling=fm.KPath(
-        points=[
-            fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
-            fm.KPoint("X", (1.0e7, 0.0, 0.0)),
+        nodes=[
+            ("Gamma", (0.0, 0.0, 0.0)),
+            ("X", (3.14159265e7, 0.0, 0.0)),
         ],
-        samples_per_segment=[4],
+        samples_per_segment=12,
     ),
-    solver_rtol=1.0e-8,
-    solver_max_outer_iterations=400,
-    solver_max_linear_iterations=200,
+    mode_tracking=fm.ModeTracking(
+        method="overlap_hungarian",
+        min_overlap=0.6,
+        degeneracy_tolerance=1.0e6,
+    ),
+    fem_solver_policy=fm.FemEigenSolverPolicy(
+        backend="slepc_shift_invert_schur",
+        subspace_dimension=24,
+        max_iterations=250,
+        tolerance=1.0e-8,
+        shift_Hz=8.0e9,
+        target_spectrum="target_magnitude",
+    ),
 )
 ```
 
-### `Eigenmodes` and `EigenmodesStageSpec` parameters
+### `Eigenmodes` parameters
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | `Eigenmodes.outputs` | `Sequence[EigenOutputSpec]` | `required` | $1$ | At least one; `SaveResponse` is rejected | Mode/spectrum/dispersion/diagnostic outputs | FDM/FEM CPU/GPU; planner checks materialization | `sampling.outputs` |
 | `Eigenmodes.count` | `int` | `20` | $1$ | Positive | Number of eigenvectors requested | FEM/FDM CPU/GPU | `count` |
 | `Eigenmodes.target` | `str` | `"lowest"` | $1$ | `lowest`, `nearest`, or `frequency_window` | Eigenvalue selection policy | FEM/FDM CPU/GPU | `target` |
@@ -133,7 +148,7 @@ study.stages.add_eigenmodes(
 | `Eigenmodes.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM/FDM CPU/GPU | `operator.kind` |
 | `Eigenmodes.include_demag` | `bool` | `True` | $1$ | Boolean | Include the dynamic demagnetization term | FEM/FDM CPU/GPU | `operator.include_demag` |
 | `Eigenmodes.equilibrium_source` | `str` | `"relax"` (stage entry default) | $1$ | `provided`, `relax`, or `artifact` | Equilibrium acquisition | FEM/FDM CPU/GPU | `equilibrium` |
-| `Eigenmodes.k_sampling` | `object \| None` | `None` | $\mathrm{m^{-1}}$ | Valid k sampling or k vector | Wave-vector sampling | FEM/FDM CPU/GPU | `k_sampling` |
+| `Eigenmodes.k_sampling` | `object \| None` | `None` | $\mathrm{rad\,m^{-1}}$ | Valid k sampling or k vector | Wave-vector sampling | FEM/FDM CPU/GPU | `k_sampling` |
 | `Eigenmodes.bias_field_sweep` | `BiasFieldSweep \| None` | `None` | $\mathrm{A\,m^{-1}}$ | Non-empty finite field list | Static bias-field sweep | FEM modal lane | `bias_field_sweep` |
 | `Eigenmodes.mode_tracking` | `ModeTracking \| None` | `None` | $1$ | Validated tracking policy | Mass-weighted Hungarian mode tracking | FEM modal runner | `mode_tracking` |
 | `Eigenmodes.normalization` | `str` | `"unit_l2"` | $1$ | `unit_l2` or `unit_max_amplitude` | Mode normalization | FEM/FDM CPU/GPU | `normalization` |
@@ -142,143 +157,111 @@ study.stages.add_eigenmodes(
 | `Eigenmodes.spatial_representation` | `str` | `"full_3d"` | $1$ | `full_3d` or `waveguide_2p5d` | Spatial operator geometry | FEM modal lane | `spatial_representation` |
 | `Eigenmodes.fem_solver_policy` | `FemEigenSolverPolicy \| None` | `None` | $1$ | Validated FEM eigensolver policy | Native eigensolver configuration | FEM modal lane | `fem_solver_policy` |
 
-### `FemEigenSolverPolicy`, `KPath`, `BiasFieldSweep`, and `ModeTracking` parameters
+### Companion policy and sampling schemas
 
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| `FemEigenSolverPolicy.backend` | `str` | `"auto"` | $1$ | `auto`, `slepc_shift_invert_schur`, `slepc`, `lobpcg_reference`, or `dense_reference` | Native eigensolver backend | FEM modal lane | `fem_solver_policy.backend` |
-| `FemEigenSolverPolicy.subspace_dimension` | `int \| None` | `None` | $1$ | Integer $\ge 2$ and $\ge \mathrm{count}$ | Krylov subspace dimension | FEM modal lane | `fem_solver_policy.subspace_dimension` |
-| `FemEigenSolverPolicy.max_iterations` | `int` | `200` | $1$ | Positive integer | Maximum outer eigensolver iterations | FEM modal lane | `fem_solver_policy.max_iterations` |
-| `FemEigenSolverPolicy.tolerance` | `float` | `1e-8` | $1$ | Finite positive float | Relative eigenpair residual tolerance | FEM modal lane | `fem_solver_policy.tolerance` |
-| `FemEigenSolverPolicy.shift_Hz` | `float \| None` | `None` | $\mathrm{Hz}$ | Finite nonnegative float | Spectral shift frequency | FEM shift-invert lane | `fem_solver_policy.shift_hz` |
-| `FemEigenSolverPolicy.target_spectrum` | `str` | `"smallest_magnitude"` | $1$ | `smallest_magnitude` or `target_magnitude` | SLEPc eigenvalue ordering target | FEM modal lane | `fem_solver_policy.target_spectrum` |
-| `KPath.nodes` | `Sequence[tuple[float,float,float]]` | `required` | $\mathrm{rad\,m^{-1}}$ | At least two finite 3-vectors | Brillouin-zone path vertices | FEM Floquet/2.5D lane | `k_sampling.nodes` |
-| `KPath.samples_per_segment` | `int` | `16` | $1$ | Positive integer | Interpolated samples per segment | FEM Floquet/2.5D lane | `k_sampling.samples_per_segment` |
-| `BiasFieldSweep.values` | `Sequence[tuple[float,float,float]]` | `required` | $\mathrm{A\,m^{-1}}$ | Non-empty finite 3-vectors | Static external field samples | FEM modal lane | `bias_field_sweep.values` |
-| `ModeTracking.min_overlap` | `float` | `0.5` | $1$ | Finite float in $(0, 1]$ | Minimum mass-weighted overlap threshold | FEM modal runner | `mode_tracking.min_overlap` |
-| `ModeTracking.degeneracy_tolerance` | `float` | `1e6` | $\mathrm{Hz}$ | Finite positive float | Frequency window for subspace transport | FEM modal runner | `mode_tracking.degeneracy_tolerance` |
+| Class | Field | Type | Default | SI unit | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| `FemEigenSolverPolicy` | `backend` | `str` | `"auto"` | $1$ | `"auto"`, `"slepc_shift_invert_schur"`, `"slepc"`, `"lobpcg_reference"`, or `"dense_reference"` |
+| `FemEigenSolverPolicy` | `subspace_dimension` | `int \| None` | `None` | $1$ | Krylov-Schur subspace dimension ($\ge 2$ and $\ge \mathrm{count}$) |
+| `FemEigenSolverPolicy` | `max_iterations` | `int` | `200` | $1$ | Maximum outer eigensolver restart cycles |
+| `FemEigenSolverPolicy` | `tolerance` | `float` | `1e-8` | $1$ | Relative coupled residual convergence tolerance |
+| `FemEigenSolverPolicy` | `shift_Hz` | `float \| None` | `None` | $\mathrm{Hz}$ | Spectral shift frequency $\tau/(2\pi)$ for shift-and-invert |
+| `FemEigenSolverPolicy` | `target_spectrum` | `str` | `"smallest_magnitude"` | $1$ | `"smallest_magnitude"` or `"target_magnitude"` |
+| `KPoint` | `k` | `tuple[float,float,float]` | `required` | $\mathrm{rad\,m^{-1}}$ | Single Brillouin-zone wave vector $(k_x, k_y, k_z)$ |
+| `KPath` | `nodes` | `Sequence[tuple[str, tuple[float,float,float]]]` | `required` | $\mathrm{rad\,m^{-1}}$ | Ordered high-symmetry vertices along the dispersion path |
+| `KPath` | `samples_per_segment` | `int \| Sequence[int]` | `16` | $1$ | Number of wave-vector samples per path segment |
+| `BiasFieldSweep` | `fields` | `Sequence[tuple[float,float,float]]` | `required` | $\mathrm{A\,m^{-1}}$ | Static external magnetic bias-field samples |
+| `ModeTracking` | `method` | `str` | `"overlap_hungarian"` | $1$ | Combinatorial branch assignment algorithm |
+| `ModeTracking` | `min_overlap` | `float` | `0.5` | $1$ | Minimum consistent-$P_1$ mass-weighted overlap threshold in $(0, 1]$ |
+| `ModeTracking` | `degeneracy_tolerance` | `float` | `1e6` | $\mathrm{Hz}$ | Frequency window for SVD Procrustes degenerate-subspace transport |
 
 (python-api-studies-eigenmodes-problem-ir)=
 <!-- (problem-ir)= -->
-## 6. ProblemIR, normalization, and provenance
+## 6. ProblemIR
 
-`Eigenmodes.to_ir()` emits `{"kind": "eigenmodes", ...}` inside `ProblemIR`:
-
-```json
-{
-  "kind": "eigenmodes",
-  "count": 8,
-  "target": "lowest",
-  "operator": "linearized_llg",
-  "include_demag": true,
-  "equilibrium_source": "relax",
-  "normalization": "unit_l2",
-  "damping_policy": "ignore",
-  "spin_wave_bc": {"kind": "free"},
-  "spatial_representation": "full_3d",
-  "k_sampling": {
-    "kind": "path",
-    "nodes": [[0.0, 0.0, 0.0], [10000000.0, 0.0, 0.0]],
-    "samples_per_segment": 4,
-    "labels": ["Gamma", "X"]
-  },
-  "mode_tracking": {
-    "enabled": true,
-    "method": "overlap_hungarian",
-    "min_overlap": 0.6,
-    "degeneracy_tolerance": 1000000.0
-  },
-  "fem_solver_policy": {
-    "backend": "auto",
-    "subspace_dimension": 24,
-    "max_iterations": 300,
-    "tolerance": 1e-8,
-    "shift_hz": null,
-    "target_spectrum": "smallest_magnitude"
-  }
-}
-```
+`Eigenmodes.to_ir()` emits `{"kind": "eigenmodes", ...}` with `operator`, `equilibrium`, `target`,
+`count`, `k_sampling`, `bias_field_sweep`, `mode_tracking`, `normalization`, `damping_policy`,
+`spin_wave_bc`, `spatial_representation`, `fem_solver_policy`, and `sampling`.
 
 (python-api-studies-eigenmodes-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## 7. Round-trip and failure semantics
 
-**Requested intent** is preserved in Python and `ProblemIR`; **resolved execution** is selected by
-`plan_fem_eigen` (`FemEigenPlanIR`). **Validation errors** reject empty outputs, non-positive
-counts, invalid operator/target/normalization/damping values, and mismatched target bounds.
-**Unsupported combinations** (such as FDM modal execution or unqualified GPU Floquet paths) fail
-capability checks without silent fallback.
+Requested intent is the value authored by Python and preserved in `ProblemIR`; resolved execution is
+the planner or realization result (`FemEigenPlanIR`). Validation errors identify the violated domain
+rule, and unsupported combinations are rejected explicitly rather than silently substituted.
 
 (python-api-studies-eigenmodes-discrete-realization)=
 <!-- (discrete-realization)= -->
 ## 8. Discrete realization
 
-This page owns Python authoring and `ProblemIR` lowering. Native FEM operator discretization,
-shared-domain Schur-complement SLEPc solving, multi-process `EigenKProcessPool` orchestration, and
-modal qualification are documented under {doc}`../../numerical-methods/eigensolvers/index` and
-{doc}`../../numerical-methods/eigensolvers/linearized-llg`.
+Solver execution follows {doc}`/numerical-methods/eigensolvers/linearized-llg`: `plan_fem_eigen`
+resolves `FemEigenPlanIR`, `EigenKProcessPool` isolates PETSc/SLEPc worker processes across
+$\mathbf k$-points, `solve_poisson_airbox_modal_eigen_cpu_schur` solves the matrix-free Schur
+complement, `evaluate_poisson_airbox_modal_residuals` certifies coupled $(q,\phi)$ residuals, and
+`track_branches` / `mass_weighted_subspace_transport` track branches across $\mathbf k$ or bias-field
+sweeps.
 
 (python-api-studies-eigenmodes-implementation-mapping)=
 <!-- (implementation-mapping)= -->
 ## 9. Implementation mapping
 
-| Layer | Repository path | Stable symbol | Responsibility |
-|---|---|---|---|
-| Stage-first spec | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2795) | `class EigenmodesStageSpec` | Stage-first modal parameter validation |
-| Stage builder | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4633) | `add_eigenmodes` | Appends an `eigenmodes` stage to `study.stages` |
-| Study model | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1093) | `class Eigenmodes` | Canonical `Eigenmodes` study class and `.to_ir()` |
-| Solver policy | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L181) | `class FemEigenSolverPolicy` | FEM eigensolver policy class |
-| Sampling & tracking | [`packages/fullmag-py/src/fullmag/model/eigen.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/eigen.py#L458) | `coerce_k_sampling`, `class KPath`, `class BiasFieldSweep`, `class ModeTracking` | Wave-vector, field-sweep, and mode-tracking schemas |
+| Layer | Owner | Responsibility |
+| --- | --- | --- |
+| Python authoring | `Eigenmodes`, `EigenmodesStageSpec`, `FemEigenSolverPolicy`, `ModeTracking` | Schema validation and `ProblemIR` lowering |
+| Rust planner | `plan_fem_eigen` | Capability check and `FemEigenPlanIR` resolution |
+| Rust runner | `EigenKProcessPool`, `track_branches`, `mass_weighted_subspace_transport`, `ConsistentP1TrackingMetric` | Multi-process $\mathbf k$-pool and consistent-$P_1$ branch tracking |
+| Native C++ solver | `solve_modal_eigen_contract`, `assemble_poisson_airbox_shared_domain`, `solve_poisson_airbox_modal_eigen_cpu_schur`, `evaluate_poisson_airbox_modal_residuals` | Shared-domain $(q,\phi)$ assembly, Schur shift-and-invert, and residual certification |
 
 (python-api-studies-eigenmodes-validation)=
 <!-- (validation)= -->
-## 10. Validation and qualification
+## 10. Validation
 
-Ownership and round-trip tests compare this parameter inventory against live Python signatures and
-validate the adjacent `.source-map.json` manifest. Numerical and physical qualification gates are
-documented in {doc}`../../numerical-methods/eigensolvers/modal-validation`.
+Constructor and round-trip tests verify `Eigenmodes`, `FemEigenSolverPolicy`, `KPath`,
+`BiasFieldSweep`, and `ModeTracking` serialization, while scientific qualification follows
+{doc}`/numerical-methods/eigensolvers/modal-validation`.
 
 (python-api-studies-eigenmodes-limitations)=
 <!-- (limitations)= -->
 ## 11. Limitations
 
-Python/IR representability does not imply universal backend support; `plan_fem_eigen` is the
-authoritative gate for native FEM CPU and FEM GPU execution.
+Authoring support is broader than any single backend's resolved modal capability; the planner rejects
+unsupported combinations (`plan_fem_eigen`) without silent fallback.
 
 (python-api-studies-eigenmodes-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
-1. C. Kittel, “On the theory of ferromagnetic resonance absorption,” *Physical Review* **73**,
-   155–161 (1948), [doi:10.1103/PhysRev.73.155](https://doi.org/10.1103/PhysRev.73.155).
-2. B. A. Kalinikos and A. N. Slavin, “Theory of dipole-exchange spin wave spectrum for
-   ferromagnetic films with mixed exchange boundary conditions,” *Journal of Physics C: Solid State
-   Physics* **19**, 7013–7033 (1986),
-   [doi:10.1088/0022-3719/19/35/014](https://doi.org/10.1088/0022-3719/19/35/014).
-3. Canonical solver reference: {doc}`../../numerical-methods/eigensolvers/linearized-llg`.
+1. C. Herring and C. Kittel, “On the theory of spin waves in ferromagnetic media,” *Physical Review*, 81, 869–880 (1951).
+2. M. d'Aquino, C. Serpico, G. Miano, and C. Forestiere, “A novel formulation for the numerical computation of magnetization modes in complex micromagnetic systems,” *Journal of Computational Physics*, 228, 6130–6149 (2009).
 
 (python-api-studies-eigenmodes-source-code-index)=
-<!-- (source-code-index)= -->
+## 13. Source-code index
 
-## Control Room crosswalk
-
-Status: Stage authoring and inspection are partial; the stage editor exposes only its advertised fields.
+### Control Room crosswalk
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
 | Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `not implemented` | Python-only until implemented |
 
-not implemented: frontend support for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: [`apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx#L17) (`StudyStageDraftEditor`) and [`apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx#L27) (`StudyStageInspectorRouter`).
+See {doc}`/frontend/capability-register` for the support matrix and not implemented policy.
 
-## 13. Source-code index
+### Source-code index
 
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1093) | `class Eigenmodes` | Canonical Python API behavior | Ownership test and source-map validator |
-| FEM eigensolver policy | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L181) | `class FemEigenSolverPolicy` | Native solver backend and Krylov policy | Source-map validator |
-| k-vector normalization | [`packages/fullmag-py/src/fullmag/model/eigen.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/eigen.py#L458) | `coerce_k_sampling` | k sampling alias resolution | Source-map validator |
-| Stage spec | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2795) | `class EigenmodesStageSpec` | Stage-first modal specification | Source-map validator |
-| Stage builder | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4633) | `add_eigenmodes` | Stage-first authoring entrypoint | Source-map validator |
+| Repository path | Stable symbol | Responsibility |
+|---|---|---|
+| [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1093) | [`class Eigenmodes`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1093) | Eigenmode study parameters and IR lowering. |
+| [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L181) | [`class FemEigenSolverPolicy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L181) | Native FEM eigensolver policy schema. |
+| [`packages/fullmag-py/src/fullmag/model/eigen.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/eigen.py#L458) | [`coerce_k_sampling`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/eigen.py#L458) | Wave-vector sampling normalization. |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2795) | [`class EigenmodesStageSpec`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2795) | Stage-first modal request specification. |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4633) | [`add_eigenmodes`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4633) | Stage-first authoring entrypoint. |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L5155) | [`plan_fem_eigen`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L5155) | Resolves FemEigenPlanIR and capability gates. |
+| [`crates/fullmag-runner/src/eigen/k_process_pool.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/k_process_pool.rs#L798) | [`EigenKProcessPool`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/k_process_pool.rs#L798) | Multi-process worker pool for k-path dispersion sweeps. |
+| [`crates/fullmag-runner/src/eigen/tracking.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking.rs#L1217) | [`track_branches`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking.rs#L1217) | Mass-weighted Hungarian branch tracking. |
+| [`crates/fullmag-runner/src/eigen/tracking_subspace.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking_subspace.rs#L328) | [`mass_weighted_subspace_transport`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking_subspace.rs#L328) | SVD Procrustes degenerate-subspace transport. |
+| [`crates/fullmag-runner/src/eigen/tracking_mass.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking_mass.rs#L7) | [`ConsistentP1TrackingMetric`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking_mass.rs#L7) | Consistent P1 finite-element mass inner product. |
+| [`backends/fem/src/frequency_domain/modal_eigen_solver.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/modal_eigen_solver.cpp#L2134) | [`solve_modal_eigen_contract`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/modal_eigen_solver.cpp#L2134) | Native modal eigensolver contract and diagnostics. |
+| [`backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp#L310) | [`assemble_poisson_airbox_shared_domain`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp#L310) | Shared-domain (q, phi) magnetostatic block assembly. |
+| [`backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp#L147) | [`solve_poisson_airbox_modal_eigen_cpu_schur`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp#L147) | Matrix-free MATSHELL Schur shift-and-invert eigensolver. |
+| [`backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp#L648) | [`evaluate_poisson_airbox_modal_residuals`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp#L648) | Reconstructs scalar potential and certifies coupled residuals. |

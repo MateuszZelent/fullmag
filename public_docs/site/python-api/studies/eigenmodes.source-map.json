@@ -1,7 +1,8 @@
 {
   "document": {
     "path": "public_docs/site/python-api/studies/eigenmodes.md",
-    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "source_of_truth": "docs/physics/0600-fem-eigenmodes-linearized-llg.md"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
@@ -10,11 +11,11 @@
     {"solver": "FDM", "device": "GPU", "status": "documented"}
   ],
   "equations": [
-    {"id": "eq-python-api-eigenmodes-pencil", "symbols": ["K", "q", "G", "lambda", "sigma", "omega", "f"], "sources": ["source-1", "source-2"]}
+    {"id": "eq-python-api-eigenmodes-pencil", "symbols": ["K", "q", "G", "lambda", "sigma", "omega", "f"], "sources": ["source-1", "source-2", "source-11"]}
   ],
   "symbols": [
-    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent stiffness/dynamic matrix", "si_unit": "problem-dependent"},
-    {"id": "G", "latex": "$\\mathsf G$", "meaning": "gyrotropic mass/operator matrix", "si_unit": "problem-dependent"},
+    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent rate-stiffness dynamic matrix (or $\\mathrm{J}$ in energy-Hessian form)", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "G", "latex": "$\\mathsf G$", "meaning": "damping-modified tangent metric $I - \\alpha_{\\mathrm{eff}}J$ (or $\\mathrm{J\\,s}$ in energy-Hessian form)", "si_unit": "$1$"},
     {"id": "q", "latex": "$\\mathbf q$", "meaning": "discrete tangent eigenvector", "si_unit": "$1$"},
     {"id": "lambda", "latex": "$\\lambda$", "meaning": "complex eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
     {"id": "sigma", "latex": "$\\sigma$", "meaning": "modal growth/decay real part", "si_unit": "$\\mathrm{s^{-1}}$"},
@@ -26,7 +27,16 @@
     {"id": "source-2", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FemEigenSolverPolicy", "responsibility": "Native FEM eigensolver policy schema."},
     {"id": "source-3", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "coerce_k_sampling", "responsibility": "Wave-vector sampling normalization."},
     {"id": "source-4", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class EigenmodesStageSpec", "responsibility": "Stage-first modal request specification."},
-    {"id": "source-5", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_eigenmodes", "responsibility": "Stage-first authoring entrypoint."}
+    {"id": "source-5", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_eigenmodes", "responsibility": "Stage-first authoring entrypoint."},
+    {"id": "source-6", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem_eigen", "responsibility": "Resolves FemEigenPlanIR and capability gates."},
+    {"id": "source-7", "path": "crates/fullmag-runner/src/eigen/k_process_pool.rs", "symbol": "EigenKProcessPool", "responsibility": "Multi-process worker pool for k-path dispersion sweeps."},
+    {"id": "source-8", "path": "crates/fullmag-runner/src/eigen/tracking.rs", "symbol": "track_branches", "responsibility": "Mass-weighted Hungarian branch tracking."},
+    {"id": "source-9", "path": "crates/fullmag-runner/src/eigen/tracking_subspace.rs", "symbol": "mass_weighted_subspace_transport", "responsibility": "SVD Procrustes degenerate-subspace transport."},
+    {"id": "source-10", "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs", "symbol": "ConsistentP1TrackingMetric", "responsibility": "Consistent P1 finite-element mass inner product."},
+    {"id": "source-11", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal eigensolver contract and diagnostics."},
+    {"id": "source-12", "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp", "symbol": "assemble_poisson_airbox_shared_domain", "responsibility": "Shared-domain (q, phi) magnetostatic block assembly."},
+    {"id": "source-13", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp", "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur", "responsibility": "Matrix-free MATSHELL Schur shift-and-invert eigensolver."},
+    {"id": "source-14", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "evaluate_poisson_airbox_modal_residuals", "responsibility": "Reconstructs scalar potential and certifies coupled residuals."}
   ],
   "public_api": {
     "parameters": [
@@ -39,7 +49,7 @@
       {"python": "Eigenmodes.operator", "type": "`str`", "default": "`\"linearized_llg\"`", "si_unit": "$1$", "validation": "`linearized_llg` or `full_2x2`", "meaning": "Linearized operator", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "`operator.kind`"},
       {"python": "Eigenmodes.include_demag", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean", "meaning": "Include the dynamic demagnetization term", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "`operator.include_demag`"},
       {"python": "Eigenmodes.equilibrium_source", "type": "`str`", "default": "`\"relax\"` (stage entry default)", "si_unit": "$1$", "validation": "`provided`, `relax`, or `artifact`", "meaning": "Equilibrium acquisition", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "`equilibrium`"},
-      {"python": "Eigenmodes.k_sampling", "type": "`object | None`", "default": "`None`", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "Valid k sampling or k vector", "meaning": "Wave-vector sampling", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "`k_sampling`"},
+      {"python": "Eigenmodes.k_sampling", "type": "`object | None`", "default": "`None`", "si_unit": "$\\mathrm{rad\\,m^{-1}}$", "validation": "Valid k sampling or k vector", "meaning": "Wave-vector sampling", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "`k_sampling`"},
       {"python": "Eigenmodes.bias_field_sweep", "type": "`BiasFieldSweep | None`", "default": "`None`", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "Non-empty finite field list", "meaning": "Static bias-field sweep", "backend_support": "FEM modal lane", "problem_ir": "`bias_field_sweep`"},
       {"python": "Eigenmodes.mode_tracking", "type": "`ModeTracking | None`", "default": "`None`", "si_unit": "$1$", "validation": "Validated tracking policy", "meaning": "Mass-weighted Hungarian mode tracking", "backend_support": "FEM modal runner", "problem_ir": "`mode_tracking`"},
       {"python": "Eigenmodes.normalization", "type": "`str`", "default": "`\"unit_l2\"`", "si_unit": "$1$", "validation": "`unit_l2` or `unit_max_amplitude`", "meaning": "Mode normalization", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "`normalization`"},

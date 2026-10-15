@@ -25,6 +25,7 @@ from verify_control_room_sources import fingerprint, timestamp
 PROFILE = "windows-control-room-browser-fixture"
 BROWSER_CHANNEL = "chrome" if os.name == "nt" else None
 SCENARIOS = {
+    "preparation-workspace": ("smoke-preparation-workspace.mjs", "fullmag_preparation_workspace_fixture_v1", "preparation-workspace", "FULLMAG_PREPARATION_WORKSPACE"),
     "inspector-actions": ("smoke-inspector-actions.mjs", "fullmag_inspector_actions_browser_fixture_v1", "inspector-actions", "FULLMAG_INSPECTOR_ACTIONS"),
     "explorer-physics-reporting": ("smoke-explorer-physics-reporting.mjs", "fullmag_explorer_physics_reporting_browser_fixture_v1", "explorer-physics-reporting", "FULLMAG_EXPLORER_PHYSICS_REPORTING"),
     "object-material-editor": ("smoke-object-material-editor.mjs", "fullmag_object_material_editor_browser_fixture_v1", "object-material-editor", "FULLMAG_OBJECT_MATERIAL_EDITOR"),
@@ -111,6 +112,8 @@ def print_fixture_log_tails(run_root: Path):
 def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
     if scenario not in SCENARIOS:
         raise storage.StorageError("Unknown fixed browser fixture scenario")
+    if scenario == "preparation-workspace" and port != 3268:
+        raise storage.StorageError("Preparation workspace browser fixture uses fixed port 3268")
     if scenario == "object-material-editor" and port != 3266:
         raise storage.StorageError("Object material editor browser fixture uses fixed port 3266")
     if scenario == "antenna-drive-editor" and port != 3265:
@@ -284,7 +287,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
             )
             if receipt["source_changed_during_run"]:
                 receipt.update(state="failed", exit_code=1)
-            if scenario in {"inspector-actions", "explorer-physics-reporting"}:
+            if scenario in {"inspector-actions", "explorer-physics-reporting", "preparation-workspace"}:
                 browser_root = run_root / "browser"
                 artifacts = []
                 if browser_root.is_dir():
@@ -298,7 +301,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                 receipt["browser_artifacts"] = artifacts
             receipt["finished_at"] = timestamp()
             storage.atomic_json(receipt_path, receipt)
-        if scenario in {"inspector-actions", "explorer-physics-reporting"} and receipt["state"] != "passed":
+        if scenario in {"inspector-actions", "explorer-physics-reporting", "preparation-workspace"} and receipt["state"] != "passed":
             for key in ("error", "cleanup_error"):
                 if receipt.get(key):
                     print(f"{key}: {str(receipt[key])[:2000]}", file=sys.stderr, flush=True)

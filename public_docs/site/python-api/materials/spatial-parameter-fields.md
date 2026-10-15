@@ -35,18 +35,12 @@ and it does not implicitly create another magnetic object, interface coupling, o
 (python-api-materials-spatial-parameter-fields-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-material-spatial-effective
-
-q_{\mathrm{IR}} = \mathrm{material-spatial-effective}(\text{qualified inputs})
-```
-
 For a scalar material parameter $p$, the base material supplies $p_0$. An active field assignment
 $a$ supplies $p_a(\mathbf x)$. After ownership, region membership, priority, and conflict resolution,
 the realized value is
 
 ```{math}
-:label: eq-material-spatial-effective-2
+:label: eq-material-spatial-effective
 p_{\mathrm{eff}}(\mathbf x)=
 p_0+w_{a_*}(\mathbf x)\bigl(p_{a_*}(\mathbf x)-p_0\bigr),
 \qquad 0\le w_{a_*}(\mathbf x)\le 1,
@@ -85,10 +79,6 @@ sampled material-field materialization is currently authoring-only and is reject
 
 (python-api-materials-spatial-parameter-fields-symbols-and-si-units)=
 ## Symbols and SI units
-
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
 
 | Symbol | Meaning | SI unit |
 |---|---|---:|

@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object geomet
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,8 +54,8 @@ fm.Difference(base, tool, name="difference"), fm.Union(a, b), fm.Intersection(a,
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```base/tool or a/b``` | ```Geometry``` | ```required``` | ```1``` | typed geometry operands | boolean operands | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```operands``` |
-| ```name``` | ```str``` | ```operation default``` | ```1``` | non-empty | result name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
+| `base/tool or a/b` | `Geometry` | `required` | `1` | typed geometry operands | boolean operands | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `operands` |
+| `name` | `str` | `operation default` | `1` | non-empty | result name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
 
 ### Stage-first example
 

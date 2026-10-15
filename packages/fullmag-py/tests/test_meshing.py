@@ -9877,11 +9877,16 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             {"left"},
         )
 
-        generated: list[tuple[str, float, list[dict[str, object]]]] = []
+        geometry_object_ids = {
+            "left": "object-left",
+            "left_geom": "object-left-geom",
+        }
+        generated: list[tuple[str, str, float, list[dict[str, object]]]] = []
 
-        def generate(_geometry, *, hmax, order, options):
+        def generate(_geometry, *, object_id, hmax, order, options):
             generated.append(
                 (
+                    object_id,
                     _geometry.geometry_name,
                     float(hmax),
                     list(options.lower_bound_fields),
@@ -9911,17 +9916,21 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 discretization=fm.DiscretizationHints(fem=hints),
                 mesh_workflow=mesh_workflow,
                 per_object_recipes=recipes,
+                geometry_object_ids=geometry_object_ids,
             )
 
         self.assertEqual(
-            [(name, hmax) for name, hmax, _lower_bounds in generated],
-            [("left", 5e-9), ("left_geom", 20e-9)],
+            [(object_id, name, hmax) for object_id, name, hmax, _lower_bounds in generated],
+            [
+                ("object-left", "left", 5e-9),
+                ("object-left-geom", "left_geom", 20e-9),
+            ],
         )
         self.assertEqual(
-            [field["params"]["MinimumElementSize"] for field in generated[0][2]],
+            [field["params"]["MinimumElementSize"] for field in generated[0][3]],
             [2e-9],
         )
-        self.assertEqual(generated[1][2], [])
+        self.assertEqual(generated[1][3], [])
         self.assertEqual(
             [entry["geometry_name"] for entry in assets["fem_mesh_assets"]],
             ["left", "left_geom"],
@@ -9983,13 +9992,18 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             },
         }
         recipes = {"left": PerObjectMeshRecipe(hmax=20e-9, hmin=2e-9)}
+        geometry_object_ids = {
+            "left": "object-left",
+            "left_geom": "object-left-geom",
+        }
         generated: dict[
             str,
-            tuple[float, list[dict[str, object]], list[dict[str, object]]],
+            tuple[str, float, list[dict[str, object]], list[dict[str, object]]],
         ] = {}
 
-        def generate(_geometry, *, hmax, order, options):
+        def generate(_geometry, *, object_id, hmax, order, options):
             generated[_geometry.geometry_name] = (
+                object_id,
                 float(hmax),
                 list(options.size_fields),
                 list(options.lower_bound_fields),
@@ -10018,9 +10032,11 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 discretization=fm.DiscretizationHints(fem=hints),
                 mesh_workflow=mesh_workflow,
                 per_object_recipes=recipes,
+                geometry_object_ids=geometry_object_ids,
             )
 
-        left_hmax, left_fields, left_lower_bounds = generated["left"]
+        left_object_id, left_hmax, left_fields, left_lower_bounds = generated["left"]
+        self.assertEqual(left_object_id, geometry_object_ids["left"])
         self.assertEqual(left_hmax, 20e-9)
         self.assertFalse(
             any(
@@ -10063,7 +10079,8 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             },
         )
 
-        right_hmax, right_fields, _right_lower_bounds = generated["left_geom"]
+        right_object_id, right_hmax, right_fields, _right_lower_bounds = generated["left_geom"]
+        self.assertEqual(right_object_id, geometry_object_ids["left_geom"])
         self.assertEqual(right_hmax, 25e-9)
         self.assertTrue(
             any(
@@ -15097,7 +15114,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         assert bounds is not None
         scale = 1.0e6
         xmin, ymin, zmin, xmax, ymax, zmax = (value * scale for value in bounds)
-        levels = {"z": zmin}
+        body_bottom = -0.5 * float(geometry.size[2]) * scale
         surface_planes: dict[int, float] = {}
         next_tag_value = 1
 
@@ -15107,11 +15124,21 @@ class RegionMeshPolicyTests(unittest.TestCase):
             next_tag_value += 1
             return tag
 
-        def extrude(_source, _dx, _dy, step, **_kwargs):
-            levels["z"] += float(step)
+        def add_plane_surface(_wire_tags):
+            tag = next_tag()
+            surface_planes[tag] = body_bottom
+            return tag
+
+        def extrude(source_entities, _dx, _dy, step, **_kwargs):
+            source_surfaces = [
+                int(tag) for dimension, tag in source_entities if int(dimension) == 2
+            ]
+            if len(source_surfaces) != 1 or source_surfaces[0] not in surface_planes:
+                raise AssertionError("extrusion must start from one known body or airbox cap")
+            top_plane = surface_planes[source_surfaces[0]] + float(step)
             volume_tag = next_tag()
             top_surface_tag = next_tag()
-            surface_planes[top_surface_tag] = levels["z"]
+            surface_planes[top_surface_tag] = top_plane
             return [(3, volume_tag), (2, top_surface_tag)]
 
         def bounding_box(dimension, tag):
@@ -15125,7 +15152,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         gmsh.model.geo.addPoint.side_effect = next_tag
         gmsh.model.geo.addLine.side_effect = next_tag
         gmsh.model.geo.addCurveLoop.side_effect = next_tag
-        gmsh.model.geo.addPlaneSurface.side_effect = next_tag
+        gmsh.model.geo.addPlaneSurface.side_effect = add_plane_surface
         gmsh.model.geo.extrude.side_effect = extrude
         gmsh.model.getBoundingBox.side_effect = bounding_box
         gmsh.model.getBoundary.return_value = []

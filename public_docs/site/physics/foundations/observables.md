@@ -91,7 +91,7 @@ Scalar observables are integrated (global) quantities, typically energies.
 | `E_dmi` | $E_{\mathrm{DMI}}$ | $\mathrm{J}$ | DMI term |
 | `E_mel` | $E_{\mathrm{mel}}$ | $\mathrm{J}$ | `Magnetoelastic()` |
 | `E_total` | $E_{\mathrm{tot}}$ | $\mathrm{J}$ | at least one energy term |
-| `max_torque` | $\max|\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}|$ | $\mathrm{A\,m^{-1}}$ | at least one field term |
+| `max_torque` | $\max\lvert\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\rvert$ | $\mathrm{A\,m^{-1}}$ | at least one field term |
 | `dt` | $\Delta t$ | $\mathrm{s}$ | adaptive integrator |
 
 ## Requesting observables
@@ -260,12 +260,11 @@ FDM and FEM supports is outside this observable contract.
 
 ## Control Room crosswalk
 
-No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
 
 ## Python/API crosswalk
 
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
-ot applicable here and must be taken from the terminal API page.
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
 
 ## Bibliography and source scope
 
@@ -276,8 +275,8 @@ Use the scientific bibliography and source-code index on the linked terminal pag
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
 | Stage capture | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) |
-| Scalar autosave contract | `packages/fullmag-py/src/fullmag/model/study.py` | `TableAutosave` |
-| Field autosave contract | `packages/fullmag-py/src/fullmag/model/study.py` | `FieldAutosave` |
+| Scalar autosave contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L337) | [`class TableAutosave`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L337) |
+| Field autosave contract | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L410) | [`class FieldAutosave`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L410) |
 | Planner output legality | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) | [`validate_executable_outputs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) |
 | Quantity evaluation registry | [`crates/fullmag-quantities/src/registry.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-quantities/src/registry.rs#L41) | [`evaluate_by_name`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-quantities/src/registry.rs#L41) |
 | FEM field extraction | [`backends/fem/cpu/mfem/runtime/state_io.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/runtime/state_io.cpp#L226) | [`context_copy_field_f64`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/runtime/state_io.cpp#L226) |

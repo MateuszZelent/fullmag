@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object initia
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,10 +54,10 @@ fm.init.UniformMagnetization, fm.init.RandomMagnetization, fm.init.SampledMagnet
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```UniformMagnetization.value``` | ```Sequence[float]``` | ```required``` | ```1``` | finite three-vector | uniform direction/value | FEM/FDM CPU/GPU: IR; resolver-specific | ```value``` |
-| ```RandomMagnetization.seed``` | ```int``` | ```required``` | ```1``` | integer | reproducible random seed | FEM/FDM CPU/GPU: IR; resolver-specific | ```seed``` |
-| ```SampledMagnetization.values``` | ```Sequence[Sequence[float]]``` | ```required``` | ```1``` | typed sampled vectors | sampled initial field | FEM/FDM CPU/GPU: IR; resolver-specific | ```values``` |
-| ```SampledMagnetization.source_path/source_format/dataset/sample_index``` | ```optional``` | ```None``` | ```1``` | typed when supplied | sample provenance and selection | FEM/FDM CPU/GPU: IR; resolver-specific | ```source metadata``` |
+| `UniformMagnetization.value` | `Sequence[float]` | `required` | `1` | finite three-vector | uniform direction/value | FEM/FDM CPU/GPU: IR; resolver-specific | `value` |
+| `RandomMagnetization.seed` | `int` | `required` | `1` | integer | reproducible random seed | FEM/FDM CPU/GPU: IR; resolver-specific | `seed` |
+| `SampledMagnetization.values` | `Sequence[Sequence[float]]` | `required` | `1` | typed sampled vectors | sampled initial field | FEM/FDM CPU/GPU: IR; resolver-specific | `values` |
+| `SampledMagnetization.source_path/source_format/dataset/sample_index` | `optional` | `None` | `1` | typed when supplied | sample provenance and selection | FEM/FDM CPU/GPU: IR; resolver-specific | `source metadata` |
 
 ### Stage-first example
 

@@ -1,13 +1,13 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useState } from "react";
 
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 import { Progress } from "@/shared/ui/Progress";
 import {
@@ -27,29 +27,14 @@ import { useSessionStatusSelector } from "../resources/useSessionStatus";
 import { useSimulationPreparation } from "../resources/useSimulationPreparation";
 import type { KernelApi } from "../types";
 import { SimulationPreparationLog } from "./SimulationPreparationLog";
-import { SlotHost } from "./SlotHost";
 import {
   resolveSimulationPreparationViewModel,
   serializeSimulationPreparationDiagnostics,
   type SimulationPreparationStageView,
   type SimulationPreparationViewModel,
 } from "./simulationPreparationModel";
-import { useLayoutSelector } from "./useLayout";
 
 export type SimulationStartupOverlayState = SimulationPreparationViewModel;
-
-export const WorkspaceStartupInteractionContext = createContext(false);
-
-export function useWorkspaceStartupInteractionBlocked(): boolean {
-  return useContext(WorkspaceStartupInteractionContext);
-}
-
-export function shouldMountWorkspaceChildren(
-  startupVisible: boolean,
-  childrenMounted: boolean,
-): boolean {
-  return childrenMounted || !startupVisible;
-}
 
 interface SimulationStartupOverlayOptions {
   readonly allowMissingSessionSmoke?: boolean;
@@ -139,18 +124,16 @@ export function SimulationStartupOverlayView({
     state.progress.kind === "determinate" ? state.progress.value : undefined;
 
   return (
-    <div
+    <aside
+      aria-label="Simulation preparation status"
       className="fm-simulation-startup"
-      data-interaction-state="blocked"
       data-state={state.kind}
     >
       <section
         aria-labelledby="fm-simulation-startup-title"
         className="fm-simulation-startup__panel"
-        role={state.failure ? undefined : "dialog"}
-        aria-modal={state.failure ? undefined : "true"}
       >
-        <header className="fm-simulation-startup__header">
+        <header className="fm-simulation-startup__summary">
           <div className="fm-simulation-startup__heading-row">
             <div className="fm-simulation-startup__heading-copy">
               <p className="fm-simulation-startup__eyebrow">{state.eyebrow}</p>
@@ -161,83 +144,17 @@ export function SimulationStartupOverlayView({
                 {state.title}
               </h2>
               <p className="fm-simulation-startup__detail">{state.detail}</p>
+              {state.reconnectingTitle ? (
+                <span className="fm-simulation-startup__reconnecting-label">
+                  {state.reconnectingTitle}
+                </span>
+              ) : null}
               {state.failure?.correlationId ? (
-                <p className="fm-simulation-startup__detail">
+                <p className="fm-simulation-startup__correlation-id">
                   Diagnostic ID: <code>{state.failure.correlationId}</code>
                 </p>
               ) : null}
             </div>
-            {state.totalElapsedLabel ? (
-              <div className="fm-simulation-startup__elapsed">
-                <span>Total elapsed</span>
-                <strong>{state.totalElapsedLabel}</strong>
-              </div>
-            ) : null}
-          </div>
-
-          {state.reconnectingTitle ? (
-            <div className="fm-simulation-startup__reconnecting">
-              <strong>{state.reconnectingTitle}</strong>
-              <span>{state.reconnectingMessage}</span>
-            </div>
-          ) : null}
-
-          {state.requestedExecutionLabel || state.resolvedExecutionLabel ? (
-            <dl className="fm-simulation-startup__execution">
-              {state.requestedExecutionLabel ? (
-                <div>
-                  <dt>Requested</dt>
-                  <dd>{state.requestedExecutionLabel}</dd>
-                </div>
-              ) : null}
-              {state.resolvedExecutionLabel ? (
-                <div>
-                  <dt>Resolved</dt>
-                  <dd>{state.resolvedExecutionLabel}</dd>
-                </div>
-              ) : null}
-            </dl>
-          ) : null}
-
-          {state.preparation?.receipt ? (
-            <dl
-              aria-label="Accepted preparation provenance"
-              className="fm-simulation-startup__receipt"
-              data-preparation-receipt="accepted"
-            >
-              <div>
-                <dt>Accepted preparation</dt>
-                <dd>{state.preparation.receipt.preparation_id}</dd>
-              </div>
-              <div>
-                <dt>Live run</dt>
-                <dd>{state.preparation.receipt.run_id}</dd>
-              </div>
-              <div>
-                <dt>Receipt schema</dt>
-                <dd>{state.preparation.receipt.schema_version}</dd>
-              </div>
-              <div>
-                <dt>Plan digest</dt>
-                <dd title={state.preparation.receipt.plan_fingerprint}>
-                  {state.preparation.receipt.plan_fingerprint}
-                </dd>
-              </div>
-              <div>
-                <dt>Payload digest</dt>
-                <dd title={state.preparation.receipt.payload_sha256}>
-                  {state.preparation.receipt.payload_sha256}
-                </dd>
-              </div>
-            </dl>
-          ) : null}
-
-          <div
-            aria-live="polite"
-            className="fm-visually-hidden"
-            role="status"
-          >
-            {state.liveSummary}
           </div>
 
           <div className="fm-simulation-startup__progress-row">
@@ -257,30 +174,121 @@ export function SimulationStartupOverlayView({
                   : state.activeStage?.stateLabel ?? "Connecting"}
             </span>
           </div>
-          {state.progressLabel ? (
-            <p className="fm-simulation-startup__progress-detail">
-              {state.progressLabel}
-            </p>
-          ) : null}
         </header>
 
-        <div className="fm-simulation-startup__body">
-          <PreparationStageList stages={state.stages} />
-          <SimulationPreparationLog entries={state.logEntries} />
+        <div
+          aria-live="polite"
+          className="fm-visually-hidden"
+          role="status"
+        >
+          {state.liveSummary}
         </div>
 
-        <footer className="fm-simulation-startup__footer">
-          <p>
-            Simulation controls will be available when initialization finishes.
-          </p>
-          {(state.failure && state.preparation) || state.kind === "resource-error" ? (
-            <SimulationPreparationFailureActions
-              state={state}
-            />
-          ) : null}
-        </footer>
+        <Accordion
+          className="fm-simulation-startup__accordion"
+          collapsible
+          type="single"
+        >
+          <AccordionItem value="details">
+            <AccordionTrigger className="fm-simulation-startup__details-trigger">
+              {state.failure || state.kind === "resource-error"
+                ? "View failure details"
+                : "View preparation details"}
+            </AccordionTrigger>
+            <AccordionContent
+              className="fm-simulation-startup__details"
+              forceMount
+            >
+              {state.totalElapsedLabel ? (
+                <div className="fm-simulation-startup__elapsed">
+                  <span>Total elapsed</span>
+                  <strong>{state.totalElapsedLabel}</strong>
+                </div>
+              ) : null}
+
+              {state.reconnectingTitle ? (
+                <div className="fm-simulation-startup__reconnecting">
+                  <strong>{state.reconnectingTitle}</strong>
+                  <span>{state.reconnectingMessage}</span>
+                </div>
+              ) : null}
+
+              {state.requestedExecutionLabel || state.resolvedExecutionLabel ? (
+                <dl className="fm-simulation-startup__execution">
+                  {state.requestedExecutionLabel ? (
+                    <div>
+                      <dt>Requested</dt>
+                      <dd>{state.requestedExecutionLabel}</dd>
+                    </div>
+                  ) : null}
+                  {state.resolvedExecutionLabel ? (
+                    <div>
+                      <dt>Resolved</dt>
+                      <dd>{state.resolvedExecutionLabel}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              ) : null}
+
+              {state.preparation?.receipt ? (
+                <dl
+                  aria-label="Accepted preparation provenance"
+                  className="fm-simulation-startup__receipt"
+                  data-preparation-receipt="accepted"
+                >
+                  <div>
+                    <dt>Accepted preparation</dt>
+                    <dd>{state.preparation.receipt.preparation_id}</dd>
+                  </div>
+                  <div>
+                    <dt>Live run</dt>
+                    <dd>{state.preparation.receipt.run_id}</dd>
+                  </div>
+                  <div>
+                    <dt>Receipt schema</dt>
+                    <dd>{state.preparation.receipt.schema_version}</dd>
+                  </div>
+                  <div>
+                    <dt>Plan digest</dt>
+                    <dd title={state.preparation.receipt.plan_fingerprint}>
+                      {state.preparation.receipt.plan_fingerprint}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Payload digest</dt>
+                    <dd title={state.preparation.receipt.payload_sha256}>
+                      {state.preparation.receipt.payload_sha256}
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
+
+              {state.progressLabel ? (
+                <p className="fm-simulation-startup__progress-detail">
+                  {state.progressLabel}
+                </p>
+              ) : null}
+
+              <div className="fm-simulation-startup__body">
+                <PreparationStageList stages={state.stages} />
+                <SimulationPreparationLog entries={state.logEntries} />
+              </div>
+
+              <footer className="fm-simulation-startup__footer">
+                <p>
+                  Preparation continues in the background while you work in the
+                  workspace.
+                </p>
+                {(state.failure && state.preparation) ||
+                state.kind === "resource-error" ? (
+                  <SimulationPreparationFailureActions state={state} />
+                ) : null}
+              </footer>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </section>
-    </div>
+    </aside>
   );
 }
 
@@ -419,7 +427,6 @@ function SimulationPreparationFailureActions({
 
   return (
     <SimulationPreparationFailureAttempt
-      initiallyOpen={Boolean(snapshot && state.failure)}
       key={failureIdentity}
       state={state}
     />
@@ -427,10 +434,8 @@ function SimulationPreparationFailureActions({
 }
 
 function SimulationPreparationFailureAttempt({
-  initiallyOpen,
   state,
 }: {
-  initiallyOpen: boolean;
   state: SimulationStartupOverlayState;
 }) {
   const kernel = useKernel();
@@ -438,7 +443,7 @@ function SimulationPreparationFailureAttempt({
   const [copyState, setCopyState] = useState<"copied" | "failed" | "idle">(
     "idle",
   );
-  const [dialogOpen, setDialogOpen] = useState(initiallyOpen);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const diagnosticReport = snapshot
     ? serializeSimulationPreparationDiagnostics(snapshot)
     : "";
@@ -647,67 +652,6 @@ function preparationDuringRealtimeDisruption(
   }
 
   return { ...preparation, status: "stale" };
-}
-
-export function WorkspaceStartupGateView({
-  children,
-  state,
-  preserveMountedWorkspace = false,
-}: {
-  children: ReactNode;
-  state: SimulationStartupOverlayState;
-  /** Keep the workspace mounted after its first successful preparation. */
-  preserveMountedWorkspace?: boolean;
-}) {
-  const [childrenMounted, setChildrenMounted] = useState(() => !state.isVisible);
-  const shouldMountChildren = shouldMountWorkspaceChildren(
-    state.isVisible,
-    preserveMountedWorkspace && childrenMounted,
-  );
-  const diagnosticsRequested = useLayoutSelector(
-    (layout) =>
-      layout.panelVisible.bottom &&
-      layout.focusedSlot === "panel-bottom" &&
-      layout.activeBottomPanelTab === "diagnostics",
-  );
-
-  useEffect(() => {
-    if (!preserveMountedWorkspace || !shouldMountChildren || childrenMounted) {
-      return;
-    }
-
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) setChildrenMounted(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [childrenMounted, preserveMountedWorkspace, shouldMountChildren]);
-
-  return (
-    <WorkspaceStartupInteractionContext.Provider
-      value={state.isVisible && shouldMountChildren}
-    >
-      {shouldMountChildren ? children : null}
-      {!shouldMountChildren && diagnosticsRequested ? (
-        <SimulationStartupDiagnosticsDock />
-      ) : null}
-      <SimulationStartupOverlayView state={state} />
-    </WorkspaceStartupInteractionContext.Provider>
-  );
-}
-
-function SimulationStartupDiagnosticsDock() {
-  return (
-    <aside
-      aria-label="Simulation diagnostics"
-      className="fm-workspace-bottom-panel"
-      data-startup-diagnostics="visible"
-    >
-      <SlotHost slotId="panel-bottom" />
-    </aside>
-  );
 }
 
 export function SimulationStartupOverlay() {

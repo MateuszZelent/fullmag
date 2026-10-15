@@ -18,21 +18,11 @@ owner: fullmag-public-docs
 (python-api-magnets-and-textures-uniform-texture-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-record-2
-
-q_{\mathrm{IR}} = \mathrm{record}(\text{qualified inputs})
-```
-
 The preset evaluates $\mathbf m(\mathbf x)=\mathbf m_0$ at every active sample point. The runtime
 normalization policy belongs to the initial-state evaluator.
 
 (python-api-magnets-and-textures-uniform-texture-symbols-and-si-units)=
 ## Symbols and SI units
-
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
 
 All direction components and `preset_version` are dimensionless.
 
@@ -129,4 +119,4 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMag
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| factory and versioning | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266) | `texture.[`uniform`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266)`, `PresetTexture` | preset construction and IR | signature/evaluator tests |
+| factory and versioning | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266) | [`uniform`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266), `PresetTexture` | preset construction and IR | signature/evaluator tests |

@@ -33,7 +33,7 @@ The physical term or constraint is represented by the canonical IR object spin_t
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -53,15 +53,15 @@ fm.SlonczewskiSTT(...), fm.ZhangLiSTT(...), fm.InterfaceCppSTT(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```current_density``` | ```tuple[float, float, float] or None``` | ```None``` | ```A/m^2``` | finite vector; exclusive with current_source | direct current density vector | FEM/FDM CPU/GPU: IR; resolver-specific | ```current_density``` |
-| ```current_source``` | ```str or None``` | ```None``` | ```1``` | exclusive with current_density | named current source | FEM/FDM CPU/GPU: IR; resolver-specific | ```current_source``` |
-| ```spin_polarization``` | ```tuple[float,float,float]``` | ```(0,0,1)``` | ```1``` | finite non-zero; normalized | polarization direction | FEM/FDM CPU/GPU: IR; resolver-specific | ```spin_polarization``` |
-| ```degree``` | ```float``` | ```0.4``` | ```1``` | finite | polarization degree | FEM/FDM CPU/GPU: IR; resolver-specific | ```degree``` |
-| ```lambda_asymmetry``` | ```float``` | ```1.0``` | ```1``` | finite | Slonczewski asymmetry | FEM/FDM CPU/GPU: IR; resolver-specific | ```lambda_asymmetry``` |
-| ```epsilon_prime``` | ```float``` | ```0.0``` | ```1``` | finite | field-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | ```epsilon_prime``` |
-| ```free_layer_thickness_m``` | ```float or None``` | ```None``` | ```m``` | positive in canonical thin-layer mode | free-layer thickness | FEM/FDM CPU/GPU: IR; resolver-specific | ```free_layer_thickness_m``` |
-| ```beta``` | ```float``` | ```0.0``` | ```1``` | finite for ZhangLiSTT | nonadiabaticity parameter | FEM/FDM CPU/GPU: IR; resolver-specific | ```beta``` |
-| ```lande_g``` | ```float or None``` | ```None``` | ```1``` | positive in ZhangLi canonical mode | Landé factor | FEM/FDM CPU/GPU: IR; resolver-specific | ```lande_g``` |
+| `current_density` | `tuple[float, float, float] or None` | `None` | `A/m^2` | finite vector; exclusive with current_source | direct current density vector | FEM/FDM CPU/GPU: IR; resolver-specific | `current_density` |
+| `current_source` | `str or None` | `None` | `1` | exclusive with current_density | named current source | FEM/FDM CPU/GPU: IR; resolver-specific | `current_source` |
+| `spin_polarization` | `tuple[float,float,float]` | `(0,0,1)` | `1` | finite non-zero; normalized | polarization direction | FEM/FDM CPU/GPU: IR; resolver-specific | `spin_polarization` |
+| `degree` | `float` | `0.4` | `1` | finite | polarization degree | FEM/FDM CPU/GPU: IR; resolver-specific | `degree` |
+| `lambda_asymmetry` | `float` | `1.0` | `1` | finite | Slonczewski asymmetry | FEM/FDM CPU/GPU: IR; resolver-specific | `lambda_asymmetry` |
+| `epsilon_prime` | `float` | `0.0` | `1` | finite | field-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | `epsilon_prime` |
+| `free_layer_thickness_m` | `float or None` | `None` | `m` | positive in canonical thin-layer mode | free-layer thickness | FEM/FDM CPU/GPU: IR; resolver-specific | `free_layer_thickness_m` |
+| `beta` | `float` | `0.0` | `1` | finite for ZhangLiSTT | nonadiabaticity parameter | FEM/FDM CPU/GPU: IR; resolver-specific | `beta` |
+| `lande_g` | `float or None` | `None` | `1` | positive in ZhangLi canonical mode | Landé factor | FEM/FDM CPU/GPU: IR; resolver-specific | `lande_g` |
 
 ### Stage-first example
 

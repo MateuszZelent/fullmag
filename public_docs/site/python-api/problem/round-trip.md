@@ -37,10 +37,11 @@ without changing requested intent. Validation failures happen at authoring or pl
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `Problem.to_ir.requested_backend` | `BackendTarget | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested solver-family intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.requested_backend` |
-| `Problem.to_ir.execution_mode` | `ExecutionMode | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested execution-mode intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_mode` |
-| `Problem.to_ir.execution_precision` | `ExecutionPrecision | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested precision intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_precision` |
+| `Problem.to_ir.requested_backend` | `BackendTarget \| None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested solver-family intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.requested_backend` |
+| `Problem.to_ir.execution_mode` | `ExecutionMode \| None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested execution-mode intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_mode` |
+| `Problem.to_ir.execution_precision` | `ExecutionPrecision \| None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested precision intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_precision` |
 | `RuntimeSelection.resolved(...)` | method | required | $1$ | Backend/mode/precision values are normalized against the selection. | Resolved runtime descriptor. | FEM/FDM CPU/GPU; capability checks remain authoritative. | `backend_policy` |
+
 | Python | Meaning |
 |---|---|
 | `Problem.to_ir(requested_backend=..., execution_mode=..., execution_precision=...)` | Canonical lowering with explicit runtime intent |

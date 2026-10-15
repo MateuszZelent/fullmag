@@ -19,21 +19,11 @@ the normal user workflow; the constructor remains the canonical class API and se
 (python-api-magnets-and-textures-ferromagnet-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-record
-
-q_{\mathrm{IR}} = \mathrm{record}(\text{qualified inputs})
-```
-
 This object introduces no independent field equation. It defines ownership and identity for the
 magnetic domain consumed by interactions and dynamics.
 
 (python-api-magnets-and-textures-ferromagnet-symbols-and-si-units)=
 ## Symbols and SI units
-
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
 
 Geometry lengths use metres. Material parameters retain their interaction-specific SI units.
 Magnetization textures and region/constraint identities are dimensionless semantic data.

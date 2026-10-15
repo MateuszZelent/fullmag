@@ -2,32 +2,38 @@
   "document": {
     "path": "public_docs/site/numerical-methods/frequency-domain/floquet-response.md",
     "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
-    "source_of_truth": "Current repository source declarations and public Python API contracts."
+    "source_of_truth": "docs/physics/0828-fem-frequency-domain-floquet-demag.md"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Projected Floquet response is source-visible; dynamic demag is gated."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Projected Floquet response is source-visible; dynamic demag at nonzero k is capability-gated."},
     {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate projected response qualification is required."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No native FDM Floquet response lane."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public FDM CUDA Floquet response lane."}
   ],
   "equations": [
-    {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "r", "dr", "k"], "sources": ["bc", "planner_floquet"]},
-    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat"], "sources": ["validate", "response"]}
+    {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "phihat", "r", "dr", "k", "Ck"], "sources": ["bc", "planner_floquet", "floquet_mag_op"]},
+    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat", "Dk"], "sources": ["validate", "response", "floquet_demag_k", "waveguide_demag_k"]}
   ],
   "symbols": [
-    {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex dynamic magnetization amplitude", "si_unit": "$1$"},
-    {"id": "r", "latex": "$\\mathbf r$", "meaning": "position", "si_unit": "$\\mathrm{m}$"},
-    {"id": "dr", "latex": "$\\Delta\\mathbf r$", "meaning": "periodic face translation", "si_unit": "$\\mathrm{m}$"},
-    {"id": "k", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "K", "latex": "$\\mathsf K(\\mathbf k)$", "meaning": "k-dependent tangent operator", "si_unit": "problem-dependent"},
-    {"id": "G", "latex": "$\\mathsf G(\\mathbf k)$", "meaning": "k-dependent gyrotropic/damping operator", "si_unit": "problem-dependent"},
-    {"id": "omega", "latex": "$\\omega$", "meaning": "angular drive frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
-    {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "tangent response amplitude", "si_unit": "$1$"},
-    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "harmonic right-hand side", "si_unit": "problem-dependent"}
+    {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex dynamic reduced-magnetization amplitude", "si_unit": "$1$"},
+    {"id": "phihat", "latex": "$\\widehat{\\phi}$", "meaning": "complex dynamic magnetostatic scalar potential amplitude", "si_unit": "$\\mathrm{A}$"},
+    {"id": "r", "latex": "$\\mathbf r$", "meaning": "spatial position vector in the unit cell", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dr", "latex": "$\\Delta\\mathbf r$", "meaning": "direct-lattice translation vector between periodic face partners", "si_unit": "$\\mathrm{m}$"},
+    {"id": "k", "latex": "$\\mathbf k$", "meaning": "Bloch–Floquet spin-wave wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "Ck", "latex": "$C(\\mathbf k)$", "meaning": "complex unitary Bloch boundary-prolongation matrix", "si_unit": "$1$"},
+    {"id": "K", "latex": "$\\mathsf K(\\mathbf k)$", "meaning": "Bloch-reduced $\\mathbf k$-dependent tangent rate-stiffness operator", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "G", "latex": "$\\mathsf G(\\mathbf k)$", "meaning": "Bloch-reduced $\\mathbf k$-dependent damping-modified tangent metric", "si_unit": "$1$"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular drive frequency $2\\pi f$", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "master-DOF complex tangent response amplitude vector", "si_unit": "$1$"},
+    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}(\\mathbf k,\\omega)$", "meaning": "Bloch-projected harmonic drive right-hand side vector", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "Dk", "latex": "$D_{\\mathbf k}$", "meaning": "2.5D waveguide shifted-gradient differential operator $\\nabla_\\perp - \\mathrm i k\\hat{\\mathbf z}$", "si_unit": "$\\mathrm{m^{-1}}$"}
   ],
   "sources": [
     {"id": "bc", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FloquetBC", "responsibility": "Floquet pair and phase schema."},
     {"id": "planner_floquet", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "frequency_response_periodic_constraint_sets", "responsibility": "Lowers Floquet pair IDs and Bloch phase into planner constraint sets."},
+    {"id": "floquet_mag_op", "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp", "symbol": "class FloquetReducedMagneticOperator", "responsibility": "Applies complex Bloch prolongation C(k) to tangent magnetic blocks."},
+    {"id": "floquet_demag_k", "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp", "symbol": "build_floquet_dynamic_demag_k_real_split", "responsibility": "3D Floquet k-dependent dynamic demagnetization operator."},
+    {"id": "waveguide_demag_k", "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp", "symbol": "build_floquet_waveguide_demag_k_real_split", "responsibility": "2.5D waveguide shifted-gradient dynamic demagnetization operator."},
     {"id": "validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Floquet legality and dynamic-demag gate."},
     {"id": "response", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_driven_response_contract", "responsibility": "Projected response contract and diagnostics."}
   ],
@@ -35,7 +41,7 @@
     "parameters": [
       {"python": "FloquetBC.pair_ids", "type": "Sequence[str]", "default": "required", "si_unit": "$1$", "validation": "at least one nonempty pair ID", "meaning": "periodic face pair identities", "backend_support": "FEM mesh/planner", "problem_ir": "`study.spin_wave_bc.pair_ids`"},
       {"python": "FloquetBC.phase_convention", "type": "str", "default": "exp_minus_i_k_dot_delta_r", "si_unit": "$1$", "validation": "nonempty supported convention", "meaning": "sign convention for phase", "backend_support": "FEM Floquet", "problem_ir": "`study.spin_wave_bc.phase_convention`"},
-      {"python": "FrequencyResponseStageSpec.k_vector", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "finite three-vector", "meaning": "legacy Bloch vector", "backend_support": "FEM Floquet", "problem_ir": "`study.k_vector`"},
+      {"python": "FrequencyResponseStageSpec.k_vector", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{rad\\,m^{-1}}$", "validation": "finite three-vector", "meaning": "legacy Bloch vector", "backend_support": "FEM Floquet", "problem_ir": "`study.k_vector`"},
       {"python": "FrequencyResponseStageSpec.k_sampling", "type": "object | None", "default": "None", "si_unit": "$1$", "validation": "valid k sampling schema", "meaning": "Bloch sampling", "backend_support": "FEM Floquet", "problem_ir": "`study.k_sampling`"},
       {"python": "FrequencyResponseStageSpec.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean", "meaning": "include dynamic demag", "backend_support": "narrow gated slice", "problem_ir": "`study.operator.include_demag`"},
       {"python": "FrequencyResponseStageSpec.magnetostatic_bc", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `periodic_airbox_k0`, or `floquet_airbox`", "meaning": "magnetostatic closure", "backend_support": "FEM", "problem_ir": "`study.magnetostatic_bc`"}

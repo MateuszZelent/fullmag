@@ -383,12 +383,6 @@ The resolved execution record additionally identifies FEM/FDM, CPU/GPU, precisio
 integrator, adaptive policy, and actual device. The serialized request alone is not runtime proof.
 
 (numerical-methods-relaxation-llg-round-trip-and-failure-semantics)=
-## Diagnostics and failure semantics
-
-Record attempted and accepted steps, local-error ratios, rejection causes, field refreshes,
-accepted-state torque confirmation, completion reason and executed backend/device. A failed solve,
-non-finite state or exhausted adaptive floor cannot be published as converged.
-
 ## Round-trip and failure semantics
 
 The script exporter emits the stage-first `study.stages.add_relax(...)` call and preserves the
@@ -398,6 +392,10 @@ both `tolT` and `tolA`, legacy `tol`, and LLG-only controls used with a direct m
 Unsupported combinations are rejected by the planner; there is no silent fallback to `rk23`, CPU, or a different
 algorithm after an explicit request. Requested intent, resolved execution, and provenance are three
 different records.
+
+Runtime diagnostics record attempted and accepted steps, local-error ratios, rejection causes, field refreshes,
+accepted-state torque confirmation, completion reason, and executed backend/device. A failed solve,
+non-finite state, or exhausted adaptive floor cannot be published as converged.
 
 (numerical-methods-relaxation-llg-discrete-realization)=
 ## Discrete realization
@@ -449,25 +447,15 @@ and their line-search contracts are described separately.
 - T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic materials,” IEEE Transactions on Magnetics 40 (2004), DOI: [10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
 - Fullmag canonical contracts: [`0500-fdm-relaxation-algorithms.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0500-fdm-relaxation-algorithms.md), [`0510-fem-relaxation-algorithms-mfem-gpu.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md), [`0580-canonical-relaxation-equilibrium-contract.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0580-canonical-relaxation-equilibrium-contract.md).
 
-(numerical-methods-relaxation-llg-source-code-index)=
-
-## Control Room workflow
-
-Use the stage editor to select overdamped LLG and expose only integrator, timestep, adaptive, stop
-and field-refresh controls present in the current stage draft. Inspect resolved execution and
-completion telemetry before treating the stage as converged.
-
 ## Control Room crosswalk
 
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
 
-## Where this is implemented
+(numerical-methods-relaxation-llg-source-code-index)=
+## Source-code index
 
 The source-code index below records public validation, stage lowering, adaptive controllers, backend
-execution and completion semantics. Each sidecar entry names a stable declaration rather than a
-line range.
-
-## Source-code index
+execution, and completion semantics.
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |
 |---|---|---|---|---|---|

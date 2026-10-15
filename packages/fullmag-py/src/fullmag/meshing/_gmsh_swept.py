@@ -2379,7 +2379,7 @@ def _generate_coincident_ring_airbox_mesh(
         _configure_gmsh_threads(gmsh, requested_threads=1, honor_environment=False)
         gmsh.model.add("fullmag_swept_box_cylinder_ring_coincident_airbox")
         source_hmax_scaled = body_hmax_scaled
-        z_source = levels[0]
+        z_source = body_bottom
         outer_points = [
             gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)
             for x, y in (
@@ -2457,27 +2457,74 @@ def _generate_coincident_ring_airbox_mesh(
                     gmsh.option.setNumber("Mesh.CharacteristicLengthMin", options.hmin * SCALE)
             gmsh.model.mesh.generate(2)
 
-        annulus_volumes: list[int] = []
-        hole_volumes: list[int] = []
+        annulus_volumes_by_interval: dict[int, int] = {}
+        hole_volumes_by_interval: dict[int, int] = {}
         current_annulus = int(annulus_surface)
         current_hole = int(hole_surface) if hole_surface is not None else None
-        for level_index in range(len(levels) - 1):
-            step = float(levels[level_index + 1] - levels[level_index])
+        interval_midpoints = [
+            0.5 * (levels[level_index] + levels[level_index + 1])
+            for level_index in range(len(levels) - 1)
+        ]
+        magnetic_indices = [
+            level_index
+            for level_index, midpoint in enumerate(interval_midpoints)
+            if body_bottom < midpoint < body_top
+        ]
+        above_indices = [
+            level_index
+            for level_index, midpoint in enumerate(interval_midpoints)
+            if midpoint >= body_top
+        ]
+        below_indices = [
+            level_index
+            for level_index, midpoint in enumerate(interval_midpoints)
+            if midpoint <= body_bottom
+        ]
+        if len(magnetic_indices) + len(above_indices) + len(below_indices) != len(
+            interval_midpoints
+        ):
+            raise RuntimeError("coincident ring intervals do not partition the airbox")
+        ordered_indices = [*magnetic_indices, *above_indices, *reversed(below_indices)]
+        below_started = False
+        for level_index in ordered_indices:
+            is_below = level_index in below_indices
+            if is_below and not below_started:
+                current_annulus = int(annulus_surface)
+                current_hole = int(hole_surface) if hole_surface is not None else None
+                below_started = True
+            interval_step = float(levels[level_index + 1] - levels[level_index])
+            step = -interval_step if is_below else interval_step
+            target_z = float(
+                levels[level_index] if is_below else levels[level_index + 1]
+            )
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
             # Keep every requested z interval as a separate CAD volume. The
-            # unscoped compatibility route still extrudes its premeshed source
-            # triangulation; scoped fields require geometry-only extrusion so
+            # unscoped compatibility route still extrudes its premeshed
+            # source triangulation. Scoped air slabs remain geometry-only so
             # the final conforming 3D mesh resolves magnetic-owner and air
-            # sizing independently instead of copying one cap mesh everywhere.
+            # sizing independently. Magnetic intervals use one recombined
+            # prism layer; the existing coordinate-based converter then gives
+            # periodic copies the same deterministic tetrahedral split.
             if scoped_layer_partitioning:
-                extruded = gmsh.model.geo.extrude(
-                    source_entities,
-                    0.0,
-                    0.0,
-                    step,
-                )
+                if body_bottom < 0.5 * (levels[level_index] + levels[level_index + 1]) < body_top:
+                    extruded = gmsh.model.geo.extrude(
+                        source_entities,
+                        0.0,
+                        0.0,
+                        step,
+                        numElements=[1],
+                        heights=[1.0],
+                        recombine=True,
+                    )
+                else:
+                    extruded = gmsh.model.geo.extrude(
+                        source_entities,
+                        0.0,
+                        0.0,
+                        step,
+                    )
             else:
                 extruded = gmsh.model.geo.extrude(
                     source_entities,
@@ -2503,15 +2550,15 @@ def _generate_coincident_ring_airbox_mesh(
                     hole_step.append(volume)
             if len(annulus_step) != 1 or len(hole_step) != (1 if tool is not None else 0):
                 raise RuntimeError("coincident ring extrusion volume identity is ambiguous")
-            annulus_volumes.append(annulus_step[0])
+            annulus_volumes_by_interval[level_index] = annulus_step[0]
             if hole_step:
-                hole_volumes.append(hole_step[0])
+                hole_volumes_by_interval[level_index] = hole_step[0]
             top_surfaces = []
             for dim, tag in extruded:
                 if int(dim) != 2:
                     continue
                 box = gmsh.model.getBoundingBox(2, int(tag))
-                if abs(float(box[2]) - levels[level_index + 1]) <= 1.0e-8 and abs(float(box[5]) - levels[level_index + 1]) <= 1.0e-8:
+                if abs(float(box[2]) - target_z) <= 1.0e-8 and abs(float(box[5]) - target_z) <= 1.0e-8:
                     top_surfaces.append((int(tag), float(box[3] - box[0])))
             next_annulus = [tag for tag, x_span in top_surfaces if math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
             next_hole = [tag for tag, x_span in top_surfaces if not math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
@@ -2519,6 +2566,20 @@ def _generate_coincident_ring_airbox_mesh(
                 raise RuntimeError("coincident ring extrusion top-face identity is ambiguous")
             current_annulus = next_annulus[0]
             current_hole = next_hole[0] if next_hole else None
+
+        expected_interval_indices = set(range(len(levels) - 1))
+        if set(annulus_volumes_by_interval) != expected_interval_indices:
+            raise RuntimeError("coincident ring realization lost an annulus interval volume")
+        if tool is not None and set(hole_volumes_by_interval) != expected_interval_indices:
+            raise RuntimeError("coincident ring realization lost a hole interval volume")
+        annulus_volumes = [
+            annulus_volumes_by_interval[index]
+            for index in range(len(levels) - 1)
+        ]
+        hole_volumes = [
+            hole_volumes_by_interval[index]
+            for index in sorted(hole_volumes_by_interval)
+        ]
 
         body_volumes = [volume for i, volume in enumerate(annulus_volumes)
                         if body_bottom < 0.5 * (levels[i] + levels[i + 1]) < body_top]
