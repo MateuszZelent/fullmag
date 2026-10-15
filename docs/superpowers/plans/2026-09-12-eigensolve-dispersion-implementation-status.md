@@ -1,5 +1,5 @@
 <!-- current-eigensolve-status-begin -->
-## Bieżący checkpoint — K0 pipeline PASS, signed15 solver PASS / walidacja OPEN, 2026-10-15
+## Bieżący checkpoint — K0 i signed15 pipeline PASS / kwalifikacja naukowa OPEN, 2026-10-15
 
 Pełny cel **S00–S12 pozostaje OPEN**. Worktree `dispersion-mode-ui-20261008`,
 branch `codex/dispersion-mode-ui-20261008`. Runtime jest zamrożony na
@@ -12,8 +12,9 @@ i dokumentacji nie oznaczają przebudowania tego runtime.
 | K0 count1/frequency_window | EPS1e-10/GMRES: 50/50 podokien, 1 mod9.2992496970683GHz, full residual9.800595170769307e-15. Canonical run7edd30b550d34152b9a9a36e9cd8c225 exit0/completed_unqualified | Domyślne EPS1e-11 nadal zawodzi w1/50; niezależna kwalifikacja naukowa i zbieżność pozostają OPEN |
 | K0 energia | Naprawiony Python consumer używa tej samej skali mu0*Ms²*V co native; raw energie zachowane, osobna kontrola ujemności i przeliczona identity. 89 interpretowanych testów PASS | Nie zmienia operatora ani tolerancji full residual1e-8 |
 | K0 analityka | Dla jednorodnego modu i skończonego airboxu:9.299249697068401GHz, różnica−0.000101Hz; otwarty film9.309813711433355GHz | Profil modu i zbieżność wymagają osobnego dowodu; nie dopasowywano parametrów |
-| Signed15 DE serial | Runbe5355a8bb904ed49c0589c69bf8f6cc: native exit0, 15 zapisanych punktów−25…+25rad/µm, wszystkie full descriptor certified; max residual1.0802441875514487e-14 | Historyczny host receipt failed zachowany. Poprawka indexed KSP sprawdza unikalne15indeksów, Gamma1/Floquet14; replay PASS,65testów PASS. Świeży kanoniczny serial po poprawce w toku |
-| Wykres signed15 | build245-de-signed15-20261015.png/svg/pdf/json w katalogu diagnostyki; 15 rzeczywistych punktów plus KS n0 open-film, bez fitu; max różnica1.9423568%, max asymetria±k459752.48Hz | Diagnoza zbieżności/reciprocity, serial-adaptive parity; wynik NOT VERIFIED |
+| Signed15 DE serial | Runbe5355a8bb904ed49c0589c69bf8f6cc: native exit0, 15 zapisanych punktów−25…+25rad/µm, wszystkie full descriptor certified; max residual1.0802441875514487e-14 | Świeży run6c9b97a7980a452cae15b203526fcb0a po poprawcef176a45fee3c5cc03de80b354555734cdbb0970f: canonical exit0/completed_unqualified; Gamma1/Floquet14, rekonstrukcja potencjału i signed state closure PASS. Historyczny failed receipt zachowany; osobna próba adaptive odrzucona przez guard tożsamości boundary |
+| Wykres signed15 | Kanoniczny plot-6c9b97a7980a452cae15b203526fcb0a/signed-fifteen-dispersion.png/pdf i plot-receipt.json: consumer PASS na świeżym serial,15punktów oraz open/finite n0 i coupled thickness32; bez fitu, odbicia i interpolacji FEM. Wcześniejszy wykres diagnostyczny zachowany | Diagnoza zbieżności/reciprocity, serial-adaptive parity; wynik NOT VERIFIED |
+| Signed15 adaptive | Run83f4a6cd976541708ac8280431b81361 native exit1: equilibrium_boundary_hash_mismatch, stored aed4fdc43d95670251a6940f224e92a211e75d01029c796fa5ae70a9e991168a, recomputed66e5db54f6e3b88f7d85f3dd12b7c5bbb63473e965d73e57d5cc17f087945a42 | Diagnoza importu równowagi i statycznego boundary workera. Guard pozostaje aktywny; parity/co-activity NOT VERIFIED |
 | Zbieżność +25rad/µm | Canonical FGMRES/EPS1e-10,3warstwy: L0=13.408272871236032GHz, L1=13.489825251951523GHz, L2=13.526688197653702GHz; wszystkie exit0/completed_unqualified. Różnica L0FGMRES−L0GMRES=5.72e-6Hz. L1GMRES osobno przerwał guard rekurencji PETSc | Wpływ dyskretyzacji potwierdzony, zbieżność nadal NOT VERIFIED; potrzeba grubości/airboxu i analizy asymetrii. Bez osłabiania tolerancji |
 | API ownership | Commitccb6a781966f5e883de73fb5b03ef2b9305d51f7: CI38692453999 Rust job116281276566 PASS, w tym65ownershiptests i oba naprawione fixtures. Auto CI38692391217 PASS | Cały bootstrap FAIL przez browser request budget13/12; brak lokalnej kompilacji testów |
 | Mapa źródeł | Commit9c27e09ab5a7ae3e9aa7c66520b58bac047ae894: dokładny opt-in CPP-DECL, 28 testów PASS; niejednoznaczne deklaracje nadal odrzucane | Mapę0831 weryfikować razem z konsumentem energii |
@@ -8894,3 +8895,9 @@ Native test po korekcie pozostaje NOT VERIFIED do nowego CI; runtime
 ## Checkpoint konsumenta indexed KSP — 2026-10-15
 
 Commit energii i dokumentacji367b24e3f244d94e40755a659d4255409b2e1e82 jest na remote; CI38697548626 oraz38697548650 zakończyły się success. Walidacja mixed sweep nie wymaga globalnej konfiguracji KSP, gdy native publikuje konfiguracje per sample. Adapter ustala baseline z rzeczywistej próbki niezero, nadal sprawdza wszystkie próbki/podokna i wiąże raport z hashem oryginalnych diagnostyk. Braki, duplikaty i niezgodne ustawienia są odrzucane. K0 zachowuje osobny policy validator. Historyczny failed receipt nie został przepisany. Pełny cel S00–S12 pozostaje OPEN.
+
+## Dowód pełnego pipeline signed15 — 2026-10-15
+
+Świeży serial run6c9b97a7980a452cae15b203526fcb0a zakończył się completed_unqualified/exit0 na runtime245/sourcef0f293081. Host consumer sprawdził wszystkie15punktów i zachowane pola. Kanoniczny plot_signed_de_campaign.py przeszedł i wygenerował PNG/PDF/receipt w sąsiednim katalogu plot-6c9b97a7980a452cae15b203526fcb0a. Kampania adaptive jest osobnym uruchomieniem przy identycznej kapsule i modelu; jej sam start nie dowodzi parity ani co-activity. Niezależny count proof i zbieżność nadal OPEN.
+
+Próba adaptive run83f4a6cd976541708ac8280431b81361 zakończyła się następnie native exit1 na equilibrium_boundary_hash_mismatch. Nie dostarcza pozytywnego dowodu parity ani zrównoleglenia. Diagnoza read-only obejmuje tworzenie i import statycznego boundary; brak zgody na pominięcie lub ręczne podmienienie hashów.
