@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 
@@ -768,6 +769,136 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
             combined = f"{result.stdout or ''}{result.stderr or ''}"
             self.assertEqual(result.returncode, 2, combined)
             self.assertIn("invalid", combined.lower())
+
+    def test_native_provider_boost_validator_is_loaded_in_each_admission_scope(self) -> None:
+        """Provider checks must retain the helper functions after requirement lookup returns."""
+
+        powershell = self._powershell_command()
+        if os.name != "nt" or powershell is None:
+            self.skipTest("Native Windows provider fixture requires PowerShell")
+
+        with tempfile.TemporaryDirectory(prefix="fullmag-provider-scope-") as temporary:
+            root = Path(temporary)
+            provider = root / "provider root with spaces"
+            driver = root / "provider_scope_guard.ps1"
+            driver.write_text(
+                textwrap.dedent(
+                    r'''
+                    param($Setup,$RepoRoot,$ProviderRoot)
+                    $ErrorActionPreference = "Stop"
+                    $tokens=$null; $errors=$null
+                    $ast=[System.Management.Automation.Language.Parser]::ParseFile($Setup,[ref]$tokens,[ref]$errors)
+                    foreach($name in @("Get-ProviderBoostRequirement","Assert-ProviderReceiptBoost")) {
+                      $fn=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+                      if($null -eq $fn){throw "Missing function: $name"}
+                      . ([scriptblock]::Create($fn.Extent.Text))
+                    }
+                    $script:ProviderRoot=[IO.Path]::GetFullPath($ProviderRoot)
+                    $script:BoostRequirement=$null
+
+                    New-Item -ItemType Directory -Force -Path (Join-Path $script:ProviderRoot "downloads") | Out-Null
+                    Add-Type -AssemblyName System.IO.Compression
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    function Add-ZipText {
+                      param([IO.Compression.ZipArchive]$Zip,[string]$Name,[string]$Content)
+                      $entry=$Zip.CreateEntry($Name)
+                      $bytes=[Text.Encoding]::UTF8.GetBytes($Content)
+                      $stream=$entry.Open()
+                      try {$stream.Write($bytes,0,$bytes.Length)} finally {$stream.Dispose()}
+                    }
+                    $archive=Join-Path $script:ProviderRoot "downloads\boost_1_89_0.zip"
+                    $zip=[IO.Compression.ZipFile]::Open($archive,[IO.Compression.ZipArchiveMode]::Create)
+                    try {
+                      Add-ZipText $zip "boost_1_89_0/boost/multiprecision/cpp_int.hpp" "synthetic cpp_int"
+                      Add-ZipText $zip "boost_1_89_0/boost/rational.hpp" "synthetic rational"
+                      Add-ZipText $zip "boost_1_89_0/LICENSE_1_0.txt" "synthetic license"
+                    } finally {$zip.Dispose()}
+                    $archiveHash=(Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+                    # Give the production requirement loader a temporary, fully
+                    # pinned source root. The synthetic archive hash is mirrored
+                    # into the helper's plan and manifest so the first admission
+                    # really enters Get-ProviderBoostRequirement with an empty
+                    # cache; no real download or provider tree is used.
+                    $syntheticRepo=Join-Path ([IO.Path]::GetDirectoryName($script:ProviderRoot)) "repo"
+                    New-Item -ItemType Directory -Force -Path (Join-Path $syntheticRepo "scripts\windows") | Out-Null
+                    $manifestText=Get-Content -LiteralPath (Join-Path $RepoRoot "windows_build_requirements.json") -Raw
+                    $manifestText=$manifestText.Replace("77bee48e32cabab96a3fd2589ec3ab9a17798d330220fdd8bde6ff5611b4ccde",$archiveHash)
+                    [IO.File]::WriteAllText((Join-Path $syntheticRepo "windows_build_requirements.json"),$manifestText)
+                    $helperText=Get-Content -LiteralPath (Join-Path $RepoRoot "scripts\windows\native_fem_dependencies.ps1") -Raw
+                    $helperText=$helperText.Replace("77bee48e32cabab96a3fd2589ec3ab9a17798d330220fdd8bde6ff5611b4ccde",$archiveHash)
+                    [IO.File]::WriteAllText((Join-Path $syntheticRepo "scripts\windows\native_fem_dependencies.ps1"),$helperText)
+                    $script:RepoRoot=$syntheticRepo
+                    $requirement=[pscustomobject]@{
+                      kind="project_managed_header_provider"; version="1.89.0"
+                      url="https://archives.boost.io/release/1.89.0/source/boost_1_89_0.zip"
+                      archive="boost_1_89_0.zip"; archive_sha256=$archiveHash
+                      root_directory="boost_1_89_0"; include_directory="boost"; license_file="LICENSE_1_0.txt"
+                      required_headers=@("boost/multiprecision/cpp_int.hpp","boost/rational.hpp")
+                      max_selected_files=50000; max_selected_file_bytes=33554432; max_selected_uncompressed_bytes=536870912
+                    }
+                    $installRoot=Join-Path $script:ProviderRoot ("installed\providers\b-"+$archiveHash.Substring(0,12))
+                    $header=Join-Path $installRoot "include\boost\multiprecision\cpp_int.hpp"
+                    $rational=Join-Path $installRoot "include\boost\rational.hpp"
+                    $license=Join-Path $installRoot "share\licenses\boost\LICENSE_1_0.txt"
+                    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $header),(Split-Path -Parent $rational),(Split-Path -Parent $license) | Out-Null
+                    [IO.File]::WriteAllText($header,"synthetic cpp_int")
+                    [IO.File]::WriteAllText($rational,"synthetic rational")
+                    [IO.File]::WriteAllText($license,"synthetic license")
+                    $headerHash=(Get-FileHash -LiteralPath $header -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $rationalHash=(Get-FileHash -LiteralPath $rational -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $licenseHash=(Get-FileHash -LiteralPath $license -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $tree=@(
+                      [pscustomobject]@{path="include/boost/multiprecision/cpp_int.hpp";size_bytes=(Get-Item $header).Length;sha256=$headerHash},
+                      [pscustomobject]@{path="include/boost/rational.hpp";size_bytes=(Get-Item $rational).Length;sha256=$rationalHash},
+                      [pscustomobject]@{path="share/licenses/boost/LICENSE_1_0.txt";size_bytes=(Get-Item $license).Length;sha256=$licenseHash}
+                    )
+                    $metadata=[pscustomobject]@{
+                      name="boost_headers"; kind=$requirement.kind; version=$requirement.version; url=$requirement.url
+                      archive_name=$requirement.archive; archive_sha256=$archiveHash; archive=$archive
+                      install_root=$installRoot; include_root=(Join-Path $installRoot "include")
+                      installed_header=$header; installed_header_sha256=$headerHash
+                      installed_rational_header=$rational; installed_rational_header_sha256=$rationalHash
+                      license=$license; license_sha256=$licenseHash; include_tree=$tree; required_headers=$requirement.required_headers
+                    }
+                    $receipt=[pscustomobject]@{boost=$metadata}
+                    function Invoke-ProviderCase {
+                      param([string]$Id,[object]$Candidate)
+                      try { $null=Assert-ProviderReceiptBoost -Receipt $Candidate; return [pscustomobject]@{id=$Id;ok=$true;error=""} }
+                      catch { return [pscustomobject]@{id=$Id;ok=$false;error=[string]$_.Exception.Message} }
+                    }
+                    $valid=@("mfem","hypre","libceed","boost_headers") | ForEach-Object { Invoke-ProviderCase $_ $receipt }
+                    $receipt.boost.version="1.88.0"
+                    $invalid=@("mfem","hypre","libceed","boost_headers") | ForEach-Object { Invoke-ProviderCase $_ $receipt }
+                    [pscustomobject]@{valid=@($valid);invalid=@($invalid)} | ConvertTo-Json -Depth 12 -Compress
+                    '''
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    powershell,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(driver),
+                    str(SETUP),
+                    str(ROOT),
+                    str(provider),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            report = json.loads(result.stdout.strip().splitlines()[-1])
+            self.assertEqual([item["id"] for item in report["valid"]], ["mfem", "hypre", "libceed", "boost_headers"])
+            self.assertTrue(all(item["ok"] for item in report["valid"]), report)
+            self.assertFalse(any(item["ok"] for item in report["invalid"]), report)
+            self.assertTrue(all("pin" in item["error"].lower() for item in report["invalid"]), report)
 
 
 if __name__ == "__main__":

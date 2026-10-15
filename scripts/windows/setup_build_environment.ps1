@@ -660,6 +660,15 @@ function Get-ProviderBoostRequirement {
 
 function Assert-ProviderReceiptBoost {
   param([Parameter(Mandatory = $true)][object]$Receipt)
+  # The dependency helper must be loaded in this validator's scope.  Dot
+  # sourcing it only from Get-ProviderBoostRequirement creates functions in
+  # that nested function scope; they disappear before this validator calls
+  # Assert-FullmagNativeFemBoostReceipt, which blocks every provider check.
+  $dependencyScript = Join-Path $script:RepoRoot "scripts\windows\native_fem_dependencies.ps1"
+  if (-not (Test-Path -LiteralPath $dependencyScript -PathType Leaf)) {
+    throw "Native FEM dependency helper is missing: $dependencyScript"
+  }
+  . $dependencyScript
   $requirement = Get-ProviderBoostRequirement
   # The frozen dependency helper owns the archive pin, immutable install root,
   # selected tree, required headers, and license binding. Keep setup readiness
