@@ -83,15 +83,22 @@ try {
     pageUrl: url,
   });
   removeMutationProcessGuards = mutationGuard.installProcessGuards();
-  browser = await playwright.chromium.launch();
+  const browserChannel = process.env.CONTROL_ROOM_TARGET_SMOKE_BROWSER_CHANNEL;
+  browser = await playwright.chromium.launch(
+    browserChannel ? { channel: browserChannel } : {},
+  );
   const targetSmokePhase = process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE;
   const analysisHandoffOnly = targetSmokePhase === "analysis-handoff";
   const fdmOnly = targetSmokePhase === "fdm" || analysisHandoffOnly;
   const femOnly = targetSmokePhase === "fem";
-  const fdm = femOnly ? null : await verifyFdmObjectAndAirboxTargets(browser, url);
-  const fieldFailures = fdmOnly || femOnly ? null : await verifyFdmFieldFailureRecovery(browser, url);
-  const fem = fdmOnly ? null : await verifyFemObjectTargetAndFallback(browser, url);
-  console.log(`Explorer/Inspector target smoke passed: ${JSON.stringify({ fdm, fem, fieldFailures, url })}`);
+  const emptyPartColorOnly = targetSmokePhase === "empty-part-color";
+  const fdm = femOnly || emptyPartColorOnly ? null : await verifyFdmObjectAndAirboxTargets(browser, url);
+  const fieldFailures = fdmOnly || femOnly || emptyPartColorOnly ? null : await verifyFdmFieldFailureRecovery(browser, url);
+  const fem = fdmOnly || emptyPartColorOnly ? null : await verifyFemObjectTargetAndFallback(browser, url);
+  const emptyPartColor = emptyPartColorOnly
+    ? await verifyEmptyPartThicknessAverageZ(browser, url)
+    : null;
+  console.log(`Explorer/Inspector target smoke passed: ${JSON.stringify({ emptyPartColor, fdm, fem, fieldFailures, url })}`);
 } catch (error) {
   runFailure = error;
   throw error;
@@ -352,6 +359,168 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
   }
 }
 
+async function verifyEmptyPartThicknessAverageZ(browser, url) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const fixture = createEmptyPartColorFixture();
+  const errors = attachBrowserErrors(page);
+  await installFixtureApi(page, fixture);
+  await installFixtureConfig(page);
+  const quantityId = "H_eff";
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await assertHealthyCanvas(page, "empty-range FEM initial");
+
+    // Keep the later part hidden while measuring A. Both parts have separate
+    // object targets and share their XY projection columns in the typed mesh.
+    await selectVisualizationNode(page, "fem-visible", null);
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: false,
+      wireframe: false,
+    });
+    await selectVisualizationNode(page, "fem-empty", null);
+    await assertTarget(page, "object:fem-empty");
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: true,
+      wireframe: false,
+    });
+    const emptyBaseline = await sampleViewportPixels(page);
+    const emptyRedPixels = countRedDominantPixels(emptyBaseline);
+    if (emptyRedPixels < 4) {
+      throw new Error(`Empty-range part A was not visibly rendered in its solid-color baseline: ${JSON.stringify({ emptyRedPixels })}.`);
+    }
+
+    await enableMagnitudeSurfaceColoring(page, fixture, "fem-empty");
+    const fieldResource = await waitForFdmFieldResource(page, quantityId);
+    if (!fieldResource.hasValues) {
+      throw new Error(`FEM FMVP field resource did not expose decoded values: ${JSON.stringify(fieldResource)}.`);
+    }
+    assertFieldRequest(fixture, {
+      component: "full",
+      quantityId,
+      scopeId: null,
+      scopeKind: "full",
+    });
+    const emptyOverride = assertMagnitudeThicknessOverride(fixture, "fem-empty");
+    await assertHealthyCanvas(page, "empty-range FEM field-color request");
+    await assertNoViewportPixelDelta(page, emptyBaseline, "empty-range part A field-color no-leak");
+    const emptyDelta = viewportPixelDelta(
+      emptyBaseline,
+      await sampleViewportPixels(page, emptyBaseline.stride),
+    );
+    if (emptyDelta.changed) {
+      throw new Error(`Later-part H_eff values changed empty-range part A pixels: ${JSON.stringify(emptyDelta)}.`);
+    }
+
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: false,
+      wireframe: false,
+    });
+    await selectVisualizationNode(page, "fem-visible", null);
+    await assertTarget(page, "object:fem-visible");
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: true,
+      wireframe: false,
+    });
+    const positiveBaseline = await sampleViewportPixels(page);
+    const positiveRedPixels = countRedDominantPixels(positiveBaseline);
+    if (positiveRedPixels < 4) {
+      throw new Error(`Positive-control part B was not visibly rendered in its solid-color baseline: ${JSON.stringify({ positiveRedPixels })}.`);
+    }
+    await enableMagnitudeSurfaceColoring(page, fixture, "fem-visible");
+    const positiveOverride = assertMagnitudeThicknessOverride(fixture, "fem-visible");
+    const positiveDelta = await waitForViewportPixelDelta(
+      page,
+      positiveBaseline,
+      "nonempty FEM part B magnitude surface coloring",
+      { minimumChangedPixels: 20 },
+    );
+    await assertHealthyCanvas(page, "nonempty FEM positive field-color control");
+    assertNoBrowserErrors(errors);
+    await captureBrowserAuditScreenshot(page, "empty-part-thickness-average-z-success.png");
+    return {
+      emptyPartA: {
+        fieldColorDelta: emptyDelta,
+        nodeCount: 0,
+        nodeStart: 4,
+        redBaselineSamples: emptyRedPixels,
+        visualizationOverride: emptyOverride,
+      },
+      fieldRequests: fixture.fieldRequests,
+      fieldResource,
+      positiveControlPartB: {
+        fieldColorDelta: positiveDelta,
+        nodeCount: 4,
+        nodeStart: 4,
+        redBaselineSamples: positiveRedPixels,
+        visualizationOverride: positiveOverride,
+      },
+      projectionMode: "thickness_average_z",
+      topology: "FEM FMVP v2 full-domain H_eff vector",
+    };
+  } finally {
+    await page.close();
+  }
+}
+
+async function enableMagnitudeSurfaceColoring(page, fixture, objectId) {
+  await setObjectDisplayState(page, {
+    colorbar: true,
+    vectors: false,
+    wireframe: false,
+  });
+  const panel = page.locator(".fm-inspector-panel").last();
+  const colorSource = panel.locator('select[aria-label="Color source"]');
+  const selectedColorSource = await colorSource.inputValue();
+  if (selectedColorSource !== "magnitude") {
+    throw new Error(`Inspector did not select magnitude surface coloring for ${objectId}: ${selectedColorSource}.`);
+  }
+  const colorbar = panel.getByRole("switch", { name: "Add colorbar to viewport" });
+  if (
+    (await colorbar.count()) &&
+    (await colorbar.getAttribute("aria-checked")) === "true"
+  ) {
+    await colorbar.click();
+    await waitForVisualizationMutationSettled(page, panel);
+  }
+  return assertMagnitudeThicknessOverride(fixture, objectId);
+}
+
+function assertMagnitudeThicknessOverride(fixture, objectId) {
+  const override = fixture.visualization.overrides.find(
+    (candidate) => candidate.scope === "object" && candidate.scope_id === objectId,
+  );
+  const style = override?.style;
+  if (
+    style?.surface_color_source !== "magnitude" ||
+    style?.surface_projection_mode !== "thickness_average_z"
+  ) {
+    throw new Error(`Inspector/API resource did not retain magnitude thickness-average-Z for ${objectId}: ${JSON.stringify(override)}.`);
+  }
+  return {
+    colorSource: style.surface_color_source,
+    projectionMode: style.surface_projection_mode,
+  };
+}
+
+function countRedDominantPixels(sample) {
+  let count = 0;
+  for (let offset = 0; offset < sample.signature.length; offset += 3) {
+    const red = sample.signature[offset];
+    const green = sample.signature[offset + 1];
+    const blue = sample.signature[offset + 2];
+    if (red >= 36 && red > green * 1.4 && red > blue * 1.4) count += 1;
+  }
+  return count;
+}
+
 async function installFixtureConfig(page) {
   await page.addInitScript((baseUrl) => {
     window.__FULLMAG_CONFIG__ = {
@@ -385,8 +554,15 @@ async function installFixtureApi(page, fixture) {
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
-      fixture.visualization = applyPatch(fixture.visualization, patch);
-      fixture.visualization.revision += 1;
+      if (fixture.visualizationPatchReducer) {
+        fixture.visualization = fixture.visualizationPatchReducer(
+          fixture.visualization,
+          patch,
+        );
+      } else {
+        fixture.visualization = applyPatch(fixture.visualization, patch);
+        fixture.visualization.revision += 1;
+      }
       return fulfillJson(route, fixture.visualization);
     }
     if (path === "/v2/sessions/current/status") return fulfillJson(route, fixture.status);
@@ -415,7 +591,13 @@ async function installFixtureApi(page, fixture) {
         query: requestUrl.searchParams,
       }));
     }
-    if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, fieldMetaFixture(path.split("/")[6] ?? "m"));
+    if (path.includes("/data/fields/") && path.endsWith("/meta")) {
+      const quantityId = path.split("/")[6] ?? "m";
+      return fulfillJson(
+        route,
+        fixture.fieldMetaFactory?.(quantityId) ?? fieldMetaFixture(quantityId),
+      );
+    }
     if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) {
       const quantityId = path.split("/")[6] ?? "m";
       const fieldRequest = {
@@ -432,6 +614,13 @@ async function installFixtureApi(page, fixture) {
       if (fixture.fieldMode === "stale") return fulfillBinary(route, fdmFieldVectorBuffer({ quantityId, gridShape: fixture.domain.grid?.shape }), fieldVectorHeaders({ ...fieldRequest, domainGenerationId: "stale" }));
       if (fixture.fieldMode === "mismatch") return fulfillBinary(route, fdmFieldVectorBuffer({ quantityId: "H_eff", gridShape: fixture.domain.grid?.shape }), fieldVectorHeaders({ ...fieldRequest, quantityId: "H_eff" }));
       if (fieldRequest.scopeKind === "full") {
+        if (fixture.fieldVectorFactory) {
+          return fulfillBinary(
+            route,
+            fixture.fieldVectorFactory(quantityId),
+            fieldVectorHeaders(fieldRequest),
+          );
+        }
         return fulfillBinary(
           route,
           fdmFieldVectorBuffer({ quantityId, gridShape: fixture.domain.grid?.shape }),
@@ -1327,6 +1516,96 @@ function createFemFixture() {
   return fixture;
 }
 
+function createEmptyPartColorFixture() {
+  const objects = ["fem-empty", "fem-visible"].map((id) => ({
+    geometry: { geometry_params: { size: [1, 1, 1] }, kind: "box" },
+    id,
+    regions: [],
+    transform: { translation: [0, 0, 0] },
+    visible: true,
+  }));
+  const fixture = baseFixture("fem", objects);
+  const quantityId = "H_eff";
+  const boundsMin = [-0.55, -0.45, -0.15];
+  const boundsMax = [0.45, 0.55, 1.55];
+  fixture.status.display.active_quantity_id = quantityId;
+  fixture.status.domain.cell_count = 2;
+  fixture.domain.bounds = { max: boundsMax, min: boundsMin };
+  fixture.domain.counts = { cells: 2, nodes: 8 };
+  fixture.universe.object_bounds_max = boundsMax;
+  fixture.universe.object_bounds_min = boundsMin;
+  fixture.visualization.active_quantity_id = quantityId;
+  fixture.visualization.quantity.active_quantity_id = quantityId;
+  fixture.visualization.overrides = objects.map(({ id }) => ({
+    display: {
+      surface: { visible: true },
+      vectors: { visible: false },
+      wireframe: { visible: false },
+    },
+    quantity: { active_quantity_id: quantityId },
+    scope: "object",
+    scope_id: id,
+    style: {
+      scalar_color_palette: "viridis",
+      surface_color_source: "solid",
+      surface_mono_color: "rgb(240, 24, 24)",
+      surface_projection_mode: "thickness_average_z",
+      viewport_colorbar_visible: false,
+    },
+  }));
+  fixture.visualizationPatchReducer = applyFixtureVisualizationTargetPatch;
+  fixture.fieldMode = "ready";
+  fixture.fieldMetaFactory = (fieldQuantityId) => ({
+    components: ["x", "y", "z"],
+    quantity_id: fieldQuantityId,
+    stats: { max: 1_000_000, min: 0 },
+    unit: fieldQuantityId === "m" ? "1" : "A/m",
+  });
+  fixture.fieldVectorFactory = (fieldQuantityId) =>
+    femEmptyPartColorFieldVectorBuffer(fieldQuantityId);
+  fixture.manifest = {
+    generation_id: "1",
+    mesh_parts: [
+      {
+        boundary_face_count: 4,
+        boundary_face_indices: [0, 1, 2, 3],
+        boundary_face_start: 0,
+        bounds_max: [0.45, 0.55, 0.55],
+        bounds_min: [-0.55, -0.45, -0.15],
+        element_count: 1,
+        element_start: 0,
+        id: "part-empty-range",
+        node_count: 0,
+        node_start: 4,
+        object_id: "fem-empty",
+        role: "magnetic",
+        topology: "tet4",
+      },
+      {
+        boundary_face_count: 4,
+        boundary_face_indices: [4, 5, 6, 7],
+        boundary_face_start: 4,
+        bounds_max: [0.45, 0.55, 1.55],
+        bounds_min: [-0.55, -0.45, 0.85],
+        element_count: 1,
+        element_start: 1,
+        id: "part-visible",
+        node_count: 4,
+        node_start: 4,
+        object_id: "fem-visible",
+        role: "magnetic",
+        topology: "tet4",
+      },
+    ],
+    regions: [],
+    revision: 1,
+    source_scene_revision: 1,
+    topology_fingerprint: "2".repeat(64),
+  };
+  fixture.topology = femEmptyPartColorTopologyBuffer();
+  return fixture;
+}
+
 function baseFixture(discretization, objects) {
   return {
     fieldRequests: [], requests: [],
@@ -1366,6 +1645,25 @@ function regionListFixture(objects) {
 
 function applyPatch(state, patch) {
   return mergeRecords(state, patch ?? {});
+}
+
+function applyFixtureVisualizationTargetPatch(state, patch) {
+  if (typeof patch.scope !== "string" || typeof patch.scope_id !== "string") {
+    const next = applyPatch(state, patch ?? {});
+    next.revision += 1;
+    return next;
+  }
+  const existing = state.overrides.find(
+    (override) =>
+      override.scope === patch.scope && override.scope_id === patch.scope_id,
+  );
+  const nextOverride = mergeRecords(existing ?? {}, patch);
+  const overrides = state.overrides.filter(
+    (override) =>
+      override.scope !== patch.scope || override.scope_id !== patch.scope_id,
+  );
+  overrides.push(nextOverride);
+  return { ...state, overrides, revision: state.revision + 1 };
 }
 
 function mergeRecords(current, patch) {
@@ -1692,6 +1990,80 @@ function femTopologyBuffer() {
   return buffer;
 }
 
+function femEmptyPartColorTopologyBuffer() {
+  const nodeCount = 8;
+  const elementCount = 2;
+  const boundaryFaceCount = 8;
+  const buffer = new ArrayBuffer(
+    32 +
+      nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+      elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT +
+      boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
+      elementCount * 2 * Uint32Array.BYTES_PER_ELEMENT,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) view.setUint8(index, code.charCodeAt(0));
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, elementCount, true);
+  view.setUint32(16, boundaryFaceCount, true);
+  view.setUint32(20, elementCount, true);
+  view.setUint32(24, elementCount, true);
+  let offset = 32;
+  new Float64Array(buffer, offset, nodeCount * 3).set([
+    -0.55, -0.45, -0.15,
+    0.45, -0.45, -0.15,
+    -0.55, 0.55, -0.15,
+    -0.55, -0.45, 0.55,
+    -0.55, -0.45, 0.85,
+    0.45, -0.45, 0.85,
+    -0.55, 0.55, 0.85,
+    -0.55, -0.45, 1.55,
+  ]);
+  offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount * 4).set([
+    0, 1, 2, 3,
+    4, 5, 6, 7,
+  ]);
+  offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryFaceCount * 3).set([
+    0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3,
+    4, 5, 6, 4, 5, 7, 4, 6, 7, 5, 6, 7,
+  ]);
+  offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1, 0]);
+  offset += elementCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1, 0]);
+  return buffer;
+}
+
+function femEmptyPartColorFieldVectorBuffer(quantityId) {
+  const pointCount = 8;
+  const componentCount = 3;
+  const buffer = new ArrayBuffer(
+    48 + pointCount * componentCount * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) view.setUint8(index, code.charCodeAt(0));
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint8(6, componentCount);
+  view.setUint32(12, pointCount * componentCount, true);
+  view.setUint32(16, pointCount, true);
+  view.setUint32(20, 1, true);
+  view.setUint32(24, 1, true);
+  new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
+  const values = new Float64Array(buffer, 48);
+  const magnitudes = [1, 2, 3, 4, 1_000, 10_000, 100_000, 1_000_000];
+  for (let point = 0; point < pointCount; point += 1) {
+    values[point * componentCount] = magnitudes[point];
+    values[point * componentCount + 1] = 0;
+    values[point * componentCount + 2] = 0;
+  }
+  return buffer;
+}
+
 function parsePng(buffer) {
   if (buffer.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") throw new Error("Viewport screenshot is not PNG.");
   let offset = 8;
@@ -1861,3 +2233,4 @@ function signalChildTree(child, signal) {
 }
 function reservePort(port) { return new Promise((resolve, reject) => { const server = createServer(); server.once("error", reject); server.listen(port, process.env.CONTROL_ROOM_TARGET_SMOKE_BIND_HOST ?? "127.0.0.1", () => { const address = server.address(); server.close((error) => error ? reject(error) : resolve(address.port)); }); }); }
 async function waitForHttp(url, child, readSpawnError, readStderr) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { const spawnError = readSpawnError(); if (spawnError) throw new Error(`Target smoke server failed to spawn: ${spawnError.message}.`); if (child.exitCode != null) throw new Error(`Target smoke server exited with ${child.exitCode}: ${readStderr() || "no stderr"}`); try { if ((await fetch(url)).status < 500) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 200)); } throw new Error(`Timed out waiting for ${url}: ${readStderr() || "no stderr"}`); }
+

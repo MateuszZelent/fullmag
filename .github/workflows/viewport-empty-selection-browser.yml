@@ -1,0 +1,74 @@
+name: Viewport empty-selection field-color browser regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'codex/**'
+    paths:
+      - 'scripts/ci/run_viewport_empty_selection_browser_smoke.py'
+      - 'apps/control-room/scripts/smoke-viewport-3d-explorer-inspector-targets.mjs'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dFieldMapping.ts'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dFieldMapping.test.ts'
+      - '.github/workflows/viewport-empty-selection-browser.yml'
+  pull_request:
+    paths:
+      - 'scripts/ci/run_viewport_empty_selection_browser_smoke.py'
+      - 'apps/control-room/scripts/smoke-viewport-3d-explorer-inspector-targets.mjs'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dFieldMapping.ts'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dFieldMapping.test.ts'
+      - '.github/workflows/viewport-empty-selection-browser.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-chrome:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Prepare managed frontend paths
+        run: python -B scripts/fullmag_storage.py prepare-links --profile linux-host --frontend
+      - name: Stage pinned pnpm manifests in managed storage
+        run: python -B scripts/ci/prepare_eigensolve_ui_workspace.py
+      - name: Install pinned workspace dependencies
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir "$FULLMAG_CI_FRONTEND_WORKSPACE_ROOT" install --frozen-lockfile
+      - name: Provision hosted Chrome in managed storage
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir apps/control-room exec playwright install chrome
+      - name: Verify hosted Chrome availability
+        run: google-chrome --version
+      - name: Run live viewport empty-selection scalar-color regression
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          python -B scripts/ci/run_viewport_empty_selection_browser_smoke.py
+      - name: Preserve browser proof and managed terminal status
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: viewport-empty-selection-browser-${{ github.run_id }}
+          path: |
+            ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/builds/**/build-status.json
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/pnpm-workspace-manifests.json
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/viewport-empty-selection-next-dev.log
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/viewport-empty-selection-browser.log
+            apps/control-room/.artifacts/viewport-3d-browser-audit/**
+          if-no-files-found: warn
+
