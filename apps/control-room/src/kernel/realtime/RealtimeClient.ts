@@ -15,6 +15,11 @@ export interface RealtimeWebSocketLike {
 
 const FULLMAG_LIVE_SUBPROTOCOL = "fullmag.live.v1";
 
+export type RealtimeScopeMismatchReason =
+  | "foreign_session"
+  | "request_scope_epoch"
+  | "api_instance";
+
 interface MessageEventLike {
   data: string;
 }
@@ -33,7 +38,7 @@ interface RealtimeClientOptions {
   expectedApiInstance?: string | null;
   /** Called after an already-established socket connects again. */
   onReconnected?: () => void;
-  onScopeMismatch?: () => void;
+  onScopeMismatch?: (reason: RealtimeScopeMismatchReason) => void;
   onStatusChange?: (status: RealtimeConnectionStatus) => void;
   scheduleReconnect?: (callback: () => void, delayMs: number) => () => void;
   url: string;
@@ -80,8 +85,7 @@ export class RealtimeClient {
         this.options.expectedSessionId &&
         parsed.session_id !== this.options.expectedSessionId
       ) {
-        this.options.onScopeMismatch?.();
-        this.close();
+        this.rejectScopeMismatch("foreign_session");
         return;
       }
       if (this.options.expectedRequestScopeEpoch) {
@@ -94,8 +98,7 @@ export class RealtimeClient {
             payload?.request_scope_epoch !==
             this.options.expectedRequestScopeEpoch
           ) {
-            this.options.onScopeMismatch?.();
-            this.close();
+            this.rejectScopeMismatch("request_scope_epoch");
             return;
           }
           this.scopeAccepted = true;
@@ -144,6 +147,14 @@ export class RealtimeClient {
     return this.options.bridge;
   }
 
+  private rejectScopeMismatch(reason: RealtimeScopeMismatchReason): void {
+    try {
+      this.options.onScopeMismatch?.(reason);
+    } finally {
+      this.close();
+    }
+  }
+
   connect(): void {
     if (this.socket || this.validatingConnection) {
       return;
@@ -161,9 +172,8 @@ export class RealtimeClient {
         if (generation !== this.connectionGeneration || this.closedByClient) return;
         this.validatingConnection = false;
         if (!allowed) {
-          this.close();
+          this.rejectScopeMismatch("api_instance");
           this.notifyStatus("disconnected");
-          this.options.onScopeMismatch?.();
           return;
         }
         this.openSocket();
@@ -182,8 +192,7 @@ export class RealtimeClient {
     const url = this.connectionUrl();
     const pin = this.options.expectedApiInstance;
     if (pin && !isApiInstanceId(pin)) {
-      this.close();
-      this.options.onScopeMismatch?.();
+      this.rejectScopeMismatch("api_instance");
       return;
     }
     const instanceProtocol = pin ? `fullmag.api-instance.${pin}` : undefined;

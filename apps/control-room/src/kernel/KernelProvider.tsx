@@ -366,8 +366,8 @@ function RealtimeConnector({ kernel, sessionIdentity, paused }: { kernel: Kernel
       onReconnected: () => {
         kernel.realtime.handleReconnect();
       },
-      onScopeMismatch: () => {
-        kernel.realtime.handleReconnect();
+      onScopeMismatch: (reason) => {
+        kernel.realtime.handleScopeMismatch(reason);
       },
       onStatusChange: (status) => {
         const host = kernel.developmentWorkspace?.getSnapshot();

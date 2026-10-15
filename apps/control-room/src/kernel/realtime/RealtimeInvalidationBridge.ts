@@ -76,6 +76,7 @@ import {
   parseCanonicalFieldVectorResourceKey,
 } from "../api/fieldQueryIdentity";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import type { RealtimeScopeMismatchReason } from "./RealtimeClient";
 import { canonicalFrequencyDomainResourceKey } from "../resources/frequencyDomainResourceKeys";
 import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
 
@@ -518,6 +519,16 @@ export class RealtimeInvalidationBridge {
    */
   handleReconnect(): void {
     this.invalidateSessionScope(`realtime:reconnect:${Date.now()}`);
+  }
+
+  /**
+   * A foreign-session message belongs to another scope and must not trigger
+   * refetches for this session. Epoch and API-instance mismatches invalidate
+   * this session's resources so HTTP can reconcile the current scope.
+   */
+  handleScopeMismatch(reason: RealtimeScopeMismatchReason): void {
+    if (reason === "foreign_session") return;
+    this.invalidateSessionScope(`realtime:scope-mismatch:${reason}:${Date.now()}`);
   }
 
   handleEvent(event: unknown): boolean {

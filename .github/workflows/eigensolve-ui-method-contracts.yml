@@ -43,6 +43,8 @@ on:
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
       - 'apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge*'
+      - 'apps/control-room/src/kernel/realtime/RealtimeClient*'
+      - 'apps/control-room/src/kernel/KernelProvider.tsx'
       - 'apps/control-room/src/kernel/resources/modeCompositionFieldLayerResources*'
       - 'apps/control-room/src/kernel/visualization/ModeCompositionFieldLayerController*'
       - 'apps/control-room/src/kernel/visualization/ModeFieldOverlayIntent*'
@@ -111,6 +113,8 @@ on:
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
       - 'apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge*'
+      - 'apps/control-room/src/kernel/realtime/RealtimeClient*'
+      - 'apps/control-room/src/kernel/KernelProvider.tsx'
       - 'apps/control-room/src/kernel/resources/modeCompositionFieldLayerResources*'
       - 'apps/control-room/src/kernel/visualization/ModeCompositionFieldLayerController*'
       - 'apps/control-room/src/kernel/visualization/ModeFieldOverlayIntent*'
@@ -207,6 +211,7 @@ jobs:
           src/kernel/resources/frequencyDomainResourceKeys.test.ts
           src/kernel/resources/analysisResultCatalogPagination.test.ts
           src/kernel/realtime/RealtimeInvalidationBridge.test.ts
+          src/kernel/realtime/RealtimeClient.test.ts
           src/kernel/visualization/ModeCompositionFieldLayerController.test.ts
           src/kernel/visualization/ModeFieldOverlayIntent.test.ts
           src/kernel/visualization/ModeFieldOverlayIntentController.test.ts

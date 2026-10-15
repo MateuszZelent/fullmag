@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { RequestDiagnosticsController } from "../api/RequestDiagnosticsController";
-import { DATA_FIELDS_PATH, SESSION_EVENTS_WS_PATH } from "../api/apiPaths";
+import {
+  ANALYSIS_RESULT_DATASETS_PATH,
+  DATA_FIELDS_PATH,
+  SESSION_EVENTS_WS_PATH,
+} from "../api/apiPaths";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import { sessionScopedResourceKey } from "../resources/sessionResourceIdentity";
 
 import { RealtimeClient, type RealtimeWebSocketLike } from "./RealtimeClient";
 import { RealtimeInvalidationBridge } from "./RealtimeInvalidationBridge";
@@ -48,6 +53,7 @@ describe("RealtimeClient", () => {
     });
     client.connect();
     await vi.waitFor(() => expect(onScopeMismatch).toHaveBeenCalledTimes(1));
+    expect(onScopeMismatch).toHaveBeenCalledWith("api_instance");
     expect(createSocket).not.toHaveBeenCalled();
     expect(scheduleReconnect).not.toHaveBeenCalled();
     client.close();
@@ -97,11 +103,13 @@ describe("RealtimeClient", () => {
     const socket = new FakeWebSocket();
     const handleEvent = vi.fn(() => true);
     const onScopeMismatch = vi.fn();
+    const scheduleReconnect = vi.fn(() => () => {});
     const client = new RealtimeClient({
       bridge: { handleEvent },
       createSocket: () => socket,
       expectedRequestScopeEpoch: "api-instance:2",
       onScopeMismatch,
+      scheduleReconnect,
       url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
     });
 
@@ -114,8 +122,10 @@ describe("RealtimeClient", () => {
       type: "hello",
     }));
     expect(onScopeMismatch).toHaveBeenCalledTimes(1);
+    expect(onScopeMismatch).toHaveBeenCalledWith("request_scope_epoch");
     expect(socket.close).toHaveBeenCalledTimes(1);
     expect(handleEvent).not.toHaveBeenCalled();
+    expect(scheduleReconnect).not.toHaveBeenCalled();
   });
 
   it("accepts events only after a hello with the expected request scope", () => {
@@ -140,14 +150,30 @@ describe("RealtimeClient", () => {
 
   it("closes a scoped socket before forwarding a message from another session", () => {
     const socket = new FakeWebSocket();
-    const handleEvent = vi.fn(() => true);
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const handleEvent = vi.spyOn(bridge, "handleEvent");
     const onScopeMismatch = vi.fn();
+    const sessionIdentity = {
+      requestScopeEpoch: "api-instance:2",
+      sessionEpoch: "epoch-b",
+      sessionId: "session-b",
+    };
+    const catalogKey = sessionScopedResourceKey(
+      sessionIdentity,
+      ANALYSIS_RESULT_DATASETS_PATH.replace("{run_id}", "run-1"),
+    );
+    resources.subscribe(catalogKey, () => {});
     const client = new RealtimeClient({
-      bridge: { handleEvent },
+      bridge,
       createSocket: () => socket,
       expectedRequestScopeEpoch: "api-instance:2",
       expectedSessionId: "session-b",
-      onScopeMismatch,
+      onScopeMismatch: (reason) => {
+        onScopeMismatch(reason);
+        bridge.handleScopeMismatch(reason);
+      },
       url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
     });
 
@@ -165,7 +191,56 @@ describe("RealtimeClient", () => {
 
     expect(handleEvent).toHaveBeenCalledTimes(1);
     expect(onScopeMismatch).toHaveBeenCalledTimes(1);
+    expect(onScopeMismatch).toHaveBeenCalledWith("foreign_session");
     expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(resources.getRevision(catalogKey)).toBeNull();
+  });
+
+  it("closes a mismatched socket even if its scope callback throws", () => {
+    const socket = new FakeWebSocket();
+    const handleEvent = vi.fn(() => true);
+    const scheduleReconnect = vi.fn(() => () => {});
+    const client = new RealtimeClient({
+      bridge: { handleEvent },
+      createSocket: () => socket,
+      expectedSessionId: "session-b",
+      onScopeMismatch: () => {
+        throw new Error("scope handler failed");
+      },
+      scheduleReconnect,
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    socket.emit("message", JSON.stringify({
+      session_id: "session-a",
+      type: "resource.batch_changed",
+    }));
+
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(handleEvent).not.toHaveBeenCalled();
+    expect(scheduleReconnect).not.toHaveBeenCalled();
+  });
+
+  it("reports invalid API instance pins as scoped mismatches without opening or retrying", () => {
+    const createSocket = vi.fn(() => new FakeWebSocket());
+    const onScopeMismatch = vi.fn();
+    const scheduleReconnect = vi.fn(() => () => {});
+    const client = new RealtimeClient({
+      bridge: { handleEvent: () => true },
+      createSocket,
+      expectedApiInstance: "not-an-api-instance",
+      onScopeMismatch,
+      scheduleReconnect,
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+
+    expect(onScopeMismatch).toHaveBeenCalledTimes(1);
+    expect(onScopeMismatch).toHaveBeenCalledWith("api_instance");
+    expect(createSocket).not.toHaveBeenCalled();
+    expect(scheduleReconnect).not.toHaveBeenCalled();
   });
 
   it("connects to the v2 realtime endpoint and invalidates resources from events", () => {

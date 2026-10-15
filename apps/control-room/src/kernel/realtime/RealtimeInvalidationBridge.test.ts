@@ -137,6 +137,58 @@ describe("RealtimeInvalidationBridge", () => {
     );
   });
 
+  it("does not invalidate the current catalog for a foreign-session mismatch", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const sessionIdentity: SessionResourceIdentity = {
+      requestScopeEpoch: "api-instance:1",
+      sessionEpoch: "epoch-current",
+      sessionId: "session-current",
+    };
+    const catalogKey = analysisResultDatasetCatalogKey(
+      sessionIdentity,
+      "run-current",
+      "::complete-catalog",
+    );
+    resources.subscribe(SESSION_CURRENT_PATH, () => {});
+    resources.subscribe(catalogKey, () => {});
+
+    bridge.handleScopeMismatch("foreign_session");
+
+    expect(resources.getRevision(SESSION_CURRENT_PATH)).toBeNull();
+    expect(resources.getRevision(catalogKey)).toBeNull();
+  });
+
+  it("resynchronizes current resources for request-epoch and API-instance mismatches", () => {
+    for (const reason of ["request_scope_epoch", "api_instance"] as const) {
+      const bus = new EventBus<KernelEventMap>();
+      const resources = new ResourceInvalidationController(bus);
+      const bridge = new RealtimeInvalidationBridge(resources);
+      const sessionIdentity: SessionResourceIdentity = {
+        requestScopeEpoch: "api-instance:1",
+        sessionEpoch: `epoch-${reason}`,
+        sessionId: `session-${reason}`,
+      };
+      const catalogKey = analysisResultDatasetCatalogKey(
+        sessionIdentity,
+        `run-${reason}`,
+        "::complete-catalog",
+      );
+      resources.subscribe(SESSION_CURRENT_PATH, () => {});
+      resources.subscribe(catalogKey, () => {});
+
+      bridge.handleScopeMismatch(reason);
+
+      expect(resources.getRevision(SESSION_CURRENT_PATH)).toEqual(
+        expect.stringMatching(new RegExp(`^realtime:scope-mismatch:${reason}:`)),
+      );
+      expect(resources.getRevision(catalogKey)).toEqual(
+        expect.stringMatching(new RegExp(`^realtime:scope-mismatch:${reason}:`)),
+      );
+    }
+  });
+
   it("reconciles active-run resources through the session prefix after reconnect", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
