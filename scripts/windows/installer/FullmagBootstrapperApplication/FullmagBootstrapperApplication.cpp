@@ -18,6 +18,7 @@
 #include <limits>
 #include <map>
 #include <new>
+#include <set>
 #include <sstream>
 
 #pragma comment(lib, "advapi32.lib")
@@ -44,6 +45,7 @@ constexpr UINT kUiReply = WM_APP + 6;
 constexpr UINT kUiCancel = WM_APP + 7;
 constexpr UINT kUiApplyComplete = WM_APP + 8;
 constexpr UINT kUiBrokerMessage = WM_APP + 9;
+constexpr UINT kUiPlanComplete = WM_APP + 10;
 constexpr size_t kMaxSourceAdmissionBytes = 64 * 1024;
 constexpr size_t kMaxHelperRequestBytes = 2 * 1024 * 1024;
 
@@ -506,6 +508,10 @@ struct HelperReply {
 };
 
 struct UiApplyCompleteMessage {
+    HRESULT status = E_FAIL;
+};
+
+struct UiPlanCompleteMessage {
     HRESULT status = E_FAIL;
 };
 
@@ -1980,6 +1986,88 @@ void FullmagBootstrapperApplication::MaybeSendPendingHelperCancel() {
         });
 }
 
+void FullmagBootstrapperApplication::HandlePlanComplete(HRESULT status) {
+    // Burn invokes OnPlanComplete on its callback thread. This method is
+    // called only by WindowProc, so state, HWND, and Apply mutations stay on
+    // the owning UI thread.
+    if (shuttingDown_.load()) {
+        installRequested_.store(false);
+        return;
+    }
+    const bool cancelRequested = burnCancelRequested_.load();
+    const UiOperationContext terminalContext =
+        cancelRequested && burnCancelOperation_.valid ?
+            burnCancelOperation_ : burnOperationContext_;
+    if (FAILED(status)) {
+        installRequested_.store(false);
+        SetEnvironmentMutationLock(false);
+        SetStatus(L"Burn could not plan the product payload: " + HresultText(status), true);
+        SendUiTerminal(this, terminalContext, false,
+                       cancelRequested ? L"canceled" : L"blocked", L"",
+                       L"Burn could not plan the product payload: " + HresultText(status));
+        burnOperationContext_ = {};
+        burnCancelOperation_ = {};
+        burnCancelRequested_.store(false);
+        return;
+    }
+
+    if (cancelRequested) {
+        installRequested_.store(false);
+        SetEnvironmentMutationLock(false);
+        SetStatus(L"Burn planning was canceled.", true);
+        SendUiTerminal(this, terminalContext, true, L"canceled",
+                       L"{\"canceled\":true,\"burn_cancel_requested\":true}");
+        burnOperationContext_ = {};
+        burnCancelOperation_ = {};
+        burnCancelRequested_.store(false);
+        return;
+    }
+
+    if (!burnApplyAfterPlan_) {
+        installRequested_.store(false);
+        SetEnvironmentMutationLock(false);
+        SetStatus(L"Burn planning completed; no payload was applied.");
+        SendUiTerminal(this, burnOperationContext_, true, L"complete",
+                       L"{\"planned\":true,\"receipt_valid\":false,\"apply_started\":false}");
+        burnOperationContext_ = {};
+        return;
+    }
+
+    const HWND target = uiWindow_.load();
+    if (installRequested_.load() && engine_ && target) {
+        SetStatus(L"Applying the verified product payload...");
+        const HRESULT apply = engine_->Apply(target);
+        if (FAILED(apply)) {
+            installRequested_.store(false);
+            SetEnvironmentMutationLock(false);
+            SetStatus(L"Burn could not apply the product payload: " + HresultText(apply), true);
+            const bool canceled = burnCancelRequested_.load();
+            const UiOperationContext applyContext =
+                canceled && burnCancelOperation_.valid ?
+                    burnCancelOperation_ : burnOperationContext_;
+            SendUiTerminal(this, applyContext, false,
+                           canceled ? L"canceled" : L"blocked", L"",
+                           L"Burn could not apply the product payload: " + HresultText(apply));
+            burnOperationContext_ = {};
+            burnCancelOperation_ = {};
+            burnCancelRequested_.store(false);
+        }
+    } else if (installRequested_.load()) {
+        installRequested_.store(false);
+        SetEnvironmentMutationLock(false);
+        const bool canceled = burnCancelRequested_.load();
+        const UiOperationContext applyContext =
+            canceled && burnCancelOperation_.valid ?
+                burnCancelOperation_ : burnOperationContext_;
+        SendUiTerminal(this, applyContext, false,
+                       canceled ? L"canceled" : L"blocked", L"",
+                       L"The Burn window is unavailable; applying the payload is blocked.");
+        burnOperationContext_ = {};
+        burnCancelOperation_ = {};
+        burnCancelRequested_.store(false);
+    }
+}
+
 void FullmagBootstrapperApplication::HandleApplyComplete(HRESULT status) {
     // Burn invokes OnApplyComplete on its callback thread. This method is
     // called only by WindowProc, so all state and HWND mutations stay on the
@@ -2295,6 +2383,9 @@ void FullmagBootstrapperApplication::UiThreadMain() {
     while (PeekMessageW(&pending, nullptr, kUiApplyComplete, kUiApplyComplete, PM_REMOVE)) {
         delete reinterpret_cast<UiApplyCompleteMessage*>(pending.lParam);
     }
+    while (PeekMessageW(&pending, nullptr, kUiPlanComplete, kUiPlanComplete, PM_REMOVE)) {
+        delete reinterpret_cast<UiPlanCompleteMessage*>(pending.lParam);
+    }
     while (PeekMessageW(&pending, nullptr, kUiBrokerMessage, kUiBrokerMessage, PM_REMOVE)) {
         delete reinterpret_cast<UiBrokerMessage*>(pending.lParam);
     }
@@ -2334,7 +2425,7 @@ void FullmagBootstrapperApplication::CreateUi(HWND window) {
     if (licenseIsValid_) {
         SetControlText(licenseText_, license);
     } else {
-        SetControlText(licenseText_, L"A signed license payload was not provided. Installation is blocked.");
+        SetControlText(licenseText_, L"The bundled license payload was not provided. Installation is blocked.");
         EnableWindowIf(licenseAccepted_, false);
     }
 
@@ -2424,7 +2515,7 @@ void FullmagBootstrapperApplication::CreateUi(HWND window) {
     LayoutUi();
     SetStatus(requestedLane_.empty() ?
                   (sourceFirst_ ? L"Select your source folder before continuing." :
-                   L"The signed runtime lane manifest is missing or inconsistent; installation is blocked.") :
+                   L"The runtime lane manifest is missing or inconsistent; installation is blocked.") :
                   L"Accept the license, select the main Git checkout, then read it.",
               requestedLane_.empty());
 }
@@ -2690,6 +2781,12 @@ LRESULT CALLBACK FullmagBootstrapperApplication::WindowProc(HWND window, UINT me
     case kUiCancel:
         application->MaybeSendPendingHelperCancel();
         return 0;
+    case kUiPlanComplete: {
+        std::unique_ptr<UiPlanCompleteMessage> completion(
+            reinterpret_cast<UiPlanCompleteMessage*>(lParam));
+        if (completion) application->HandlePlanComplete(completion->status);
+        return 0;
+    }
     case kUiApplyComplete: {
         std::unique_ptr<UiApplyCompleteMessage> completion(
             reinterpret_cast<UiApplyCompleteMessage*>(lParam));
@@ -4537,7 +4634,7 @@ bool FullmagBootstrapperApplication::BootstrapFreshHostPrerequisites() {
     if (!IsRegularLocalFile(checkoutSetup) || !IsRegularLocalFile(checkoutManifest) ||
         !EqualsInsensitive(Sha256File(checkoutSetup), setupHash) ||
         !EqualsInsensitive(Sha256File(checkoutManifest), manifestHash)) {
-        SetStatus(L"The selected checkout does not match the signed bundled bootstrap inputs; no installation was attempted.", true);
+        SetStatus(L"The selected checkout does not match the hash-bound bundled bootstrap inputs; no installation was attempted.", true);
         return false;
     }
     const std::wstring helperPath = FindPayload({L"installer_env.ps1"});
@@ -5209,7 +5306,7 @@ STDMETHODIMP_(void) FullmagBootstrapperApplication::OnDetectComplete(HRESULT sta
     if (IsHresultSuccess(status) && requestedLane_.empty()) {
         SetStatus(sourceFirst_ ?
                       L"Choose your source folder to continue." :
-                      L"The signed runtime lane manifest is missing or inconsistent; installation is blocked.",
+                      L"The runtime lane manifest is missing or inconsistent; installation is blocked.",
                   !sourceFirst_);
     } else if (IsHresultSuccess(status)) {
         SetStatus(L"Burn detection completed. Select the checkout to continue.");
@@ -5231,81 +5328,17 @@ STDMETHODIMP_(void) FullmagBootstrapperApplication::OnPlanPackageComplete(
     LPCWSTR, HRESULT, BOOTSTRAPPER_PACKAGE_STATE, BOOTSTRAPPER_REQUEST_STATE,
     BOOTSTRAPPER_ACTION_STATE, BOOTSTRAPPER_ACTION_STATE) {}
 STDMETHODIMP_(void) FullmagBootstrapperApplication::OnPlanComplete(HRESULT status) {
-    if (shuttingDown_.load()) {
-        installRequested_.store(false);
-        return;
+    auto* completion = new (std::nothrow) UiPlanCompleteMessage{status};
+    bool posted = false;
+    {
+        std::lock_guard<std::mutex> guard(stateMutex_);
+        const HWND target = uiWindow_.load();
+        posted = completion && !shuttingDown_.load() && target &&
+            PostMessageW(target, kUiPlanComplete, 0,
+                         reinterpret_cast<LPARAM>(completion)) != FALSE;
     }
-    const bool cancelRequested = burnCancelRequested_.load();
-    const UiOperationContext terminalContext =
-        cancelRequested && burnCancelOperation_.valid ?
-            burnCancelOperation_ : burnOperationContext_;
-    if (FAILED(status)) {
-        installRequested_.store(false);
-        SetEnvironmentMutationLock(false);
-        SetStatus(L"Burn could not plan the product payload: " + HresultText(status), true);
-        SendUiTerminal(this, terminalContext, false,
-                       cancelRequested ? L"canceled" : L"blocked", L"",
-                       L"Burn could not plan the product payload: " + HresultText(status));
-        burnOperationContext_ = {};
-        burnCancelOperation_ = {};
-        burnCancelRequested_.store(false);
-        return;
-    }
-
-    if (cancelRequested) {
-        installRequested_.store(false);
-        SetEnvironmentMutationLock(false);
-        SetStatus(L"Burn planning was canceled.", true);
-        SendUiTerminal(this, terminalContext, true, L"canceled",
-                       L"{\"canceled\":true,\"burn_cancel_requested\":true}");
-        burnOperationContext_ = {};
-        burnCancelOperation_ = {};
-        burnCancelRequested_.store(false);
-        return;
-    }
-
-    if (!burnApplyAfterPlan_) {
-        installRequested_.store(false);
-        SetEnvironmentMutationLock(false);
-        SetStatus(L"Burn planning completed; no payload was applied.");
-        SendUiTerminal(this, burnOperationContext_, true, L"complete",
-                       L"{\"planned\":true,\"receipt_valid\":false,\"apply_started\":false}");
-        burnOperationContext_ = {};
-        return;
-    }
-
-    const HWND target = uiWindow_.load();
-    if (installRequested_.load() && engine_ && target) {
-        SetStatus(L"Applying the verified product payload...");
-        const HRESULT apply = engine_->Apply(target);
-        if (FAILED(apply)) {
-            installRequested_.store(false);
-            SetEnvironmentMutationLock(false);
-            SetStatus(L"Burn could not apply the product payload: " + HresultText(apply), true);
-            const bool canceled = burnCancelRequested_.load();
-            const UiOperationContext applyContext =
-                canceled && burnCancelOperation_.valid ?
-                    burnCancelOperation_ : burnOperationContext_;
-            SendUiTerminal(this, applyContext, false,
-                           canceled ? L"canceled" : L"blocked", L"",
-                           L"Burn could not apply the product payload: " + HresultText(apply));
-            burnOperationContext_ = {};
-            burnCancelOperation_ = {};
-            burnCancelRequested_.store(false);
-        }
-    } else if (installRequested_.load()) {
-        installRequested_.store(false);
-        SetEnvironmentMutationLock(false);
-        const bool canceled = burnCancelRequested_.load();
-        const UiOperationContext applyContext =
-            canceled && burnCancelOperation_.valid ?
-                burnCancelOperation_ : burnOperationContext_;
-        SendUiTerminal(this, applyContext, false,
-                       canceled ? L"canceled" : L"blocked", L"",
-                       L"The Burn window is unavailable; applying the payload is blocked.");
-        burnOperationContext_ = {};
-        burnCancelOperation_ = {};
-        burnCancelRequested_.store(false);
+    if (!posted) {
+        delete completion;
     }
 }
 STDMETHODIMP_(int) FullmagBootstrapperApplication::OnApplyBegin() {

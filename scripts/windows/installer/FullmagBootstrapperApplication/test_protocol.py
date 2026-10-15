@@ -215,6 +215,26 @@ class BootstrapperApplicationSourceContract(unittest.TestCase):
         self.assertIn("HandleApplyComplete", CPP)
         self.assertNotIn("EnableWindowIf(launchButton_", apply)
 
+    def test_burn_plan_completion_is_marshaled_before_apply_or_state_mutation(self) -> None:
+        plan_callback = CPP[CPP.index("STDMETHODIMP_(void) FullmagBootstrapperApplication::OnPlanComplete") :
+                            CPP.index("STDMETHODIMP_(int) FullmagBootstrapperApplication::OnApplyBegin")]
+        self.assertIn("UiPlanCompleteMessage", plan_callback)
+        self.assertIn("PostMessageW(target, kUiPlanComplete", plan_callback)
+        self.assertNotIn("SetEnvironmentMutationLock", plan_callback)
+        self.assertNotIn("SendUiTerminal", plan_callback)
+        self.assertNotIn("engine_->Apply", plan_callback)
+        self.assertIn("if (!posted)", plan_callback)
+        self.assertIn("delete completion", plan_callback)
+        handler = CPP[CPP.index("void FullmagBootstrapperApplication::HandlePlanComplete") :
+                      CPP.index("void FullmagBootstrapperApplication::HandleApplyComplete")]
+        self.assertIn("SetEnvironmentMutationLock", handler)
+        self.assertIn("SendUiTerminal", handler)
+        self.assertIn("engine_->Apply(target)", handler)
+        self.assertIn("case kUiPlanComplete", CPP)
+        self.assertIn("HandlePlanComplete(completion->status)", CPP)
+        self.assertIn("PeekMessageW(&pending, nullptr, kUiPlanComplete, kUiPlanComplete, PM_REMOVE)", CPP)
+        self.assertIn("delete reinterpret_cast<UiPlanCompleteMessage*>(pending.lParam)", CPP)
+
     def test_burn_plan_request_flag_is_cross_thread_safe(self) -> None:
         self.assertIn("std::atomic<bool> installRequested_", HEADER)
         self.assertIn("installRequested_.store(true)", CPP)
@@ -483,7 +503,7 @@ class BootstrapperApplicationSourceContract(unittest.TestCase):
             "expectedReportProfile",
             "compiler_ready_provider_pending",
             "requirements.storage.build_profiles",
-            "The signed runtime lane manifest is missing or inconsistent; installation is blocked.",
+            "The runtime lane manifest is missing or inconsistent; installation is blocked.",
             "Microsoft Edge WebView2 Runtime is not installed; launch is blocked.",
             "CPU fallback is blocked.",
             "fullmag.windows-installer-source-admission.v1",

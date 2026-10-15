@@ -173,6 +173,7 @@ private:
                          std::function<void(const std::wstring&, const std::wstring&)> completion);
     void HandleHelperReply(HelperReply* reply);
     void MaybeSendPendingHelperCancel();
+    void HandlePlanComplete(HRESULT status);
     void HandleApplyComplete(HRESULT status);
     void SetEnvironmentMutationLock(bool locked);
     bool PrepareSourceFirstBurnVariables();
