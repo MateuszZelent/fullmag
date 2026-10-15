@@ -866,7 +866,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SetupCompleted = setup.Ok &&
                          InstallationScopeMatches(setup.Payload) &&
                          string.Equals(setup.State, "complete", StringComparison.OrdinalIgnoreCase) &&
-                         JsonPayload.Bool(setup.Payload, "receipt_valid");
+                         JsonPayload.Bool(setup.Payload, "receipt_valid") &&
+                         (!string.Equals(_setupMode, "initial-build", StringComparison.OrdinalIgnoreCase) ||
+                          JsonPayload.Bool(setup.Payload, "all_runtime_ready"));
         if (SetupCompleted)
         {
             StatusMessage = CanLaunchWorkspace

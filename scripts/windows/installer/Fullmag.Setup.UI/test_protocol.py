@@ -258,6 +258,31 @@ def main() -> None:
     require(view_model, 'JsonPayload.FirstString(\n            payload,\n            "manifest_hash",', "init manifest hash binding")
     require(view_model, 'JsonPayload.NestedString(payload, "requirements_manifest", "sha256")', "init manifest provenance hash")
     require(view_model, "receipt_valid", "receipt validation")
+    setup_gate_start = view_model.index("SetupCompleted = setup.Ok &&")
+    setup_gate_end = view_model.index("        if (SetupCompleted)", setup_gate_start)
+    setup_gate = view_model[setup_gate_start:setup_gate_end]
+    require(
+        setup_gate,
+        'JsonPayload.Bool(setup.Payload, "receipt_valid") &&',
+        "receipt validity remains part of the Ready gate",
+    )
+    require(
+        setup_gate,
+        '(!string.Equals(_setupMode, "initial-build", StringComparison.OrdinalIgnoreCase) ||',
+        "initial-build uses a mode-conditional runtime gate",
+    )
+    require(
+        setup_gate,
+        'JsonPayload.Bool(setup.Payload, "all_runtime_ready"));',
+        "initial-build requires all-runtime readiness",
+    )
+    require_order(
+        setup_gate,
+        'JsonPayload.Bool(setup.Payload, "receipt_valid")',
+        'JsonPayload.Bool(setup.Payload, "all_runtime_ready")',
+        "runtime readiness follows receipt validation",
+    )
+
     require(view_model, "bootstrap_mode", "setup mode binding")
     require(view_model, 'string.Equals(_setupMode, "initial-build"', "initial-build launch gate")
     require(view_model, "Build environment is ready.", "setup-only ready copy")
