@@ -279,7 +279,7 @@ study.geometry_object(fm.Box(20e-9, 10e-9, 5e-9, name='lead').translate((4e-9, 0
     assert problem_ir["object_regions"] == reference_ir["object_regions"]
 
 
-def test_scene_document_problem_ir_rejects_unrepresented_auxiliary_object_id(
+def test_scene_document_problem_ir_preserves_auxiliary_object_id(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "scene_auxiliary_identity_source.py"
@@ -290,21 +290,79 @@ study.engine('fdm')
 film = study.geometry(fm.Box(200e-9, 20e-9, 6e-9), name='film', object_id='film')
 film.Ms = 800000
 film.Aex = 13e-12
+study.geometry_object(
+    fm.Box(20e-9, 10e-9, 5e-9),
+    name='lead',
+    type='conductor',
+    object_id='stable-lead-id',
+)
+""",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(source, lightweight_assets=True)
+    assert loaded.problem.auxiliary_geometry_object_ids == {
+        "lead": "stable-lead-id"
+    }
+
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    auxiliary = next(obj for obj in scene["objects"] if obj["role"] == "conductor")
+    assert (auxiliary["id"], auxiliary["name"], auxiliary["role"]) == (
+        "stable-lead-id",
+        "lead",
+        "conductor",
+    )
+
+    problem_ir = scene_document_to_problem_ir(
+        scene,
+        requested_backend="fdm",
+        requested_device="cpu",
+        requested_precision="double",
+        requested_mode="strict",
+        source_root=tmp_path,
+    )
+    physics_object = next(
+        item for item in problem_ir["physics_objects"] if item["type"] == "conductor"
+    )
+    assert (
+        physics_object["object_id"],
+        physics_object["name"],
+        physics_object["type"],
+        physics_object["geometry_id"],
+    ) == ("stable-lead-id", "lead", "conductor", "lead")
+
+
+def test_scene_document_problem_ir_rejects_auxiliary_id_collision_with_magnetic_alias(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "scene_auxiliary_collision_source.py"
+    source.write_text(
+        """import fullmag as fm
+study = fm.study('scene-auxiliary-collision-study')
+study.engine('fdm')
+film = study.geometry(fm.Box(200e-9, 20e-9, 6e-9), name='film', object_id='stable-film-id')
+film.Ms = 800000
+film.Aex = 13e-12
 study.geometry_object(fm.Box(20e-9, 10e-9, 5e-9), name='lead', type='conductor')
 """,
         encoding="utf-8",
     )
     loaded = load_problem_from_script(source, lightweight_assets=True)
     scene = build_scene_document_from_builder(export_builder_draft(loaded))
-    auxiliary = next(obj for obj in scene["objects"] if obj["role"] == "conductor")
-    auxiliary["id"] = "stable-lead-id"
+    colliding_scene = {
+        **scene,
+        "objects": [dict(obj) for obj in scene["objects"]],
+    }
+    auxiliary = next(
+        obj for obj in colliding_scene["objects"] if obj["role"] == "conductor"
+    )
+    auxiliary["id"] = "film"
 
     with pytest.raises(
         ValueError,
-        match="scene_document_auxiliary_object_id_unsupported",
+        match="auxiliary ID conflicts with a magnetic name alias",
     ):
         scene_document_to_problem_ir(
-            scene,
+            colliding_scene,
             requested_backend="fdm",
             requested_device="cpu",
             requested_precision="double",
@@ -1053,3 +1111,4 @@ def _lower_scene_document(
         requested_mode="strict",
         source_root=source_root,
     )
+
