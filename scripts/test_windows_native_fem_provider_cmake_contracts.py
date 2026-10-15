@@ -180,3 +180,23 @@ def test_mfem_like_config_consumes_forward_slash_mpi_path_with_spaces(tmp_path: 
         normalized_mpi_include,
         "C:/git/fullmag/storage/MS MPI SDK/PFiles/Microsoft SDKs/MPI/Lib/x64/msmpi.lib",
     ]
+
+
+def test_windows_mfem_pins_mpi_when_slepc_is_disabled() -> None:
+    """The ordinary MFEM route must not delegate MPI selection to the host."""
+    module_source = (ROOT / "native/cmake/FindFullmagMfem.cmake").read_text(
+        encoding="utf-8"
+    )
+    backend_source = (ROOT / "backends/fem/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "function(fullmag_pin_windows_mpi)" in module_source
+    assert 'DEFINED ENV{MSMPI_INC}' in module_source
+    assert 'DEFINED ENV{MSMPI_LIB64}' in module_source
+    assert 'find_package(MPI MODULE REQUIRED COMPONENTS CXX)' in module_source
+    assert 'set(MPI_CXX_INCLUDE_DIR ' in module_source
+    assert 'set(MPI_C_INCLUDE_DIR ' in module_source
+    assert 'MPI_CXX_LIBRARIES' in module_source
+    assert 'MPI::MPI_CXX' in module_source
+    assert 'NOT FULLMAG_FEM_WITH_SLEPC' in backend_source
+    assert 'fullmag_pin_windows_mpi()' in backend_source

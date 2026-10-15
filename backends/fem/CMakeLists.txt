@@ -247,6 +247,11 @@ if(FULLMAG_USE_MFEM_STACK)
         fullmag_find_windows_modal()
     endif()
     include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
+    if(WIN32 AND NOT FULLMAG_FEM_WITH_SLEPC)
+        # The ordinary MFEM route still loads MFEMConfig.cmake, whose
+        # find_dependency(MPI) must use the selected Microsoft MPI SDK.
+        fullmag_pin_windows_mpi()
+    endif()
     fullmag_find_mfem()
     if(FULLMAG_FEM_WITH_SLEPC)
         if(WIN32)

@@ -524,11 +524,16 @@ try {
   }
   New-Item -ItemType Directory -Force -Path $providerRoot | Out-Null
   [IO.File]::WriteAllText((Join-Path $providerRoot "provider-receipt.json"), ($providerReceipt | ConvertTo-Json -Depth 8))
-  $recovered = Get-FullmagNativeFemToolCache -Plan $plan -ToolName "ninja-1.13.2" `
-    -ArchivePath $archive -ArchiveSha256 $archiveSha -Root $toolRoot `
-    -RequiredRelativePaths @("ninja.exe")
-  if ([string]$recovered.recovered_from -ne "provider-receipt") {
-    throw "provider receipt did not recover an existing tool tree"
+  [IO.File]::WriteAllBytes((Join-Path $toolRoot "unverified-sidecar.dll"), [byte[]](70, 79, 82, 71, 69, 68))
+  $recoveryFailed = $false
+  try {
+    $null = Get-FullmagNativeFemToolCache -Plan $plan -ToolName "ninja-1.13.2" `
+      -ArchivePath $archive -ArchiveSha256 $archiveSha -Root $toolRoot `
+      -RequiredRelativePaths @("ninja.exe")
+  }
+  catch { $recoveryFailed = $true }
+  if (-not $recoveryFailed) {
+    throw "tool tree without a full immutable cache inventory was recovered"
   }
   Write-Output "TOOL CACHE FIXTURE PASS"
 }
@@ -564,6 +569,11 @@ finally {
         self.assertIn('if ($null -eq $zstdCache)', helper)
         self.assertIn('if ($null -eq $llvmCache)', helper)
         self.assertIn("tool_cache=$toolCacheInventory", helper)
+        self.assertIn(
+            "refusing recovery or overwrite: $rootFull",
+            helper,
+        )
+        self.assertNotIn('RecoveredFrom "provider-receipt"', helper)
         self.assertNotIn('Expand-Archive -LiteralPath $ninjaZip -DestinationPath $ninjaRoot -Force', helper)
         self.assertNotIn('Expand-Archive -LiteralPath $zstdArchive -DestinationPath $zstdRoot -Force', helper)
 

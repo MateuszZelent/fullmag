@@ -1015,35 +1015,11 @@ function Get-FullmagNativeFemToolCache {
   }
   if (-not (Test-Path -LiteralPath $rootFull)) { return $null }
 
-  # A pre-existing tree without its immutable cache receipt may be reused only
-  # through the completed provider receipt.  The receipt binds the required
-  # executable/header hashes; the complete tree is then captured once without
-  # overwriting any existing bytes.  Any mismatch remains fail-closed.
-  $providerReceiptPath = Join-Path ([string]$Plan.root) "provider-receipt.json"
-  if (-not (Test-Path -LiteralPath $providerReceiptPath -PathType Leaf)) {
-    throw "Native FEM tool tree exists without an immutable cache receipt; refusing extraction or overwrite: $rootFull"
-  }
-  try { $providerReceipt = Get-Content -LiteralPath $providerReceiptPath -Raw | ConvertFrom-Json -ErrorAction Stop }
-  catch { throw "Existing native FEM provider receipt is invalid while recovering tool cache: $providerReceiptPath ($($_.Exception.Message))" }
-  if ([string]$providerReceipt.schema -ne "fullmag.windows.fem-providers.v1" -or
-      $null -eq $providerReceipt.plan -or
-      -not ([IO.Path]::GetFullPath([string]$providerReceipt.plan.root)).Equals([IO.Path]::GetFullPath([string]$Plan.root), [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Existing native FEM provider receipt cannot recover the cached tool tree: $providerReceiptPath"
-  }
-  $actual = @(Get-FullmagNativeFemTreeInventory -Root $rootFull -Label "$ToolName existing tool tree")
-  $required = @(Get-FullmagNativeFemToolRequiredRecords -Inventory $actual -RequiredRelativePaths $RequiredRelativePaths -RequiredLeafName $RequiredLeafName)
-  foreach ($requiredFile in $required) {
-    $absolute = [IO.Path]::GetFullPath((Join-Path $rootFull ([string]$requiredFile.path).Replace('/', '\')))
-    $matches = @($providerReceipt.tools | Where-Object {
-      [IO.Path]::GetFullPath([string]$_.path).Equals($absolute, [StringComparison]::OrdinalIgnoreCase)
-    })
-    if ($matches.Count -ne 1 -or [string]$matches[0].sha256 -ne [string]$requiredFile.sha256) {
-      throw "Existing native FEM provider receipt does not bind the required cached tool bytes: $absolute"
-    }
-  }
-  return Write-FullmagNativeFemToolCache -Plan $Plan -ToolName $ToolName `
-    -ArchivePath $archiveFull -ArchiveSha256 $archiveHash -Root $rootFull `
-    -Inventory $actual -RequiredFiles $required -RecoveredFrom "provider-receipt"
+  # A provider receipt records selected tool files, not a complete immutable
+  # inventory of each extracted tool tree.  It therefore cannot recover a
+  # missing tool-cache receipt: accepting the current tree here would promote
+  # unverified extra or modified compiler files into the immutable cache.
+  throw "Native FEM tool tree exists without its immutable cache receipt; refusing recovery or overwrite: $rootFull"
 }
 
 function Assert-FullmagNativeFemRegularDirectory {
