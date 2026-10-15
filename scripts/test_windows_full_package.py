@@ -98,6 +98,10 @@ def test_all_backends_source_contract_is_closed() -> None:
         "Get-NativeFemMsvcDesktopX64RedistRoot",
         'x64\\Microsoft.VC143.CRT',
         "runtime_family_inventory_sha256",
+        "AllowHardLinkLeaf",
+        "sourceLaunchBinaryPaths",
+        "Canonical native FEM runtime family",
+        "$AllBackendsRequested -or $Backend -eq \"fem\"",
         "allBackendFemAuditSha256",
         "-ExpectedAuditSha256 $allBackendFemAuditSha256",
         "FULLMAG_FULL_RUNTIME_MANIFEST",
@@ -119,6 +123,117 @@ def test_all_backends_source_contract_is_closed() -> None:
     assert 'FULLMAG_FDM_EXECUTION = $null' in helper
     assert 'FULLMAG_FEM_EXECUTION = $null' in helper
     assert 'FULLMAG_RELAX_DEVICE = $null' in helper
+
+
+@pytest.mark.skipif(_powershell() is None, reason="Windows PowerShell is unavailable")
+def test_native_fem_hardlink_sources_are_read_only_and_full_family_audited() -> None:
+    """Exercise source hardlinks without weakening copy destinations or PE audit coverage."""
+    powershell = _powershell()
+    assert powershell is not None
+    runs_root = _canonical_runs_root()
+    fixture = runs_root / f"native-fem-hardlink-contract-{uuid.uuid4().hex}"
+    fixture.mkdir(parents=True)
+    family_names = ", ".join(_ps_literal(name) for name in RUNTIME_FAMILY_NAMES)
+    probe = fixture / "probe.ps1"
+    probe.write_text(
+        "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                f"$sourcePath = {_ps_literal(_windows_path(RUNNER))}",
+                "$tokens = $null; $parseErrors = $null",
+                "$sourceAst = [System.Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$parseErrors)",
+                "if ($parseErrors.Count) { throw 'run_fullmag.ps1 parse failed' }",
+                "$functionNames = @('Resolve-AbsolutePath', 'Get-Sha256File', 'Test-NativeFemPathWithin', 'Assert-NativeFemPathChain', 'Assert-NativeFemCopyDestination', 'Assert-NativeFemStagedPeAudit')",
+                "foreach ($functionName in $functionNames) {",
+                "  $functionAst = @($sourceAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $_.Name -eq $functionName }) | Select-Object -First 1",
+                "  if ($null -eq $functionAst) { throw \"missing production function: $functionName\" }",
+                "  . ([scriptblock]::Create($functionAst.Extent.Text))",
+                "}",
+                f"$root = {_ps_literal(_windows_path(fixture))}",
+                "$deps = Join-Path $root 'deps'",
+                "$release = Join-Path $root 'release'",
+                "$stage = Join-Path $root 'stage'",
+                "New-Item -ItemType Directory -Force -Path $deps, $release, $stage | Out-Null",
+                f"$names = @({family_names})",
+                "$hardlinkUnsupported = $false",
+                "foreach ($name in $names) {",
+                "  $source = Join-Path $deps $name",
+                "  Set-Content -LiteralPath $source -Value ('fixture-' + $name) -Encoding ASCII",
+                "  try { New-Item -ItemType HardLink -Path (Join-Path $release $name) -Target $source -ErrorAction Stop | Out-Null } catch { $hardlinkUnsupported = $true; break }",
+                "  Copy-Item -LiteralPath $source -Destination (Join-Path $stage $name)",
+                "}",
+                "if ($hardlinkUnsupported) { Write-Output 'native-hardlink-unsupported'; exit 0 }",
+                "$dll = Join-Path $release 'fullmag_fem.dll'",
+                "Set-Content -LiteralPath $dll -Value 'fixture-fem-dll' -Encoding ASCII",
+                "Copy-Item -LiteralPath $dll -Destination (Join-Path $stage 'fullmag_fem.dll')",
+                "$sourceExe = Join-Path $release $names[0]",
+                "$null = Assert-NativeFemPathChain -Path $sourceExe -Base $root -Label 'hardlinked source executable' -Leaf -AllowHardLinkLeaf",
+                "Write-Output 'native-hardlink-source-read-pass'",
+                "$strictSourceRejected = $false",
+                "try { $null = Assert-NativeFemPathChain -Path $sourceExe -Base $root -Label 'strict source executable' -Leaf } catch { $strictSourceRejected = $true }",
+                "if (-not $strictSourceRejected) { throw 'strict source validation accepted a hardlink' }",
+                "Write-Output 'native-hardlink-strict-source-rejected'",
+                "$destinationRejected = $false",
+                "try { $null = Assert-NativeFemCopyDestination -Path $sourceExe -Base $root -Label 'hardlink destination' } catch { $destinationRejected = $true }",
+                "if (-not $destinationRejected) { throw 'copy destination accepted a Cargo hardlink' }",
+                "Write-Output 'native-hardlink-destination-rejected'",
+                "$beforeHash = Get-Sha256File $sourceExe",
+                "$afterHash = Get-Sha256File $sourceExe",
+                "if ($beforeHash -ne $afterHash) { throw 'source executable bytes changed during destination validation' }",
+                "Write-Output 'native-hardlink-source-unchanged'",
+                "$records = @()",
+                "foreach ($name in $names) { $records += [ordered]@{ path = ('bin\\' + $name); sha256 = Get-Sha256File (Join-Path $stage $name) } }",
+                "$records += [ordered]@{ path = 'bin\\fullmag_fem.dll'; sha256 = Get-Sha256File (Join-Path $stage 'fullmag_fem.dll') }",
+                "$audit = Join-Path $root 'windows-pe-dependencies.json'",
+                "[ordered]@{ schema_version = 1; target = 'x86_64-pc-windows-msvc'; scope = 'bin_pe_static_and_delay_imports'; images = $records; limitations = @() } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $audit -Encoding UTF8",
+                "$null = Assert-NativeFemStagedPeAudit -AuditPath $audit -StageRoot $stage -LaunchRoot $release -LaunchBase $root",
+                "Write-Output 'native-full-family-launch-audit-pass'",
+                "$linkTarget = Join-Path $root 'symlink-target.exe'",
+                "$linkPath = Join-Path $root 'symlink.exe'",
+                "Set-Content -LiteralPath $linkTarget -Value 'target' -Encoding ASCII",
+                "$symlinkCreated = $false",
+                "try { New-Item -ItemType SymbolicLink -Path $linkPath -Target $linkTarget -ErrorAction Stop | Out-Null; $symlinkCreated = $true } catch { }",
+                "if ($symlinkCreated) {",
+                "  $symlinkRejected = $false",
+                "  try { $null = Assert-NativeFemPathChain -Path $linkPath -Base $root -Label 'reparse source executable' -Leaf -AllowHardLinkLeaf } catch { $symlinkRejected = $true }",
+                "  if (-not $symlinkRejected) { throw 'reparse source was accepted by the hardlink exception' }",
+                "  Write-Output 'native-reparse-source-rejected'",
+                "} else { Write-Output 'native-reparse-unsupported' }",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        result = subprocess.run(
+            [
+                powershell,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                _windows_path(probe),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        output = result.stdout + result.stderr
+        if "native-hardlink-unsupported" in output:
+            pytest.skip("native hardlink creation is unavailable on this host")
+        assert "native-hardlink-source-read-pass" in output
+        assert "native-hardlink-strict-source-rejected" in output
+        assert "native-hardlink-destination-rejected" in output
+        assert "native-hardlink-source-unchanged" in output
+        assert "native-full-family-launch-audit-pass" in output
+        assert "native-reparse-" in output
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
 
 
 @pytest.mark.skipif(_powershell() is None, reason="Windows PowerShell is unavailable")

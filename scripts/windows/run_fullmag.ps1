@@ -1030,7 +1030,8 @@ function Assert-NativeFemPathChain {
     [Parameter(Mandatory = $true)][string]$Path,
     [Parameter(Mandatory = $true)][string]$Base,
     [Parameter(Mandatory = $true)][string]$Label,
-    [switch]$Leaf
+    [switch]$Leaf,
+    [switch]$AllowHardLinkLeaf
   )
   $resolved = Resolve-AbsolutePath $Path
   $root = Resolve-AbsolutePath $Base
@@ -1044,8 +1045,11 @@ function Assert-NativeFemPathChain {
   $cursor = $resolved
   while ($true) {
     $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
-        ($item.PSObject.Properties.Name -contains "LinkType" -and $item.LinkType)) {
+    $isReparsePoint = [bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+    $isDisallowedLink = $item.PSObject.Properties.Name -contains "LinkType" -and
+      $item.LinkType -and -not ($AllowHardLinkLeaf -and $Leaf -and
+      [string]$item.LinkType -eq "HardLink")
+    if ($isReparsePoint -or $isDisallowedLink) {
       throw "$Label contains a junction or symlink: $cursor"
     }
     if ([string]::Equals($cursor, $root, [System.StringComparison]::OrdinalIgnoreCase)) { break }
@@ -1154,8 +1158,15 @@ function Assert-NativeFemStagedPeAudit {
       -Label "native FEM launch runtime"
     foreach ($record in $records) {
       $name = ([string]$record.path).Substring(4)
-      $launchImage = Assert-NativeFemPathChain -Path (Join-Path $launch $name) -Base $launch `
-        -Label "native FEM launch image $name" -Leaf
+      $launchImagePath = Join-Path $launch $name
+      if ([System.IO.Path]::GetExtension($name).ToLowerInvariant() -eq ".exe") {
+        $launchImage = Assert-NativeFemPathChain -Path $launchImagePath -Base $launch `
+          -Label "native FEM launch image $name" -Leaf -AllowHardLinkLeaf
+      }
+      else {
+        $launchImage = Assert-NativeFemPathChain -Path $launchImagePath -Base $launch `
+          -Label "native FEM launch image $name" -Leaf
+      }
       if ((Get-Sha256File $launchImage) -ne ([string]$record.sha256).ToLowerInvariant()) {
         throw "Native FEM launch image hash does not match the dependency audit: $name"
       }
@@ -1664,19 +1675,24 @@ function Stage-NativeFemRuntime {
     -Label "native FEM staged runtime"
   $launchRoot = Assert-NativeFemPathChain -Path (Split-Path -Parent $FullmagExe) -Base $TargetRoot `
     -Label "native FEM launch runtime"
-  $runtimeFamilyNames = @()
-  $stageBinaries = @($FullmagExe, $FullmagApiExe)
-  if ($needsDesktopRuntime) { $stageBinaries += $FullmagUiExe }
-  if ($AllBackendsRequested) {
-    $runtimeFamilyNames = @(Get-FullmagFullPackageCanonicalRuntimeNames `
-      -IncludeDesktop:$needsDesktopRuntime -ToolsRoot (Get-WindowsBuildToolsRoot))
-    foreach ($name in $runtimeFamilyNames) {
-      $stageBinaries += Join-Path $launchRoot $name
-    }
+  # Cargo's release binaries are hardlinks to release\deps.  Read and hash
+  # those source leaves with the narrow exception in Assert-NativeFemPathChain;
+  # every staging and copy destination remains strict.  The complete runtime
+  # family is required for both narrow FEM and aggregate builds because Cargo
+  # emits the accepted worker/scheduler binaries in every release profile.
+  $runtimeFamilyNames = @(Get-FullmagFullPackageCanonicalRuntimeNames `
+    -IncludeDesktop:$needsDesktopRuntime -ToolsRoot (Get-WindowsBuildToolsRoot))
+  $stageBinaries = @($runtimeFamilyNames | ForEach-Object { Join-Path $launchRoot $_ })
+  if (-not $runtimeFamilyNames -or $runtimeFamilyNames.Count -eq 0 -or
+      -not @($runtimeFamilyNames | Where-Object { $_ -ieq (Split-Path -Leaf $FullmagExe) }).Count -or
+      -not @($runtimeFamilyNames | Where-Object { $_ -ieq (Split-Path -Leaf $FullmagApiExe) }).Count) {
+    throw "Canonical native FEM runtime family is missing the Fullmag and API executables"
   }
+  $sourceLaunchBinaryPaths = @{}
   foreach ($binary in @($stageBinaries | Select-Object -Unique)) {
     $sourceBinary = Assert-NativeFemPathChain -Path $binary -Base $TargetRoot `
-      -Label "native FEM staged runtime binary" -Leaf
+      -Label "native FEM staged runtime binary" -Leaf -AllowHardLinkLeaf
+    $sourceLaunchBinaryPaths[(Split-Path -Leaf $binary).ToLowerInvariant()] = $sourceBinary
     $destination = Assert-NativeFemCopyDestination -Path (Join-Path $stageRoot (Split-Path -Leaf $binary)) `
       -Base $FemRuntimeRoot -Label "native FEM staged binary"
     Copy-Item -LiteralPath $sourceBinary -Destination $destination -Force
@@ -1730,6 +1746,18 @@ function Stage-NativeFemRuntime {
   if ($auditExitCode -ne 0) { throw "Native FEM PE dependency audit failed with exit code $auditExitCode" }
   $auditSha256 = Assert-NativeFemStagedPeAudit -AuditPath $auditPath -StageRoot $stageRoot
   foreach ($path in Get-ChildItem -LiteralPath $stageRoot -File) {
+    $nameKey = $path.Name.ToLowerInvariant()
+    if ($sourceLaunchBinaryPaths.ContainsKey($nameKey)) {
+      # Never overwrite Cargo's hardlinked launch EXE.  The staged copy and
+      # the exact launch source must still have the audited bytes.
+      $sourceLaunchBinary = [string]$sourceLaunchBinaryPaths[$nameKey]
+      $launchPath = Resolve-AbsolutePath (Join-Path $launchRoot $path.Name)
+      if ([System.IO.Path]::GetFullPath($sourceLaunchBinary) -ine $launchPath -or
+          (Get-Sha256File $sourceLaunchBinary) -ne (Get-Sha256File $path.FullName)) {
+        throw "Native FEM launch executable changed during staging: $($path.Name)"
+      }
+      continue
+    }
     $destination = Assert-NativeFemCopyDestination -Path (Join-Path $launchRoot $path.Name) `
       -Base $TargetRoot -Label "native FEM launch binary"
     Copy-Item -LiteralPath $path.FullName -Destination $destination -Force
@@ -1743,20 +1771,18 @@ function Stage-NativeFemRuntime {
   }
   $runtimeFamily = @()
   $runtimeFamilyInventorySha256 = $null
-  if ($AllBackendsRequested) {
-    foreach ($name in $runtimeFamilyNames) {
-      $familyPath = Assert-NativeFemPathChain -Path (Join-Path $launchRoot $name) -Base $TargetRoot `
-        -Label "native FEM runtime family binary" -Leaf
-      $familyItem = Get-Item -LiteralPath $familyPath -Force -ErrorAction Stop
-      $runtimeFamily += [ordered]@{
-        name = $name
-        path = [System.IO.Path]::GetFullPath($familyPath)
-        size_bytes = [int64]$familyItem.Length
-        sha256 = Get-Sha256File $familyPath
-      }
+  foreach ($name in $runtimeFamilyNames) {
+    $familyPath = Assert-NativeFemPathChain -Path (Join-Path $launchRoot $name) -Base $TargetRoot `
+      -Label "native FEM runtime family binary" -Leaf -AllowHardLinkLeaf
+    $familyItem = Get-Item -LiteralPath $familyPath -Force -ErrorAction Stop
+    $runtimeFamily += [ordered]@{
+      name = $name
+      path = [System.IO.Path]::GetFullPath($familyPath)
+      size_bytes = [int64]$familyItem.Length
+      sha256 = Get-Sha256File $familyPath
     }
-    $runtimeFamilyInventorySha256 = Get-FullmagFullPackageRuntimeFamilyInventorySha256 -Artifacts $runtimeFamily
   }
+  $runtimeFamilyInventorySha256 = Get-FullmagFullPackageRuntimeFamilyInventorySha256 -Artifacts $runtimeFamily
   return [ordered]@{
     device = $Device
     requested_device = if ($env:FULLMAG_FEM_REQUESTED_DEVICE) { $env:FULLMAG_FEM_REQUESTED_DEVICE } else { $Device }
@@ -1774,12 +1800,12 @@ function Stage-NativeFemRuntime {
     provider_receipt_sha256 = $providerProvenance.provider_receipt_sha256
     import_library_sha256 = [string]$FemOutput.import_library_sha256
     strict_gpu = [bool]$useCuda
-    runtime_family_root = if ($AllBackendsRequested) { [System.IO.Path]::GetFullPath($launchRoot) } else { $null }
+    runtime_family_root = [System.IO.Path]::GetFullPath($launchRoot)
     runtime_family = @($runtimeFamily)
     runtime_family_inventory = @($runtimeFamilyNames)
     runtime_family_inventory_sha256 = $runtimeFamilyInventorySha256
-    runtime_family_dependency_audit_path = if ($AllBackendsRequested) { [System.IO.Path]::GetFullPath($auditPath) } else { $null }
-    runtime_family_dependency_audit_sha256 = if ($AllBackendsRequested) { $auditSha256 } else { $null }
+    runtime_family_dependency_audit_path = [System.IO.Path]::GetFullPath($auditPath)
+    runtime_family_dependency_audit_sha256 = $auditSha256
   }
 }
 
@@ -1815,10 +1841,12 @@ if ($Backend -eq "fem") {
   $VersionIdentityPath = Join-Path $FemRuntimeRoot "build-source-identity.json"
   $VersionRecordPath = Join-Path $FemRuntimeRoot "build-version.json"
 }
-if ($AllBackendsRequested) {
-  $FullRuntimeRoot = Join-Path $BuildRoot "windows-full-runtime"
-  $FullCapabilityManifestPath = Join-Path $FullRuntimeRoot "build-manifest.json"
-  $ManifestPath = $FullCapabilityManifestPath
+if ($AllBackendsRequested -or $Backend -eq "fem") {
+  if ($AllBackendsRequested) {
+    $FullRuntimeRoot = Join-Path $BuildRoot "windows-full-runtime"
+    $FullCapabilityManifestPath = Join-Path $FullRuntimeRoot "build-manifest.json"
+    $ManifestPath = $FullCapabilityManifestPath
+  }
   $fullPackageHelper = Join-Path $PSScriptRoot "native_full_package.ps1"
   if (-not (Test-Path -LiteralPath $fullPackageHelper -PathType Leaf)) {
     throw "The full capability package helper is missing: $fullPackageHelper"
