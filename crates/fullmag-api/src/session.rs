@@ -836,6 +836,9 @@ pub(crate) fn latest_field_source_precedence(
         source_step: value
             .get("source_step")
             .and_then(Value::as_u64)
+            .or_else(|| value.get("observation_frame")
+                .and_then(|frame| frame.get("source_step"))
+                .and_then(Value::as_u64))
             .unwrap_or(0),
         source_revision: value
             .get("source_revision")
@@ -843,7 +846,10 @@ pub(crate) fn latest_field_source_precedence(
             .or_else(|| field_payload_revision(value))
             .unwrap_or(0),
         source_time_seconds: valid_source_time(
-            value.get("source_time_seconds").and_then(Value::as_f64),
+            value.get("source_time_seconds").and_then(Value::as_f64)
+                .or_else(|| value.get("observation_frame")
+                    .and_then(|frame| frame.get("source_time_seconds"))
+                    .and_then(Value::as_f64)),
         ),
         materialized_at_unix_ms: value
             .get("materialized_at_unix_ms")
@@ -1023,29 +1029,71 @@ pub(crate) fn resolved_current_field_source<'a>(
     if quantity != "m" {
         return cached_source;
     }
-    let Some((values, grid, live_step)) = qualified_live_magnetization(snapshot) else {
+    let Some((values, grid, _)) = qualified_live_magnetization(snapshot) else {
         return cached_source;
     };
-    let cached_source_step = cached_source.and_then(|source| match source {
-        ResolvedCurrentFieldSource::Latest(value) => {
-            latest_field_source_step(snapshot, quantity, value)
-        }
-        ResolvedCurrentFieldSource::Preview(field) => Some(field.source_step),
-        ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. } => None,
-    });
+    // A qualified physical LiveState has a publication clock but no preview
+    // request revision. Compare only shared observation provenance; treating
+    // the missing live request revision as zero would keep stale caches forever.
+    let live_state = snapshot.live_state.as_ref()?;
     let cached_source_preserves_precedence = match cached_source {
-        Some(ResolvedCurrentFieldSource::Preview(_)) => {
-            cached_source_step.is_none_or(|cached_step| cached_step >= live_step)
+        Some(ResolvedCurrentFieldSource::Preview(field)) => {
+            cached_magnetization_precedes_live(
+                field.source_step,
+                preview_field_source_precedence(field),
+                live_state,
+            )
         }
-        Some(ResolvedCurrentFieldSource::Latest(value)) => cached_source_step
-            .map(|cached_step| cached_step >= live_step)
-            .unwrap_or_else(|| latest_field_has_explicit_provenance(value)),
+        Some(ResolvedCurrentFieldSource::Latest(value)) => {
+            latest_field_source_step(snapshot, quantity, value)
+                .map(|cached_step| cached_magnetization_precedes_live(
+                    cached_step,
+                    latest_field_source_precedence(snapshot, value),
+                    live_state,
+                ))
+                .unwrap_or_else(|| latest_field_has_explicit_provenance(value))
+        }
         Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. }) | None => false,
     };
     if cached_source_preserves_precedence {
         return cached_source;
     }
     Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid })
+}
+
+/// Order physical observations without inventing a materialization-request
+/// revision for LiveState. Physical time precedes publication wall clock.
+fn compare_observation_publications(
+    left_step: u64,
+    left_time: Option<f64>,
+    left_published_ms: u128,
+    right_step: u64,
+    right_time: Option<f64>,
+    right_published_ms: u128,
+) -> std::cmp::Ordering {
+    left_step.cmp(&right_step)
+        .then_with(|| match (valid_source_time(left_time), valid_source_time(right_time)) {
+            (Some(left), Some(right)) => left.total_cmp(&right),
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        })
+        .then_with(|| left_published_ms.cmp(&right_published_ms))
+}
+
+fn cached_magnetization_precedes_live(
+    cached_step: u64,
+    cached: FieldSourcePrecedence,
+    live: &LiveState,
+) -> bool {
+    compare_observation_publications(
+        cached_step,
+        cached.source_time_seconds,
+        u128::from(cached.materialized_at_unix_ms),
+        live.latest_step.step,
+        Some(live.latest_step.time),
+        live.updated_at_unix_ms,
+    ) != std::cmp::Ordering::Less
 }
 
 fn latest_field_source_step(
@@ -2491,7 +2539,17 @@ fn runtime_frame_has_older_selected_live_magnetization(
     let Some((_, _, selected_step)) = qualified_live_magnetization(current) else {
         return false;
     };
-    if incoming_live_state.latest_step.step >= selected_step {
+    let Some(selected_live_state) = current.live_state.as_ref() else {
+        return false;
+    };
+    if compare_observation_publications(
+        incoming_live_state.latest_step.step,
+        Some(incoming_live_state.latest_step.time),
+        incoming_live_state.updated_at_unix_ms,
+        selected_step,
+        Some(selected_live_state.latest_step.time),
+        selected_live_state.updated_at_unix_ms,
+    ) != std::cmp::Ordering::Less {
         return false;
     }
     let Some(selected_frame) = resolved_current_field_observation_frame(current, "m", 3) else {
@@ -6340,6 +6398,118 @@ mod tests {
             )
         );
         (current, preview)
+    }
+
+    #[test]
+    fn same_step_m_latest_uses_accepted_frame_time_without_top_level_duplicates() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        add_physical_observation(&mut current, 4, Some(5.0e-12));
+        let frame = accepted_observation_frame_ref(&current, 4, Some(5.0e-12));
+        current.latest_fields.insert("m".into(), json!({
+            "values": vec![[0.75, 0.75, 0.75]; 4],
+            "observation_frame": frame,
+            "materialized_at_unix_ms": 100_u64,
+            "layout": { "grid_cells": [4, 1, 1] }
+        }));
+        let mut live = live_state_with_magnetization(4, vec![0.25; 12]);
+        live.latest_step.grid = [4, 1, 1];
+        live.latest_step.fem_mesh_generation_id = Some("mesh-generation-1".into());
+        live.updated_at_unix_ms = 1000;
+        current.live_state = Some(live);
+        assert!(latest_field_source_is_qualified(&current, "m", current.latest_fields.get("m").unwrap()));
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::Latest(_))),
+            "a later accepted frame time must beat an earlier live time even with a later clock");
+        current.live_state.as_mut().unwrap().latest_step.time = 6.0e-12;
+        current.live_state.as_mut().unwrap().updated_at_unix_ms = 1;
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })),
+            "a genuinely later live observation must win symmetrically");
+    }
+
+    #[test]
+    fn same_step_physical_m_correction_replaces_preserved_cache_and_rejects_older_replay() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        add_physical_observation(&mut current, 4, Some(4.0e-12));
+        let apply = |current: &mut SessionStateResponse, live_state: LiveState| {
+            apply_current_live_runtime_frame(current, CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".into(),
+                live_state: Some(live_state),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            }).unwrap();
+        };
+        let mut first = live_state_with_magnetization(4, vec![0.25; 12]);
+        first.latest_step.grid = [4, 1, 1];
+        first.latest_step.fem_mesh_generation_id = Some("mesh-generation-1".into());
+        apply(&mut current, first.clone());
+
+        let mut progress = first.clone();
+        progress.updated_at_unix_ms += 1;
+        progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        progress.latest_step.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+            metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+        });
+        progress.latest_step.magnetization = None;
+        apply(&mut current, progress);
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::Latest(_))));
+        let before = current.field_quantity_revisions["m"];
+
+        let mut corrected = first.clone();
+        corrected.updated_at_unix_ms += 10;
+        corrected.latest_step.magnetization = Some(vec![0.75; 12]);
+        apply(&mut current, corrected.clone());
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, .. })
+                if values == [0.75; 12]));
+        let corrected_revision = current.field_quantity_revisions["m"];
+        let corrected_samples_revision = current.field_samples_revision;
+        assert!(corrected_revision > before);
+
+        apply(&mut current, corrected);
+        assert_eq!(current.field_quantity_revisions["m"], corrected_revision);
+        assert_eq!(current.field_samples_revision, corrected_samples_revision);
+
+        apply(&mut current, first);
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::Latest(value))
+                if value["values"][0] == json!([0.75, 0.75, 0.75])));
+        assert_eq!(current.field_quantity_revisions["m"], corrected_revision);
+        assert_eq!(current.field_samples_revision, corrected_samples_revision);
+    }
+
+    #[test]
+    fn same_step_m_preview_compares_scientific_time_then_publication_clock() {
+        let (mut current, mut preview) = current_with_accepted_fem_m_preview();
+        preview.source_revision = 100;
+        preview.materialized_at_unix_ms = 1_700_000_000_100;
+        apply_current_live_field_frame(&mut current, CurrentLiveFieldFrameRequest {
+            session_id: "test-session".into(),
+            latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
+            preview_fields: Some(vec![preview.clone()]),
+            clear_preview_cache: false,
+        }).unwrap();
+        assert!(preview_field_source_is_qualified(&current, current.preview_cache.get("m").unwrap()));
+        current.live_state.as_mut().unwrap().updated_at_unix_ms = preview.materialized_at_unix_ms as u128 + 1;
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })),
+            "a display request revision cannot outrank a newer physical publication");
+
+        current.live_state.as_mut().unwrap().updated_at_unix_ms = preview.materialized_at_unix_ms as u128;
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::Preview(_))), "exact ties preserve cache authority");
+        current.live_state.as_mut().unwrap().latest_step.time = 8.0e-12;
+        current.live_state.as_mut().unwrap().updated_at_unix_ms = 1;
+        assert!(matches!(resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })),
+            "later physical time wins before wall clock");
     }
 
     #[test]
