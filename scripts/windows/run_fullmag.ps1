@@ -90,6 +90,7 @@ if ($AllBackendsRequested) {
   }
 }
 $BrowserWorkspace = $Browser -and ($Backend -eq "fem" -or $AllBackendsRequested) -and $RunMode -eq "workspace"
+$BrowserApiIsolation = $BrowserWorkspace -and ($AllBackendsRequested -or $Backend -eq "fem")
 if ($Browser -and -not $BrowserWorkspace) {
   throw "-Browser is only supported for the managed native FEM workspace"
 }
@@ -2464,12 +2465,38 @@ if ($RunMode -eq "workspace") {
     $workspaceArguments = @("ui", "--web-port", $WebPort.ToString())
   }
   if ($Frontend -eq "dev") { $workspaceArguments += "--dev" }
-  Push-Location $RepoRoot
+  $previousBrowserApiPortWasSet = Test-Path Env:FULLMAG_API_PORT
+  $previousBrowserApiPort = [Environment]::GetEnvironmentVariable("FULLMAG_API_PORT", "Process")
+  $previousRequireOwnedApiWasSet = Test-Path Env:FULLMAG_REQUIRE_OWN_API
+  $previousRequireOwnedApi = [Environment]::GetEnvironmentVariable("FULLMAG_REQUIRE_OWN_API", "Process")
   try {
-    Invoke-External $FullmagExe $workspaceArguments
+    if ($BrowserApiIsolation) {
+      # Zero asks the CLI to reserve a fresh concrete API endpoint; the private
+      # ownership flag prevents reuse of a compatible API already on that port.
+      $env:FULLMAG_API_PORT = "0"
+      $env:FULLMAG_REQUIRE_OWN_API = "1"
+    }
+    Push-Location $RepoRoot
+    try {
+      Invoke-External $FullmagExe $workspaceArguments
+    }
+    finally {
+      Pop-Location
+    }
   }
   finally {
-    Pop-Location
+    if ($previousBrowserApiPortWasSet) {
+      [Environment]::SetEnvironmentVariable("FULLMAG_API_PORT", $previousBrowserApiPort, "Process")
+    }
+    else {
+      Remove-Item Env:FULLMAG_API_PORT -ErrorAction SilentlyContinue
+    }
+    if ($previousRequireOwnedApiWasSet) {
+      [Environment]::SetEnvironmentVariable("FULLMAG_REQUIRE_OWN_API", $previousRequireOwnedApi, "Process")
+    }
+    else {
+      Remove-Item Env:FULLMAG_REQUIRE_OWN_API -ErrorAction SilentlyContinue
+    }
   }
   exit 0
 }

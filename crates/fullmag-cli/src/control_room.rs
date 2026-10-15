@@ -180,14 +180,44 @@ pub(crate) fn internal_live_api_url(path: &str) -> String {
     )
 }
 
+fn fullmag_api_requires_ownership() -> Result<bool> {
+    match std::env::var("FULLMAG_REQUIRE_OWN_API") {
+        Ok(value) if value.trim() == "1" => Ok(true),
+        Ok(value) => bail!("FULLMAG_REQUIRE_OWN_API must be '1' when set, got '{value}'"),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(error) => bail!("could not read FULLMAG_REQUIRE_OWN_API: {error}"),
+    }
+}
+
 pub(crate) fn resolve_api_port() -> Result<u16> {
+    let owned_api_required = fullmag_api_requires_ownership()?;
+    if owned_api_required && std::env::var_os("FULLMAG_API_PORT").is_none() {
+        // An owned browser API must never fall back to a compatible service on
+        // the default/candidate ports. Reserve a concrete endpoint before the
+        // child is spawned so the readiness probes can address it.
+        return allocate_ephemeral_api_port()
+            .with_context(|| "FULLMAG_REQUIRE_OWN_API could not reserve a nonzero API port");
+    }
     if let Ok(raw) = std::env::var("FULLMAG_API_PORT") {
         let raw = raw.trim();
         let port = raw
             .parse::<u16>()
             .with_context(|| format!("FULLMAG_API_PORT must be a valid u16 port, got '{raw}'"))?;
         if port == 0 {
+            if owned_api_required {
+                // Zero is a child-server bind request, not a usable endpoint for
+                // the CLI readiness probes. Reserve a concrete port before spawn.
+                return allocate_ephemeral_api_port().with_context(|| {
+                    "FULLMAG_REQUIRE_OWN_API could not reserve a nonzero API port"
+                });
+            }
             return Ok(0);
+        }
+        if owned_api_required {
+            if !port_is_bindable(port) {
+                bail!("required owned FULLMAG_API_PORT={port} is not bindable");
+            }
+            return Ok(port);
         }
         if std::env::var_os("FULLMAG_ATTACHED_SESSION_ID").is_some() {
             // The scratch supervisor already verified this API before spawning
@@ -1712,8 +1742,14 @@ pub(crate) fn bootstrap_control_plane(
             .unwrap_or(false);
 
     let web_port = resolve_web_port(requested_port, &listen_port_file)?;
+    let owned_api_required = fullmag_api_requires_ownership()?;
+    if owned_api_required && api_port() != 0 && api_bridge_is_ready(api_port()) {
+        bail!(
+            "FULLMAG_REQUIRE_OWN_API selected an occupied compatible API port; refusing API reuse"
+        );
+    }
     let mut development_owner = None;
-    let api_child = if api_port() != 0 && api_bridge_is_ready(api_port()) {
+    let api_child = if !owned_api_required && api_port() != 0 && api_bridge_is_ready(api_port()) {
         if restore_from_stdin {
             bail!("private development restore requires a newly owned API; refusing API reuse");
         }

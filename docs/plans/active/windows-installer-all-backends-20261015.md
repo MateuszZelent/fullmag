@@ -28,3 +28,11 @@ Jednorazowy `fullmag.exe` przygotowuje środowisko budowy i wspólny pakiet Full
 Nowy pełny pakiet, nowy EXE/GUI, runtime FEM GPU, przeglądarka i końcowa integracja: **NOT VERIFIED**. Zachować wszystkie używane cache, źródła, logi i receipty; nie usuwać danych w ramach tej zmiany.
 
 Uwaga o weryfikacji: w starszej uruchomionej paczce regresji fixture `public_url_probe` skompilował mały harness Rust pomimo tymczasowego zakazu. Zostało to zgłoszone użytkownikowi; cała ta ścieżka jest wykluczona z kolejnych uruchomień. Wyniku tej paczki nie opisujemy jako kontroli bez kompilacji.
+
+## Kontynuacja po review — 2026-10-15
+
+Build instalatora z commita `389b11bd8ff88a3ef19dc30b389b049d05c19d55` doszedł do kompilatora MSVC i zakończył się błędem brakującego nagłówka `<set>`. Wcześniejszy EXE nie potwierdza nowego zakresu wszystkich backendów. Nagłówek i przekazywanie zakończenia planowania Burn na wątek UI poprawiono; 21 interpretowanych kontroli brokera przeszło.
+
+Review wykryło też niespójne dopuszczenie skryptu z głównego checkoutu, utratę przypięcia manifestu przy `SkipLocalChanges`, niepełną walidację odzyskiwania cache narzędzi oraz brak jawnego przypięcia MPI przy wyłączonym SLEPc. Poprawki zachowują autorski skrypt i jego hash, dokładny pakiet build-to-run oraz istniejące zweryfikowane cache. Interpretowane regresje tych ścieżek przeszły; integracja MPI wymaga rzeczywistego buildu.
+
+Workspace FEM/full wymaga własnego procesu API. Zgodny serwer FDM działający obok nie może być użyty zamiast nowego API. Instalator i nowy pełny pakiet wymagają ponownej kompilacji, dowodu GUI/Ready, przeglądarki i wykonania oryginalnego skryptu FEM GPU. Te bramki oraz integracja PR pozostają **NOT VERIFIED**.
