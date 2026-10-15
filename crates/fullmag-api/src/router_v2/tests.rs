@@ -40,9 +40,10 @@ use crate::types::{
 };
 use crate::uuid_v4_hex;
 use fullmag_runner::eigen::{
-    write_response_sweep_bundle, write_response_sweep_bundle_with_progress,
-    BlockRealSweepReuseProvenance, FieldDrivenResponseSweepArtifact,
-    FieldDrivenResponseSweepPointArtifact, ResponseExcitationProvenanceArtifact,
+    write_response_sweep_bundle, write_response_sweep_bundle_with_identity,
+    write_response_sweep_bundle_with_progress, BlockRealSweepReuseProvenance,
+    FieldDrivenResponseSweepArtifact, FieldDrivenResponseSweepPointArtifact,
+    FrequencyDomainArtifactIdentity, ResponseExcitationProvenanceArtifact,
     TangentLeakageDiagnosticArtifact,
 };
 use fullmag_runner::LivePreviewField;
@@ -46795,8 +46796,19 @@ async fn frequency_domain_response_does_not_fallback_when_v2_is_invalid() {
 #[tokio::test]
 async fn frequency_domain_response_frequency_point_uses_v2_linked_artifact_path() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
-    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
-        .expect("response sweep bundle should be written");
+    let identity = FrequencyDomainArtifactIdentity::try_new(
+        "test-session",
+        "test-run",
+        "stage:frequency-response-test",
+        "runtime:frequency-response-test",
+    )
+    .expect("response artifact identity should be valid");
+    write_response_sweep_bundle_with_identity(
+        &artifact_dir,
+        &frequency_domain_response_sweep_fixture(2),
+        &identity,
+    )
+    .expect("response sweep bundle should be written");
     let response_dir = artifact_dir.join("response");
     let linked_dir = response_dir.join("frequency_points").join("linked");
     fs::create_dir_all(&linked_dir).expect("linked response point directory should be created");
@@ -46874,16 +46886,42 @@ async fn frequency_domain_response_frequency_point_uses_v2_linked_artifact_path(
 #[tokio::test]
 async fn frequency_domain_response_field_meta_uses_v2_linked_payload_path() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
-    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
-        .expect("response sweep bundle should be written");
+    let identity = FrequencyDomainArtifactIdentity::try_new(
+        "test-session",
+        "test-run",
+        "stage:frequency-response-test",
+        "runtime:frequency-response-test",
+    )
+    .expect("response artifact identity should be valid");
+    write_response_sweep_bundle_with_identity(
+        &artifact_dir,
+        &frequency_domain_response_sweep_fixture(2),
+        &identity,
+    )
+    .expect("response sweep bundle should be written");
     let response_dir = artifact_dir.join("response");
     let linked_payload_dir = response_dir.join("field_payloads").join("linked");
     fs::create_dir_all(&linked_payload_dir).expect("linked payload directory should be created");
+    let mut primary_payload = Vec::with_capacity(12 * std::mem::size_of::<f64>());
+    for value in [
+        1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+    ] {
+        primary_payload.extend_from_slice(&value.to_le_bytes());
+    }
     fs::write(
         linked_payload_dir.join("frequency_0001_xyz.bin"),
-        [1_u8, 2, 3, 4],
+        primary_payload,
     )
     .expect("linked payload should be written");
+    let mut tangent_payload = Vec::with_capacity(8 * std::mem::size_of::<f64>());
+    for value in [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] {
+        tangent_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(
+        linked_payload_dir.join("frequency_0001_tangent.bin"),
+        tangent_payload,
+    )
+    .expect("linked tangent payload should be written");
     fs::write(
         response_dir
             .join("frequency_points")

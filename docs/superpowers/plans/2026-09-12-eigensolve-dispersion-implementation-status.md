@@ -1,5 +1,5 @@
 <!-- current-eigensolve-status-begin -->
-## Bieżący checkpoint — build244 i diagnoza kontraktu, 2026-10-13
+## Bieżący checkpoint — build245 PASS i kontrakty API, 2026-10-15
 
 Pełny cel **S00–S12 pozostaje OPEN**. Aktualny worktree:
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
@@ -9,10 +9,11 @@ Pełny cel **S00–S12 pozostaje OPEN**. Aktualny worktree:
 |---|---|---|
 | Managed build243 | Terminalne succeeded/exit0, hashe 29 artefaktów sprawdzone; source181b4e7b4e8b749cc5de3af0c15b3317e468306b | Nie zastępuje buildu poprawki K0 |
 | DE z demagiem, signed ±2rad/µm | Natywne wyniki 9,722781146398083 i 9,722781258027445GHz; residuale poniżej9e-15; odchylenie od analityki około−0,0303% | Wyniki completed_unqualified: window_count niecertyfikowany, brak zbieżności i pełnego sweepa |
-| K0 window recovery | Runtime244 faktycznie wykonał retry NEV/NCV16/64→32/128; pilot75155b64978746fdb0d49121152bb988 FAILED49/50 podokien, EPSITS2000 | Retry nie rozwiązał failure; kontrolowany EPS1e-10 trial na tym samym buildzie, physical residual1e-8 bez zmian |
+| K0 window recovery | Runtime244: count4/EPS1e-10 ukończył50/50 podokien, lecz odzyskał1 fizyczny klaster; count1 ukończył48/50, base NEV4/NCV16 bez miejsca na retry. Poprawka f0f2930815c00514317b0d9917a0b150511af948 oddziela budżet retrieval od physical count; scoped native CI PASS | Runtime nowej poprawki w build245; physical count, residual i certyfikacja bez rozluźniania |
 | Managed build244 | Job681ccf26c84742cf83880d97517ca4e4, source13d9d71f6, digestfb56ec30e8d70c3543fea6a45cf76b813a8be3052d9b788ec886dba4a22ee275, native-build exit0,2211640ms; build-receipt state succeeded,29 artefaktów/340071153B; dependency/runtime attestations PASS; kolejka succeeded/exit0, terminalny receipt potwierdzony | Build wykonany; obowiązują osobne runtime/science/UI gates i signed15 |
-| Storage i observer | Runner odczytał57771622400B wolnego; pojedynczy observer wznowiony po timeoutcie status request, bez ponowienia joba lub pilota | Obserwować ten sam job; nie uznawać timeoutu za zakończenie buildu |
-| Native CI | Source849fa8ddb: normal CI38464533642 4/4 PASS; ASAN CI38464528559 ABI PASS; lifetime, label-only demag i reference action skorygowane | Produkcyjny FEM/SLEPc runtime i pełny workflow są osobnymi bramkami; zielony ABI nie zamyka nauki |
+| Storage i observer | Job245/1dd454832d014d28b3b27761b4990e47 terminalnie succeeded/exit0 potwierdzony API i coordinator journal; sourcef0f293081, digest43a4af1a2d77a2b9071a2c7e52816518a0bb7ab1bfae35bbca154206f826e3be. Native-build1731898.235ms. Observer49807 zakończył się po3 timeoutach przed pilotem | Sprawdzić canonical preflight i wykonać pierwszy de-smoke-k0/count1/frequency_window na tym samym buildzie; nie zlecać ponownego buildu |
+| Native CI | Source849fa8ddb: normal4/4 PASS iASAN ABI PASS. Sourcef0f293081: native job115551933931/run38471638858 PASS; cały workflow FAIL | Python: degenerate tet4 i facet bez adjacency w modelu z otworem; Rust: ownership fixtures; browser: Inspector request budget. Runtime/nauka pozostają osobne |
+| API ownership fixtures | Dwa testy linked artifact/field meta używają validated exact test-session/test-run identity; payloady mają96B/64B LE-f64 zgodnie z metadanymi. Asercje i produkcyjny owner guard zachowane; scoped review i diff check PASS | Kompilacja i wykonanie wyłącznie GitHub Actions; brak lokalnego runtime proof, testy jeszcze NOT VERIFIED |
 | Produkcyjne non-k0 count proof | Sparse retrieval emituje prawidłowe not_certified/methodnone; nie ma niezależnego count proof | Wymagana sprawdzona struktura pencilu i niezależne zliczanie, nie zmiana etykiety certyfikacji |
 | COMSOL A1 i pozostały plan | Scoped Box dokładny; ring/A1, pełne okno/pasma, serial/adaptive parity, convergence, S09 provider, interactions/GPU, GUI/WebGL i review/master/cleanup pozostają OPEN | Każda bramka wymaga dowodu odpowiadającego jej rzeczywistemu zakresowi |
 
