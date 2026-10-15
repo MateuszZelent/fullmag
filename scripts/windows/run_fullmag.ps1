@@ -1052,7 +1052,13 @@ function Assert-NativeFemPathChain {
     if ($isReparsePoint -or $isDisallowedLink) {
       throw "$Label contains a junction or symlink: $cursor"
     }
-    if ([string]::Equals($cursor, $root, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+    $comparisonCursor = $cursor.TrimEnd('\')
+    $comparisonRoot = $root.TrimEnd('\')
+    # Preserve a filesystem root such as C:\ while tolerating the trailing
+    # separator commonly returned by vcvars64's VCToolsRedistDir.
+    if ($comparisonCursor.Length -eq 2 -and $comparisonCursor[1] -eq ':') { $comparisonCursor += '\' }
+    if ($comparisonRoot.Length -eq 2 -and $comparisonRoot[1] -eq ':') { $comparisonRoot += '\' }
+    if ([string]::Equals($comparisonCursor, $comparisonRoot, [System.StringComparison]::OrdinalIgnoreCase)) { break }
     $parent = Split-Path -Parent $cursor
     if (-not $parent -or [string]::Equals($parent, $cursor, [System.StringComparison]::OrdinalIgnoreCase)) {
       throw "$Label has no safe canonical ancestor: $resolved"

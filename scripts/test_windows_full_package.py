@@ -560,6 +560,11 @@ def test_native_msvc_selector_rejects_onecore_or_missing_desktop_runtime() -> No
                 "$selected = Get-NativeFemMsvcDesktopX64RedistRoot",
                 "if ([System.IO.Path]::GetFullPath($selected) -ine [System.IO.Path]::GetFullPath($desktop)) { throw 'desktop CRT root was not selected' }",
                 "Write-Output 'native-msvc-desktop-x64-selected'",
+                "$env:VCToolsRedistDir = $redistRoot + '\\'",
+                "$selectedTrailingSlash = Get-NativeFemMsvcDesktopX64RedistRoot",
+                "if ([System.IO.Path]::GetFullPath($selectedTrailingSlash) -ine [System.IO.Path]::GetFullPath($desktop)) { throw 'desktop CRT root with trailing separator was not selected' }",
+                "Write-Output 'native-msvc-desktop-x64-trailing-slash-selected'",
+                "$env:VCToolsRedistDir = $redistRoot",
                 "Remove-Item -LiteralPath $desktop -Recurse -Force",
                 "$onecoreOnlyRejected = $false",
                 "try { $null = Get-NativeFemMsvcDesktopX64RedistRoot } catch { $onecoreOnlyRejected = $true }",
@@ -596,6 +601,7 @@ def test_native_msvc_selector_rejects_onecore_or_missing_desktop_runtime() -> No
         assert result.returncode == 0, result.stdout + result.stderr
         output = result.stdout + result.stderr
         assert "native-msvc-desktop-x64-selected" in output
+        assert "native-msvc-desktop-x64-trailing-slash-selected" in output
         assert "native-msvc-onecore-only-rejected" in output
         assert "native-msvc-desktop-vcruntime-missing-rejected" in output
     finally:
