@@ -1643,7 +1643,10 @@ function Invoke-NativePythonWithArguments {
   if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
     throw "Python executable is missing: $PythonPath"
   }
-  $nativeArguments = @($Arguments | ForEach-Object {
+  # Native planner imports must never write bytecode into the frozen tools
+  # tree.  Keep this switch before the caller-supplied arguments so the
+  # helper remains responsible for every Python invocation at this boundary.
+  $nativeArguments = @('-B') + @($Arguments | ForEach-Object {
     ConvertTo-NativeProcessArgument -Value ([string]$_)
   })
   $argumentLine = $nativeArguments -join ' '

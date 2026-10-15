@@ -1,9 +1,10 @@
 """Verify the native PowerShell 5 argument boundary used by PE planning.
 
 This is an interpreted process-boundary regression.  It does not compile or
-invoke the PE planner: a real Windows Python process records argv so the
-launcher quoting helper is exercised with the CUDA path shape that previously
-broke argparse.
+invoke the PE planner: a real Windows Python process imports a copied
+production verifier module, records argv, and exercises the launcher quoting
+helper with the CUDA path shape that previously broke argparse.  ``-B`` must
+keep that import from creating a bytecode tree.
 """
 
 from __future__ import annotations
@@ -75,11 +76,19 @@ def test_native_powershell5_preserves_cuda_dependency_root_and_following_switche
 
     probe = tmp_path / "argv_probe.py"
     result_path = tmp_path / "argv.json"
+    module_root = tmp_path / "production_tools"
+    module_root.mkdir()
+    shutil.copy2(
+        ROOT / "scripts" / "windows" / "verify_pe_dependencies.py",
+        module_root / "verify_pe_dependencies.py",
+    )
     probe.write_text(
         "from pathlib import Path\n"
         "import json\n"
         "import sys\n"
-        "Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]), encoding='utf-8')\n",
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import verify_pe_dependencies  # noqa: F401\n"
+        "Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]), encoding='utf-8')\n",
         encoding="utf-8",
     )
     driver = tmp_path / "invoke_native_helper.ps1"
@@ -88,6 +97,7 @@ def test_native_powershell5_preserves_cuda_dependency_root_and_following_switche
   [Parameter(Mandatory = $true)][string]$Launcher,
   [Parameter(Mandatory = $true)][string]$Python,
   [Parameter(Mandatory = $true)][string]$Probe,
+  [Parameter(Mandatory = $true)][string]$ModuleRoot,
   [Parameter(Mandatory = $true)][string]$Result
 )
 $ErrorActionPreference = 'Stop'
@@ -96,8 +106,13 @@ $start = $source.IndexOf('function ConvertTo-NativeProcessArgument {')
 $end = $source.IndexOf('function Stage-NativeFemRuntime {')
 if ($start -lt 0 -or $end -le $start) { throw 'launcher helper boundaries are missing' }
 . ([scriptblock]::Create($source.Substring($start, $end - $start)))
+# Do not let inherited bytecode settings make this probe pass without the
+# launcher's explicit -B switch.  These changes are local to this driver.
+Remove-Item Env:PYTHONDONTWRITEBYTECODE -ErrorAction SilentlyContinue
+Remove-Item Env:PYTHONPYCACHEPREFIX -ErrorAction SilentlyContinue
 $arguments = @(
   $Probe,
+  $ModuleRoot,
   $Result,
   '--dependency-root', 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin\',
   '--dependency-root', 'C:\Windows\system32',
@@ -123,6 +138,7 @@ if (-not (Test-Path -LiteralPath $Result -PathType Leaf)) { throw 'argv probe di
             _native_path(LAUNCHER),
             python,
             _native_path(probe),
+            _native_path(module_root),
             _native_path(result_path),
         ],
         capture_output=True,
@@ -131,6 +147,7 @@ if (-not (Test-Path -LiteralPath $Result -PathType Leaf)) { throw 'argv probe di
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert result_path.exists(), completed.stderr or completed.stdout
+    assert not (module_root / "__pycache__").exists()
     assert json.loads(result_path.read_text(encoding="utf-8")) == [
         "--dependency-root",
         "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.3\\bin\\",
