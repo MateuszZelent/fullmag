@@ -18,6 +18,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 
@@ -1238,6 +1239,104 @@ def _validate_window_policy_request(pilot, policy, shifted_ksp_type):
         raise managed.BenchmarkError("expected window Krylov policy requires a Gamma sample")
 
 
+def _validate_shifted_ksp_trial_from_indexed_samples(
+        case_dir, sampling, requested_type, requested_rtol, **selection):
+    """Validate mixed sweeps using their indexed KSP settings, not a K0 summary."""
+    wavevectors = SAMPLING.get(sampling)
+    if (wavevectors is None
+            or not any(value == 0.0 for value in wavevectors)
+            or not any(value != 0.0 for value in wavevectors)):
+        return validate_shifted_ksp_trial(
+            case_dir, sampling, requested_type, requested_rtol, **selection
+        )
+
+    case_path = Path(case_dir)
+    diagnostics_path = case_path / "eigen" / "diagnostics" / "solver.v1.json"
+    try:
+        raw_diagnostics = diagnostics_path.read_bytes()
+        diagnostics = json.loads(raw_diagnostics)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("mixed-sample shifted KSP diagnostics are missing or invalid") from error
+    if not isinstance(diagnostics, dict):
+        raise ValueError("mixed-sample shifted KSP diagnostics must be an object")
+
+    records = diagnostics.get("sample_solver_diagnostics")
+    if not isinstance(records, list):
+        raise ValueError("mixed-sample shifted KSP requires indexed per-sample diagnostics")
+    expected_indices = set(range(len(wavevectors)))
+    by_sample = {}
+    for position, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError(f"sample_solver_diagnostics[{position}] must be an object")
+        sample_index = record.get("sample_index")
+        if type(sample_index) is not int or sample_index < 0:
+            raise ValueError(f"sample_solver_diagnostics[{position}].sample_index is invalid")
+        if sample_index in by_sample:
+            raise ValueError(f"duplicate solver diagnostics for sample {sample_index}")
+        if sample_index not in expected_indices:
+            raise ValueError(f"native solver diagnostics contain invalid sample index {sample_index}")
+        sample = record.get("diagnostics")
+        if not isinstance(sample, dict):
+            raise ValueError(
+                f"sample_solver_diagnostics[{position}].diagnostics must be an object"
+            )
+        by_sample[sample_index] = sample
+    missing_indices = sorted(expected_indices - set(by_sample))
+    if missing_indices:
+        raise ValueError(f"missing native solver diagnostics for samples {missing_indices}")
+
+    global_fields = (
+        "ksp_type", "ksp_rtol", "ksp_atol", "ksp_breakdown_tolerance",
+    )
+    present_global_fields = [field in diagnostics for field in global_fields]
+    if any(present_global_fields) and not all(present_global_fields):
+        raise ValueError("mixed-sample global KSP configuration is incomplete")
+
+    global_config_sample_index = None
+    if not any(present_global_fields):
+        # The mixed-sweep root has no single global KSP configuration. Use the
+        # first nonzero sample as a comparison baseline, then let the existing
+        # validator check every nonzero sample and every window against it.
+        global_config_sample_index = next(
+            index for index, value in enumerate(wavevectors) if value != 0.0
+        )
+        reference_sample = by_sample[global_config_sample_index]
+        missing_fields = [field for field in global_fields if field not in reference_sample]
+        if missing_fields:
+            raise ValueError(
+                "sample {} is missing KSP configuration fields: {}".format(
+                    global_config_sample_index, ", ".join(missing_fields)
+                )
+            )
+        normalized = dict(diagnostics)
+        normalized.update({field: reference_sample[field] for field in global_fields})
+        with tempfile.TemporaryDirectory(
+                prefix=".de-ksp-validation-", dir=str(case_path.parent)) as temporary:
+            normalized_case = Path(temporary) / "case"
+            normalized_path = normalized_case / "eigen" / "diagnostics" / "solver.v1.json"
+            normalized_path.parent.mkdir(parents=True)
+            normalized_path.write_text(
+                json.dumps(normalized, allow_nan=True), encoding="utf-8"
+            )
+            report = validate_shifted_ksp_trial(
+                normalized_case, sampling, requested_type, requested_rtol, **selection
+            )
+    else:
+        report = validate_shifted_ksp_trial(
+            case_path, sampling, requested_type, requested_rtol, **selection
+        )
+
+    report["diagnostics_binding"] = {
+        "native_diagnostics_sha256": hashlib.sha256(raw_diagnostics).hexdigest(),
+        "global_configuration_source": (
+            "sample_solver_diagnostics" if global_config_sample_index is not None
+            else "native_global"
+        ),
+        "global_config_sample_index": global_config_sample_index,
+    }
+    return report
+
+
 def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
                             eps_prefilter, gmres_restart, *,
                             spectral_target="frequency_window", target_frequency_hz=None,
@@ -1282,7 +1381,7 @@ def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
              "gmres_restart": int(gmres_restart) if gmres_restart is not None else None}
             if spectral_target == "nearest" else {}
         )
-        artifacts["shifted_ksp_trial"] = validate_shifted_ksp_trial(
+        artifacts["shifted_ksp_trial"] = _validate_shifted_ksp_trial_from_indexed_samples(
             case_dir, sampling, requested_type, requested_rtol, **selection
         )
     return artifacts

@@ -18,6 +18,38 @@ import yaml
 import run_de_100nm_pilot as pilot
 
 
+def _signed_fifteen_indexed_ksp_diagnostics():
+    import copy
+
+    from test_de_gamma_krylov_trial import _diagnostics as gamma_diagnostics
+    from test_de_shifted_ksp_trial import _diagnostics as shifted_diagnostics
+
+    sampling = "signed-fifteen"
+    wavevectors = pilot.SAMPLING[sampling]
+    diagnostics = shifted_diagnostics(sampling, method="fgmres")
+    gamma = gamma_diagnostics(sampling)
+    gamma_by_sample = {
+        record["sample_index"]: record["diagnostics"]
+        for record in gamma["sample_solver_diagnostics"]
+    }
+    for record in diagnostics["sample_solver_diagnostics"]:
+        sample_index = record["sample_index"]
+        if wavevectors[sample_index] == 0.0:
+            record["diagnostics"] = copy.deepcopy(gamma_by_sample[sample_index])
+    for field in (
+            "ksp_type", "ksp_rtol", "ksp_atol", "ksp_breakdown_tolerance"):
+        diagnostics.pop(field)
+    return diagnostics
+
+
+def _write_solver_diagnostics(case_dir, diagnostics):
+    diagnostics_path = Path(case_dir) / "eigen" / "diagnostics" / "solver.v1.json"
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = json.dumps(diagnostics).encode("utf-8")
+    diagnostics_path.write_bytes(raw)
+    return diagnostics_path, raw
+
+
 class _ComposeOverrideLoader(yaml.SafeLoader):
     pass
 
@@ -1499,12 +1531,69 @@ class PilotTests(unittest.TestCase):
         for sampling, expected_keys in cases:
             with self.subTest(sampling=sampling), \
                     patch.object(pilot, "validate_gamma_krylov_trial", return_value={"gate": "gamma"}) as gamma, \
-                    patch.object(pilot, "validate_shifted_ksp_trial", return_value={"gate": "floquet"}) as floquet:
+                    patch.object(pilot, "_validate_shifted_ksp_trial_from_indexed_samples", return_value={"gate": "floquet"}) as floquet:
                 artifacts = pilot._validate_krylov_trials(
                     Path("case"), sampling, "fgmres", "1e-9", "1e-9", "10")
                 self.assertEqual(set(artifacts), expected_keys)
                 self.assertEqual(gamma.call_count, int("gamma_krylov_trial" in expected_keys))
                 self.assertEqual(floquet.call_count, int("shifted_ksp_trial" in expected_keys))
+
+    def test_mixed_signed_fifteen_krylov_accepts_indexed_sample_configuration(self):
+        sampling = "signed-fifteen"
+        wavevectors = pilot.SAMPLING[sampling]
+        diagnostics = _signed_fifteen_indexed_ksp_diagnostics()
+
+        with TemporaryDirectory() as tmp:
+            case_dir = Path(tmp)
+            diagnostics_path, raw = _write_solver_diagnostics(case_dir, diagnostics)
+
+            reports = pilot._validate_krylov_trials(
+                case_dir, sampling, "fgmres", "1e-9", "1e-9", "10")
+
+        self.assertEqual(reports["gamma_krylov_trial"]["sample_count"], 1)
+        self.assertEqual(reports["shifted_ksp_trial"]["sample_count"], 14)
+        self.assertEqual(
+            reports["shifted_ksp_trial"]["by_sample"].keys(),
+            {index for index, wavevector in enumerate(wavevectors) if wavevector != 0.0},
+        )
+        self.assertEqual(
+            reports["shifted_ksp_trial"]["diagnostics_binding"]["global_config_sample_index"],
+            0,
+        )
+        self.assertEqual(
+            reports["shifted_ksp_trial"]["diagnostics_binding"]["native_diagnostics_sha256"],
+            hashlib.sha256(raw).hexdigest(),
+        )
+
+    def test_mixed_signed_fifteen_krylov_checks_every_floquet_sample_configuration(self):
+        diagnostics = _signed_fifteen_indexed_ksp_diagnostics()
+        diagnostics["sample_solver_diagnostics"][2]["diagnostics"]["ksp_type"] = "gmres"
+
+        with TemporaryDirectory() as tmp:
+            case_dir = Path(tmp)
+            _write_solver_diagnostics(case_dir, diagnostics)
+            with self.assertRaisesRegex(ValueError, "sample 2.ksp_type"):
+                pilot._validate_krylov_trials(
+                    case_dir, "signed-fifteen", "fgmres", "1e-9", "1e-9", "10")
+
+    def test_mixed_signed_fifteen_krylov_rejects_missing_or_duplicate_samples(self):
+        base = _signed_fifteen_indexed_ksp_diagnostics()
+        for mutation in ("missing_floquet", "missing_gamma", "duplicate"):
+            with self.subTest(mutation=mutation), TemporaryDirectory() as tmp:
+                diagnostics = json.loads(json.dumps(base))
+                if mutation == "missing_floquet":
+                    diagnostics["sample_solver_diagnostics"].pop(0)
+                elif mutation == "missing_gamma":
+                    diagnostics["sample_solver_diagnostics"].pop(7)
+                else:
+                    diagnostics["sample_solver_diagnostics"].append(
+                        json.loads(json.dumps(diagnostics["sample_solver_diagnostics"][2]))
+                    )
+                case_dir = Path(tmp)
+                _write_solver_diagnostics(case_dir, diagnostics)
+                with self.assertRaisesRegex(ValueError, "missing|duplicate"):
+                    pilot._validate_krylov_trials(
+                        case_dir, "signed-fifteen", "fgmres", "1e-9", "1e-9", "10")
 
     def test_ui_seven_nearest_krylov_admission_is_pinned_and_does_not_weaken_legacy_paths(self):
         pilot._validate_shifted_ksp_trial_request(
