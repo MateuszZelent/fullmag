@@ -363,12 +363,17 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const fixture = createEmptyPartColorFixture();
   const errors = attachBrowserErrors(page);
+  const network = attachBrowserNetworkDiagnostics(page);
   await installFixtureApi(page, fixture);
   await installFixtureConfig(page);
   const quantityId = "H_eff";
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-    await assertHealthyCanvas(page, "empty-range FEM initial");
+    await assertHealthyCanvas(page, "empty-range FEM initial", {
+      browserErrors: errors,
+      fixture,
+      network,
+    });
 
     // Keep the later part hidden while measuring A. Both parts have separate
     // object targets and share their XY projection columns in the typed mesh.
@@ -1068,9 +1073,107 @@ async function verifyAirboxVectorQuantities(page, fixture, lane) {
   return deltas;
 }
 
-async function assertHealthyCanvas(page, label) {
+
+async function captureViewportCanvasFailureDiagnostics(page, label, context, waitError) {
+  const screenshotPath = join(
+    browserAuditArtifactDir,
+    `canvas-failure-${Date.now()}-${randomUUID().slice(0, 8)}.png`,
+  );
+  let screenshotError = null;
+  try {
+    await mkdir(browserAuditArtifactDir, { recursive: true });
+    await page.screenshot({ fullPage: true, path: screenshotPath, timeout: 10_000 });
+  } catch (error) {
+    screenshotError = error instanceof Error ? error.message : String(error);
+  }
+
+  let dom = null;
+  let domError = null;
+  try {
+    dom = await page.evaluate(() => {
+      const describe = (element) => {
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          className: typeof element.className === "string" ? element.className : "",
+          height: rect.height,
+          text: (element.textContent ?? "").trim().slice(0, 400),
+          visible: style.display !== "none" && style.visibility !== "hidden" &&
+            rect.width > 0 && rect.height > 0,
+          width: rect.width,
+        };
+      };
+      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      let activeViewportModule = null;
+      let auditError = null;
+      try {
+        activeViewportModule = audit?.readActiveViewportModule?.() ?? null;
+      } catch (error) {
+        auditError = error instanceof Error ? error.message : String(error);
+      }
+      const viewportHost = document.querySelector('[data-slot-id="viewport-main"]');
+      return {
+        activeViewportModule,
+        alerts: [...document.querySelectorAll('[role="alert"]')].slice(0, 10).map(describe),
+        auditError,
+        bodyText: (document.body?.innerText ?? "").slice(0, 4_000),
+        canvases: [...document.querySelectorAll("canvas")].slice(0, 10).map(describe),
+        config: { disableViewport3D: window.__FULLMAG_CONFIG__?.disableViewport3D ?? null },
+        document: { readyState: document.readyState, title: document.title, url: location.href },
+        errorBoundaries: [...document.querySelectorAll(".fm-viewport-3d__error-boundary")].slice(0, 5).map(describe),
+        placeholders: [...document.querySelectorAll(".fm-viewport-3d__placeholder")].slice(0, 5).map(describe),
+        startHosts: [...document.querySelectorAll(".fm-start-host")].slice(0, 5).map(describe),
+        viewport3D: describe(document.querySelector(".fm-viewport-3d")),
+        viewportHost: describe(viewportHost),
+        viewportModuleId: viewportHost?.getAttribute("data-active-module-id") ?? null,
+      };
+    });
+  } catch (error) {
+    domError = error instanceof Error ? error.message : String(error);
+  }
+
+  const fixture = context?.fixture;
+  return {
+    browserErrors: context?.browserErrors ?? [],
+    dom,
+    domError,
+    fixture: fixture ? {
+      capabilities: fixture.status?.capabilities ?? null,
+      domain: { counts: fixture.domain?.counts ?? null, discretization: fixture.domain?.discretization ?? null },
+      fieldRequests: fixture.fieldRequests?.slice(-20) ?? [],
+      meshParts: fixture.manifest?.mesh_parts?.map((part) => ({
+        boundary_face_count: part.boundary_face_count,
+        boundary_face_start: part.boundary_face_start,
+        element_count: part.element_count,
+        element_start: part.element_start,
+        id: part.id,
+        node_count: part.node_count,
+        node_start: part.node_start,
+      })) ?? null,
+      requests: fixture.requests?.slice(-60) ?? [],
+      sessionId: fixture.status?.session?.session_id ?? null,
+    } : null,
+    label,
+    network: context?.network ?? null,
+    screenshot: screenshotError ? { error: screenshotError } : screenshotPath,
+    timeout: waitError instanceof Error
+      ? { message: waitError.message, name: waitError.name }
+      : String(waitError),
+  };
+}
+
+async function assertHealthyCanvas(page, label, diagnosticContext = null) {
   const canvas = page.locator(CANVAS_SELECTOR);
-  await canvas.waitFor({ state: "visible", timeout: timeoutMs });
+  try {
+    await canvas.waitFor({ state: "visible", timeout: timeoutMs });
+  } catch (error) {
+    const diagnostic = await captureViewportCanvasFailureDiagnostics(
+      page, label, diagnosticContext, error,
+    );
+    console.error(`[viewport-canvas-failure] ${JSON.stringify(diagnostic)}`);
+    throw error;
+  }
   const state = await canvas.evaluate((node) => {
     const gl = node.getContext("webgl2") ?? node.getContext("webgl");
     return {
@@ -1444,6 +1547,41 @@ function attachBrowserErrors(page) {
   return errors;
 }
 function assertNoBrowserErrors(errors) { if (errors.length) throw new Error(`Browser errors:\n${errors.join("\n")}`); }
+
+function attachBrowserNetworkDiagnostics(page) {
+  const diagnostics = { apiRequests: [], failedRequests: [], failedResponses: [] };
+  const retain = (items, item) => {
+    items.push(item);
+    if (items.length > 80) items.shift();
+  };
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/v2/")) {
+      retain(diagnostics.apiRequests, { method: request.method(), path: url.pathname });
+    }
+  });
+  page.on("requestfailed", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/v2/")) {
+      retain(diagnostics.failedRequests, {
+        failure: request.failure()?.errorText ?? null,
+        method: request.method(),
+        path: url.pathname,
+      });
+    }
+  });
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (url.pathname.startsWith("/v2/") && response.status() >= 400) {
+      retain(diagnostics.failedResponses, {
+        method: response.request().method(),
+        path: url.pathname,
+        status: response.status(),
+      });
+    }
+  });
+  return diagnostics;
+}
 
 function createFdmFixture() {
   const objects = ["fdm-left", "fdm-right"].map((id, index) => ({
