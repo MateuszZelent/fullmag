@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cub/cub.cuh>
 
+#include "gpu/cuda/runtime/cccl_extrema.hpp"
+
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
@@ -41,11 +43,13 @@ __global__ void field_metric_blocks_kernel(
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
     __shared__ typename BlockReduce::TempStorage h_temp_storage;
-    const double h_block = BlockReduce(h_temp_storage).Reduce(h_norm, cub::Max());
+    const double h_block = BlockReduce(h_temp_storage).Reduce(
+        h_norm, cuda_compat::legacy_maximum{});
     __syncthreads();
     __shared__ typename BlockReduce::TempStorage torque_temp_storage;
     const double torque_block =
-        BlockReduce(torque_temp_storage).Reduce(torque_norm, cub::Max());
+        BlockReduce(torque_temp_storage).Reduce(
+            torque_norm, cuda_compat::legacy_maximum{});
     if (threadIdx.x == 0) {
         block_max_h[blockIdx.x] = h_block;
         block_max_torque[blockIdx.x] = torque_block;
