@@ -94,6 +94,10 @@ $BrowserApiIsolation = $BrowserWorkspace -and ($AllBackendsRequested -or $Backen
 # Script-mode FEM needs the same private API ownership as the browser workspace,
 # but headless runs must retain their disabled API contract.
 $FemInteractiveApiIsolation = $RunMode -eq "interactive" -and $Backend -eq "fem"
+# Interactive FEM uses the same isolated frontend staging/reuse contract as the
+# managed workspace, while retaining script-mode execution and API ownership.
+$FemInteractiveFrontend = $RunMode -eq "interactive" -and $Backend -eq "fem"
+$StagedFrontendRoute = $RunMode -eq "workspace" -or $FemInteractiveFrontend
 if ($Browser -and -not $BrowserWorkspace) {
   throw "-Browser is only supported for the managed native FEM workspace"
 }
@@ -571,7 +575,7 @@ function Ensure-ControlRoomDependencies {
   # Workspace mode has its own staged root below the managed build profile.
   $dependencyWorkspace = if ($BuildSnapshot) { $BuildSourceRoot } else { $RepoRoot }
   $stagedFrontendRoot = $null
-  if ($RunMode -eq "workspace") {
+  if ($StagedFrontendRoute) {
     # `0` means that the browser CLI chooses its own listener.  Frontend
     # staging still needs a nonzero cache key for Next dev; reserve one only
     # for the staged source tree and never publish it as the runtime port.
@@ -593,10 +597,17 @@ function Ensure-ControlRoomDependencies {
     $stageOutput = (& python -B @stageArguments 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Native frontend staging failed: $stageOutput" }
     $stage = $stageOutput | ConvertFrom-Json
+    $stageManifestPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$stage.manifest_path) -Label "native frontend source manifest" -Parent $BuildRoot
+    $stageManifest = Get-Content -LiteralPath $stageManifestPath -Raw | ConvertFrom-Json
+    $null = Assert-NativeFrontendStage -StageManifest $stageManifest -ExpectedSourceRoot $BuildSourceRoot `
+      -ExpectedWorkspaceRoot ([string]$stage.workspace_root) -ExpectedCacheRoot ([string]$stage.frontend_root)
     $script:FrontendWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$stage.workspace_root) -Label "native frontend workspace" -Parent $BuildRoot
     $script:FrontendCacheRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$stage.frontend_root) -Label "native frontend cache" -Parent $BuildRoot
     $script:FrontendSourceManifestPath = [string]$stage.manifest_path
     $script:FrontendSourceManifestSha256 = [string]$stage.manifest_sha256
+    if ($FemInteractiveFrontend) {
+      $script:FrontendSourceDigest = [string]$stage.source_inventory_sha256
+    }
     $script:StaticControlRoom = Join-Path $FrontendWorkspaceRoot "apps\control-room\out\index.html"
     $stagedFrontendRoot = $FrontendCacheRoot
     $dependencyWorkspace = $FrontendWorkspaceRoot
@@ -899,6 +910,60 @@ function Get-WindowsCargoProfileArguments {
   param([Parameter(Mandatory = $true)][ValidateSet("backend-dev", "release")][string]$CompilerProfile)
   if ($CompilerProfile -eq "backend-dev") { return @("--profile", "backend-dev") }
   return @("--release")
+}
+
+function Assert-NativeFrontendStage {
+  param(
+    [Parameter(Mandatory = $true)][object]$StageManifest,
+    [Parameter(Mandatory = $true)][string]$ExpectedSourceRoot,
+    [AllowEmptyString()][string]$ExpectedWorkspaceRoot = "",
+    [AllowEmptyString()][string]$ExpectedCacheRoot = "",
+    [AllowEmptyString()][string]$ExpectedSourceInventorySha256 = ""
+  )
+  if ([string]$StageManifest.schema -ne "fullmag.native-workspace-frontend-source.v1" -or
+      [string]$StageManifest.mode -ne $Frontend -or
+      [string]$StageManifest.build_root -eq "" -or
+      [string]$StageManifest.source_root -eq "" -or
+      [string]$StageManifest.workspace_root -eq "" -or
+      [string]$StageManifest.frontend_cache_root -eq "" -or
+      [string]$StageManifest.source_inventory_sha256 -notmatch '^[0-9a-f]{64}$') {
+    throw "Native FEM frontend source manifest is incomplete or has an incompatible schema"
+  }
+  $stageBuildRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$StageManifest.build_root) `
+    -Label "native frontend stage build root" -Parent $BuildRoot
+  $stageSourceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$StageManifest.source_root) `
+    -Label "native frontend stage source root" -Parent $BuildRoot
+  $stageWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$StageManifest.workspace_root) `
+    -Label "native frontend workspace" -Parent $BuildRoot
+  $stageCacheRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$StageManifest.frontend_cache_root) `
+    -Label "native frontend cache" -Parent $BuildRoot
+  if ((Resolve-AbsolutePath $stageBuildRoot) -ine (Resolve-AbsolutePath $BuildRoot) -or
+      (Resolve-AbsolutePath $stageSourceRoot) -ine (Resolve-AbsolutePath $ExpectedSourceRoot)) {
+    throw "Native FEM frontend source manifest is bound to a different build or frozen source root"
+  }
+  if ($ExpectedWorkspaceRoot -and
+      (Resolve-AbsolutePath $stageWorkspaceRoot) -ine (Resolve-AbsolutePath $ExpectedWorkspaceRoot)) {
+    throw "Native FEM frontend workspace manifest does not match the build manifest"
+  }
+  if ($ExpectedCacheRoot -and
+      (Resolve-AbsolutePath $stageCacheRoot) -ine (Resolve-AbsolutePath $ExpectedCacheRoot)) {
+    throw "Native FEM frontend cache manifest does not match the build manifest"
+  }
+  if ($ExpectedSourceInventorySha256 -and
+      ([string]$ExpectedSourceInventorySha256 -notmatch '^[0-9a-f]{64}$' -or
+       [string]$StageManifest.source_inventory_sha256 -ne [string]$ExpectedSourceInventorySha256)) {
+    throw "Native FEM frontend source inventory does not match the build manifest"
+  }
+  if (-not $BuildSnapshot -or -not $StageManifest.build_source_snapshot) {
+    throw "Native FEM frontend source manifest is not bound to a frozen source snapshot"
+  }
+  $stageSnapshot = $StageManifest.build_source_snapshot
+  if ([string]$stageSnapshot.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256 -or
+      [string]$stageSnapshot.record_path -ne [string]$BuildSnapshot.record_path -or
+      (Resolve-AbsolutePath ([string]$stageSnapshot.source_root)) -ine (Resolve-AbsolutePath $BuildSourceRoot)) {
+    throw "Native FEM frontend source manifest is bound to a different frozen source snapshot"
+  }
+  return $true
 }
 
 function Get-DirectorySha256 {
@@ -1870,26 +1935,40 @@ $FrontendWorkspaceRoot = $null
 $FrontendCacheRoot = $null
 $FrontendSourceManifestPath = $null
 $FrontendSourceManifestSha256 = $null
-if ($RunMode -eq "workspace" -and (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-  try {
-    $existingWorkspaceManifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-    if ($existingWorkspaceManifest.frontend_workspace_root) {
-      $FrontendWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$existingWorkspaceManifest.frontend_workspace_root) -Label "native frontend workspace" -Parent $BuildRoot
-      $FrontendCacheRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$existingWorkspaceManifest.frontend_cache_root) -Label "native frontend cache" -Parent $BuildRoot
-      $FrontendSourceManifestPath = [string]$existingWorkspaceManifest.frontend_source_manifest
-      $FrontendSourceManifestSha256 = [string]$existingWorkspaceManifest.frontend_source_manifest_sha256
-      $StaticControlRoom = Join-Path $FrontendWorkspaceRoot "apps\control-room\out\index.html"
-    }
-  }
-  catch { $FrontendWorkspaceRoot = $null }
+$FrontendSourceDigest = if ($RunMode -eq "workspace" -and $Frontend -eq "static") {
+  Get-WindowsBackendSourceDigest -FrontendSources
+} else {
+  $null
 }
+$existingWorkspaceManifest = $null
 $existingFemManifest = $null
 if ($Backend -eq "fem" -and (Test-Path -LiteralPath $PhysicalManifestPath -PathType Leaf)) {
   try { $existingFemManifest = Get-Content -LiteralPath $PhysicalManifestPath -Raw | ConvertFrom-Json }
   catch { $existingFemManifest = $null }
 }
+$frontendManifestCandidate = if ($FemInteractiveFrontend) { $existingFemManifest } else { $existingWorkspaceManifest }
+if ($StagedFrontendRoute -and (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+  try {
+    if (-not $frontendManifestCandidate) {
+      $frontendManifestCandidate = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    }
+    if (-not $FemInteractiveFrontend) {
+      $existingWorkspaceManifest = $frontendManifestCandidate
+    }
+    if ($frontendManifestCandidate.frontend_workspace_root) {
+      $FrontendWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$frontendManifestCandidate.frontend_workspace_root) -Label "native frontend workspace" -Parent $BuildRoot
+      $FrontendCacheRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$frontendManifestCandidate.frontend_cache_root) -Label "native frontend cache" -Parent $BuildRoot
+      $FrontendSourceManifestPath = [string]$frontendManifestCandidate.frontend_source_manifest
+      $FrontendSourceManifestSha256 = [string]$frontendManifestCandidate.frontend_source_manifest_sha256
+      if ($FemInteractiveFrontend) {
+        $FrontendSourceDigest = [string]$frontendManifestCandidate.frontend_source_sha256
+      }
+      $StaticControlRoom = Join-Path $FrontendWorkspaceRoot "apps\control-room\out\index.html"
+    }
+  }
+  catch { $FrontendWorkspaceRoot = $null; $FrontendCacheRoot = $null }
+}
 $BackendSourceDigest = if ($RunMode -eq "workspace") { Get-WindowsBackendSourceDigest } else { $null }
-$FrontendSourceDigest = if ($RunMode -eq "workspace" -and $Frontend -eq "static") { Get-WindowsBackendSourceDigest -FrontendSources } else { $null }
 if ($BuildMode -eq "auto") {
   $BuildMode = if (Test-WindowsWorkspaceBuildRequired -BackendDigest $BackendSourceDigest) { "true" } else { "false" }
   Write-Host "Windows workspace automatic build selection: $BuildMode"
@@ -1923,9 +2002,28 @@ if ($BuildMode -eq "false" -and $existingFrozenManifest -and $existingFrozenMani
     throw "Build manifest does not match its frozen sources"
   }
   $BuildSourceRoot = [string]$BuildSnapshot.source_root
-  $StaticControlRoom = Join-Path $BuildSourceRoot "apps\control-room\out\index.html"
+  if (-not $StagedFrontendRoute) {
+    $StaticControlRoom = Join-Path $BuildSourceRoot "apps\control-room\out\index.html"
+  }
 } elseif ($ExpectedBuildId) {
   throw "The requested build has no verified frozen sources"
+}
+if ($FemInteractiveFrontend -and $BuildMode -eq "false") {
+  if (-not $existingFemManifest -or -not $FrontendWorkspaceRoot -or -not $FrontendCacheRoot -or
+      -not $FrontendSourceManifestPath -or
+      [string]$FrontendSourceDigest -notmatch '^[0-9a-f]{64}$') {
+    throw "Existing FEM interactive frontend staging is missing from the build manifest; rerun with build=True"
+  }
+  $existingFrontendStageManifestPath = Assert-FullmagStoragePath -Layout $StorageLayout `
+    -Path $FrontendSourceManifestPath -Label "native frontend source manifest" -Parent $BuildRoot
+  $existingFrontendStageManifest = Get-Content -LiteralPath $existingFrontendStageManifestPath -Raw | ConvertFrom-Json
+  $null = Assert-NativeFrontendStage -StageManifest $existingFrontendStageManifest `
+    -ExpectedSourceRoot $BuildSourceRoot -ExpectedWorkspaceRoot $FrontendWorkspaceRoot `
+    -ExpectedCacheRoot $FrontendCacheRoot -ExpectedSourceInventorySha256 $FrontendSourceDigest
+  if ([string]$FrontendSourceManifestSha256 -notmatch '^[0-9a-f]{64}$' -or
+      [string]$FrontendSourceManifestSha256 -ne (Get-Sha256File $existingFrontendStageManifestPath)) {
+    throw "Existing FEM interactive frontend source manifest hash does not match the build manifest"
+  }
 }
 if ($BuildMode -eq "true") {
   $volatileToolsRoot = if ($BuildSnapshot) { Get-WindowsBuildToolsRoot } else { $PSScriptRoot }
@@ -1973,7 +2071,8 @@ if ($nextDistDir -and $RunMode -ne "workspace") {
 if ($SkipCompatibilityLinks -and -not $BuildOnly) {
   throw "SkipCompatibilityLinks is allowed only for an isolated BuildOnly invocation"
 }
-if ($RunMode -ne "workspace" -and (-not $SkipCompatibilityLinks -or $needsControlRoomToolchain)) {
+if ($RunMode -ne "workspace" -and -not $FemInteractiveFrontend -and
+    (-not $SkipCompatibilityLinks -or $needsControlRoomToolchain)) {
   $null = Prepare-FullmagStorageLinks @prepareArguments
 }
 
@@ -2280,7 +2379,7 @@ if ($BuildMode -eq "true") {
   }
   $frontendEntryPath = $null
   $frontendEntrySha256 = $null
-  if ($BrowserWorkspace) {
+  if ($BrowserWorkspace -or $FemInteractiveFrontend) {
     $frontendEntryPath = if ($Frontend -eq "static") {
       Join-Path $FrontendCacheRoot "out\index.html"
     } else {
@@ -2424,7 +2523,7 @@ else {
       [string]$manifest.target_triple -ne $TargetTriple -or
       [string]$manifest.node_version -ne [string]$expectedNodeVersion -or
       [string]$manifest.pnpm_version -ne [string]$expectedPnpmVersion
-  if ($RunMode -eq "workspace") {
+  if ($StagedFrontendRoute) {
     $manifestStructureMismatch = $manifestStructureMismatch -or [string]$manifest.frontend_mode -ne $Frontend -or
         [string]$manifest.build_version.schema -ne "fullmag.build-version.v1" -or
         [string]$manifest.build_version.git_commit -ne [string]$manifest.git_commit -or
@@ -2464,14 +2563,14 @@ else {
   if ($needsDesktopRuntime) {
     Assert-FullmagDesktopRuntime -Path $FullmagUiExe -ExpectedHash ([string]$manifest.desktop_binary_sha256)
   }
-  if ($RunMode -eq "workspace") {
+  if ($StagedFrontendRoute) {
     $versionFile = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$manifest.build_version_file) -Label "build version file" -Parent $BuildRoot
     $frontendManifest = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$manifest.frontend_source_manifest) -Label "frontend source manifest" -Parent $BuildRoot
     if ([string]$manifest.build_version_file_sha256 -ne (Get-Sha256File $versionFile) -or
         [string]$manifest.frontend_source_manifest_sha256 -ne (Get-Sha256File $frontendManifest)) {
       throw "Native workspace metadata hash does not match the build manifest; rebuild the Windows workspace"
     }
-    if ($BrowserWorkspace) {
+    if ($BrowserWorkspace -or $FemInteractiveFrontend) {
       $browserEntryPath = if ($Frontend -eq "static") {
         Join-Path $FrontendCacheRoot "out\index.html"
       } else {
@@ -2482,7 +2581,7 @@ else {
           [string]$manifest.frontend_entry_path -ne (Resolve-AbsolutePath $browserEntryPath) -or
           [string]$manifest.frontend_entry_sha256 -notmatch '^[0-9a-f]{64}$' -or
           [string]$manifest.frontend_entry_sha256 -ne (Get-Sha256File $browserEntryPath)) {
-        throw "Existing FEM browser frontend entry does not match the build manifest; rerun with build=True"
+        throw "Existing staged FEM frontend entry does not match the build manifest; rerun with build=True"
       }
     }
   }
@@ -2723,7 +2822,26 @@ $previousScriptApiPortWasSet = Test-Path Env:FULLMAG_API_PORT
 $previousScriptApiPort = [Environment]::GetEnvironmentVariable("FULLMAG_API_PORT", "Process")
 $previousScriptRequireOwnedApiWasSet = Test-Path Env:FULLMAG_REQUIRE_OWN_API
 $previousScriptRequireOwnedApi = [Environment]::GetEnvironmentVariable("FULLMAG_REQUIRE_OWN_API", "Process")
+$previousScriptRepoRootWasSet = Test-Path Env:FULLMAG_REPO_ROOT
+$previousScriptRepoRoot = [Environment]::GetEnvironmentVariable("FULLMAG_REPO_ROOT", "Process")
+$previousScriptFrontendRootWasSet = Test-Path Env:FULLMAG_FRONTEND_ROOT
+$previousScriptFrontendRoot = [Environment]::GetEnvironmentVariable("FULLMAG_FRONTEND_ROOT", "Process")
+$previousScriptStateRootWasSet = Test-Path Env:FULLMAG_STATE_ROOT
+$previousScriptStateRoot = [Environment]::GetEnvironmentVariable("FULLMAG_STATE_ROOT", "Process")
+$previousScriptDevSourceRootWasSet = Test-Path Env:FULLMAG_DEV_SOURCE_ROOT
+$previousScriptDevSourceRoot = [Environment]::GetEnvironmentVariable("FULLMAG_DEV_SOURCE_ROOT", "Process")
 try {
+  if ($FemInteractiveFrontend) {
+    if (-not $FrontendWorkspaceRoot -or -not $FrontendCacheRoot) {
+      throw "Native FEM interactive frontend roots are missing from the verified build manifest"
+    }
+    $env:FULLMAG_REPO_ROOT = $FrontendWorkspaceRoot
+    $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
+    $env:FULLMAG_STATE_ROOT = Join-Path $StorageLayout.runtime_root "state"
+    $env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev") {
+      Join-Path $FrontendWorkspaceRoot "apps\control-room"
+    } else { "" }
+  }
   if ($RunMode -eq "headless") {
     # Headless script execution keeps the API disabled; do not opt it into
     # the interactive owned-API contract.
@@ -2759,6 +2877,30 @@ try {
   }
 }
 finally {
+  if ($previousScriptRepoRootWasSet) {
+    [Environment]::SetEnvironmentVariable("FULLMAG_REPO_ROOT", $previousScriptRepoRoot, "Process")
+  }
+  else {
+    Remove-Item Env:FULLMAG_REPO_ROOT -ErrorAction SilentlyContinue
+  }
+  if ($previousScriptFrontendRootWasSet) {
+    [Environment]::SetEnvironmentVariable("FULLMAG_FRONTEND_ROOT", $previousScriptFrontendRoot, "Process")
+  }
+  else {
+    Remove-Item Env:FULLMAG_FRONTEND_ROOT -ErrorAction SilentlyContinue
+  }
+  if ($previousScriptStateRootWasSet) {
+    [Environment]::SetEnvironmentVariable("FULLMAG_STATE_ROOT", $previousScriptStateRoot, "Process")
+  }
+  else {
+    Remove-Item Env:FULLMAG_STATE_ROOT -ErrorAction SilentlyContinue
+  }
+  if ($previousScriptDevSourceRootWasSet) {
+    [Environment]::SetEnvironmentVariable("FULLMAG_DEV_SOURCE_ROOT", $previousScriptDevSourceRoot, "Process")
+  }
+  else {
+    Remove-Item Env:FULLMAG_DEV_SOURCE_ROOT -ErrorAction SilentlyContinue
+  }
   if ($previousScriptApiPortWasSet) {
     [Environment]::SetEnvironmentVariable("FULLMAG_API_PORT", $previousScriptApiPort, "Process")
   }

@@ -53,9 +53,15 @@ $script:FrontendSourceManifestPath = $null
 $script:FrontendSourceManifestSha256 = $null
 $script:StaticControlRoom = $null
 $RunMode = "workspace"
+$StagedFrontendRoute = $true
+$FemInteractiveFrontend = $false
 $Frontend = "dev"
 $WebPort = 0
-$BuildSnapshot = $null
+$BuildSnapshot = [pscustomobject]@{
+  record_path = Join-Path $script:BuildRoot "record.json"
+  inventory_sha256 = ("b" * 64)
+  source_root = $script:BuildSourceRoot
+}
 $StorageLayout = [pscustomobject]@{ build_root = $script:BuildRoot }
 $script:ObservedFrontendRoot = $null
 $script:ObservedCi = $null
@@ -74,16 +80,29 @@ function Assert-FullmagStoragePath {
   try { return [IO.Path]::GetFullPath($Path) }
   catch { throw "mock storage path label=$Label path=<$Path> parent=<$Parent>: $($_.Exception.Message)" }
 }
+function Resolve-AbsolutePath {
+  param([string]$Path)
+  return [IO.Path]::GetFullPath($Path)
+}
 function python {
   param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Arguments)
   $global:LASTEXITCODE = 0
-  [pscustomobject]@{
-    schema = "fullmag.dev-source-mirror.v1"
+  $manifestPath = Join-Path $script:StagedWorkspaceRoot "frontend-manifest.json"
+  $stage = [pscustomobject]@{
+    schema = "fullmag.native-workspace-frontend-source.v1"
+    mode = $Frontend
+    build_root = $script:BuildRoot
+    source_root = $script:BuildSourceRoot
     workspace_root = $script:StagedWorkspaceRoot
     frontend_root = $script:StagedFrontendRoot
-    manifest_path = Join-Path $script:StagedWorkspaceRoot "frontend-manifest.json"
+    frontend_cache_root = $script:StagedFrontendRoot
+    source_inventory_sha256 = ("c" * 64)
+    build_source_snapshot = $BuildSnapshot
+    manifest_path = $manifestPath
     manifest_sha256 = ("a" * 64)
-  } | ConvertTo-Json -Compress
+  }
+  $stage | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+  $stage | ConvertTo-Json -Depth 8 -Compress
 }
 function Invoke-External {
   param([string]$Command, [object[]]$Arguments)
@@ -153,7 +172,11 @@ def test_native_frontend_root_is_restored_on_success_and_failure(tmp_path: Path)
     start = source.index("function Ensure-ControlRoomDependencies {")
     end = source.index("function Ensure-PinnedPnpm {", start)
     function_file = tmp_path / "Ensure-ControlRoomDependencies.ps1"
-    function_file.write_text(source[start:end], encoding="utf-8")
+    validator_start = source.index("function Assert-NativeFrontendStage {")
+    validator_end = source.index("\nfunction Get-DirectorySha256", validator_start)
+    function_file.write_text(
+        source[validator_start:validator_end] + "\n" + source[start:end], encoding="utf-8"
+    )
     driver = tmp_path / "frontend-root-scope.ps1"
     driver.write_text(textwrap.dedent(DRIVER), encoding="utf-8")
     environment = os.environ.copy()

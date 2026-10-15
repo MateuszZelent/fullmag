@@ -42,6 +42,92 @@ def _script_launch_tail() -> str:
     return tail
 
 
+def _interactive_frontend_runtime_tail() -> str:
+    source = LAUNCHER.read_text(encoding="utf-8-sig")
+    start = source.index("$previousScriptApiPortWasSet = Test-Path Env:FULLMAG_API_PORT")
+    tail = "$cliArguments = @()\n" + source[start:]
+    assert "$env:FULLMAG_REPO_ROOT = $FrontendWorkspaceRoot" in tail
+    assert "$env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot" in tail
+    assert "Invoke-External $FullmagExe $cliArguments" in tail
+    return tail
+
+
+def _run_interactive_frontend_probe(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
+    powershell = _powershell()
+    if powershell is None:
+        pytest.skip("Windows PowerShell is required for the interpreted launcher probe")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixture.py").write_text("print('fixture')\n", encoding="utf-8")
+    probe = tmp_path / "interactive-fem-frontend.ps1"
+    tail = _interactive_frontend_runtime_tail()
+    probe.write_text(
+        "\n".join(
+            [
+                'param([Parameter(Mandatory = $true)][string]$RepoRoot)',
+                '$ErrorActionPreference = "Stop"',
+                '$RunMode = "interactive"',
+                '$Backend = "fem"',
+                '$Device = "gpu"',
+                '$Frontend = "dev"',
+                '$WebPort = 0',
+                '$FemInteractiveApiIsolation = $true',
+                '$FemInteractiveFrontend = $true',
+                '$FullmagExe = "fixture-fullmag.exe"',
+                '$TargetRoot = "fixture-target"',
+                '$CacheRoot = "fixture-cache"',
+                '$resolvedScript = Join-Path $RepoRoot "fixture.py"',
+                '$resolvedOutputDir = $null',
+                '$OutputDir = ""',
+                '$InitialMagnetizationState = ""',
+                '$FrontendWorkspaceRoot = Join-Path $RepoRoot "staged-workspace"',
+                '$FrontendCacheRoot = Join-Path $RepoRoot "staged-frontend"',
+                '$StorageLayout = [pscustomobject]@{ runtime_root = Join-Path $RepoRoot "runtime" }',
+                '$env:FULLMAG_API_PORT = "43123"',
+                '$env:FULLMAG_REQUIRE_OWN_API = "prior-value"',
+                '$env:FULLMAG_REPO_ROOT = "prior-repo"',
+                '$env:FULLMAG_FRONTEND_ROOT = "prior-frontend"',
+                '$env:FULLMAG_STATE_ROOT = "prior-state"',
+                '$env:FULLMAG_DEV_SOURCE_ROOT = "prior-dev-source"',
+                'function Invoke-External {',
+                '  param([Parameter(Mandatory = $true)][string]$Command, [string[]]$Arguments = @())',
+                '  [ordered]@{ during_repo_root = [string]$env:FULLMAG_REPO_ROOT; during_frontend_root = [string]$env:FULLMAG_FRONTEND_ROOT; during_state_root = [string]$env:FULLMAG_STATE_ROOT; during_dev_source_root = [string]$env:FULLMAG_DEV_SOURCE_ROOT; during_api_port = [string]$env:FULLMAG_API_PORT; during_require_owned = [string]$env:FULLMAG_REQUIRE_OWN_API; args = $Arguments } | ConvertTo-Json -Compress',
+                '}',
+                tail,
+                '[ordered]@{ after_repo_root = [string]$env:FULLMAG_REPO_ROOT; after_frontend_root = [string]$env:FULLMAG_FRONTEND_ROOT; after_state_root = [string]$env:FULLMAG_STATE_ROOT; after_dev_source_root = [string]$env:FULLMAG_DEV_SOURCE_ROOT; after_api_port = [string]$env:FULLMAG_API_PORT; after_require_owned = [string]$env:FULLMAG_REQUIRE_OWN_API } | ConvertTo-Json -Compress',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            _native_path(probe),
+            _native_path(repo),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    records = [
+        json.loads(line.strip())
+        for line in result.stdout.splitlines()
+        if line.strip().startswith("{")
+    ]
+    assert len(records) == 2, result.stdout
+    return records[0], records[1]
+
+
 def _run_script_probe(
     tmp_path: Path, *, run_mode: str, backend: str, web_port: int
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -110,6 +196,25 @@ def _run_script_probe(
     ]
     assert len(records) == 2, result.stdout
     return records[0], records[1]
+
+
+def test_interactive_fem_uses_staged_frontend_and_restores_parent_environment(tmp_path: Path) -> None:
+    during, after = _run_interactive_frontend_probe(tmp_path)
+    repo = _native_path(tmp_path / "repo")
+    assert during["during_repo_root"] == repo + "\\staged-workspace"
+    assert during["during_frontend_root"] == repo + "\\staged-frontend"
+    assert during["during_state_root"] == repo + "\\runtime\\state"
+    assert during["during_dev_source_root"] == repo + "\\staged-workspace\\apps\\control-room"
+    assert during["during_api_port"] == "0"
+    assert during["during_require_owned"] == "1"
+    assert after == {
+        "after_repo_root": "prior-repo",
+        "after_frontend_root": "prior-frontend",
+        "after_state_root": "prior-state",
+        "after_dev_source_root": "prior-dev-source",
+        "after_api_port": "43123",
+        "after_require_owned": "prior-value",
+    }
 
 
 def test_source_keeps_zero_web_port_out_of_script_cli_and_scopes_fem_api_ownership() -> None:
@@ -190,3 +295,105 @@ Write-Output "parsed"
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "parsed"
+
+
+def test_staged_frontend_manifest_handoff_accepts_dev_static_and_rejects_stale_reuse(
+    tmp_path: Path,
+) -> None:
+    """Run the production stage-manifest validator for both frontend modes."""
+
+    powershell = _powershell()
+    if powershell is None:
+        pytest.skip("Windows PowerShell is required for the interpreted stage probe")
+    source = LAUNCHER.read_text(encoding="utf-8-sig")
+    start = source.index("function Assert-NativeFrontendStage {")
+    end = source.index("\nfunction Get-DirectorySha256", start)
+    validator = source[start:end]
+
+    root = tmp_path / "frontend-stage"
+    build_root = _native_path(root / "build")
+    source_root = _native_path(root / "source")
+    workspace_root = _native_path(root / "workspace")
+    cache_root = _native_path(root / "cache")
+    record_path = _native_path(root / "build" / "record.json")
+    manifest = {
+        "schema": "fullmag.native-workspace-frontend-source.v1",
+        "mode": "static",
+        "build_root": build_root,
+        "source_root": source_root,
+        "workspace_root": workspace_root,
+        "frontend_cache_root": cache_root,
+        "source_inventory_sha256": "b" * 64,
+        "build_source_snapshot": {
+            "inventory_sha256": "a" * 64,
+            "record_path": record_path,
+            "source_root": source_root,
+        },
+    }
+    manifest_json = json.dumps(manifest, ensure_ascii=False)
+    stale_inventory = "d" * 64
+    probe = tmp_path / "stage-manifest-probe.ps1"
+    probe.write_text(
+        "\n".join(
+            [
+                'param([Parameter(Mandatory = $true)][string]$TemplateJson)',
+                '$ErrorActionPreference = "Stop"',
+                '$StorageLayout = [pscustomobject]@{}',
+                f'$BuildRoot = "{build_root}"',
+                f'$BuildSourceRoot = "{source_root}"',
+                '$BuildSnapshot = [pscustomobject]@{ inventory_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; record_path = "' + record_path + '"; source_root = "' + source_root + '" }',
+                '$Frontend = "static"',
+                'function Resolve-AbsolutePath { param([Parameter(Mandatory = $true)][string]$Path) return [System.IO.Path]::GetFullPath($Path) }',
+                'function Assert-FullmagStoragePath { param($Layout, [string]$Path, [string]$Label, [string]$Parent) return [System.IO.Path]::GetFullPath($Path) }',
+                validator,
+                '$template = $TemplateJson | ConvertFrom-Json',
+                'foreach ($mode in @("dev", "static")) {',
+                '  $manifest = $TemplateJson | ConvertFrom-Json',
+                '  $manifest.mode = $mode',
+                '  $Frontend = $mode',
+                '  $null = Assert-NativeFrontendStage -StageManifest $manifest -ExpectedSourceRoot $BuildSourceRoot -ExpectedWorkspaceRoot $manifest.workspace_root -ExpectedCacheRoot $manifest.frontend_cache_root -ExpectedSourceInventorySha256 $manifest.source_inventory_sha256',
+                '  Write-Output "$mode accepted"',
+                '  $stale = $TemplateJson | ConvertFrom-Json',
+                '  $stale.mode = $mode',
+                f'  $stale.build_source_snapshot.inventory_sha256 = "{stale_inventory}"',
+                '  try {',
+                '    $null = Assert-NativeFrontendStage -StageManifest $stale -ExpectedSourceRoot $BuildSourceRoot -ExpectedWorkspaceRoot $stale.workspace_root -ExpectedCacheRoot $stale.frontend_cache_root -ExpectedSourceInventorySha256 $stale.source_inventory_sha256',
+                '    throw "stale reuse accepted"',
+                '  } catch {',
+                '    if ($_.Exception.Message -eq "stale reuse accepted") { throw }',
+                '    Write-Output "$mode stale rejected"',
+                '  }',
+                '}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            _native_path(probe),
+            manifest_json,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = set(result.stdout.splitlines())
+    assert {"dev accepted", "dev stale rejected", "static accepted", "static stale rejected"} <= lines
+
+    # The fixture exercises the production validator; these guards bind the
+    # loader/reuse decisions around it to the same staged route.
+    assert "$existingWorkspaceManifest = $frontendManifestCandidate" in source
+    assert "$FrontendSourceDigest = if ($RunMode -eq \"workspace\" -and $Frontend -eq \"static\")" in source
+    assert "if ($FemInteractiveFrontend) {\n      $script:FrontendSourceDigest = [string]$stage.source_inventory_sha256" in source
+    assert 'if (-not $StagedFrontendRoute) {\n    $StaticControlRoom = Join-Path $BuildSourceRoot' in source
+    assert "if ($RunMode -ne \"workspace\" -and -not $FemInteractiveFrontend" in source
