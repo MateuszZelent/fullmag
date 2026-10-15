@@ -1576,6 +1576,50 @@ function Invoke-NativeFemBuild {
   }
 }
 
+# Windows PowerShell 5 serializes argument arrays into a command line.  Quote
+# path arguments explicitly, including the doubled trailing separator required
+# before a closing quote, so a CUDA/MSVC root with spaces cannot swallow the
+# following planner switch.
+function ConvertTo-NativeProcessArgument {
+  param([AllowEmptyString()][string]$Value)
+  if ($null -eq $Value) { return '""' }
+  if ($Value.IndexOf('"') -ge 0) {
+    throw "Native process arguments cannot contain embedded quotes: $Value"
+  }
+  if ($Value.Length -gt 0 -and $Value -notmatch '\s') { return $Value }
+  $trailingSlashCount = 0
+  for ($index = $Value.Length - 1; $index -ge 0; $index--) {
+    if ($Value[$index] -ne '\') { break }
+    $trailingSlashCount++
+  }
+  $trailingSlashes = if ($trailingSlashCount -gt 0) {
+    ('\' * $trailingSlashCount) -join ''
+  } else {
+    ''
+  }
+  return '"' + $Value + $trailingSlashes + '"'
+}
+
+function Invoke-NativePythonWithArguments {
+  param(
+    [Parameter(Mandatory = $true)][string]$PythonPath,
+    [Parameter()][string[]]$Arguments = @()
+  )
+  if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
+    throw "Python executable is missing: $PythonPath"
+  }
+  $nativeArguments = @($Arguments | ForEach-Object {
+    ConvertTo-NativeProcessArgument -Value ([string]$_)
+  })
+  $argumentLine = $nativeArguments -join ' '
+  $process = Start-Process -FilePath $PythonPath -ArgumentList $argumentLine -NoNewWindow -Wait -PassThru
+  try {
+    return [int]$process.ExitCode
+  }
+  finally {
+    $process.Dispose()
+  }
+}
 function Stage-NativeFemRuntime {
   param([Parameter(Mandatory = $true)]$FemOutput)
   if (-not $FemOutput.dll -or -not (Test-Path -LiteralPath ([string]$FemOutput.dll) -PathType Leaf)) {
@@ -1634,8 +1678,8 @@ function Stage-NativeFemRuntime {
   )
   foreach ($root in $dependencyRoots) { $planArguments += @("--dependency-root", $root) }
   if ($useCuda) { $planArguments += "--allow-cuda-driver" }
-  & python @planArguments | Out-Host
-  if ($LASTEXITCODE -ne 0) { throw "Native FEM PE dependency planning failed with exit code $LASTEXITCODE" }
+  $planExitCode = Invoke-NativePythonWithArguments -PythonPath $PythonExe -Arguments $planArguments
+  if ($planExitCode -ne 0) { throw "Native FEM PE dependency planning failed with exit code $planExitCode" }
   $pePlan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
   foreach ($source in $pePlan.sources) {
     $destination = Assert-NativeFemCopyDestination -Path (Join-Path $stageRoot ([string]$source.name)) `
@@ -1651,8 +1695,8 @@ function Stage-NativeFemRuntime {
     "--bin", $stageRoot, "--dumpbin", $dumpbin.Source, "--output", $auditPath
   )
   if ($useCuda) { $auditArguments += "--allow-cuda-driver" }
-  & python @auditArguments | Out-Host
-  if ($LASTEXITCODE -ne 0) { throw "Native FEM PE dependency audit failed with exit code $LASTEXITCODE" }
+  $auditExitCode = Invoke-NativePythonWithArguments -PythonPath $PythonExe -Arguments $auditArguments
+  if ($auditExitCode -ne 0) { throw "Native FEM PE dependency audit failed with exit code $auditExitCode" }
   $auditSha256 = Assert-NativeFemStagedPeAudit -AuditPath $auditPath -StageRoot $stageRoot
   foreach ($path in Get-ChildItem -LiteralPath $stageRoot -File) {
     $destination = Assert-NativeFemCopyDestination -Path (Join-Path $launchRoot $path.Name) `
