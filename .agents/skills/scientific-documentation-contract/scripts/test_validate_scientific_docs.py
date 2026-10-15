@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from validate_scientific_docs import validate_page
+from validate_scientific_docs import _source_symbol_declarations, validate_page
 
 
 class ScientificDocumentationContractTests(unittest.TestCase):
@@ -152,6 +152,163 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
         source.write_text("# exchange_kernel only\n", encoding="utf-8")
         errors = self.errors(manifest)
         self.assertTrue(any("declaration not found" in error for error in errors))
+
+    def _cpp_source_manifest(self, filename: str, source_text: str, symbol: str) -> dict:
+        source = self.repo / filename
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(source_text, encoding="utf-8")
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0].update({"path": filename, "symbol": symbol})
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + f"\n| C++ source | {filename} | {symbol} |\n",
+            encoding="utf-8",
+        )
+        return manifest
+
+    def test_cpp_decl_selects_the_exact_typed_overload(self) -> None:
+        symbol = (
+            "CPP-DECL:ModeKinematics map_eigenvalue("
+            "ComplexEigenvalue lambda, FrequencyDomainPhaseConvention phase, "
+            "ModeKinematicsPolicy policy) noexcept"
+        )
+        source = (
+            "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase) noexcept { return {}; }\n"
+            "ModeKinematics map_eigenvalue(\n"
+            "    ComplexEigenvalue lambda,\n"
+            "    FrequencyDomainPhaseConvention phase,\n"
+            "    ModeKinematicsPolicy policy\n"
+            ") noexcept\n"
+            "{ return {}; }\n"
+        )
+        manifest = self._cpp_source_manifest("src/mode_kinematics.cpp", source, symbol)
+        self.assertEqual([], self.errors(manifest))
+
+    def test_cpp_decl_selects_the_exact_numeric_constexpr(self) -> None:
+        symbol = "CPP-DECL:constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;"
+        source = (
+            "// constexpr double kDefaultZeroFrequencyToleranceRadPerS = 9.0;\n"
+            "constexpr\n"
+            "  double\n"
+            "  kDefaultZeroFrequencyToleranceRadPerS\n"
+            "  = 0.0\n"
+            ";\n"
+            "double read_tolerance() { return kDefaultZeroFrequencyToleranceRadPerS; }\n"
+        )
+        manifest = self._cpp_source_manifest("include/mode_kinematics.hpp", source, symbol)
+        self.assertEqual([], self.errors(manifest))
+
+    def test_cpp_decl_resolves_current_mode_kinematics_source_identities(self) -> None:
+        root = Path(__file__).resolve().parents[4]
+        identities = (
+            (
+                "backends/fem/src/frequency_domain/mode_kinematics.cpp",
+                "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+                "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept",
+            ),
+            (
+                "backends/fem/include/frequency_domain/mode_kinematics.hpp",
+                "constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;",
+            ),
+        )
+        for relative_path, declaration in identities:
+            with self.subTest(path=relative_path):
+                source = (root / relative_path).read_text(encoding="utf-8")
+                matches = _source_symbol_declarations(
+                    relative_path, source, f"CPP-DECL:{declaration}"
+                )
+                self.assertEqual(1, len(matches))
+
+    def test_cpp_decl_rejects_wrong_types_calls_comments_and_literals(self) -> None:
+        symbol = (
+            "CPP-DECL:ModeKinematics map_eigenvalue("
+            "ComplexEigenvalue lambda, FrequencyDomainPhaseConvention phase, "
+            "ModeKinematicsPolicy policy) noexcept"
+        )
+        source = (
+            "// ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept {}\n"
+            "/* ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept; */\n"
+            'const char* quoted = "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, '
+            'FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept {}";\n'
+            'const char* raw = R"tag(ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, '
+            'FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept {})tag";\n'
+            "void caller() { map_eigenvalue({}, {}, {}); }\n"
+            "void map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept;\n"
+            "OtherResult map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept;\n"
+            "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, OtherPolicy policy) noexcept;\n"
+            "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase) noexcept;\n"
+            "ModeKinematicsmap_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept;\n"
+        )
+        manifest = self._cpp_source_manifest("src/mode_kinematics.cpp", source, symbol)
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration not found" in error for error in errors))
+
+    def test_cpp_decl_rejects_wrong_constexpr_value_and_malformed_queries(self) -> None:
+        source = (
+            "constexpr double kDefaultZeroFrequencyToleranceRadPerS = 1.0;\n"
+            "double use_value = kDefaultZeroFrequencyToleranceRadPerS;\n"
+            "// constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;\n"
+            'const char* value = "constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;";\n'
+            'const char* raw = R"x(constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;)x";\n'
+        )
+        for symbol in (
+            "CPP-DECL:constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;",
+            "CPP-DECL:",
+            "CPP-DECL: ",
+            "CPP-DECL:double kDefaultZeroFrequencyToleranceRadPerS = 0.0;",
+            "CPP-DECL:constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0",
+        ):
+            with self.subTest(symbol=symbol):
+                manifest = self._cpp_source_manifest("include/mode_kinematics.hpp", source, symbol)
+                errors = self.errors(manifest)
+                self.assertTrue(any("declaration not found" in error for error in errors))
+
+    def test_cpp_decl_duplicate_real_declarations_remain_ambiguous(self) -> None:
+        symbol = (
+            "CPP-DECL:ModeKinematics map_eigenvalue("
+            "ComplexEigenvalue lambda, FrequencyDomainPhaseConvention phase, "
+            "ModeKinematicsPolicy policy) noexcept"
+        )
+        declaration = (
+            "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept;\n"
+        )
+        manifest = self._cpp_source_manifest(
+            "src/mode_kinematics.cpp", declaration + declaration, symbol
+        )
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration is not unique" in error for error in errors))
+
+    def test_cpp_decl_duplicate_constexpr_declarations_remain_ambiguous(self) -> None:
+        symbol = "CPP-DECL:constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;"
+        declaration = "constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;\n"
+        manifest = self._cpp_source_manifest(
+            "include/mode_kinematics.hpp", declaration + declaration, symbol
+        )
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration is not unique" in error for error in errors))
+
+    def test_cpp_legacy_bare_function_identity_remains_ambiguous_for_overloads(self) -> None:
+        source = (
+            "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase) noexcept { return {}; }\n"
+            "ModeKinematics map_eigenvalue(ComplexEigenvalue lambda, "
+            "FrequencyDomainPhaseConvention phase, ModeKinematicsPolicy policy) noexcept "
+            "{ return {}; }\n"
+        )
+        manifest = self._cpp_source_manifest(
+            "src/mode_kinematics.cpp", source, "map_eigenvalue"
+        )
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration is not unique" in error for error in errors))
 
     def test_python_module_constant_is_a_stable_source_symbol(self) -> None:
         source = self.repo / "src/policy.py"

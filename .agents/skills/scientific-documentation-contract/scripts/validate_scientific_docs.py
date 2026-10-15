@@ -74,12 +74,104 @@ def _table_row(page: str, values: list[str]) -> bool:
     )
 
 
+_CPP_SOURCE_SUFFIXES = (
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".cu", ".cuh",
+)
+_CPP_IGNORED_RE = re.compile(
+    r"//[^\r\n]*|/\*.*?\*/"
+    r'|(?:u8|u|U|L)?R"(?P<raw_delimiter>[^ ()\\\t\r\n]{0,16})\(.*?\)(?P=raw_delimiter)"'
+    r'|(?:u8|u|U|L)?"(?:\\.|[^"\\])*"'
+    r"|(?:u8|u|U|L)?'(?:\\.|[^'\\])*'",
+    re.DOTALL,
+)
+_CPP_TOKEN_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*"
+    r"|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[fFlL]?|[^\s]"
+)
+_CPP_NUMERIC_LITERAL_RE = re.compile(
+    r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[fFlL]?"
+)
+_CPP_NUMERIC_TYPES = {
+    "char", "double", "float", "int", "long", "short", "signed", "unsigned",
+}
+_CPP_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _cpp_declaration_query(value: str) -> list[str] | None:
+    """Parse only simple typed function signatures and scalar numeric constexpr declarations."""
+    tokens = [match.group(0) for match in _CPP_TOKEN_RE.finditer(value)]
+    if not tokens:
+        return None
+    if tokens[0] == "constexpr":
+        if (
+            len(tokens) != 6
+            or tokens[1] not in _CPP_NUMERIC_TYPES
+            or not _CPP_IDENTIFIER_RE.fullmatch(tokens[2])
+            or tokens[3] != "="
+            or not _CPP_NUMERIC_LITERAL_RE.fullmatch(tokens[4])
+            or tokens[5] != ";"
+        ):
+            return None
+        return tokens
+
+    signature = tokens[:-1] if tokens[-1:] == ["noexcept"] else tokens
+    if (
+        len(signature) < 4
+        or not _CPP_IDENTIFIER_RE.fullmatch(signature[0])
+        or not _CPP_IDENTIFIER_RE.fullmatch(signature[1])
+        or signature[2] != "("
+        or signature[-1] != ")"
+    ):
+        return None
+    parameters = signature[3:-1]
+    if parameters:
+        groups: list[list[str]] = [[]]
+        for token in parameters:
+            if token == ",":
+                groups.append([])
+            else:
+                groups[-1].append(token)
+        if any(
+            len(group) != 2 or not all(_CPP_IDENTIFIER_RE.fullmatch(token) for token in group)
+            for group in groups
+        ):
+            return None
+    return tokens
+
+
+def _cpp_declaration_matches(text: str, query_tokens: list[str]) -> list[str]:
+    def blank(match: re.Match[str]) -> str:
+        return "".join(char if char in "\r\n" else " " for char in match.group(0))
+
+    source = _CPP_IGNORED_RE.sub(blank, text)
+    matches = list(_CPP_TOKEN_RE.finditer(source))
+    values = [match.group(0) for match in matches]
+    found: list[str] = []
+    width = len(query_tokens)
+    for index, match in enumerate(matches):
+        if values[index] != query_tokens[0]:
+            continue
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        if source[line_start : match.start()].strip(" \t\r"):
+            continue
+        end = index + width
+        if values[index:end] == query_tokens and (
+            query_tokens[0] == "constexpr" or end < len(values) and values[end] in {"{", ";"}
+        ):
+            found.append(" ".join(query_tokens))
+    return found
+
+
 def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
     """Return declaration-like lines for a stable path + symbol identity."""
     if symbol.startswith("DOC-ANCHOR:"):
         anchor = re.escape(symbol.removeprefix("DOC-ANCHOR:"))
         pattern = re.compile(rf"^\({anchor}\)=\s*$", re.MULTILINE)
         return pattern.findall(text)
+    if symbol.startswith("CPP-DECL:") and path.endswith(_CPP_SOURCE_SUFFIXES):
+        # This opt-in form intentionally covers only simple typed signatures and scalar constants.
+        query = _cpp_declaration_query(symbol.removeprefix("CPP-DECL:").strip())
+        return _cpp_declaration_matches(text, query) if query else []
     escaped = re.escape(symbol)
     if symbol.startswith("class "):
         class_name = re.escape(symbol.removeprefix("class ").rstrip(":"))
