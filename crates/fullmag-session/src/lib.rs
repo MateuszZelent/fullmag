@@ -17,6 +17,9 @@
 mod archive_capacity;
 mod archive_document;
 mod archive_source;
+mod docker_desktop_storage;
+#[doc(hidden)]
+pub use docker_desktop_storage::initialize_attested_docker_accepted_store;
 pub mod capture;
 pub mod cas;
 pub mod communication_policy;

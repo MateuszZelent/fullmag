@@ -1321,7 +1321,6 @@ def reconcile_build(layout, job_id, *, owner, call=docker):
         container_id = journal.get('container_id')
         if not isinstance(container_id, str) or not re.fullmatch('[a-f0-9]{64}', container_id):
             raise CoordinatorError('No exact container ID; manual recovery required')
-        journal['mounts'] = [tuple(value) for value in journal['mounts']]
         inspected = inspect_owned(call, container_id, job_id)
         attest_build_container(inspected, journal)
         if job['state'] == 'cancel_requested' and inspected.get('State', {}).get('Running') is True:

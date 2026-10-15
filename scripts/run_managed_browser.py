@@ -45,8 +45,11 @@ def host_path(value):
 
 
 def digest(path):
+    checksum = hashlib.sha256()
     with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            checksum.update(block)
+    return checksum.hexdigest()
 
 
 def read_json(path):
@@ -57,12 +60,15 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def validate_managed_build(root, expected_commit, *, source_digest=None, native_snapshot_sha256=None):
+def validate_managed_build(root, expected_commit, *, source_digest=None, native_snapshot_sha256=None,
+                           expected_profile="fem-cpu-release"):
+    if expected_profile not in {"fem-cpu-release", "fem-gpu-release"}:
+        raise ValueError("Unsupported managed release profile")
     journal = read_json(storage.validate_path(root / "receipt.json", root))
     context = read_json(storage.validate_path(root / "trusted/context.json", root))
     if journal.get("phase") != "terminal" or journal.get("state") != "succeeded" \
-            or journal.get("exit_code") != 0 or journal.get("profile") != "fem-cpu-release":
-        raise ValueError("Managed CPU release must be terminal and successful")
+            or journal.get("exit_code") != 0 or journal.get("profile") != expected_profile:
+        raise ValueError("Managed release must be terminal and successful")
     if root.name != context.get("job_id") or any(journal.get(k) != context.get(k)
             for k in ("job_id", "source_digest", "profile", "image_digest")):
         raise ValueError("Coordinator and build identities differ")
@@ -156,10 +162,11 @@ def run(repo, job_id, commit, port, *, source_digest=None, native_snapshot_sha25
         raise ValueError("Full managed job ID required")
     layout = storage.resolve_layout(repo, PROFILE)
     with runtime_package_use(layout):
-        return _run_protected(layout, job_id, commit, port)
+        return _run_protected(layout, job_id, commit, port, source_digest=source_digest,
+                              native_snapshot_sha256=native_snapshot_sha256)
 
 
-def _run_protected(layout, job_id, commit, port):
+def _run_protected(layout, job_id, commit, port, *, source_digest=None, native_snapshot_sha256=None):
     base = Path(layout["storage_root"])
     build = storage.validate_path(Path(layout["runs_root"]) / job_id, base)
     context, built = validate_managed_build(build, commit,

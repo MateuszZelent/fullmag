@@ -56,6 +56,15 @@ const INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION = 7;
 const INSPECTOR_MODAL_TOPOLOGY_HASH = "0123456789abcdef".repeat(4);
 const INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH =
   `sha256:${INSPECTOR_MODAL_TOPOLOGY_HASH}`;
+const INSPECTOR_FEM_DOMAIN_BOUNDS_MIN = [-500e-9, -500e-9, -500e-9];
+const INSPECTOR_FEM_DOMAIN_BOUNDS_MAX = [500e-9, 500e-9, 500e-9];
+const INSPECTOR_FILM_BOUNDS_MIN = [-100e-9, -40e-9, -2.5e-9];
+const INSPECTOR_FILM_BOUNDS_MAX = [100e-9, 40e-9, 2.5e-9];
+// Keep the semantic orphan part in the same FEM domain, one authored-film
+// extent away from the Film object, without introducing a normalized mesh
+// coordinate system into the SI fixture.
+const INSPECTOR_ORPHAN_BOUNDS_MIN = [100e-9, 40e-9, 2.5e-9];
+const INSPECTOR_ORPHAN_BOUNDS_MAX = [300e-9, 120e-9, 7.5e-9];
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
     "GET /v2/sessions/current/model/regions",
@@ -3866,12 +3875,17 @@ function createInspectorFixture() {
 }
 
 function inspectorMeshPart(id, role, objectId, ordinal) {
+  const bounds = id === "airbox"
+    ? { max: INSPECTOR_FEM_DOMAIN_BOUNDS_MAX, min: INSPECTOR_FEM_DOMAIN_BOUNDS_MIN }
+    : id === "film-part"
+      ? { max: INSPECTOR_FILM_BOUNDS_MAX, min: INSPECTOR_FILM_BOUNDS_MIN }
+      : { max: INSPECTOR_ORPHAN_BOUNDS_MAX, min: INSPECTOR_ORPHAN_BOUNDS_MIN };
   return {
     boundary_face_count: 4,
     boundary_face_indices: [0, 1, 2, 3].map((index) => index + ordinal * 4),
     boundary_face_start: ordinal * 4,
-    bounds_max: [1 + ordinal, 1 + ordinal, 1 + ordinal],
-    bounds_min: [-1 + ordinal, -1 + ordinal, -1 + ordinal],
+    bounds_max: [...bounds.max],
+    bounds_min: [...bounds.min],
     element_count: 1,
     element_start: ordinal,
     id,
@@ -4310,8 +4324,8 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/model/planar-monitors") return fulfillJson(route, { count: 0, monitors: [], scene_revision: fixture.revision });
     if (path === "/v2/sessions/current/model/universe") return fulfillJson(route, {
       mesh_dirty: false,
-      object_bounds_max: [16e-9, 8e-9, 2e-9],
-      object_bounds_min: [0, 0, 0],
+      object_bounds_max: INSPECTOR_FILM_BOUNDS_MAX,
+      object_bounds_min: INSPECTOR_FILM_BOUNDS_MIN,
       scene_revision: fixture.revision,
       study_universe_mesh: null,
       universe: null,

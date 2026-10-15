@@ -279,7 +279,7 @@ study.geometry_object(fm.Box(20e-9, 10e-9, 5e-9, name='lead').translate((4e-9, 0
     assert problem_ir["object_regions"] == reference_ir["object_regions"]
 
 
-def test_scene_document_problem_ir_preserves_auxiliary_object_id(
+def test_scene_document_problem_ir_preserves_distinct_auxiliary_object_id_and_name(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "scene_auxiliary_identity_source.py"
@@ -306,6 +306,15 @@ study.geometry_object(fm.Box(20e-9, 10e-9, 5e-9), name='lead', type='conductor')
         requested_precision="double",
         requested_mode="strict",
         source_root=tmp_path,
+    )
+
+    auxiliary_ir = next(
+        obj for obj in problem_ir["physics_objects"] if obj["type"] == "conductor"
+    )
+    assert (auxiliary_ir["object_id"], auxiliary_ir["name"], auxiliary_ir["geometry_id"]) == (
+        "stable-lead-id",
+        "lead",
+        "lead",
     )
     assert problem_ir["physics_objects"] == [
         {

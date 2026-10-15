@@ -56,6 +56,10 @@ services:
       context: .
       dockerfile: docker/fem-gpu/Dockerfile
       args:
+        # An unset value preserves the Dockerfile default; a managed caller
+        # can select the same immutable CUDA base as compose.toolchain.yaml.
+        FULLMAG_CUDA_BASE_IMAGE:
+        FULLMAG_CUDA_BASE_IMAGE_DIGEST:
         FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
         FULLMAG_HYPRE_GPU_ARCHITECTURES: "${FULLMAG_HYPRE_GPU_ARCHITECTURES:-60 70 80 89 90}"
         FULLMAG_HYPRE_MEMORY_VARIANT: "${FULLMAG_HYPRE_MEMORY_VARIANT:-baseline}"

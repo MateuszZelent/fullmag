@@ -17,6 +17,93 @@ class BuildExecutorTests(unittest.TestCase):
         self.assertEqual(identity, json.loads(json.dumps(identity)))
         self.assertEqual(identity[0][1], mounts[0]['Source'])
 
+    def test_reconcile_keeps_json_mount_identity_and_rejects_tamper(self):
+        """Recovery must compare JSON arrays with the Docker-derived arrays."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            storage = root
+            worktree_id = 'worktree'
+            job_id = 'a' * 32
+            container_id = 'b' * 64
+            owner = 'operator'
+            source_digest = 'c' * 64
+            run_root = storage / 'runs' / worktree_id / job_id
+            run_root.mkdir(parents=True)
+            (storage / 'index').mkdir()
+            (storage / 'locks').mkdir()
+
+            inspected_mounts = [
+                {'Type': 'bind', 'Source': '/run/desktop/mnt/host/c/source',
+                 'Destination': '/source', 'RW': False, 'Propagation': 'rprivate'},
+                {'Type': 'bind', 'Source': '/run/desktop/mnt/host/c/workspace',
+                 'Destination': '/workspace', 'RW': True, 'Propagation': 'rprivate'},
+            ]
+            journal = {
+                'schema': 'fullmag.local-runner.coordinator.v1',
+                'job_id': job_id,
+                'owner': owner,
+                'source_digest': source_digest,
+                'profile': 'fem-cpu-release',
+                'container_id': container_id,
+                'image_digest': 'sha256:' + 'd' * 64,
+                # Simulate the persisted JSON round-trip explicitly.
+                'mounts': json.loads(json.dumps(executor.mount_identity(inspected_mounts))),
+                'trusted_hashes': {},
+                'lease_token': 'private-test-token',
+            }
+            (run_root / 'coordinator.json').write_text(json.dumps(journal), encoding='utf-8')
+            job = {
+                'job_id': job_id,
+                'owner': owner,
+                'source_digest': source_digest,
+                'profile': journal['profile'],
+                'worktree_id': worktree_id,
+                'state': 'running',
+                'payload': {'capture_id': 'e' * 32,
+                            'capsule_relative': f'runs/{worktree_id}/capture/source'},
+            }
+            queue = Mock()
+            queue.get.return_value = job
+            inspected = {
+                'Id': container_id,
+                'Image': journal['image_digest'],
+                'Config': {
+                    'User': '65532:65532',
+                    'Labels': {'owner': 'fullmag-local-runner', 'job': job_id},
+                },
+                'HostConfig': {
+                    'Privileged': False,
+                    'ReadonlyRootfs': True,
+                    'CapDrop': ['ALL'],
+                    'CapAdd': None,
+                    'SecurityOpt': ['no-new-privileges:true'],
+                    'NetworkMode': 'bridge',
+                },
+                'Mounts': inspected_mounts,
+                'State': {'Status': 'exited', 'Running': False, 'ExitCode': 2},
+            }
+
+            def fake_docker(arguments):
+                self.assertEqual(arguments, ['inspect', container_id])
+                return json.dumps([inspected])
+
+            layout = {'storage_root': str(storage)}
+            with patch.object(executor, 'JobQueue', return_value=queue), \
+                 patch.object(executor, 'file_lock', return_value=nullcontext()), \
+                 patch.object(executor, 'capsule_path'), \
+                 patch.object(executor, 'trusted_identity'), \
+                 patch.object(executor, 'finish_build', return_value={'state': 'failed'}) as finish:
+                result = executor.reconcile_build(layout, job_id, owner=owner, call=fake_docker)
+                self.assertEqual({'state': 'failed'}, result)
+                finish.assert_called_once()
+
+                journal['mounts'][0][1] = '/run/desktop/mnt/host/c/tampered'
+                (run_root / 'coordinator.json').write_text(json.dumps(journal), encoding='utf-8')
+                with self.assertRaisesRegex(executor.CoordinatorError,
+                                            'image/mount identity mismatch'):
+                    executor.reconcile_build(layout, job_id, owner=owner, call=fake_docker)
+                self.assertEqual(1, finish.call_count)
+
     def test_cpu_mfem_abi_attestation_rejects_missing_or_wrong_prefix(self):
         valid = {
             'mfem_abi': {

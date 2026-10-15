@@ -1,7 +1,7 @@
 # Thin-film shared-domain meshing
 
-- Status: terminal contract
-- Ostatnia aktualizacja: 2026-10-09
+- Status: implemented scoped candidate; managed runtime, 0105 density and production evidence **NOT VERIFIED**
+- Ostatnia aktualizacja: 2026-10-15
 - Decyzje: [ADR 0021](../adr/0021-native-mixed-p1-fem-topology.md), [ADR 0027](../adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md)
 - Gate produkcyjny: [0105](0105-fem-meshing-production-acceptance.md)
 
@@ -52,17 +52,58 @@ h_{\Sigma,k}(x,y)=h_{\mathrm{target}}(x,y,z_k),
 ```
 
 Here $\Sigma_k$ is the 2D cross-section of the exact body-layer GEO volumes
-at the requested plane $z_k$. The intended method keeps the existing
-upper/lower composition and evaluates it at that plane; a shared internal
-plane must be triangulated once and reused by both adjacent slabs. This is a
-testable implementation hypothesis, not evidence that the current Gmsh
-generation path actually evaluates those regional fields there.
+at the requested plane $z_k$. The current source path realizes this policy in
+two stages. Before extrusion, `_embed_mixed_source_face_seed_points` validates
+the owner, projects Box and graded Box/Cylinder/Sphere footprints into the
+source plane, composes the applicable lower bounds and embeds only points that
+`gmsh.model.isInside` accepts. After extrusion,
+`_add_swept_exact_plane_cap_field` calls
+`_add_exact_plane_projected_cap_field` for each exact layer plane and binds the
+same owner-volume tags. This preserves the requested $N_z$ and the canonical
+upper/lower composition at the source and volume stages.
 
-If realized, cross-section-local sizing would let a finite region intersecting
-an exact plane receive local in-plane edges before the adjacent slab
-tetrahedra are formed. It would not change $N_z$, introduce intermediate $z$
-levels, enlarge the ROI, or refine the whole source cap through unrelated air.
-The actual field-evaluation and layer-mesh timing still require GHA evidence.
+This source realization does not introduce intermediate $z$ levels, enlarge
+the ROI or refine the whole source cap through unrelated air. The focused
+interpreted source regression passed; it exercises the owner/shape projection
+and fail-closed bounding-box checks with a test double. Actual Gmsh mesh
+field evaluation, layer timing, density, managed runtime and 0105 qualification
+still require separate evidence. Focused real-Gmsh checks nevertheless passed
+for the graded Box (805 nodes/3456 elements), graded Cylinder (777 nodes/3370
+elements) and existing Box (819 nodes/3577 elements), with the expected
+cell-topology sets. The exact-plane cap is z-directed; nonparallel graded
+projections and unsupported exact-cap variants fail closed.
+
+(thin-film-graded-source-plane-policy)=
+### Graded scoped fields on the source plane — current realization and validation boundary
+
+`ComponentRestrictedGradedBox`, `ComponentRestrictedGradedCylinder` and
+`ComponentRestrictedGradedSphere` are scoped upper-target descriptors produced
+for explicit transition policies. The current source-face path recognizes all
+three, validates the `GeometryName` owner, and projects each accepted footprint
+onto the exact source-plane axes. It preserves `VIn`, `VOut` and
+`TransitionDistance` in the descriptor passed to the later owner-volume field;
+replacing a graded descriptor with its `VIn`, a global cap or a copied
+source-face triangulation would change the requested sizing semantics.
+
+The projected upper field remains part of the canonical composition
+`Max(Min(upper), Max(lower))`. Its owner restriction uses the exact component
+volume binding, while the pre-3D source-face seeds use the same owner and
+source-surface binding. A vertical cylinder projects to its plane disc and a
+box to its plane rectangle. A cylinder whose axis cannot be projected onto the
+source-face normal, malformed shape parameters, missing graded ownership and
+invalid source-surface bounding boxes are rejected with a reason before
+meshing; they are not silently replaced by a global cap.
+
+For Box-minus-Cylinder source faces, candidate seed points are retained only
+when `gmsh.model.isInside` confirms membership in the trimmed source surface.
+The owner mask, lower bounds, holes and exact layer planes remain independent
+obligations. This implementation changes neither CAD boundaries nor $N_z$; it
+only makes the existing graded field visible to the 2-D source-face sampler
+and to the later exact-plane cap. The focused interpreted source regression
+(`test_source_plane_seed_rejects_invalid_surface_bounding_box` and
+`test_source_plane_seed_supports_graded_component_fields`) passed with two
+tests and four subtests. Actual Gmsh mesh runtime, density, managed runtime
+and 0105 qualification remain **NOT VERIFIED**.
 
 (thin-film-mesh-symbols-and-si-units)=
 ## Symbols and SI units
@@ -121,33 +162,67 @@ nie należy wymyślać opcji `OutsideValue` dla `Restrict`. Opcje `Restrict` ora
 semantykę `Threshold` określa [oficjalny manual Gmsh](https://gmsh.info/doc/texinfo/gmsh.html).
 
 Stan źródeł po review 2026-10-07: scoped producer/consumer, lower-only region
-i exact owner propagation są zaimplementowane; regresje oczekują świeżego CI.
-FEM CPU/GPU: zamierzona wspólna semantyka generatora; kwalifikacja obu realizacji
-pozostaje **NOT VERIFIED**. FDM CPU/GPU: nie dotyczy siatki Gmsh. Wymagane są
-regresje scope/precedence/lower-only/hscale, rzeczywisty rozkład rozmiarów elementów
-oraz managed meshing evidence. Zielony parser dokumentacji nie zamyka tych bramek.
+ i exact owner propagation są zaimplementowane. Bieżący kandydat exact-layer
+w `_generate_coincident_ring_airbox_mesh` używa jednej rekombinowanej warstwy
+GEO w magnetycznych przedziałach oraz geometry-only extrusion w exterior air.
+Wcześniejszy pre-seed wynik czterech publicznych przypadków (DE plus trzy
+ścieżki Box) pochodził sprzed ring-only source-surface change i pozostaje
+bezpośrednio właściwy tylko dla niezmienionej ścieżki Box. Dla ring-only implementacji przed późniejszą wording-only korektą komentarza
+źródłowego świeżo przeszły trzy publiczne przypadki (DE plus dwa Box), sześć
+przypadków ring, dwa focused owner-field consumers oraz sześć testów
+periodic-conforming; znormalizowane porównanie źródła potwierdziło brak zmian
+w implementacji po tej korekcie.
+Rerun explicit-cap-below-body-hmax został przerwany po około 120 s bez wyniku
+pytest (exit 130), więc nie jest świeżym PASS; wcześniejsze logi implicit-cap
+i scoped-ring nie były powtarzane po zmianie. Jest to dowód źródłowy, nie
+kwalifikacja managed runtime ani 0105 density gate. FEM CPU/GPU: wspólna
+semantyka generatora, kwalifikacja obu realizacji pozostaje **NOT VERIFIED**.
+FDM CPU/GPU: nie dotyczy siatki Gmsh. Wymagane są dalsze regresje rzeczywistego
+rozkładu rozmiarów oraz managed meshing evidence; zielony parser dokumentacji
+nie zamyka tych bramek.
+Focused owner-field consumers po poprawce źródłowego seeda przeszły oba testy:
+`test_shared_domain_recipe_hmax_preserves_manual_owner_fields_at_gmsh_boundary`
+oraz `test_exact_layer_body_target_precedence_survives_air_and_local_fields`.
+Wcześniejsza porażka mierzyła rzeczywiste węzły `MeshData` ringa: siedem
+współrzędnych XY po każdej stronie różniło się między `far_air` i `resolved`.
+Przyczyną był brak pola ownera na początkowych powierzchniach CAD (`annulus`
+i `hole`): pole `Restrict` związane z objętością 3D nie steruje siatkowaniem
+tej dwuwymiarowej ściany, gdy jest ona używana jako pre-3D source seed, mimo
+że odpowiadające objętości GEO i ich tagi są już zsynchronizowane. Obecny
+kandydat przypina te ringowe powierzchnie polem `Constant(SurfacesList,
+VIn=body_hmax, VOut=neutral)`.
+To jest dowód interpretowanych konsumentów Gmsh, nie kwalifikacja density,
+managed runtime ani solvera.
 
 (thin-film-scoped-layer-realization)=
 ### Scoped fields i exact layers — realizacja GEO
 
 Dla exact-cell Box z geometrycznym airboxem scoped pola muszą zostać
-skomponowane po utworzeniu dokładnych objętości właściciela. Dotychczasowa
-triangulacja jednej ściany źródłowej airboxu, ekstruzowana przez wszystkie
-warstwy, ignorowała te pola przed powstaniem body tags. Projekcja regionalnego
-minimum na tę ścianę rozszerzałaby jego zakres na powietrze i inne wysokości.
+skomponowane po utworzeniu dokładnych objętości właściciela. Historyczna trasa
+triangulowała jedną ścianę źródłową airboxu i ekstruzowała ją przez wszystkie
+warstwy, zanim pola mogły zostać związane z body tags; ten mechanizm nie jest
+opisem bieżącego kandydata.
 
-Nowa trasa tworzy najpierw niesiatkowane objętości GEO w zadanych przedziałach
-z, następnie wiąże body/air tags, nakłada tę samą kompozycję upper/lower i
-uruchamia meshing3D. Nie nadaje nowego znaczenia `through_thickness_elements`:
-wynik musi przejść istniejący exact count, wszystkie węzły magnetyczne muszą
-leżeć na dokładnie zadanych płaszczyznach, każda warstwa musi być niepusta,
-a żaden tetraedr magnetyczny nie może przecinać wewnętrznej płaszczyzny.
-Dodatkowe poziomy z **w siatce magnetycznego właściciela** są błędem,
-nie dopuszczoną przybliżoną realizacją. Parametr jest przypisany do
+Bieżąca trasa tworzy najpierw niesiatkowane objętości GEO w zadanych przedziałach
+z, wiąże body/air tags, nakłada tę samą kompozycję upper/lower, wymusza jedną
+rekombinowaną warstwę tylko w magnetycznych przedziałach, pozostawia
+exterior-air intervals geometry-only i uruchamia meshing3D z polami owner/air.
+Nie nadaje nowego znaczenia `through_thickness_elements`: magnetyczny obiekt
+musi przejść istniejący exact count, wszystkie jego węzły muszą leżeć na dokładnie
+zadanych płaszczyznach, każda warstwa musi być niepusta, a żaden tetraedr
+magnetyczny nie może przecinać wewnętrznej płaszczyzny. Płaszczyzny CAD na
+granicach obiektu pozostają obowiązkowe.
+
+Exact-layer contract dotyczy resolved magnetic owner, zgodnie z ADR-0027;
+zewnętrzny airbox pozostaje niezależną strefą sizingu. Dodatkowe poziomy w
+zewnętrznym air mogą występować, o ile nie zmieniają magnetycznego `L+1`,
+granic CAD, dodatnich komórek, PBC ani ograniczeń pionowego kroku air.
+Dodatkowe poziomy w siatce magnetycznego właściciela są błędem, a nie
+przybliżoną realizacją kontraktu. Parametr jest przypisany do
 `mesh_workflow.per_geometry[]`, nie do wszystkich węzłów wspólnego airboxa.
 Zewnętrzne przedziały powietrza siatkowane niezależnymi polami 3D mogą mieć
-węzły wewnątrz granic partycji CAD. Wszystkie zadane granice nadal muszą być
-obecne, żaden tetraedr nie może przekraczać granicy partycji, a zewnętrzne
+węzły wewnątrz granic partycji CAD, ale wszystkie zadane granice nadal muszą
+być obecne, żaden tetraedr nie może przekraczać granicy partycji, a zewnętrzne
 bounds i limity pionowego kroku pozostają bez zmian. Nie jest to obietnica
 strukturalnej siatki XY ani osłabienie exact layer count filmu.
 
@@ -155,13 +230,28 @@ Poniższy opis pełnej meshed extrusion dokumentuje historyczny przypadek
 GHA 37911565494, a nie stan kwalifikacji obecnego kandydata. Bieżąca
 magnetic-only prism correction, geometry-only exterior air i jej otwarte
 bramki są opisane w [nocie 0102](0102-airbox-mesh-grading-geometric.md).
-Każdy zadany przedział GEO ma jawnie jedną warstwę ekstrudowania
+Każdy magnetyczny przedział GEO ma jawnie jedną warstwę ekstrudowania
 (`numElements=[1]`, znormalizowane `heights=[1.0]`, `recombine=True`).
-Dotyczy to także trasy scoped, lecz meshed extrusion nadal replikuje jedną
-triangulację źródłowego capu airboxu. Samo odłożenie meshingu do czasu owner tags
-nie realizuje lokalnego pola 3D wewnątrz filmu, którego zakres nie obejmuje capu.
-Źródła zachowują definicję regionalną, ale geometria nie zapewnia jej realizacji.
-Actual density gate pozostaje **FAILED** w GHA 37911565494/job113757705367.
+Przedziały exterior air używają geometrii bez tego wymuszenia, aby ich pola
+upper/lower mogły realizować niezależną gradację zamiast kopiować triangulację
+źródłowego capu airboxu. W przypadku ringa hole-air w magnetycznych
+przedziałach pozostaje częścią grupowanej ekstrudowanej geometrii; nie jest to
+obietnica niezależnego meshingu powietrza w tych przedziałach.
+Przy wspólnej powierzchni pole air jest ograniczane warunkiem ownera: gdy
+`h_inner <= body_hmax`, `IncludeBoundary=1` zachowuje start gradacji na
+interfejsie; gdy jawne `h_inner > body_hmax`, `IncludeBoundary=0` nie pozwala
+airboxowi zgrubiać powierzchni magnetycznej. Pole ownera ma `VIn=body_hmax`
+i jest dodatkowo ograniczone przez `Restrict(VolumesList=body)`, natomiast jego
+`VOut` pozostaje neutralnym capem air. Dla scoped ringa początkowe powierzchnie
+`annulus` i `hole` dostają osobne pole `Constant(SurfacesList=...)` z tym samym
+`VIn` i neutralnym `VOut`; pole jest instalowane wyłącznie, gdy istnieje
+`hole_surface`, więc ścieżka Box zachowuje niezależną politykę jawnego
+`h_inner > body_hmax`. To rozdziela lokalny target ownera od far-air gradacji
+bez zmiany exact-layer planes.
+Źródła zachowują definicję regionalną, ale bieżący kandydat nie zapewnia
+jeszcze jej produkcyjnej realizacji. Actual density gate pozostaje **FAILED**
+w GHA 37911565494/job113757705367 dla wcześniejszej trasy; po zmianie podziału
+magnetic/exterior-air potrzebne jest świeże hosted evidence.
 Regresja test_direct_layered_box_region_floor_beats_eligible_upper_actual_density
 zwróciła 108 tetraedrów i 45 węzłów dla dwóch warstw na dokładnych płaszczyznach
 $-10,0,+10\,\mathrm{nm}$, po 15 węzłów na płaszczyznę. W cylindrycznym ROI
@@ -170,11 +260,11 @@ promienia $15\,\mathrm{nm}$ i półwysokości $4\,\mathrm{nm}$ nie było żadneg
 poza zakresem regionalnym. Poprawne exact layer planes nie dowodzą lokalnego
 zagęszczenia.
 
-W GHA wszystkie pięć pól scoped ma status `applied`, lecz pole nie realizuje
-lokalnej topologii w ROI. Źródła wskazują na meshed extrusion z jedną warstwą
-na przedział: kopiuje triangulację początkowej ściany airboxu, położonej poza
-skończonym ROI. Jest to zgodne z jednakową liczbą węzłów na płaszczyznach
-w wyniku CI; komentarz producenta opisuje to ograniczenie wprost.
+W historycznym GHA wszystkie pięć pól scoped miało status `applied`, lecz
+pole nie realizowało lokalnej topologii w ROI; wynik wskazywał na kopiowanie
+triangulacji początkowej ściany airboxu. Ten wynik zachowuje status niezamkniętej
+bramki density, ale nie opisuje jeszcze zweryfikowanego zachowania bieżącego
+kandydata z magnetycznym recombine i geometry-only exterior air.
 
 Nie wystarcza rozszerzenie `SurfacesList`: `Restrict` i `Constant` obejmują
 granice owner-volumes przy domyślnym `IncludeBoundary=1`, zgodnie z
@@ -183,13 +273,15 @@ Odrzucono także swobodne tetrahedralizowanie bez parametrów meshed extrusion,
 ponieważ mogłoby wprowadzić węzły poza zadanymi płaszczyznami i naruszyć
 istniejący guard oraz regresję exact-plane.
 
-Naprawa musi umożliwić konformne przejście między lokalnymi triangulacjami
-przekrojów, przy węzłach wyłącznie na istniejących płaszczyznach. Potrzebuje
-zgodnej aktualizacji incydentnych tet4, faset, interfejsów właścicieli i PBC
-oraz zachowania pointwise upper/lower bounds. Projekcja jednego pola przez
-całą grubość, rozszerzenie ROI, nowe poziomy z i poluzowanie progów nie są
-naprawą tego kontraktu. Działająca realizacja tej metody pozostaje do
-zaimplementowania; runtime oraz świeża actualGmsh regresja są **NOT VERIFIED**.
+Bieżący kandydat zapewnia magnetic one-layer extrusion i zachowuje
+geometry-only exterior air, lecz nadal musi wykazać konformne przejście między
+lokalnymi triangulacjami przekrojów przy węzłach wyłącznie na istniejących
+płaszczyznach. Potrzebna jest zgodna aktualizacja incydentnych tet4, faset,
+interfejsów właścicieli i PBC oraz zachowanie pointwise upper/lower bounds.
+Projekcja jednego pola przez całą grubość, rozszerzenie ROI, nowe poziomy z i
+poluzowanie progów nie są naprawą tego kontraktu. Produkcyjna realizacja i
+managed runtime pozostają **NOT VERIFIED**; bieżące testy interpretowane
+potwierdzają tylko zachowanie objęte ich guardami.
 Regresja gęstości cienkiej warstwy klasyfikuje próbki według środków krawędzi
 w zadanym regionie, mierząc pełne długości tych krawędzi; centroid tetraedru
 może leżeć poza regionem przecinającym środkową płaszczyznę warstwy.
@@ -206,10 +298,17 @@ prywatny token do serializowanych metadanych. Brak exact-cell/geometric route
 wymaga jawnej odmowy; nie wprowadza cichego free-tet fallbacku bez warstw.
 
 Owner pozostaje `_generate_coincident_ring_airbox_mesh` w `_gmsh_swept.py`.
-Source review/AST PASS; świeże actualGmsh density/plane/periodicity CI oraz
-managed runtime pozostają **NOT VERIFIED**. Model regresji i threshold12nm
-nie zostały zmienione. Jest to metoda wspólnego mesha FEM CPU/GPU; solver GPU
-wymaga oddzielnej kwalifikacji. Nie zmienia równań ani FDM CPU/GPU.
+Source review/AST PASS. Dla ring-only implementacji przed późniejszą
+wording-only korektą komentarza źródłowego przeszły interpretowane Gmsh 4.15.2:
+trzy publiczne przypadki DE/Box, sześć przypadków ring, dwa focused owner-field
+consumers oraz sześć testów periodic-conforming; znormalizowane porównanie
+potwierdziło brak zmian w implementacji po tej korekcie. Stary wynik czterech publicznych
+przypadków jest pre-seed evidence; explicit-cap-below-body-hmax nie ma świeżego
+wyniku po przerwanym rerun, a implicit-cap/scoped-ring nie były powtarzane po
+zmianie. Hosted actual-density, managed runtime i kwalifikacja FEM CPU/GPU
+pozostają **NOT VERIFIED**. Model regresji i threshold12nm nie zostały
+zmienione; solver GPU wymaga oddzielnej kwalifikacji. Nie zmienia to równań ani
+FDM CPU/GPU.
 
 (thin-film-mesh-python-api)=
 ## Python API
@@ -348,11 +447,15 @@ actual-Gmsh evidence can qualify a transition implementation.
 |---|---|---|---|
 | Python API | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | publiczny thin-film contract |
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
-| Layered GEO producer | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | meshed extrusion replikuje źródłową triangulację; conforming scoped in-plane transition pozostaje do implementacji |
+| Layered GEO producer | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | magnetic intervals use one recombined extrusion layer; exterior-air intervals remain geometry-only; conforming scoped in-plane density remains unqualified |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
-| Scoped field composition | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_configure_mesh_size_fields` | składa upper/lower pola; ich lokalna ewaluacja w layered GEO wymaga dalszej diagnostyki |
+| Scoped field composition | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_configure_mesh_size_fields` | składa upper/lower pola; lokalna ewaluacja w layered GEO i density gate pozostają niezakwalifikowane |
 | Owner binding | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `_geometry_owner_alias_index` | exact-name-first roster, jednoznaczne aliasy i izolacja polityk obiektów |
-| Actual density regression | `packages/fullmag-py/tests/test_meshing.py` | `test_direct_layered_box_region_floor_beats_eligible_upper_actual_density` | rzeczywisty ROI/bulk density i dokładne planes; wynik GHA oczekiwany po poprawce |
+| Ring owner source seed | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | przypina ringowe powierzchnie `annulus`/`hole` do owner targetu przed utworzeniem objętości 3D; neutralny `VOut`, bez zmiany ścieżki Box |
+| Scoped source-plane seeds | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_embed_mixed_source_face_seed_points` | Projects ComponentRestrictedBox and graded Box/Cylinder/Sphere targets onto the magnetic source plane, validates the GeometryName owner, composes owner lower bounds, excludes trimmed holes with gmsh.model.isInside, rejects malformed bounding boxes, and embeds points before 2-D generation while preserving exact layers and independent exterior-air planes. | focused source regression and real-Gmsh graded Box/Cylinder/existing-Box checks passed; runtime, density and 0105 **NOT VERIFIED** |
+| Graded source-plane policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_add_exact_plane_projected_cap_field` | ocenia owner-bound graded upper fields na każdym z-directed exact plane z kanoniczną kompozycją upper/lower; nonparallel exact-cap projections fail closed | focused real-Gmsh graded checks passed; managed runtime, density i 0105 **NOT VERIFIED** |
+| Plane-projected graded descriptors | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_PLANE_PROJECTED_UPPER_KINDS` | allowlista używana przez exact-plane cap i swept source-face route dla graded Box/Cylinder/Sphere; unsupported exact-cap projections są odrzucane | focused real-Gmsh graded checks passed; mesh runtime i density **NOT VERIFIED** |
+| Actual density regression | `packages/fullmag-py/tests/test_meshing.py` | `test_direct_layered_box_region_floor_beats_eligible_upper_actual_density` | rzeczywisty ROI/bulk density i dokładne planes; wcześniejszy GHA gate FAILED, świeże evidence po kandydacie **NOT VERIFIED** |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
 
 
@@ -360,9 +463,10 @@ actual-Gmsh evidence can qualify a transition implementation.
 ## Warstwowa triangulacja periodyczna — korekta realizacji
 
 Dla ograniczonego przypadku Box lub Box minus współosiowy Cylinder, z airboxem
-współbieżnym bocznie, GEO generuje pomocnicze pryzmaty z zadaną liczbą warstw.
-Jedna reguła podziału obejmuje wszystkie magnetic i air volumes oraz ich ściany:
-trzy wierzchołki dolnej podstawy porządkuje się leksykograficznie po współrzędnych
+współbieżnym bocznie, GEO generuje pomocnicze pryzmaty z zadaną liczbą warstw
+w magnetycznych przedziałach. Jedna reguła podziału obejmuje magnetic volumes
+oraz hole-air volumes, które współdzielą te przedziały, i ich ściany: trzy
+wierzchołki dolnej podstawy porządkuje się leksykograficznie po współrzędnych
 w płaszczyźnie filmu, a górne odpowiadają im po przesunięciu wzdłuż z.
 Pryzmat o podstawie a,b,c i górze A,B,C dzieli się na tetraedry
 (a,b,c,C), (a,b,B,C), (a,A,B,C). Wspólna pionowa ściana między a i b ma
@@ -370,7 +474,10 @@ przekątną a–B. Ten sam wybór stosuje się do powierzchni zapisanej w Gmsh.
 Kolejność lokalna komórki nie steruje wyborem przekątnej. Orientacja tetraedrów
 jest dodatnia; zerowy wyznacznik jest błędem.
 
-Reguła nie dodaje węzłów i zachowuje płaszczyzny warstw oraz regiony.
+Reguła nie dodaje węzłów i zachowuje magnetyczne płaszczyzny warstw oraz regiony.
+Exterior-air volumes pozostają geometry-only i mogą mieć własne poziomy Z;
+ich obowiązki są mierzone przez granice CAD, dodatnie komórki, PBC oraz air-step
+constraints, a nie przez kopiowanie magnetycznego planu.
 Współrzędne bliskie w granicach błędu maszynowego klasyfikuje się do wspólnych
 rang osi; tolerancja służy wyłącznie deterministycznemu porządkowaniu geometrii,
 nie akceptacji błędnego certyfikatu. Dla par osiowych translacja nie zmienia

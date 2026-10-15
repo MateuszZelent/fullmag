@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -22,3 +23,10 @@ def test_cuda_base_version_keeps_legacy_literal_support() -> None:
     dockerfile = "FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS deps\n"
 
     assert MODULE.cuda_base_version(dockerfile, "Dockerfile") == "12.4.1"
+
+
+def test_pnpm_dashboard_matches_the_workspace_package_manager() -> None:
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    expected = package["packageManager"].removeprefix("pnpm@")
+
+    assert MODULE.collect_versions(ROOT)["pnpm"] == expected

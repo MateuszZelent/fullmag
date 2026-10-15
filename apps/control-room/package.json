@@ -27,7 +27,7 @@
     "check:api-hygiene": "node --test scripts/check-api-hygiene.node-test.mjs && node scripts/check-api-hygiene.mjs",
     "generate:api": "pnpm run generate:openapi-v2 && pnpm run generate:api-v2-types && pnpm run generate:api-v2-client",
     "generate:api-v2-client": "node scripts/generate-v2-client.mjs",
-    "generate:api-v2-types": "openapi-typescript src/kernel/api/generated/openapi-v2.json --output src/kernel/api/generated/openapi-v2-types.ts",
+    "generate:api-v2-types": "openapi-typescript src/kernel/api/generated/openapi-v2.json --output src/kernel/api/generated/openapi-v2-types.ts --empty-objects-unknown",
     "generate:openapi-v2": "node scripts/generate-openapi-v2.mjs",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",

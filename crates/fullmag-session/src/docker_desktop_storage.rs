@@ -1,0 +1,946 @@
+//! Scoped admission for a Docker Desktop Windows-folder session store.
+//!
+//! Docker Desktop exposes a Windows bind mount as Linux 9p.  The native
+//! writer therefore keeps 9p outside its normal filesystem allow-list and
+//! reaches this module only when the operator has selected the explicit
+//! `windows-folder-v1` profile and supplied both host evidence and a
+//! container-specific grant.  This module only admits that evidence; all
+//! writer leases, path checks, and publication barriers remain unchanged.
+
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::env;
+use std::fs::{self, File, OpenOptions};
+use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::path::Component;
+use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
+use uuid::Uuid;
+
+const HOST_ATTESTATION_PATH: &str = "/run/fullmag/windows-folder-host.json";
+const CONTAINER_ROOT: &str = "/state";
+const GRANT_NAME: &str = ".fullmag-windows-folder-grant.json";
+#[cfg(windows)]
+const OWNER_MARKER_NAME: &str = ".fullmag-windows-folder-owner.json";
+const MAX_EVIDENCE_BYTES: u64 = 1024 * 1024;
+const SHA256_HEX_LENGTH: usize = 64;
+const SOURCE_COMMIT_HEX_LENGTH: usize = 40;
+const REQUIRED_CHECKS: [&str; 9] = [
+    "file_sync",
+    "directory_sync",
+    "atomic_replace",
+    "atomic_directory_publish",
+    "process_lock",
+    "no_follow_symlink",
+    "no_follow_junction",
+    "sqlite_transactions",
+    "restart_readback",
+];
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct HostAttestation {
+    schema: String,
+    storage_profile: String,
+    role: String,
+    owner_scope: String,
+    host_root: String,
+    host_filesystem: String,
+    host_drive_type: u32,
+    host_volume_serial: u32,
+    host_root_no_reparse: bool,
+    owner_token: String,
+    engine_id: String,
+    image_id: String,
+    source_commit: String,
+    binary_hashes: BTreeMap<String, String>,
+    artifact_receipt_sha256: String,
+    restart_expected_sha256: String,
+    restart_verified: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SessionGrant {
+    schema: String,
+    storage_profile: String,
+    role: String,
+    state: String,
+    container_root: String,
+    host_attestation_sha256: String,
+    owner_token: String,
+    root_device: u64,
+    root_inode: u64,
+    mount_namespace_inode: u64,
+    power_loss: String,
+    checks: BTreeMap<String, bool>,
+}
+
+fn validate_hex(value: &str, length: usize, label: &str) -> Result<()> {
+    if value.len() != length
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("{label} must be lowercase hexadecimal with {length} characters");
+    }
+    Ok(())
+}
+
+fn validate_uuid(value: &str, label: &str) -> Result<()> {
+    let uuid = Uuid::parse_str(value).with_context(|| format!("{label} is not a UUID"))?;
+    if uuid.is_nil() {
+        bail!("{label} must not be the nil UUID");
+    }
+    Ok(())
+}
+
+fn validate_scalar(value: &str, label: &str, maximum: usize) -> Result<()> {
+    if value.is_empty() || value.len() > maximum || value.chars().any(char::is_control) {
+        bail!("{label} is empty, oversized, or contains control characters");
+    }
+    Ok(())
+}
+
+fn validate_windows_drive_path(value: &str) -> Result<()> {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() < 4
+        || !chars[0].is_ascii_alphabetic()
+        || chars[1] != ':'
+        || !matches!(chars[2], '\\' | '/')
+        || value.starts_with("\\\\")
+        || value.starts_with("//")
+        || value.chars().any(char::is_control)
+    {
+        bail!("host_root must be an absolute local Windows drive path");
+    }
+    let normalized = value.replace('\\', "/");
+    for component in normalized.split('/').skip(1) {
+        if component.is_empty() || component == "." || component == ".." {
+            bail!("host_root contains an unsafe Windows path component");
+        }
+    }
+    Ok(())
+}
+
+fn validate_binary_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control)
+    {
+        bail!("binary_hashes contains an unsafe executable name");
+    }
+    Ok(())
+}
+
+fn validate_host_attestation(attestation: &HostAttestation) -> Result<()> {
+    if attestation.schema != "fullmag.windows-folder-host.v1" {
+        bail!("unsupported Windows-folder host attestation schema");
+    }
+    if attestation.storage_profile != "windows-folder-v1"
+        || attestation.role != "session"
+        || attestation.owner_scope != "docker-desktop-linux"
+    {
+        bail!("Windows-folder host attestation scope is invalid");
+    }
+    validate_windows_drive_path(&attestation.host_root)?;
+    if !matches!(attestation.host_filesystem.as_str(), "NTFS" | "ReFS") {
+        bail!("Windows-folder host filesystem must be NTFS or ReFS");
+    }
+    if attestation.host_drive_type != 3 {
+        bail!("Windows-folder host volume must be a fixed local drive");
+    }
+    if attestation.host_volume_serial == 0 || !attestation.host_root_no_reparse {
+        bail!("Windows-folder host volume identity is incomplete");
+    }
+    validate_uuid(&attestation.owner_token, "owner_token")?;
+    validate_scalar(&attestation.engine_id, "engine_id", 256)?;
+    if !attestation.image_id.starts_with("sha256:") {
+        bail!("host image_id must use the sha256: prefix");
+    }
+    validate_hex(
+        attestation
+            .image_id
+            .strip_prefix("sha256:")
+            .unwrap_or_default(),
+        SHA256_HEX_LENGTH,
+        "host image_id",
+    )?;
+    validate_hex(
+        &attestation.source_commit,
+        SOURCE_COMMIT_HEX_LENGTH,
+        "host source_commit",
+    )?;
+    if attestation.binary_hashes.is_empty() {
+        bail!("host binary_hashes must not be empty");
+    }
+    for (name, hash) in &attestation.binary_hashes {
+        validate_binary_name(name)?;
+        validate_hex(hash, SHA256_HEX_LENGTH, "host binary hash")?;
+    }
+    validate_hex(
+        &attestation.artifact_receipt_sha256,
+        SHA256_HEX_LENGTH,
+        "artifact_receipt_sha256",
+    )?;
+    validate_hex(
+        &attestation.restart_expected_sha256,
+        SHA256_HEX_LENGTH,
+        "restart_expected_sha256",
+    )?;
+    if !attestation.restart_verified {
+        bail!("Windows-folder restart readback was not verified");
+    }
+    Ok(())
+}
+
+fn validate_session_grant(grant: &SessionGrant) -> Result<()> {
+    if grant.schema != "fullmag.windows-folder-session.v1"
+        || grant.storage_profile != "windows-folder-v1"
+        || grant.role != "session"
+        || grant.state != "operational"
+        || grant.container_root != CONTAINER_ROOT
+        || grant.power_loss != "NOT VERIFIED"
+    {
+        bail!("Windows-folder session grant scope or state is invalid");
+    }
+    validate_hex(
+        &grant.host_attestation_sha256,
+        SHA256_HEX_LENGTH,
+        "host_attestation_sha256",
+    )?;
+    validate_uuid(&grant.owner_token, "grant owner_token")?;
+    if grant.root_device == 0 || grant.root_inode == 0 || grant.mount_namespace_inode == 0 {
+        bail!("Windows-folder session grant has an invalid filesystem identity");
+    }
+    if grant.checks.len() != REQUIRED_CHECKS.len()
+        || REQUIRED_CHECKS
+            .iter()
+            .any(|name| grant.checks.get(*name) != Some(&true))
+    {
+        bail!("Windows-folder session grant checks are incomplete or failed");
+    }
+    Ok(())
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(env::current_dir()?.join(path))
+    }
+}
+
+fn is_reparse(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        return metadata.file_attributes() & 0x400 != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+fn reject_link_ancestors(path: &Path) -> Result<()> {
+    // Walk complete paths instead of rebuilding them from `Components`.
+    // Rebuilding a Windows `Prefix` and `RootDir` separately can turn `C:\\...`
+    // into a path rooted on the process current drive.
+    let mut current = absolute_path(path)?;
+    loop {
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || is_reparse(&metadata) {
+                    bail!(
+                        "evidence path traverses a symlink or reparse point: {}",
+                        current.display()
+                    );
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("checking evidence path component {}", current.display())
+                });
+            }
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if parent == current {
+            break;
+        }
+        current = parent.to_path_buf();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn open_regular_nofollow(path: &Path) -> Result<File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let absolute = absolute_path(path)?;
+    let mut components = Vec::new();
+    for component in absolute.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(name) => components.push(name),
+            Component::ParentDir => {
+                bail!(
+                    "evidence path contains a parent-directory component: {}",
+                    path.display()
+                );
+            }
+            Component::Prefix(_) => {
+                bail!(
+                    "evidence path has an unsupported path prefix: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+    let Some((file_name, parents)) = components.split_last() else {
+        bail!(
+            "evidence path has no regular file component: {}",
+            path.display()
+        );
+    };
+
+    // Path checks followed by a path-based open leave a race in which a
+    // Windows-folder ancestor can be replaced by a reparse point.  Pin every
+    // ancestor directory and resolve children through its descriptor instead.
+    let mut directory = {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        options.custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW);
+        options
+            .open("/")
+            .context("opening the evidence path root directory")?
+    };
+    for component in parents {
+        let name = CString::new(component.as_bytes())
+            .context("evidence path component contains an embedded NUL")?;
+        let descriptor = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "opening evidence directory component {}",
+                    component.to_string_lossy()
+                )
+            });
+        }
+        directory = unsafe { File::from_raw_fd(descriptor) };
+    }
+
+    let name = CString::new(file_name.as_bytes())
+        .context("evidence file name contains an embedded NUL")?;
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("opening evidence file {}", path.display()));
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let opened = file.metadata()?;
+    if !opened.is_file() || is_reparse(&opened) {
+        bail!(
+            "opened evidence file is not a regular non-link file: {}",
+            path.display()
+        );
+    }
+    Ok(file)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_regular_nofollow(path: &Path) -> Result<File> {
+    reject_link_ancestors(path)?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("checking evidence file {}", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || is_reparse(&metadata) {
+        bail!(
+            "evidence path is not a regular non-link file: {}",
+            path.display()
+        );
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let file = options
+        .open(path)
+        .with_context(|| format!("opening evidence file {}", path.display()))?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || is_reparse(&opened) {
+        bail!(
+            "opened evidence file is not a regular non-link file: {}",
+            path.display()
+        );
+    }
+    Ok(file)
+}
+
+fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+    let mut file = open_regular_nofollow(path)?;
+    if file.metadata()?.len() > maximum {
+        bail!(
+            "evidence file exceeds the bounded read limit: {}",
+            path.display()
+        );
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(maximum.min(1024 * 1024))?);
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len())? > maximum {
+        bail!(
+            "evidence file changed beyond the bounded read limit: {}",
+            path.display()
+        );
+    }
+    Ok(bytes)
+}
+
+fn parse_host_attestation(bytes: &[u8]) -> Result<HostAttestation> {
+    let attestation: HostAttestation =
+        serde_json::from_slice(bytes).context("decoding Windows-folder host attestation")?;
+    validate_host_attestation(&attestation)?;
+    Ok(attestation)
+}
+
+fn parse_session_grant(bytes: &[u8]) -> Result<SessionGrant> {
+    let grant: SessionGrant =
+        serde_json::from_slice(bytes).context("decoding Windows-folder session grant")?;
+    validate_session_grant(&grant)?;
+    Ok(grant)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(target_os = "linux")]
+fn stream_sha256(path: &Path) -> Result<String> {
+    let mut file = open_regular_nofollow(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(target_os = "linux")]
+static CURRENT_EXECUTABLE_SHA256: OnceLock<String> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn current_executable_sha256() -> Result<String> {
+    if let Some(hash) = CURRENT_EXECUTABLE_SHA256.get() {
+        return Ok(hash.clone());
+    }
+    let executable = env::current_exe().context("resolving current executable")?;
+    let hash = stream_sha256(&executable)?;
+    let _ = CURRENT_EXECUTABLE_SHA256.set(hash.clone());
+    Ok(hash)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_runtime_identity(attestation: &HostAttestation) -> Result<()> {
+    let expected_commit = option_env!("FULLMAG_SOURCE_GIT_COMMIT").ok_or_else(|| {
+        anyhow::anyhow!("managed source commit identity is missing at compile time")
+    })?;
+    validate_hex(
+        expected_commit,
+        SOURCE_COMMIT_HEX_LENGTH,
+        "compiled FULLMAG_SOURCE_GIT_COMMIT",
+    )?;
+    if attestation.source_commit != expected_commit {
+        bail!("Windows-folder source commit differs from the managed binary");
+    }
+    let image_id = env::var("FULLMAG_RUNTIME_IMAGE_ID")
+        .context("FULLMAG_RUNTIME_IMAGE_ID is required for Windows-folder admission")?;
+    if !image_id.starts_with("sha256:")
+        || image_id.len() != "sha256:".len() + SHA256_HEX_LENGTH
+        || !image_id["sha256:".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("FULLMAG_RUNTIME_IMAGE_ID must be sha256: followed by 64 lowercase hex characters");
+    }
+    if attestation.image_id != image_id {
+        bail!("Windows-folder image identity differs from the running image");
+    }
+    let executable = env::current_exe().context("resolving current executable")?;
+    let name = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("current executable has no portable filename"))?;
+    let expected_hash = attestation
+        .binary_hashes
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("current executable is absent from host binary_hashes"))?;
+    let actual_hash = current_executable_sha256()?;
+    if expected_hash != &actual_hash {
+        bail!("current executable hash differs from host binary attestation");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+struct PinnedCandidate {
+    candidate: PathBuf,
+    existing: PathBuf,
+    state_path: PathBuf,
+    state_file: File,
+    existing_file: File,
+}
+
+#[cfg(target_os = "linux")]
+fn normalized_components(path: &Path, label: &str) -> Result<(PathBuf, Vec<std::ffi::OsString>)> {
+    let absolute = absolute_path(path)?;
+    let mut components = Vec::new();
+    for component in absolute.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(name) => components.push(name.to_os_string()),
+            Component::ParentDir => {
+                bail!("{label} contains a parent-directory component");
+            }
+            Component::Prefix(_) => {
+                bail!("{label} has an unsupported path prefix");
+            }
+        }
+    }
+    let mut normalized = PathBuf::from("/");
+    for component in &components {
+        normalized.push(component);
+    }
+    Ok((normalized, components))
+}
+
+#[cfg(target_os = "linux")]
+fn open_directory_child(parent: &File, component: &std::ffi::OsStr) -> std::io::Result<File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let name = CString::new(component.as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path component contains an embedded NUL",
+        )
+    })?;
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+#[cfg(target_os = "linux")]
+fn open_root_directory() -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    options.custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    options.open("/")
+}
+
+#[cfg(target_os = "linux")]
+fn canonical_candidate(root: &Path, state: &Path) -> Result<PinnedCandidate> {
+    let (state_path, state_components) = normalized_components(state, "Docker state path")?;
+    let (candidate_path, root_components) = normalized_components(root, "session root")?;
+    if root_components.len() < state_components.len()
+        || !root_components
+            .iter()
+            .zip(state_components.iter())
+            .all(|(root, state)| root == state)
+    {
+        bail!("session root escapes the Docker state mount");
+    }
+
+    let mut state_file = open_root_directory().context("opening the Docker state root")?;
+    for component in &state_components {
+        state_file = open_directory_child(&state_file, component).with_context(|| {
+            format!(
+                "opening Docker state directory component {}",
+                component.to_string_lossy()
+            )
+        })?;
+    }
+
+    let mut existing_file = state_file.try_clone()?;
+    let mut existing_path = state_path.clone();
+    for component in root_components.iter().skip(state_components.len()) {
+        match open_directory_child(&existing_file, component) {
+            Ok(next) => {
+                existing_file = next;
+                existing_path.push(component);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                break;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "opening session root directory component {}",
+                        component.to_string_lossy()
+                    )
+                });
+            }
+        }
+    }
+
+    Ok(PinnedCandidate {
+        candidate: candidate_path,
+        existing: existing_path,
+        state_path,
+        state_file,
+        existing_file,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn admit_container_identity(root: &Path, grant: &SessionGrant) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let state = Path::new(CONTAINER_ROOT);
+    let pinned = canonical_candidate(root, state)?;
+    let state_metadata = pinned
+        .state_file
+        .metadata()
+        .context("statting pinned Docker state mount")?;
+    if !state_metadata.is_dir()
+        || state_metadata.dev() != grant.root_device
+        || state_metadata.ino() != grant.root_inode
+    {
+        bail!("Docker state mount device/inode differs from the session grant");
+    }
+    let namespace =
+        fs::metadata("/proc/self/ns/mnt").context("statting the current mount namespace")?;
+    if namespace.ino() != grant.mount_namespace_inode {
+        bail!("current mount namespace differs from the session grant");
+    }
+    if !pinned.candidate.starts_with(&pinned.state_path) {
+        bail!("session root is outside the Docker state mount");
+    }
+    let existing_metadata = pinned.existing_file.metadata().with_context(|| {
+        format!(
+            "statting pinned session root ancestor {}",
+            pinned.existing.display()
+        )
+    })?;
+    if existing_metadata.dev() != state_metadata.dev() {
+        bail!("session root crosses a filesystem device boundary");
+    }
+    Ok(())
+}
+
+/// Admit one Linux 9p-backed session root under the explicit Windows-folder
+/// profile.  Every evidence file is reread for each admission; only the
+/// immutable current executable hash is cached for the lifetime of the process.
+#[cfg(target_os = "linux")]
+pub(crate) fn admit(root: &Path) -> Result<()> {
+    if env::var("FULLMAG_SESSION_STORAGE_PROFILE").ok().as_deref() != Some("windows-folder-v1") {
+        bail!("9p session storage requires FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1");
+    }
+    let host_bytes =
+        read_bounded_regular_file(Path::new(HOST_ATTESTATION_PATH), MAX_EVIDENCE_BYTES)?;
+    let host = parse_host_attestation(&host_bytes)?;
+    let grant_path = Path::new(CONTAINER_ROOT).join(GRANT_NAME);
+    let grant_bytes = read_bounded_regular_file(&grant_path, MAX_EVIDENCE_BYTES)?;
+    let grant = parse_session_grant(&grant_bytes)?;
+    if grant.owner_token != host.owner_token {
+        bail!("Windows-folder host and grant owner_token differ");
+    }
+    if grant.host_attestation_sha256 != sha256_hex(&host_bytes) {
+        bail!("Windows-folder grant does not hash the mounted host attestation");
+    }
+    validate_runtime_identity(&host)?;
+    admit_container_identity(root, &grant)?;
+    Ok(())
+}
+
+fn initialize_store_under(parent: &Path, relative: &str) -> Result<(PathBuf, bool)> {
+    let root = crate::repository_path::checked_path(parent, relative)?;
+    let created = match fs::symlink_metadata(&root) {
+        Ok(_) => {
+            // Existing or partial data never grants initialization or takeover.
+            for relative in [
+                "manifests",
+                "runs",
+                "scheduler_pools",
+                "live_command_journals",
+                "recovery",
+                "temp",
+                "objects/sha256",
+                "objects/pins",
+            ] {
+                if !crate::repository_path::checked_path(&root, relative)?.is_dir() {
+                    bail!("Docker accepted store is partially initialized; controlled recovery required");
+                }
+            }
+            drop(crate::SessionStore::open_existing(&root)?);
+            false
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let checked = crate::repository_path::create_new_directory(parent, relative)?;
+            drop(crate::SessionStore::open(checked)?);
+            true
+        }
+        Err(error) => return Err(error).context("inspecting the Docker accepted store"),
+    };
+    Ok((root, created))
+}
+
+/// Bootstrap only the fixed Docker accepted store after full Windows-folder
+/// admission. This is internal launcher plumbing, not a general initializer.
+#[doc(hidden)]
+pub fn initialize_attested_docker_accepted_store() -> Result<(PathBuf, bool)> {
+    #[cfg(target_os = "linux")]
+    {
+        let parent = Path::new("/state/runs/docker-all");
+        admit(parent)?;
+        initialize_store_under(parent, "session-store")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("Docker Windows-folder bootstrap requires the attested Linux container");
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn reject_docker_owned_windows_root(root: &Path) -> Result<()> {
+    let mut candidate = absolute_path(root)?;
+    if !candidate.exists() {
+        while !candidate.exists() {
+            if !candidate.pop() {
+                bail!("session root has no existing Windows ancestor");
+            }
+        }
+    }
+    reject_link_ancestors(&candidate)?;
+    loop {
+        let marker = candidate.join(OWNER_MARKER_NAME);
+        match fs::symlink_metadata(&marker) {
+            Ok(_) => {
+                let bytes = read_bounded_regular_file(&marker, MAX_EVIDENCE_BYTES)
+                    .context("reading Docker-owned Windows session marker")?;
+                let attestation = parse_host_attestation(&bytes)
+                    .context("validating Docker-owned Windows session marker")?;
+                let marker_parent = fs::canonicalize(&candidate)
+                    .context("canonicalizing Docker-owned Windows session marker parent")?;
+                let host_root = fs::canonicalize(PathBuf::from(&attestation.host_root))
+                    .context("canonicalizing Docker-owned Windows host root")?;
+                if !marker_parent
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&host_root.to_string_lossy())
+                {
+                    bail!("Docker-owned Windows session marker has an unexpected host root; controlled recovery required");
+                }
+                bail!("Windows session root is owned by Docker; controlled recovery required");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("checking Docker-owned Windows marker"),
+        }
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        if parent == candidate {
+            break;
+        }
+        candidate = parent.to_path_buf();
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn host() -> HostAttestation {
+        HostAttestation {
+            schema: "fullmag.windows-folder-host.v1".into(),
+            storage_profile: "windows-folder-v1".into(),
+            role: "session".into(),
+            owner_scope: "docker-desktop-linux".into(),
+            host_root: "C:\\fullmag\\storage\\runs\\session".into(),
+            host_filesystem: "NTFS".into(),
+            host_drive_type: 3,
+            host_volume_serial: 7,
+            host_root_no_reparse: true,
+            owner_token: "123e4567-e89b-42d3-a456-426614174000".into(),
+            engine_id: "desktop-engine".into(),
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            source_commit: "b".repeat(40),
+            binary_hashes: BTreeMap::from([("fullmag-api".into(), "c".repeat(64))]),
+            artifact_receipt_sha256: "d".repeat(64),
+            restart_expected_sha256: "e".repeat(64),
+            restart_verified: true,
+        }
+    }
+
+    fn grant() -> SessionGrant {
+        SessionGrant {
+            schema: "fullmag.windows-folder-session.v1".into(),
+            storage_profile: "windows-folder-v1".into(),
+            role: "session".into(),
+            state: "operational".into(),
+            container_root: "/state".into(),
+            host_attestation_sha256: "f".repeat(64),
+            owner_token: "123e4567-e89b-42d3-a456-426614174000".into(),
+            root_device: 1,
+            root_inode: 2,
+            mount_namespace_inode: 3,
+            power_loss: "NOT VERIFIED".into(),
+            checks: REQUIRED_CHECKS
+                .into_iter()
+                .map(|name| (name.into(), true))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn strict_host_and_grant_validation_accepts_the_contract() {
+        validate_host_attestation(&host()).unwrap();
+        validate_session_grant(&grant()).unwrap();
+    }
+
+    #[test]
+    fn serde_schemas_reject_unknown_fields() {
+        let mut value = serde_json::to_value(host()).unwrap();
+        value["unexpected"] = serde_json::Value::Bool(true);
+        assert!(serde_json::from_value::<HostAttestation>(value).is_err());
+    }
+
+    #[test]
+    fn validation_rejects_unknown_or_failed_grant_checks() {
+        let mut value = grant();
+        value.checks.insert("unknown".into(), true);
+        assert!(validate_session_grant(&value).is_err());
+        let mut value = grant();
+        value.checks.insert("file_sync".into(), false);
+        assert!(validate_session_grant(&value).is_err());
+    }
+
+    #[test]
+    fn bounded_reader_rejects_oversized_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("evidence.json");
+        fs::write(&path, b"12345").unwrap();
+        assert!(read_bounded_regular_file(&path, 4).is_err());
+    }
+
+    #[test]
+    fn store_bootstrap_opens_valid_data_and_preserves_partial_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let (root, created) = initialize_store_under(directory.path(), "session-store").unwrap();
+        assert!(created);
+        let (reopened, created) =
+            initialize_store_under(directory.path(), "session-store").unwrap();
+        assert_eq!(root, reopened);
+        assert!(!created);
+        let partial = directory.path().join("partial-store");
+        fs::create_dir(&partial).unwrap();
+        fs::write(partial.join("evidence"), b"retain partial failure").unwrap();
+        assert!(initialize_store_under(directory.path(), "partial-store").is_err());
+        assert_eq!(
+            fs::read(partial.join("evidence")).unwrap(),
+            b"retain partial failure"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_reader_rejects_final_symlink_without_following_it() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.json");
+        let link = directory.path().join("link.json");
+        fs::write(&target, b"{}").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(read_bounded_regular_file(&link, 32).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_reader_rejects_existing_ancestor_symlink_without_following_it() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        let link = directory.path().join("link");
+        let target = real.join("target.json");
+        fs::create_dir(&real).unwrap();
+        fs::write(&target, b"{}").unwrap();
+        symlink(&real, &link).unwrap();
+        assert!(read_bounded_regular_file(&link.join("target.json"), 32).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn canonical_candidate_rejects_existing_ancestor_symlink() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        let real = state.join("real");
+        let link = state.join("link");
+        fs::create_dir_all(&real).unwrap();
+        symlink(&real, &link).unwrap();
+        let root = link.join("session-store");
+        assert!(canonical_candidate(&root, &state).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bounded_reader_rejects_parent_component_before_descriptor_walk() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.json");
+        fs::write(&target, b"{}").unwrap();
+        let escaped = directory
+            .path()
+            .join("child")
+            .join("..")
+            .join("target.json");
+        assert!(read_bounded_regular_file(&escaped, 32).is_err());
+    }
+}

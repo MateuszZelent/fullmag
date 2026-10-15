@@ -1,9 +1,22 @@
 ARG FULLMAG_CUDA_BASE_IMAGE="nvidia/cuda:12.4.1-devel-ubuntu20.04"
+ARG FULLMAG_CUDA_BASE_IMAGE_DIGEST=""
 
 FROM ${FULLMAG_CUDA_BASE_IMAGE} AS cuda-base-normalized
 
+ARG FULLMAG_CUDA_BASE_IMAGE
+ARG FULLMAG_CUDA_BASE_IMAGE_DIGEST
+ENV FULLMAG_CUDA_BASE_IMAGE=${FULLMAG_CUDA_BASE_IMAGE}
+ENV FULLMAG_CUDA_BASE_IMAGE_DIGEST=${FULLMAG_CUDA_BASE_IMAGE_DIGEST}
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+RUN if [[ -n "${FULLMAG_CUDA_BASE_IMAGE_DIGEST}" ]]; then \
+      expected_digest="${FULLMAG_CUDA_BASE_IMAGE_DIGEST#sha256:}"; \
+      [[ "${expected_digest}" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "FULLMAG_CUDA_BASE_IMAGE_DIGEST must be a 64-hex SHA-256" >&2; exit 2; }; \
+      [[ "${FULLMAG_CUDA_BASE_IMAGE}" == *@sha256:* ]] || { echo "FULLMAG_CUDA_BASE_IMAGE_DIGEST requires a matching @sha256 FROM reference" >&2; exit 2; }; \
+      actual_digest="${FULLMAG_CUDA_BASE_IMAGE##*@sha256:}"; \
+      [[ "${actual_digest}" == "${expected_digest}" ]] || { echo "FULLMAG_CUDA_BASE_IMAGE_DIGEST does not match the FROM reference" >&2; exit 2; }; \
+    fi
 COPY --chmod=755 docker/fem-gpu/normalize_cuda_dpkg_lists.sh /usr/local/sbin/
 RUN /usr/local/sbin/normalize_cuda_dpkg_lists.sh && \
     if [[ -f /var/lib/dpkg/info/.fullmag-cuda-dpkg-reinstall-required ]]; then \
@@ -35,8 +48,15 @@ ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG FULLMAG_HYPRE_GPU_ARCHITECTURES="60 70 80 89 90"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
+ENV PNPM_VERSION=10.8.1
+ENV RUST_TOOLCHAIN=nightly
 ENV MFEM_REF=v4.10
 ENV MFEM_SOURCE_COMMIT=d964264cdb9a13e94a201b6c236c7721e0c8765f
+ENV LIBCEED_SOURCE_COMMIT=4018a20a98d451fac24765d3ddb936861647ce8d
+ENV HYPRE_SOURCE_COMMIT=9dc9e18aed6a945a95f966e57daacfb1c269f6ec
+ENV UMPIRE_SOURCE_COMMIT=abd729f40064175e999a83d11d6b073dac4c01d2
+ENV PETSC_SOURCE_COMMIT=1467453aedb62826efc970ceafc4bd6dab8229ab
+ENV SLEPC_SOURCE_COMMIT=4c754d7d3ae067837670828a304512798334fb3a
 ENV LIBCEED_REF=v0.12.0
 ENV HYPRE_REF=v3.1.0
 ENV PETSC_REF=v3.24.6
@@ -80,23 +100,27 @@ RUN pip3 install --no-cache-dir cmake==${CMAKE_VERSION}
 
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 
+COPY --chmod=755 docker/fem-gpu/write_dependency_versions.py /usr/local/sbin/fullmag-write-dependency-versions.py
+
 WORKDIR /tmp/build
 
 RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git && \
     test "$(git -C mfem rev-parse HEAD)" = "${MFEM_SOURCE_COMMIT}"
-RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.git /tmp/build/libCEED
+RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.git /tmp/build/libCEED && \
+    test "$(git -C /tmp/build/libCEED rev-parse HEAD)" = "${LIBCEED_SOURCE_COMMIT}"
 
 RUN make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} -j"$(nproc)" && \
     make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} install prefix=${INSTALL_PREFIX}
 
-# S10: Build hypre (serial + CUDA) â€” required for CG+AMG Poisson solver
+# S10: Build hypre (serial + CUDA) Ä‚ËĂ˘â€šÂ¬Ă˘â‚¬ĹĄ required for CG+AMG Poisson solver
 ENV UMPIRE_REF=v2024.07.0
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}
 RUN if [ "${FULLMAG_HYPRE_MEMORY_VARIANT}" = "umpire" ]; then \
       umpire_cuda_archs="${FULLMAG_HYPRE_GPU_ARCHITECTURES// /;}"; \
       git clone --depth 1 --branch "${UMPIRE_REF}" --recursive \
-        https://github.com/LLNL/Umpire.git /tmp/build/umpire; \
+        https://github.com/LLNL/Umpire.git /tmp/build/umpire && \
+      test "$(git -C /tmp/build/umpire rev-parse HEAD)" = "${UMPIRE_SOURCE_COMMIT}"; \
       cmake -S /tmp/build/umpire -B /tmp/build/umpire/build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
@@ -116,6 +140,7 @@ RUN if [ "${FULLMAG_HYPRE_MEMORY_VARIANT}" = "umpire" ]; then \
     fi
 
 RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hypre.git /tmp/build/hypre && \
+    test "$(git -C /tmp/build/hypre rev-parse HEAD)" = "${HYPRE_SOURCE_COMMIT}" && \
     cd /tmp/build/hypre/src && \
     base_flags=( \
       --prefix=${INSTALL_PREFIX} \
@@ -162,6 +187,7 @@ RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hyp
 # pair from source into the shared managed prefix.
 COPY docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff /tmp/build/petsc-3.24.6-multiarch-nvcc.diff
 RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git /tmp/build/petsc && \
+    test "$(git -C /tmp/build/petsc rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
     cd /tmp/build/petsc && \
     git apply /tmp/build/petsc-3.24.6-multiarch-nvcc.diff && \
     python3 ./configure \
@@ -187,6 +213,7 @@ RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git
     make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda install
 
 RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git /tmp/build/slepc && \
+    test "$(git -C /tmp/build/slepc rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
     cd /tmp/build/slepc && \
     PETSC_DIR=${INSTALL_PREFIX} python3 ./configure --prefix=${INSTALL_PREFIX} && \
     make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} -j"$(nproc)" all && \
@@ -224,13 +251,13 @@ RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
 # A CUDA-free MFEM alone is insufficient when PETSc still links CUDA HYPRE.
 # Separate source trees avoid reusing GPU objects or generated configuration.
 RUN git clone --no-hardlinks /tmp/build/libCEED /tmp/build/libCEED-cpu && \
-    test "$(git -C /tmp/build/libCEED-cpu rev-parse HEAD)" = "4018a20a98d451fac24765d3ddb936861647ce8d" && \
+    test "$(git -C /tmp/build/libCEED-cpu rev-parse HEAD)" = "${LIBCEED_SOURCE_COMMIT}" && \
     make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j2 && \
     make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= \
       install prefix=/opt/fullmag-mfem-cpu
 
 RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
-    test "$(git -C /tmp/build/petsc-cpu rev-parse HEAD)" = "1467453aedb62826efc970ceafc4bd6dab8229ab" && \
+    test "$(git -C /tmp/build/petsc-cpu rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
     cd /tmp/build/petsc-cpu && \
     PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu \
     python3 ./configure \
@@ -246,7 +273,7 @@ RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
     make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install
 
 RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
-    test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "4c754d7d3ae067837670828a304512798334fb3a" && \
+    test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
     cd /tmp/build/slepc-cpu && \
     SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
       python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
@@ -274,6 +301,8 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
     cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
     cmake --install /tmp/build/mfem/build-cpu
 
+RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase deps --source-root /tmp/build --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+
 FROM cuda-base-normalized AS fem-gpu-dev
 
 ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
@@ -282,6 +311,11 @@ ARG NODE_SHA256_AMD64=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450f
 ARG NODE_SHA256_ARM64=58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6
 ARG PYTHON_VERSION=3.10.21
 ARG PYTHON_SHA256=a0da1e72132e950154eca0f6f47d5db828454700de20e5113667940d81e0db04
+ENV CMAKE_VERSION=3.30.5
+ENV NODE_VERSION=${NODE_VERSION}
+ENV PYTHON_VERSION=${PYTHON_VERSION}
+ENV PNPM_VERSION=10.8.1
+ENV RUST_TOOLCHAIN=nightly
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PNPM_HOME=/pnpm
@@ -378,16 +412,19 @@ RUN python_archive="Python-${PYTHON_VERSION}.tar.xz" && \
 RUN python3 -m pip install --no-cache-dir cmake==3.30.5
 RUN python3 -m pip install --no-cache-dir numpy gmsh meshio trimesh scipy h5py zarr
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
-RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
 COPY --from=deps /opt/fullmag-mfem-cpu /opt/fullmag-mfem-cpu
+COPY docker/fem-gpu/write_dependency_versions.py /usr/local/sbin/fullmag-write-dependency-versions.py
 
 # Nsight Systems/Compute are capture-time capabilities, not build prerequisites.
 # The managed runtime must remain buildable when the optional profiler packages
 # are absent; the capture harness performs its own bounded preflight instead.
 RUN if command -v nsys >/dev/null 2>&1; then nsys --version; else echo "profiler tools are optional: nsys unavailable"; fi && \
     if command -v ncu >/dev/null 2>&1; then ncu --version; else echo "profiler tools are optional: ncu unavailable"; fi
+
+RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase runtime --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}

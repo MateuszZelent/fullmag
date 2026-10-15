@@ -372,7 +372,12 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
 
     managed = load_workflow(REPO_ROOT / ".github/workflows/frontend-3d-managed-fem.yml")
     managed_job = managed["jobs"]["managed-fem-qualification"]
-    assert managed_job["runs-on"] == ["self-hosted", "linux", "x64", "fem-managed"]
+    assert managed_job["runs-on"] == [
+        "self-hosted",
+        "linux",
+        "x64",
+        "${{ vars.FULLMAG_FEM_RUNNER_LABEL || 'fem-managed' }}",
+    ]
     assert "continue-on-error" not in json.dumps(managed_job)
     assert managed_job.get("if") is None
 

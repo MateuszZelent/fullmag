@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, StudyId,
+    ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, RunId, StudyId,
     StudyReference,
 };
 use fullmag_authoring::{
@@ -9,7 +9,8 @@ use fullmag_authoring::{
     StudyPlan, StudyPlanMigrationDefaults, StudyPrimitiveStageKind, StudySolverConfigReference,
 };
 use fullmag_ir::{
-    EnergyTermIR, InitialMagnetizationIR, OutputStorageIR, ProblemIR, SpinTorqueModuleIR,
+    EnergyTermIR, InitialMagnetizationIR, OutputStorageIR, ProblemIR, RegionRefIR,
+    SpinTorqueModuleIR,
 };
 use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry};
 use serde_json::{json, Value};
@@ -41,8 +42,8 @@ fn template() -> RunSpecification {
             }),
         },
     );
-    // Replay must reuse the same captured intent, including its source RunId.
-    specification.run_id = crate::RunId::parse("run-batch-template").unwrap();
+    // Batch expansion fingerprints the complete template; keep this fixture replayable.
+    specification.run_id = RunId::parse("run-batch-template").unwrap();
     specification
 }
 
@@ -786,7 +787,7 @@ fn materialization_binds_zhang_li_axis_to_named_executable_module() {
     problem.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
         schema_version: Some("zhang_li_torque.v1".into()),
         id: Some("batch-zl".into()),
-        target: Some(fullmag_ir::RegionRefIR {
+        target: Some(RegionRefIR {
             object_id: "batch-magnet".into(),
             region_id: None,
         }),

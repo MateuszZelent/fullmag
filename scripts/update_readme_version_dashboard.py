@@ -242,9 +242,9 @@ def collect_versions(root: Path) -> dict[str, str]:
         ),
         "pnpm": assignment(
             docker,
-            r"^RUN corepack enable && corepack prepare pnpm@(?P<value>[^ ]+) --activate$",
+            r"^ENV PNPM_VERSION=(?P<value>[^\s]+)$",
             docker_path,
-            "pnpm version",
+            "ENV PNPM_VERSION",
         ),
         "next": next_version,
         "react": react_version,

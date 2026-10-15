@@ -1,7 +1,7 @@
 # Airbox mesh grading
 
-- Status: geometric and legacy linear field generation implemented; full 0105 production evidence pending
-- Last updated: 2026-10-14
+- Status: geometric/legacy field generation implemented; scoped exact-layer candidate implemented; full 0105 production and managed-runtime evidence **NOT VERIFIED**
+- Last updated: 2026-10-15
 - Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
 (airbox-grading-problem-statement)=
@@ -426,6 +426,74 @@ production criteria, not claims about the current partial report.
   It does not authorize replacing local fields with one global cap or
   relaxing owner XY equality. Unchanged in-memory baseline clones were
   separately observed to reproduce the original baseline XY sets.
+- The current scoped exact-layer candidate first creates exact CAD layer
+  partitions. For intervals whose midpoint lies in the magnetic owner,
+  `_generate_coincident_ring_airbox_mesh` calls GEO extrusion with
+  `numElements=[1]`, `heights=[1.0]` and `recombine=True`; exterior-air
+  intervals use geometry-only extrusion so their independent grading remains
+  possible. For a ring, the grouped source entities also constrain the
+  complementary hole-air volume in magnetic-thickness intervals; that is not
+  equivalent to unrestricted air meshing. It then installs the owner-volume
+  and air-volume fields and runs one conforming 3D mesh. This is an
+  implemented source candidate, not a production qualification: managed runtime, the 0105 density gate, positive
+  cells, seam incidence, periodic translations and measured air coarsening
+  remain **NOT VERIFIED**.
+- A scoped `ComponentRestrictedBox` can be evaluated correctly by Gmsh's
+  three-dimensional background field and still be missed while the source
+  face is triangulated: the first two-dimensional triangles may be larger than
+  the box footprint. `_embed_mixed_source_face_seed_points` projects the
+  authored box and lower-bound composition onto the actual source plane,
+  filters trimmed CSG holes with `gmsh.model.isInside`, and embeds bounded
+  point targets before 2-D generation. This is a realization of the existing
+  local size policy; it does not thicken the box, change CAD boundaries, or
+  claim a solver or production-runtime result. The focused interpreted Gmsh
+  source-face and owner/ring/periodic consumers pass; managed runtime and
+  0105 qualification remain **NOT VERIFIED**.
+- The source-face path now accepts the rectangular
+  `ComponentRestrictedBox` and the graded
+  `ComponentRestrictedGradedBox`, `ComponentRestrictedGradedCylinder` and
+  `ComponentRestrictedGradedSphere` descriptors. `_source_face_owner_matches`
+  validates the owner binding for graded fields and excludes a descriptor
+  bound to another geometry. `_localize_source_plane_seed_descriptor`
+  projects accepted footprints into the exact source-plane axes, retains the
+  complete graded parameter set (including `TransitionDistance`) for the later
+  owner-volume field, and rejects invalid or non-parallel cylinder projections.
+  `_embed_mixed_source_face_seed_points` composes the owner lower bounds and
+  retains only points accepted by `gmsh.model.isInside`; malformed source
+  bounding boxes fail closed. The focused interpreted source regression
+  (`test_source_plane_seed_rejects_invalid_surface_bounding_box` and
+  `test_source_plane_seed_supports_graded_component_fields`) passed with two
+  tests and four subtests. This is source-level evidence; actual Gmsh mesh
+  runtime, density, managed runtime and 0105 production qualification remain
+  **NOT VERIFIED**. Follow-up focused real-Gmsh checks passed for the graded
+  Box (805 nodes/3456 elements), graded Cylinder (777 nodes/3370 elements)
+  and existing Box (819 nodes/3577 elements), with the expected cell-topology
+  sets. The exact-plane cap remains z-directed; nonparallel graded projections
+  and unsupported exact-cap variants fail closed. These mesh checks do not
+  qualify the 0105 density gate or managed runtime.
+- An earlier 2026-10-14 baseline omitted fixed layer arguments in the
+  scoped branch, so public $L=6$ fixtures realized seven to nine magnetic
+  intervals. Those were interior magnetic planes, not additional airbox
+  boundaries. The current candidate constrains only magnetic intervals and
+  keeps the exact-plane guard fail closed. The pre-seed baseline's four-public
+  result (DE plus three Box cases) was recorded before the ring-only
+  source-surface change; normalized source comparison shows
+  that edit changed no implementation bytes. The evidence covers three public
+  cases (DE plus the default-cap and explicit-minimum-above-hmax Box cases), six ring public
+  cases, two owner-field consumers and six periodic-conforming cases. The
+  explicit-cap-below-body-hmax Box rerun was interrupted after approximately
+  120 seconds without a pytest result (exit 130), so it is not a fresh pass.
+  Earlier implicit-cap and scoped-ring logs were not repeated after the later
+  graded source-plane change. The two-test source-level regression and the
+  three focused real-Gmsh graded runs are recorded above; they do not qualify
+  managed runtime or 0105. The exact commands and dirty-source hashes are
+  reported with the task checkpoint rather than treated as release evidence.
+- The diagnostic variants in
+  `scripts/verify_exact_layer_mesh_diagnostics.py` remain bounded historical
+  comparisons. They are not the checked-in route and cannot establish
+  production behavior. In particular, no variant may weaken exact magnetic
+  planes, owner-floor and body/air separation, positive tet4 cells, seam
+  incidence, periodic translations, or measured near-to-far air growth.
 - The resolved exact-layer generator cap and the reported `effective_airbox_target`
   are currently distinct. `_resolve_box_airbox_layer_sizes` derives a finite
   outer target from the interface target and growth ratio when no maximum was
@@ -458,9 +526,16 @@ production criteria, not claims about the current partial report.
 | Boundary span | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_resolve_airbox_boundary_transition_span` | resolves numeric side/corner transition spans | FEM meshing | planner tests |
 | Physical model | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:airbox-grading-governing-equations` | source-free exterior equations motivating grading | FEM contract | publication review |
 | Chordal ring volume bound | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:eq-ring-polygon-hole-volume-bound` | conditional geometric bound for a verified common polygonal hole prism | FEM mesh geometry | planned GHA regression |
-| Exact-layer ring construction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | constrains magnetic partitions to one prism layer, converts with shared periodic diagonals, and retains independent scoped body/air fields and geometry-only exterior air | FEM meshing | actual GHA required |
-| Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | verifies body planes, positive tetrahedra, closed boundary geometry, shared body-seam incidence, owner-floor provenance, regional density, and actual periodic node translations | FEM meshing | source regression; GHA pending |
-| Implicit exact-layer cap regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_implicit_airbox_cap_coarsens_far_air` | verifies measured far-air tetrahedral sizes coarsen relative to near-air sizes when only the growth ratio sets the outer cap | FEM meshing | source regression; GHA pending |
+| Exact-layer ring construction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | creates exact CAD volumes; uses one recombined extrusion layer only in magnetic intervals and geometry-only extrusion in exterior air, then composes scoped owner/air fields | FEM meshing | interpreted Gmsh regression passed; managed runtime/0105 **NOT VERIFIED** |
+| Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | verifies body planes, positive tetrahedra, closed boundary geometry, shared body-seam incidence, owner-floor provenance, regional density, and actual periodic node translations | FEM meshing | interpreted Gmsh regression passed; managed runtime/0105 **NOT VERIFIED** |
+| Implicit exact-layer cap regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_implicit_airbox_cap_coarsens_far_air` | verifies measured far-air tetrahedral sizes coarsen relative to near-air sizes when only the growth ratio sets the outer cap | FEM meshing | interpreted Gmsh regression passed; managed runtime/0105 **NOT VERIFIED** |
 | Pure chordal-bound regression | `packages/fullmag-py/tests/test_meshing.py` | `test_ring_chordal_bound_guard_and_refinement` | checks the analytic inequality, invalid geometry rejection, and bound tightening under refinement | FEM mesh geometry | source test added; GHA pending |
+| Scoped magnetic extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | applies one recombined GEO layer (`numElements=[1]`, `heights=[1.0]`) only to intervals inside the magnetic owner | FEM meshing | interpreted Gmsh regression passed; runtime/0105 **NOT VERIFIED** |
+| Scoped exterior-air extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | leaves exterior-air intervals geometry-only so air grading can add independent z levels | FEM meshing | interpreted Gmsh regression passed; runtime/0105 **NOT VERIFIED** |
+| Owner/air boundary policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | selects air `IncludeBoundary` from `h_inner <= body_hmax`, restricts the owner cap to body volumes, and pins ring `annulus`/`hole` source surfaces with a neutral-`VOut` owner seed | FEM meshing | focused interpreted Gmsh owner consumers passed; density/runtime **NOT VERIFIED** |
+| Scoped source-plane target realization | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_embed_mixed_source_face_seed_points` | projects `ComponentRestrictedBox` and graded Box/Cylinder/Sphere descriptors into exact source-plane coordinates, validates the GeometryName owner, composes owner lower bounds, filters trimmed surfaces with `gmsh.model.isInside`, rejects malformed bounding boxes, and embeds bounded targets before 2-D generation | FEM meshing | focused source regression and real-Gmsh graded Box/Cylinder/existing-Box checks passed; mesh runtime, density and 0105 **NOT VERIFIED** |
+| Graded source-plane policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_add_exact_plane_projected_cap_field` | evaluates owner-bound upper descriptors on each z-directed exact layer plane with the canonical upper/lower composition; nonparallel exact-cap projections fail closed | FEM meshing | focused real-Gmsh graded checks passed; managed runtime, density and 0105 **NOT VERIFIED** |
+| Plane-projected graded descriptors | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_PLANE_PROJECTED_UPPER_KINDS` | allowlist consumed by the exact-plane cap and swept source-face route for graded Box/Cylinder/Sphere descriptors; unsupported exact-cap projections are rejected | FEM meshing | focused real-Gmsh graded checks passed; mesh runtime and density **NOT VERIFIED** |
+| Public CAD/air guard | `scripts/test_box_layered_airbox_mesh.py` | `_assert_public_box_planes` | requires CAD boundaries, exact magnetic `L+1`, nonempty intervals, no CAD-crossing tetrahedra, positive cells and incident exterior-air planes while allowing extra air levels | FEM meshing | interpreted Gmsh regression passed; runtime/0105 **NOT VERIFIED** |
 | Exact-layer airbox target resolution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` | derives interface and finite outer cap for the exact-layer Box/ring generator | FEM meshing | implemented |
 | Effective-target report | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_resolve_effective_shared_domain_targets` | reports resolved airbox intent, not yet the exact-layer generator's implicit cap | FEM meshing | report limitation |

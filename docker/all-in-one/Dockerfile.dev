@@ -1,0 +1,77 @@
+# Development image: the toolchain is built by docker/fem-gpu/Dockerfile.
+# Application source, compiled package, and provenance are runtime binds.
+ARG RUNTIME_BASE
+FROM ${RUNTIME_BASE} AS fullmag-dev
+
+ARG FULLMAG_TOOLCHAIN_IMAGE_ID
+ENV FULLMAG_TOOLCHAIN_IMAGE_ID=${FULLMAG_TOOLCHAIN_IMAGE_ID}
+
+USER root
+
+# The launcher must pass the immutable local toolchain identity explicitly.
+RUN python3 -c 'import os,re,sys; value=os.environ.get("FULLMAG_TOOLCHAIN_IMAGE_ID",""); sys.exit("FULLMAG_TOOLCHAIN_IMAGE_ID must be sha256:<64 hex>") if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", value) else None'
+RUN test -s /opt/fullmag-deps/share/fullmag/dependency-versions.json && \
+    python3 -c 'import json,sys; p="/opt/fullmag-deps/share/fullmag/dependency-versions.json"; d=json.load(open(p,encoding="utf-8")); required=("schema","declared","actual","latest"); missing=[k for k in required if k not in d]; commits=d.get("actual",{}).get("source_commits",{}); expected=("mfem","libceed","hypre","petsc","slepc"); missing += ["actual.source_commits."+k for k in expected if not commits.get(k)]; sys.exit("invalid FEM dependency manifest: "+", ".join(missing)) if d.get("schema") != "fullmag.docker.fem-gpu-dependencies.v1" or missing else None'
+
+COPY entrypoint.py /opt/fullmag/entrypoint.py
+COPY windows_folder_probe.py /opt/fullmag/windows_folder_probe.py
+COPY runtime_service.py /opt/fullmag/runtime_service.py
+COPY frontend_dev.py /opt/fullmag/frontend_dev.py
+COPY healthcheck.py /opt/fullmag/healthcheck.py
+
+# The pinned builder already prepared pnpm 10.8.1. Publish that immutable tool
+# for the unprivileged frontend instead of extracting it into Windows per run.
+RUN mkdir -p /opt/fullmag/tooling && \
+    cp -a /root/.cache/node/corepack/v1/pnpm/10.8.1 /opt/fullmag/tooling/pnpm && \
+    ln -sf /opt/fullmag/tooling/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm && \
+    chmod -R a+rX /opt/fullmag/tooling && \
+    chmod 755 /opt/fullmag/tooling/pnpm/bin/pnpm.cjs && \
+    test "$(/usr/local/bin/pnpm --version)" = "10.8.1"
+
+# These are image-owned mount points. Runtime bind mounts replace source,
+# package, provenance, state, and the Windows host certificate.
+RUN mkdir -p /opt/fullmag/source /opt/fullmag/package /state /run/fullmag && \
+    touch /opt/fullmag/provenance.json && \
+    chown 65532:65532 /opt/fullmag /state /run/fullmag && \
+    chmod 0755 /opt/fullmag /opt/fullmag/source /opt/fullmag/package /state /run/fullmag && \
+    chmod 0644 /opt/fullmag/provenance.json && \
+    chmod -R a+rX /opt/fullmag
+
+LABEL org.fullmag.runtime="docker-all-gpu-v1" \
+      org.fullmag.development="source-bind-v1" \
+      org.fullmag.toolchain.image-id="${FULLMAG_TOOLCHAIN_IMAGE_ID}" \
+      org.fullmag.toolchain.dependencies="/opt/fullmag-deps/share/fullmag/dependency-versions.json"
+
+ENV FULLMAG_REPO_ROOT=/opt/fullmag/source \
+    FULLMAG_STATE_ROOT=/state/.fullmag \
+    FULLMAG_STATE_DIR=/state/.fullmag \
+    HOME=/state \
+    FULLMAG_PROJECT_STORAGE_ROOT=/state \
+    FULLMAG_RUNS_ROOT=/state/runs/docker-all \
+    FULLMAG_WORKTREE_ID=docker-all \
+    FULLMAG_RUNTIME_SERVICE_CONFIG=/state/.fullmag/runtime-service/docker-all.json \
+    FULLMAG_RUNTIME_ROOT=/opt/fullmag/package \
+    FULLMAG_WEB_STATIC_DIR=/opt/fullmag/package/web \
+    FULLMAG_API_PORT=8081 \
+    FULLMAG_PYTHON=/usr/local/bin/python3 \
+    PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src:/opt/fullmag/package \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LD_LIBRARY_PATH=/opt/fullmag/package/lib:/opt/fullmag-deps/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH} \
+    FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1 \
+    FULLMAG_FORCE_LOCAL_FEM_GPU=1 \
+    FULLMAG_FEM_REQUIRE_GPU=0 \
+    FULLMAG_FEM_REQUIRE_CEED=1 \
+    FULLMAG_FEM_MFEM_DEVICE="" \
+    FULLMAG_FEM_MESH_CACHE_DIR=/state/.fullmag/mesh-cache \
+    CUDA_CACHE_PATH=/state/cuda-cache \
+    OMP_NUM_THREADS=4 \
+    FULLMAG_CPU_THREADS=4
+ENV PATH=/opt/fullmag/package/bin:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin
+
+WORKDIR /state
+USER 65532:65532
+RUN test "$(id -u)" = "65532" && test "$(/usr/local/bin/pnpm --version)" = "10.8.1"
+EXPOSE 8080 8081
+ENTRYPOINT ["/usr/local/bin/python3", "/opt/fullmag/entrypoint.py"]
+HEALTHCHECK --interval=5s --timeout=5s --start-period=30s --retries=6 \
+    CMD /usr/local/bin/python3 /opt/fullmag/healthcheck.py

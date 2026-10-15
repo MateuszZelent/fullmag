@@ -1,0 +1,13 @@
+# The canonical FEM Dockerfile has an explicit COPY allow-list. Keep source,
+# application packages, host caches, and secrets out of its build context.
+**
+!docker/
+!docker/fem-gpu/
+!docker/fem-gpu/Dockerfile
+!docker/fem-gpu/Dockerfile.dockerignore
+!docker/fem-gpu/normalize_cuda_dpkg_lists.sh
+!docker/fem-gpu/write_dependency_versions.py
+!docker/fem-gpu/nvidia-entrypoint/
+!docker/fem-gpu/nvidia-entrypoint/**
+!docker/fem-gpu/patches/
+!docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff

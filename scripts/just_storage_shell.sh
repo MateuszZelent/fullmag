@@ -87,6 +87,22 @@ fi
 # Admit this fixed helper before generic diagnostic substring handling, so a
 # composite command cannot use a diagnostic marker to bypass its argument check.
 case "${recipe}" in
+  *"scripts/verify_docker_all_runtime.py"*)
+    docker_verify_pattern="^[^[:space:]]+ \"[^\"]+/scripts/verify_docker_all_runtime.py\" --repo-root \"[^\"]+\" '[^']+'$"
+    if [[ ! "${recipe}" =~ ${docker_verify_pattern} ]]; then
+      echo "[fullmag just] invalid all-in-Docker verification recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" --profile docker-all-gpu -- "${bash_executable}" -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/fullmag_docker_runtime.py"*)
+    docker_runtime_pattern="^[^[:space:]]+ \"[^\"]+/scripts/fullmag_docker_runtime.py\" --repo-root \"[^\"]+\" (submit-development( --source-root '[^']+')?|submit --commit '[a-f0-9]{40}'|build-image --job-id '[a-f0-9]{32}' --commit '[a-f0-9]{40}'( --development)?( --source-digest '[a-f0-9]{64}' --native-snapshot-sha256 '[a-f0-9]{64}')?( --source-root '[^']+')?|start --assembly-receipt '[^']+' --port '[0-9]{4,5}'( --frontend 'dev')?( --source-root '[^']+')?)[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${docker_runtime_pattern} ]]; then
+      echo "[fullmag just] invalid all-in-Docker recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" --profile docker-all-gpu -- "${bash_executable}" -euo pipefail -c "${recipe}"
+    ;;
   *"scripts/verify_antenna_field_reader.py"*)
     antenna_reader_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_antenna_field_reader.py" --repo-root "[^"]+"$'
     if [[ ! "${recipe}" =~ ${antenna_reader_pattern} ]]; then

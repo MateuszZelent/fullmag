@@ -1,0 +1,123 @@
+# Fullmag development on Docker Desktop. Sources stay in the selected checkout.
+# The managed launcher resolves these paths, builds the backend on request,
+# checks Windows storage, and records the fully resolved Compose configuration.
+name: fullmag-development
+
+services:
+  backend:
+    image: ${FULLMAG_DEV_IMAGE:?Prepare the development image with the managed launcher}
+    build:
+      context: ./docker/all-in-one
+      dockerfile: Dockerfile.dev
+      args:
+        RUNTIME_BASE: ${FULLMAG_TOOLCHAIN_IMAGE:?Build the Fullmag toolchain first}
+        FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the inspected toolchain image ID}
+    pull_policy: never
+    init: true
+    user: "65532:65532"
+    read_only: true
+    gpus: all
+    cpus: 4
+    mem_limit: 8g
+    pids_limit: 512
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 60s
+    hostname: ${FULLMAG_BACKEND_HOSTNAME:?Managed run hostname is required}
+    environment:
+      FULLMAG_DOCKER_ROLE: backend
+      FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1
+      FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_DEV_IMAGE}
+    expose: ["8081"]
+    volumes:
+      # One source selection for both services: the main checkout or a worktree.
+      - type: bind
+        source: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
+        target: /opt/fullmag/source
+        read_only: true
+        bind: {create_host_path: false}
+      # Compiled backend output, not a Windows executable or source copy.
+      - type: bind
+        source: ${FULLMAG_BACKEND_PACKAGE:?Build the backend through the managed queue}
+        target: /opt/fullmag/package
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_PACKAGE_PROVENANCE:?Managed package provenance is required}
+        target: /opt/fullmag/provenance.json
+        read_only: true
+        bind: {create_host_path: false}
+      # Real Windows storage: sessions, results, logs and the CUDA disk cache.
+      - type: bind
+        source: ${FULLMAG_STATE_ROOT:?Managed Windows storage namespace is required}
+        target: /state
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_HOST_CERTIFICATE:?Windows storage admission is required}
+        target: /run/fullmag/windows-folder-host.json
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]
+    networks: [fullmag]
+
+  frontend:
+    image: ${FULLMAG_DEV_IMAGE}
+    pull_policy: never
+    init: true
+    user: "65532:65532"
+    read_only: true
+    cpus: 2
+    mem_limit: 4g
+    pids_limit: 512
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 60s
+    depends_on:
+      backend: {condition: service_healthy}
+    environment:
+      FULLMAG_DOCKER_ROLE: frontend
+      FULLMAG_DOCKER_FRONTEND: dev
+      FULLMAG_API_PROXY_TARGET: http://backend:8081
+      HOME: /state/development
+      NVIDIA_VISIBLE_DEVICES: void
+    ports: ["127.0.0.1:${FULLMAG_HTTP_PORT:-3197}:8080"]
+    volumes:
+      # Linux dependencies, Next output and HMR logs stay out of the checkout.
+      - type: bind
+        source: ${FULLMAG_STATE_ROOT}/development
+        target: /state/development
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_DEVELOPMENT_INPUTS:?Prepare the frontend input manifest}
+        target: /run/fullmag/development-inputs.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_SOURCE_ROOT}/apps/control-room/app
+        target: /state/development/workspace/apps/control-room/app
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_SOURCE_ROOT}/apps/control-room/src
+        target: /state/development/workspace/apps/control-room/src
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_SOURCE_ROOT}/apps/control-room/public
+        target: /state/development/workspace/apps/control-room/public
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_SOURCE_ROOT}/apps/control-room/scripts
+        target: /state/development/workspace/apps/control-room/scripts
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]
+    healthcheck:
+      start_period: 1920s
+    networks: [fullmag]
+
+# A separate project-scoped bridge; no external networks, static IPs or host mode.
+networks:
+  fullmag:
+    driver: bridge

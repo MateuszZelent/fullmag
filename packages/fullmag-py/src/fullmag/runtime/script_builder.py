@@ -909,9 +909,9 @@ def _render_scene_solver_call(source: Mapping[str, object]) -> str | None:
     return f"study.solver({', '.join(args)})" if args else None
 
 
-def _render_scene_stage_autosave_suffix(value: object) -> str:
+def _scene_stage_autosave(value: object) -> StageAutosave | None:
     if value is None:
-        return ""
+        return None
     if not isinstance(value, Mapping):
         raise ValueError("SceneDocument stage autosave must be an object")
     _reject_unrendered_scene_nested_fields(
@@ -963,7 +963,12 @@ def _render_scene_stage_autosave_suffix(value: object) -> str:
         table=table,
         fields=fields,
     )
-    return _render_stage_autosave(policy)
+    return policy
+
+
+def _render_scene_stage_autosave_suffix(value: object) -> str:
+    policy = _scene_stage_autosave(value)
+    return _render_stage_autosave(policy) if policy is not None else ""
 
 
 def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
@@ -8362,8 +8367,9 @@ def _render_stages(
             )
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
-        lines.append(f"{_surface_call(surface, 'clear_outputs')}()")
-        lines.extend(_render_outputs(stage.problem, _magnet_variable_names(stage.problem, overrides=overrides), surface=surface))
+        if not is_study_surface:
+            lines.append(f"{_surface_call(surface, 'clear_outputs')}()")
+            lines.extend(_render_outputs(stage.problem, _magnet_variable_names(stage.problem, overrides=overrides), surface=surface))
         if is_study_surface:
             run_parts: list[str] = []
             if stage.stage_id is not None:

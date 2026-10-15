@@ -355,6 +355,9 @@ pub(crate) enum RuntimeCommand {
     /// Initialize only a new explicitly scoped accepted store.
     #[command(hide = true)]
     InitializeScopedAcceptedStore,
+    /// Bootstrap the fixed accepted store inside the attested Docker runtime.
+    #[command(hide = true)]
+    InitializeDockerAcceptedStore,
     /// Initialize a pinned host policy for a never-started application store.
     #[command(hide = true)]
     InitializeHostApplication {
@@ -388,6 +391,16 @@ pub(crate) enum RuntimeCommand {
     ServiceEnsure {
         #[arg(long)]
         config: PathBuf,
+    },
+    /// Internal pinned terminal drain for a container-owned accepted service.
+    #[command(hide = true)]
+    ServiceDrainConfirmed {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        expected_owner: PathBuf,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=30))]
+        timeout_seconds: u64,
     },
     /// Observe an already running native service without starting or stopping it.
     ServiceStatus {

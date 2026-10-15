@@ -1,0 +1,36 @@
+# Optional packaged release. Development uses the root compose.yaml instead.
+services:
+  backend:
+    image: ${FULLMAG_RELEASE_IMAGE:?Assemble the managed release image first}
+    pull_policy: never
+    init: true
+    user: "65532:65532"
+    read_only: true
+    gpus: all
+    cpus: 4
+    mem_limit: 8g
+    pids_limit: 512
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 60s
+    hostname: ${FULLMAG_BACKEND_HOSTNAME:?Managed run hostname is required}
+    environment:
+      FULLMAG_DOCKER_ROLE: backend
+      FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1
+      FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_RELEASE_IMAGE}
+    ports: ["127.0.0.1:${FULLMAG_HTTP_PORT:-3197}:8081"]
+    volumes:
+      - type: bind
+        source: ${FULLMAG_STATE_ROOT:?Managed Windows storage namespace is required}
+        target: /state
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_HOST_CERTIFICATE:?Windows storage admission is required}
+        target: /run/fullmag/windows-folder-host.json
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]
+    networks: [fullmag]
+networks:
+  fullmag:
+    driver: bridge

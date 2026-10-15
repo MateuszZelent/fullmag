@@ -271,6 +271,7 @@ pub(crate) enum LocalFilesystemKind {
     LinuxBtrfs,
     LinuxTmpfs,
     LinuxOverlay,
+    DockerDesktopWindowsFolder,
     WindowsLocal,
 }
 
@@ -322,6 +323,13 @@ fn classify_local_filesystem(root: &Path) -> Result<LocalFilesystemKind> {
             0x9123_683e => Ok(LocalFilesystemKind::LinuxBtrfs),
             0x0102_1994 => Ok(LocalFilesystemKind::LinuxTmpfs),
             0x794c_7630 => Ok(LocalFilesystemKind::LinuxOverlay),
+            // Docker Desktop exposes an explicitly attested Windows folder as
+            // 9p.  Never admit 9p by filesystem name; the scoped adapter
+            // requires the profile, host evidence, and current mount grant.
+            0x0102_1997 => {
+                crate::docker_desktop_storage::admit(root)?;
+                Ok(LocalFilesystemKind::DockerDesktopWindowsFolder)
+            }
             _ => bail!(
                 "filesystem type 0x{kind:x} is not in the supported local filesystem set; power-loss durability is unverified"
             ),
@@ -345,6 +353,7 @@ fn classify_local_filesystem(root: &Path) -> Result<LocalFilesystemKind> {
         if !matches!(unsafe { GetDriveTypeW(volume.as_ptr()) }, 2 | 3 | 6) {
             bail!("non-local or unknown volume is not qualified for session writes");
         }
+        crate::docker_desktop_storage::reject_docker_owned_windows_root(&existing)?;
         return Ok(LocalFilesystemKind::WindowsLocal);
     }
     #[cfg(not(any(target_os = "linux", windows)))]

@@ -668,6 +668,8 @@ jobs:
   python-contracts:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
+    env:
+      FULLMAG_GMSH_THREADS: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -683,6 +685,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libglu1-mesa
+
+      - name: Verify Docker storage probes and runtime lifecycle contracts
+        run: |
+          python -B scripts/test_fullmag_docker_runtime.py -v
+          python -B scripts/test_windows_folder_evidence.py -v
+          python -B scripts/test_windows_folder_probe.py -v
 
       - name: Audit managed FEM CPU-only verification configuration
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
@@ -830,6 +838,9 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+
+      - name: Verify Windows Docker attestation publication barriers
+        run: python -B scripts/test_windows_folder_evidence.py -v
 
       - name: Verify disposable compiler storage and environment restoration
         run: python scripts/test_windows_volatile_build_storage.py -v

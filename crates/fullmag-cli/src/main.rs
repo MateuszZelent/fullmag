@@ -97,6 +97,37 @@ fn main() -> Result<()> {
                 }))?
             );
         }
+        Command::Runtime(RuntimeCommand::ServiceDrainConfirmed {
+            config,
+            expected_owner,
+            timeout_seconds,
+        }) => {
+            let configuration =
+                fullmag_session::runtime_service::RuntimeServiceConfig::read(&config)?;
+            let relative = expected_owner
+                .strip_prefix(&configuration.store_root)
+                .context("expected service owner must be inside its accepted store")?;
+            let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+                &configuration.store_root,
+                relative
+                    .to_str()
+                    .context("expected service owner path is not UTF-8")?,
+                256 * 1024,
+            )?;
+            let expected = serde_json::from_slice(&bytes)?;
+            let terminal = runtime_service_client::drain_confirmed(
+                &expected,
+                &configuration,
+                timeout_seconds,
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": "runtime_service_discovery.v1",
+                    "status": "drained", "owner": terminal,
+                })
+            );
+        }
         Command::Runtime(RuntimeCommand::ServiceStatus {
             store,
             target,
@@ -135,6 +166,18 @@ fn main() -> Result<()> {
         }
         Command::Runtime(RuntimeCommand::InitializeScopedAcceptedStore) => {
             control_room::initialize_scoped_accepted_store()?;
+        }
+        Command::Runtime(RuntimeCommand::InitializeDockerAcceptedStore) => {
+            let (root, created) = fullmag_session::initialize_attested_docker_accepted_store()?;
+            let binding = fullmag_runtime_control::accepted_store::store_binding(&root)
+                .context("Docker accepted-store binding is invalid")?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "fullmag.docker-accepted-store-bootstrap.v1",
+                    "store_root": root, "binding": binding, "created": created,
+                })
+            );
         }
         Command::Runtime(RuntimeCommand::InitializeHostApplication {
             config,
