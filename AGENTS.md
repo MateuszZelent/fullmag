@@ -53,8 +53,8 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 
 - Fizyczną lokalizację storage hosta deklaruj przez `FULLMAG_PROJECT_STORAGE_ROOT` w lokalnym `.env` głównego checkoutu (szablon: `.env.example`). Worktree korzystają z tej samej konfiguracji przez resolver. Nie wpisuj stałych ścieżek Windows/Linux do instrukcji ani skilli i nie kopiuj całego `.env` do worktree. Buildy są podkatalogami rozwiązanego storage; jawne zmienne procesu, w tym mapowanie kontenera, mają pierwszeństwo i podlegają tej samej walidacji.
 
-- Przed wyborem polecenia builda czytaj `justfile`. Natywne FEM/MFEM/CUDA/hypre/libCEED używa od początku container-backed `just`, np. `just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...` lub właściwego managed recipe. Hostowe `cargo`, `cmake`, ręczny Docker i bezpośrednie binaria są diagnostyką, nie kwalifikacją FEM.
-- Windows: `scripts/windows/run_fullmag.ps1` dla natywnej trasy; `scripts/windows/run_fullmag_fem.ps1` i Docker Desktop dla FEM. Windowsowy launcher nie wywołuje WSL. Wszystkie nowe kontrolowane dane kieruj do kanonicznego `storage` projektu; `FULLMAG_WINDOWS_*_ROOT` pozostaje wyłącznie zwalidowanym adapterem zgodności i nie może tworzyć alternatywnych rootów poza konfiguracją.
+- Przed wyborem polecenia builda czytaj `justfile`. Na Linuxie FEM/MFEM/CUDA/hypre/libCEED używa od początku container-backed `just`, np. `just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...` lub właściwego managed recipe. Natywny Windows stosuje zarządzaną trasę z [ADR 0053](docs/adr/0053-native-windows-fem-build-environment.md). Hostowe `cargo`, `cmake`, ręczny Docker i bezpośrednie binaria są diagnostyką, nie kwalifikacją FEM.
+- Windows: `scripts/windows/run_fullmag.ps1` obsługuje natywny workspace, a `scripts/windows/run_fullmag_fem.ps1` natywne FEM CPU/GPU. Pełny pakiet czterech realizacji przygotowuje `just windows-full-workspace-build`, a uruchamia `just windows-full-workspace`. Docker Desktop pozostaje wyłącznie jawnie wybraną zgodnością przez `FULLMAG_FORCE_WINDOWS_FEM_DOCKER=1`, z własnymi wymaganiami storage i kwalifikacji. Windowsowy launcher nie wywołuje WSL. Wszystkie nowe kontrolowane dane kieruj do kanonicznego `storage` projektu; `FULLMAG_WINDOWS_*_ROOT` pozostaje wyłącznie zwalidowanym adapterem zgodności i nie może tworzyć alternatywnych rootów poza konfiguracją.
 - Przed buildem, uruchomieniem lub porządkowaniem storage przeczytaj [reguły backendu i wykonania](.agents/instructions/backend.md), w tym dokładne ścieżki Linux/Windows. Linuxowy runner nigdy nie buduje bezpośrednio na CIFS. Prune jest domyślnie tylko dry-run przez `FULLMAG_RUNTIME_DRY_RUN=1`; usunięcie wymaga autoryzacji.
 - Obowiązująca polityka worktree, profili buildów, `justfile`, cache, runów i sprzątania znajduje się w [Fullmag build-storage governance](docs/guides/fullmag-build-storage-governance.md). Resolver wyprowadza project root ze wspólnego katalogu Git głównego checkoutu; `storage` i `worktrees` są jego rodzeństwem. Przed utworzeniem worktree sprawdź rejestr i użyj istniejącej izolacji; bez automatycznego `fetch`/`pull`/bootstrapu.
 - Każdy build/run z `justfile`, również ręczny, musi wykonać preflight ścieżek i zarejestrować stan końcowy przed zgłoszeniem zgodności. Instrukcje dokumentują kontrakt, lecz wrapper, preflight i sandbox są właściwą granicą techniczną; brak podpięcia danej recepty oznacz `NOT VERIFIED`.
@@ -68,8 +68,12 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 Użytkownik zatwierdził bezpośredni build natywnego Windows workspace na żądanie,
 bez kolejki Linux/Docker. Agenci mogą używać poniższych zarządzanych recept
 w zakresie autoryzowanego zadania. Nie wymaga to ponownej zgody na każdy build.
-Wyjątek dotyczy trasy `scripts/windows/run_fullmag.ps1` i nie rozszerza się na
-FEM/MFEM ani dowolny ręczny `cargo`, `cmake` lub Docker.
+Trasa `scripts/windows/run_fullmag.ps1` zachowuje poniższe recepty. Oddzielnie
+zatwierdzona natywna trasa FEM CPU/GPU i pełnego pakietu jest opisana w
+[ADR 0053](docs/adr/0053-native-windows-fem-build-environment.md); używa
+zarządzanych launcherów, resolvera, heavy slotu i receiptów. Ręczny `cargo`,
+`cmake` lub Docker pozostaje diagnostyką, a sukces buildu nie zastępuje
+weryfikacji runtime ani fizyki.
 
 | Polecenie | Działanie |
 |---|---|

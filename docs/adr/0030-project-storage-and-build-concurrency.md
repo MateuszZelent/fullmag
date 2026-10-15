@@ -6,6 +6,8 @@
 
 **Decision makers:** Fullmag core
 
+**Aktualizacja trasy Windows FEM (2026-10-15):** [ADR 0053](0053-native-windows-fem-build-environment.md) zastępuje opis obowiązkowego Dockera dla Windows FEM natywnymi zarządzanymi launcherami. Polityka kanonicznego storage, preflightów, lease, współbieżności i dowodów pozostaje w mocy. Poniższy opis Docker Desktop zachowuje kontekst wcześniejszej decyzji.
+
 ## Kontekst
 
 Buildy, cache, runtime’y, logi i worktree Fullmag były tworzone w kilku

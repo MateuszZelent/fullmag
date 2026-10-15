@@ -3,6 +3,8 @@
 Status: accepted for implementation; aggregate installed support and runtime NOT VERIFIED.
 Data: 2026-10-13.
 
+Zastępuje Windowsową trasę FEM z [ADR 0030](0030-project-storage-and-build-concurrency.md), zachowując jego politykę storage, blokad i provenance. Nie zmienia kontenerowej trasy Linux.
+
 ## Kontekst
 
 Skrypt FEM GPU uruchamiany z PowerShell trafiał do kontenera Linux. Trasa
@@ -60,15 +62,15 @@ Dotychczasowa forma Win32 w BA nie jest docelowym interfejsem użytkownika i nie
 może pozostać ukrytym równoległym formularzem. Samodzielne GUI musi obsługiwać
 prezentację, focus, klawiaturę, przewijanie, DPI i dostępność.
 
-Rekomendowany pin producenta to .NET SDK `10.0.402`, target `net10.0` oraz
+Przypięty toolchain producenta to .NET SDK `10.0.402`, target `net10.0` oraz
 pakiety `Avalonia`, `Avalonia.Desktop` i `Avalonia.Themes.Fluent` w wersji
 `12.1.4`. SDK i pakiety muszą zostać wpisane do osobnego, wersjonowanego
 manifestu producenta oraz lock/provenance z dokładnymi hashami przed pierwszym
 authoringiem. Publikacja ma być `self-contained` dla `win-x64`, więc komputer
-konsumenta nie wymaga wcześniej zainstalowanego .NET. Obecny manifest
-`windows_installer_build_requirements.json` nie kwalifikuje jeszcze tego
-toolchainu; do czasu jego rozszerzenia i dowodu publikacji status pozostaje
-`NOT VERIFIED`.
+konsumenta nie wymaga wcześniej zainstalowanego .NET. Manifest `windows_installer_build_requirements.json` deklaruje ten toolchain,
+a receipt producenta wiąże SDK, payload GUI i ich hashe. Kwalifikacja źródeł,
+publikacji EXE, GUI, pełnej instalacji i runtime pozostaje rozdzielona;
+samo przypięcie wersji nie poświadcza żadnej z tych bram.
 
 GUI nie wywołuje PowerShell, `fullmag_storage.py`, Git ani Burn bezpośrednio.
 Przez jednorazową, uwierzytelnioną sesję IPC żąda `discover`, `preview`,
@@ -98,7 +100,7 @@ Fizycznym artefaktem tej trasy jest jeden supersetowy bundle profilu
 fizycznych wariantów tylko po to, aby uzyskać cztery dowody. Bundle i jego
 komponenty są publikowane przez agregat
 `windows-full-runtime/build-manifest.json`, który musi zawierać cztery
-niezależne proofs komponentów: `fdm-cpu`, `fdm-gpu`, `fem-cpu` i `fem-gpu`.
+niezależne proofs komponentów: `fdm_cpu`, `fdm_gpu`, `fem_cpu` i `fem_gpu`.
 Pojedynczy build może dostarczyć więcej niż jeden komponent, lecz jego receipt
 nie może udawać wykonania ani rozstrzygnięcia GPU.
 
