@@ -280,7 +280,7 @@ class NativeInstallerPreadmissionProtocol(unittest.TestCase):
                 "manifest_path": _windows_path(manifest_path),
                 "manifest_hash": _sha256(manifest_path),
                 "storage_root": _windows_path(fixture / "storage"),
-                "lane": "fem-gpu",
+                "lane": "all",
             }
 
             old_host = fixture / "old-protocol.ps1"
@@ -310,7 +310,7 @@ class NativeInstallerPreadmissionProtocol(unittest.TestCase):
             )
             self.assertEqual(current_response.get("state"), "complete")
             self.assertEqual(current_response.get("readiness"), "prerequisites_ready")
-            self.assertEqual(current_response.get("lane"), "fem-gpu")
+            self.assertEqual(current_response.get("lane"), "all")
             self.assertEqual(current_response.get("source_admitted"), False)
             self.assertEqual(current_response.get("env_write"), False)
             self.assertEqual(current_response.get("project_owned_writes"), False)
