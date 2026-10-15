@@ -2174,6 +2174,10 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   const foreignRealtimeConnection =
     requireActiveRealtimeConnection("foreign-session isolation");
   const closesBeforeForeignEvent = realtimeSocketCloses.length;
+  const realtimeConnectionsBeforeForeignEvent = realtimeConnections.length;
+  const realtimePageEventsBeforeForeignEvent = realtimePageEvents.length;
+  const realtimeClientCloseFramesBeforeForeignEvent = realtimeClientCloseFrames.length;
+  const fixtureRequestsBeforeForeignEvent = fixtureRequests.length;
   const foreignSessionEvent = createRealtimeBatchChangedEvent({
     runId: catalogRunId,
     seq: 2,
@@ -2260,12 +2264,98 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
         ".",
     );
   }
-  const renderedNodeAfterForeignEvent = await refreshedNode.evaluate((node) => ({
-    isConnected: node.isConnected,
-    label: node.querySelector(".fm-explorer-tree-row__label")?.textContent ?? null,
-    nodeId: node.getAttribute("data-node-id"),
-    sameNode: node === window.__FULLMAG_CATALOG_NODE_BEFORE_FOREIGN_EVENT__,
-  }));
+  const foreignCloseSnapshot = await page.evaluate((expectedNodeId) => {
+    const savedReference =
+      window.__FULLMAG_CATALOG_NODE_BEFORE_FOREIGN_EVENT__ ?? null;
+    const targetNodes = Array.from(document.querySelectorAll("[data-node-id]"))
+      .filter((node) => node.getAttribute("data-node-id") === expectedNodeId);
+    const targetNode = targetNodes[0] ?? null;
+    const explorer = document.querySelector(".fm-explorer");
+    const trees = Array.from(document.querySelectorAll(".fm-explorer-tree"));
+    const tree = trees[0] ?? null;
+    const treeBounds = tree?.getBoundingClientRect() ?? null;
+    const visibleDataNodeIds = tree && treeBounds
+      ? Array.from(tree.querySelectorAll("[data-node-id]"))
+          .filter((node) => {
+            const bounds = node.getBoundingClientRect();
+            const style = window.getComputedStyle(node);
+            return bounds.width > 0 &&
+              bounds.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              bounds.bottom > treeBounds.top &&
+              bounds.top < treeBounds.bottom &&
+              bounds.right > treeBounds.left &&
+              bounds.left < treeBounds.right;
+          })
+          .map((node) => node.getAttribute("data-node-id"))
+          .filter((nodeId) => Boolean(nodeId))
+          .slice(0, 80)
+      : [];
+    return {
+      expectedNodeId,
+      explorerCount: document.querySelectorAll(".fm-explorer").length,
+      explorerConnected: Boolean(explorer?.isConnected),
+      targetCount: targetNodes.length,
+      targetExists: targetNode !== null,
+      target: targetNode
+        ? {
+            isConnected: targetNode.isConnected,
+            label: targetNode.querySelector(".fm-explorer-tree-row__label")?.textContent ?? null,
+            nodeId: targetNode.getAttribute("data-node-id"),
+            sameNode: targetNode === savedReference,
+          }
+        : null,
+      savedReferenceExists: savedReference !== null,
+      savedReferenceIsConnected: savedReference?.isConnected ?? false,
+      savedReferenceNodeId: savedReference?.getAttribute("data-node-id") ?? null,
+      treeCount: trees.length,
+      treeConnected: Boolean(tree?.isConnected),
+      scrollTop: tree?.scrollTop ?? null,
+      clientHeight: tree?.clientHeight ?? null,
+      scrollHeight: tree?.scrollHeight ?? null,
+      treeBoundsHeight: treeBounds?.height ?? null,
+      visibleDataNodeIds,
+    };
+  }, refreshedNodeId);
+  const postCloseDiagnostics = {
+    snapshot: foreignCloseSnapshot,
+    newRealtimeConnections: realtimeConnections
+      .slice(realtimeConnectionsBeforeForeignEvent)
+      .map((connection) => ({
+        connectionId: connection.id,
+        path: connection.path,
+        protocolOffer: connection.protocolOffer,
+        helloTimestamp: connection.helloTimestamp ?? null,
+        helloObserved: Boolean(connection.pageSocketObservation),
+        pageCloseEvent: connection.pageCloseEvent ?? null,
+        clientCloseFrame: connection.clientCloseFrame ?? null,
+        lastFixtureEvent: connection.lastFixtureEvent ?? null,
+      })),
+    realtimePageEvents: realtimePageEvents.slice(realtimePageEventsBeforeForeignEvent),
+    browserSocketCloses: realtimeSocketCloses.slice(closesBeforeForeignEvent),
+    clientCloseFrames: realtimeClientCloseFrames.slice(
+      realtimeClientCloseFramesBeforeForeignEvent,
+    ),
+    currentSessionRequests: fixtureRequests
+      .slice(fixtureRequestsBeforeForeignEvent)
+      .filter((request) => request.includes("/v2/sessions/current")),
+    datasetCatalogRequests: datasetCatalogRequests.slice(
+      catalogRequestCountBeforeForeignEvent,
+    ),
+  };
+  console.log(
+    "[explorer-foreign-close-diagnostics] " +
+      JSON.stringify(postCloseDiagnostics),
+  );
+  if (!foreignCloseSnapshot.targetExists) {
+    throw new Error(
+      "The existing StageExecution result node was absent immediately after foreign-scope close (no locator wait): " +
+        JSON.stringify(postCloseDiagnostics) +
+        ".",
+    );
+  }
+  const renderedNodeAfterForeignEvent = foreignCloseSnapshot.target;
   if (
     !renderedNodeAfterForeignEvent.isConnected ||
     !renderedNodeAfterForeignEvent.sameNode ||
