@@ -677,6 +677,13 @@
       "symbol": "DOC-ANCHOR:material-regions-v04-registry-identities",
       "responsibility": "Existing exact-name, global region identity and owner semantics shared by all four backend lanes; execution qualification remains separate.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "mesh-bound-public-nodal-array-contract",
+      "path": "docs/adr/0059-mesh-bound-nodal-material-arrays.md",
+      "symbol": "DOC-ANCHOR:mesh-bound-nodal-material-arrays",
+      "responsibility": "Accepted public nodal-array semantics and exact ordered-mesh binding; implementation and runtime qualification pending.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {

@@ -814,7 +814,7 @@ region topology.
 - legacy `RegionIR` remains a body/geometry binding compatibility type,
 - new `ObjectRegionIR` represents owner-scoped authored regions,
 - `MaterialParameterFieldIR` represents authored scalar/vector field intent,
-- `MaterialIR.*_field` remains realized/runtime payload, not authored intent,
+- `MaterialIR.*_field` preserves public authored nodal arrays as well as realized plan payload; new FEM planning must bind authored arrays to the exact ordered mesh snapshot (accepted contract below, implementation pending),
 - `CouplingIR` represents explicit exchange/RKKY/interface coupling,
 - realized mesh/material region markers remain runtime/meshing assets.
 
@@ -954,7 +954,7 @@ They are part of the physics contract, not implementation preferences.
 | Is FEM projection equivalent to conformal material splitting? | No. Projection is an explicit extended-mode approximation for smooth or intentionally smeared fields, not a production default for sharp jumps. |
 | Is projection allowed for RKKY/contact/DMI interfaces? | No default projection path. These need an explicit runtime interface or a capability block. |
 | Is multilayer FDM with regions in v1? | No. It is capability-gated out of scope until the multilayer plan descriptor supports region masks/material fields/couplings. |
-| Is old `MaterialIR.ms_field` authored intent? | No. It is a realized/runtime compatibility payload; authored fields use `MaterialParameterFieldIR`. |
+| Is `MaterialIR.ms_field` authored intent? | Yes. Public nodal arrays are retained. Their accepted FEM contract requires an exact ordered-mesh binding; current separate transient/eigen paths are not proof of that binding. See ADR 0059 and the implementation status below. |
 | How are object contacts discovered? | Contact discovery is a runtime materialization step: FDM uses mask adjacency; FEM uses shared-domain boundary/domain markers. |
 
 (material-regions-validation)=
@@ -1061,3 +1061,30 @@ must include:
 | FEM material core | `backends/fem/core/fem_element_quadrature_material.hpp` | `class ElementQuadratureMaterial` | element/quadrature material access |
 | Rejestry V04 | `crates/fullmag-ir/src/validation.rs` | `validate_physics_object_problem` | indeksowane błędy pustych/duplikowanych materiałów i regionów oraz właścicieli; źródła, bez kwalifikacji runtime |
 | Publiczna walidacja V04 | `crates/fullmag-ir/src/physics_object.rs` | `validate` | `validate()` egzekwuje istniejący kontrakt rejestrów, bez zmiany wire V03/V04 |
+
+| Binding tablic nodalnych | `docs/adr/0059-mesh-bound-nodal-material-arrays.md` | `DOC-ANCHOR:mesh-bound-nodal-material-arrays` | zaakceptowana semantyka, planowany binding; bez dowodu implementacji |
+
+(material-regions-mesh-bound-nodal-arrays)=
+## Korekta kontraktu: publiczne tablice nodalne — 15.10.2026
+
+Użytkownik rozstrzygnął sprzeczność publicznego `Material.*_field` i wcześniejszego
+opisu IR: dziesięć tablic Ms/A/alpha/Ku1/Ku2/Kc1/Kc2/Kc3/Dind/Dbulk pozostaje
+wejściem autorskim. Jednostki są takie same jak odpowiednich skalarów: A/m,
+J/m, 1, J/m³ oraz J/m². Tablica jest bazowym profilem parametru; regionalne
+nadpisania korzystają ze wspólnych zasad priorytetu, konfliktów i mieszania.
+
+[ADR 0059](../adr/0059-mesh-bound-nodal-material-arrays.md) określa typowany
+companion binding do `MeshIR::topology_fingerprint_v6()` i liczby węzłów końcowej
+siatki. Indeksy dotyczą dokładnej uporządkowanej listy `mesh.nodes`; mapy ownerów
+wykorzystują `FemMeshPartIR.node_indices`. Sam rozmiar tablicy nie dowodzi jej
+zgodności z siatką. Inny fingerprint, brak bindingu lub niezgodna długość mają
+blokować nowe planowanie przed ABI. Nie dopisujemy bindingu wstecz do starych
+wyników ani nie wykonujemy domyślnego transferu na inną siatkę. FEM Node-P1,
+element-DG0 i komórkowy layout FDM pozostają odrębnymi realizacjami.
+
+**Granica dowodów:** jest to accepted/planned contract. Na bazowym commicie
+`91c4bd8618079b4a72af6994a8b1267352a87c3a` transient FEM nadpisuje wejściowe
+tablice w `build_region_material_fields`, a eigen nie przechodzi przez ten sam
+krok. Native kontroluje długości i wartości, lecz nie źródłową tożsamość siatki.
+Wiązanie, wspólny resolver i testy round-trip/plannera wymagają implementacji.
+Sukces serializacji ani kontroli źródeł nie jest kwalifikacją MFEM/GPU lub fizyki.
