@@ -33,6 +33,16 @@ param(
 
   [switch]$BuildOnly,
 
+  # Explicit source-first Control Room host.  This is only valid for the
+  # managed native FEM empty workspace; it must never widen FDM workspace
+  # admission or invoke the desktop/Tauri surface.
+  [switch]$Browser,
+
+  # Build the single physical FEM GPU workspace package while publishing a
+  # hash-bound capability manifest for all four runtime lanes.  The UI keeps
+  # backend/device selection; this flag never selects a solver execution.
+  [switch]$AllBackends,
+
   [switch]$SkipCompatibilityLinks,
 
   [Alias("skip_local_changes")]
@@ -41,7 +51,7 @@ param(
   # Internal build-to-launch handoff: pins a verified snapshot manifest.
   [string]$ExpectedBuildId,
 
-  [ValidateRange(1, 65535)]
+  [ValidateRange(0, 65535)]
   [int]$WebPort = 3100
 )
 
@@ -65,24 +75,53 @@ function Resolve-WindowsBackendProfile {
 
 # Workspace opens the authoring shell; execution intent is chosen in the UI.
 # Reject simulation inputs instead of silently dropping them from `fullmag ui`.
+$AllBackendsRequested = [bool]$AllBackends
+if ($AllBackendsRequested) {
+  if ($RunMode -ne "workspace" -or $Backend -ne "auto" -or $Device -ne "auto") {
+    throw "-AllBackends is only valid for an empty workspace with Backend=auto and Device=auto"
+  }
+  if ($ScriptPath -or $OutputDir -or $InitialMagnetizationState -or
+      $InitialMagnetizationStateFormat -or $InitialMagnetizationStateDataset -or
+      $null -ne $InitialMagnetizationStateSampleIndex) {
+    throw "-AllBackends does not accept a simulation script, output, or initial state"
+  }
+  if ($BuildMode -eq "false" -and -not $ExpectedBuildId) {
+    throw "-AllBackends runtime reuse requires ExpectedBuildId for the immutable capability manifest"
+  }
+}
+$BrowserWorkspace = $Browser -and ($Backend -eq "fem" -or $AllBackendsRequested) -and $RunMode -eq "workspace"
+if ($Browser -and -not $BrowserWorkspace) {
+  throw "-Browser is only supported for the managed native FEM workspace"
+}
 if ($RunMode -eq "workspace" -and (
     $ScriptPath -or $OutputDir -or $InitialMagnetizationState -or
     $InitialMagnetizationStateFormat -or $InitialMagnetizationStateDataset -or
     $null -ne $InitialMagnetizationStateSampleIndex -or
-    $Backend -ne "auto" -or $Device -ne "auto")) {
+    (($Backend -ne "auto") -and -not $BrowserWorkspace -and -not $AllBackendsRequested) -or
+    (($Device -ne "auto") -and -not $BrowserWorkspace -and -not $AllBackendsRequested))) {
   throw "Workspace mode opens an empty authoring shell; choose backend/device in the UI and omit simulation inputs"
 }
-if ($Backend -eq "fem") {
-  throw "Native Windows launcher currently supports FDM only; FEM remains on its managed runtime path"
+if ($Device -eq "gpu" -and $Backend -notin @("auto", "fdm", "fem")) {
+  throw "device=gpu is only supported for the native Windows FDM or FEM lane"
 }
-if ($Device -eq "gpu" -and $Backend -notin @("auto", "fdm")) {
-  throw "device=gpu is only supported for the native Windows FDM lane"
+if ($Backend -eq "fem" -and $RunMode -eq "workspace" -and -not $BrowserWorkspace -and -not $AllBackendsRequested) {
+  throw "Native Windows FEM requires interactive or headless simulation mode"
 }
 if ($BuildMode -eq "auto" -and $RunMode -ne "workspace") {
   throw "Automatic build selection is supported only for the empty Windows workspace"
 }
 $SelectedBackendProfile = Resolve-WindowsBackendProfile `
   -RequestedProfile $BackendProfile -Frontend $Frontend -RunMode $RunMode
+if ($AllBackendsRequested) {
+  if ($SelectedBackendProfile -ne "release") {
+    throw "-AllBackends requires the release native workspace profile"
+  }
+  # The physical package is built by the strict FEM GPU lane.  The original
+  # auto/auto request is retained in the aggregate manifest and runtime env;
+  # these internal values only select the producer build.
+  $Backend = "fem"
+  $Device = "gpu"
+}
 if ($SelectedBackendProfile -eq "dev" -and $RunMode -ne "workspace" -and $Device -ne "cpu") {
   throw "The dev backend profile is supported only for native Windows FDM CPU builds"
 }
@@ -93,6 +132,23 @@ if ($RunMode -eq "workspace" -and $BuildOnly -and (
 }
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if ($Backend -eq "fem" -and $env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
+  throw "Native Windows FEM must enter through scripts/windows/run_fullmag_fem.ps1 and the managed storage operation"
+}
+$NativeFemAttemptId = [string]$env:FULLMAG_NATIVE_FEM_ATTEMPT_ID
+$NativeFemRequestedDevice = if ($env:FULLMAG_FEM_REQUESTED_DEVICE) {
+  [string]$env:FULLMAG_FEM_REQUESTED_DEVICE
+} else {
+  $Device
+}
+if ($Backend -eq "fem") {
+  if ($NativeFemAttemptId -notmatch '^[0-9a-f]{32}$') {
+    throw "Native Windows FEM requires the managed attempt identity"
+  }
+  if ($NativeFemRequestedDevice -notin @("auto", "cpu", "gpu")) {
+    throw "Native Windows FEM requested device provenance is invalid"
+  }
+}
 $BuildSourceRoot = $RepoRoot
 $BuildSnapshot = $null
 $VolatileBuild = $null
@@ -139,10 +195,21 @@ function Invoke-CompilerInputsTool {
     throw "Compiler input $Command returned invalid JSON: $output"
   }
 }
-if ($ExpectedBuildId -and ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1" -or
-    $ExpectedBuildId -notmatch '^[0-9a-f]{64}$' -or $RunMode -ne "workspace" -or
-    $SelectedBackendProfile -ne "dev" -or $Frontend -ne "dev" -or $BuildMode -ne "false")) {
-  throw "ExpectedBuildId requires the managed native dev build-to-launch handoff"
+if ($ExpectedBuildId) {
+  $expectedBuildHandoffAllowed =
+    ($AllBackendsRequested -and $RunMode -eq "workspace" -and
+      $SelectedBackendProfile -eq "release" -and $BuildMode -eq "false") -or
+    ($RunMode -eq "workspace" -and $Backend -in @("auto", "fdm") -and
+      $SelectedBackendProfile -in @("dev", "release") -and
+      $Frontend -in @("dev", "static") -and $BuildMode -eq "false") -or
+    ($BrowserWorkspace -and $SelectedBackendProfile -eq "release" -and
+      $BuildMode -eq "false") -or
+    ($Backend -eq "fem" -and $RunMode -in @("interactive", "headless") -and
+      $SelectedBackendProfile -eq "release" -and $BuildMode -eq "false")
+  if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1" -or
+      $ExpectedBuildId -notmatch '^[0-9a-f]{64}$' -or -not $expectedBuildHandoffAllowed) {
+    throw "ExpectedBuildId requires the managed native build-to-launch handoff"
+  }
 }
 $TargetTriple = "x86_64-pc-windows-msvc"
 
@@ -152,7 +219,9 @@ if (-not (Test-Path -LiteralPath $StorageAdapter -PathType Leaf)) {
 }
 . $StorageAdapter
 $StorageDevice = if ($Device -eq "gpu") { "gpu" } else { "cpu" }
-$ExpectedStorageProfile = if ($RunMode -eq "workspace" -or $SelectedBackendProfile -eq "dev") {
+$ExpectedStorageProfile = if ($Backend -eq "fem") {
+  "windows-native-fem-$StorageDevice"
+} elseif ($RunMode -eq "workspace" -or $SelectedBackendProfile -eq "dev") {
   if ($SelectedBackendProfile -eq "dev") { "windows-native-fdm-cpu-dev" } else { "windows-native-fdm-cpu" }
 } elseif ($StorageDevice -eq "gpu") {
   "windows-native-fdm-gpu"
@@ -163,13 +232,17 @@ $StorageProfile = $ExpectedStorageProfile
 if ($env:FULLMAG_STORAGE_PROFILE -and $env:FULLMAG_STORAGE_PROFILE.Trim()) {
   $requestedStorageProfile = $env:FULLMAG_STORAGE_PROFILE.Trim()
   $fixedWorkspaceProfiles = @("windows-native-fdm-cpu", "windows-native-fdm-cpu-dev")
+  $fixedFemProfiles = @("windows-native-fem-cpu", "windows-native-fem-gpu")
+  if ($Backend -eq "fem" -and $requestedStorageProfile -ne $ExpectedStorageProfile) {
+    throw "FULLMAG_STORAGE_PROFILE must match the selected native FEM device profile: $ExpectedStorageProfile"
+  }
   if (($RunMode -eq "workspace" -or $SelectedBackendProfile -eq "dev") -and
       $requestedStorageProfile -ne $ExpectedStorageProfile) {
     throw "FULLMAG_STORAGE_PROFILE must match the selected native workspace compiler profile: $ExpectedStorageProfile"
   }
-  if ($requestedStorageProfile -in $fixedWorkspaceProfiles -and
+  if (($requestedStorageProfile -in $fixedWorkspaceProfiles -or $requestedStorageProfile -in $fixedFemProfiles) -and
       $requestedStorageProfile -ne $ExpectedStorageProfile) {
-    throw "FULLMAG_STORAGE_PROFILE $requestedStorageProfile conflicts with backend profile $SelectedBackendProfile"
+    throw "FULLMAG_STORAGE_PROFILE $requestedStorageProfile conflicts with the selected native lane"
   }
   if ($RunMode -ne "workspace" -and $SelectedBackendProfile -eq "release" -and
       $requestedStorageProfile -notin $fixedWorkspaceProfiles) {
@@ -203,8 +276,41 @@ if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
     $managedArguments += @("-InitialMagnetizationStateSampleIndex", $InitialMagnetizationStateSampleIndex.ToString())
   }
   if ($BuildOnly) { $managedArguments += "-BuildOnly" }
+  if ($Browser) { $managedArguments += "-Browser" }
+  if ($AllBackendsRequested) { $managedArguments += "-AllBackends" }
   if ($SkipCompatibilityLinks) { $managedArguments += "-SkipCompatibilityLinks" }
   if ($SkipLocalChanges) { $managedArguments += "-SkipLocalChanges" }
+  if ($AllBackendsRequested) {
+    if ($RunMode -ne "workspace" -or -not $Browser -or $BuildMode -notin @("true", "false")) {
+      throw "-AllBackends requires the closed Windows full workspace browser operation with BuildMode true or false"
+    }
+    $fullResolver = Join-Path $RepoRoot "scripts\fullmag_storage.py"
+    if (-not (Test-Path -LiteralPath $fullResolver -PathType Leaf)) {
+      throw "Full workspace storage resolver is missing: $fullResolver"
+    }
+    $fullPython = Get-Command "python" -ErrorAction SilentlyContinue
+    if (-not $fullPython) {
+      throw "Python is required to invoke the native full workspace operation"
+    }
+    $fullAction = if ($BuildOnly) {
+      "run-windows-full-workspace-build"
+    }
+    else {
+      "run-windows-full-workspace"
+    }
+    $fullArguments = @(
+      $fullResolver, $fullAction, "--repo-root", $RepoRoot,
+      "--full-frontend", $Frontend, "--full-web-port", $WebPort.ToString(),
+      "--full-build-mode", $BuildMode
+    )
+    if ($SkipLocalChanges) { $fullArguments += "--full-skip-local-changes" }
+    if (-not $BuildOnly -and $ExpectedBuildId) {
+      $fullArguments += @("--full-expected-build-id", $ExpectedBuildId)
+    }
+    & $fullPython.Source @fullArguments | Out-Host
+    exit [int]$LASTEXITCODE
+  }
+
   if ($RunMode -eq "workspace" -and $BuildOnly) {
     $managedExitCode = Invoke-FullmagStorageWindowsWorkspaceBuild `
       -RepoRoot $RepoRoot -Profile $StorageProfile -Frontend $Frontend `
@@ -262,30 +368,79 @@ function Invoke-External {
   }
 }
 
+function Get-WindowsBuildRequirements {
+  $requirementsPath = Join-Path $BuildSourceRoot "windows_build_requirements.json"
+  if (-not (Test-Path -LiteralPath $requirementsPath -PathType Leaf)) {
+    throw "Windows build requirements manifest is missing: $requirementsPath"
+  }
+  try {
+    $requirements = Get-Content -LiteralPath $requirementsPath -Raw | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "Windows build requirements manifest is invalid: $requirementsPath ($($_.Exception.Message))"
+  }
+  if ([string]$requirements.schema_version -ne "fullmag.windows-build-requirements.v1" -or
+      $null -eq $requirements.tools) {
+    throw "Windows build requirements manifest has an incompatible schema: $requirementsPath"
+  }
+  return $requirements
+}
+
+function Get-PinnedUvVersion {
+  $tool = $null
+  $requirements = Get-WindowsBuildRequirements
+  if ($requirements.tools.PSObject.Properties.Name -contains "uv") {
+    $tool = $requirements.tools.PSObject.Properties["uv"].Value
+  }
+  $version = if ($null -ne $tool) { [string]$tool.version } else { "" }
+  if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Windows build requirements do not define a valid pinned uv version"
+  }
+  return $version
+}
+
+function Assert-PinnedUvExecutable {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$ExpectedVersion
+  )
+  $versionOutput = (& $Path --version 2>&1 | Out-String).Trim()
+  $exitCode = $LASTEXITCODE
+  $versionPattern = '^uv\s+' + [regex]::Escape($ExpectedVersion) + '(?:\s|$)'
+  if ($exitCode -ne 0 -or $versionOutput -notmatch $versionPattern) {
+    throw "uv at $Path is not the pinned project version ${ExpectedVersion}: $versionOutput"
+  }
+}
+
 function Invoke-Uv {
   param([Parameter()][string[]]$Arguments = @())
-  $managedUv = Join-Path $CacheRoot "tools\Scripts\uv.exe"
-  if (Test-Path -LiteralPath $managedUv -PathType Leaf) {
-    Invoke-External $managedUv $Arguments
-    return
-  }
-  if (Get-Command "uv" -ErrorAction SilentlyContinue) {
-    Invoke-External "uv" $Arguments
-    return
-  }
-  $toolPackages = Join-Path $CacheRoot "tools\python-packages"
-  if (-not (Test-Path -LiteralPath (Join-Path $toolPackages "uv\__main__.py") -PathType Leaf)) {
-    if ($BuildMode -ne "true") {
-      throw "Managed uv is missing; rebuild the Windows workspace"
+  $expectedVersion = Get-PinnedUvVersion
+  $managedCandidates = @(
+    (Join-Path $CacheRoot "tools\uv\Scripts\uv.exe"),
+    # Keep the second layout for an already-provisioned project prefix whose
+    # executable was placed at its root by an older setup helper.
+    (Join-Path $CacheRoot "tools\uv\uv.exe")
+  )
+  foreach ($managedUv in $managedCandidates) {
+    if (Test-Path -LiteralPath $managedUv -PathType Leaf) {
+      Assert-PinnedUvExecutable -Path $managedUv -ExpectedVersion $expectedVersion
+      Invoke-External $managedUv $Arguments
+      return
     }
-    Invoke-External "python" @("-m", "pip", "install", "--target", $toolPackages, "uv")
   }
-  $previousPythonPath = $env:PYTHONPATH
-  try {
-    $env:PYTHONPATH = $toolPackages
-    Invoke-External "python" (@("-m", "uv") + $Arguments)
+
+  # Existing FDM users may already have an exact pinned uv on PATH.  Preserve
+  # that compatible route, but never accept an unpinned global executable or
+  # install an arbitrary version into a private fallback directory.
+  $globalUv = Get-Command "uv.exe" -ErrorAction SilentlyContinue
+  if ($globalUv) {
+    $globalPath = if ($globalUv.Source) { [string]$globalUv.Source } else { [string]$globalUv.Path }
+    Assert-PinnedUvExecutable -Path $globalPath -ExpectedVersion $expectedVersion
+    Write-Warning "Using globally installed uv $expectedVersion because the project-managed uv is missing"
+    Invoke-External $globalPath $Arguments
+    return
   }
-  finally { $env:PYTHONPATH = $previousPythonPath }
+  throw "Project-managed uv $expectedVersion is missing; run scripts/windows/setup_build_environment.ps1 -Install"
 }
 
 function Add-NodePaths {
@@ -388,9 +543,30 @@ function Ensure-ControlRoomDependencies {
     Write-Host "Reusing active workspace dependencies without install or restaging"
     return
   }
-  $dependencyWorkspace = $RepoRoot
+  # A FEM build compiles from the sealed source snapshot. Keep browser
+  # dependencies and static output beside that same source tree so the later
+  # BuildMode=false handoff launches the frontend inputs that the binary used.
+  # Workspace mode has its own staged root below the managed build profile.
+  $dependencyWorkspace = if ($BuildSnapshot) { $BuildSourceRoot } else { $RepoRoot }
+  $stagedFrontendRoot = $null
   if ($RunMode -eq "workspace") {
-    $stageArguments = @((Join-Path (Get-WindowsBuildToolsRoot) "stage_workspace_frontend.py"), "--repo-root", $BuildSourceRoot, "--build-root", $BuildRoot, "--mode", $Frontend, "--web-port", $WebPort)
+    # `0` means that the browser CLI chooses its own listener.  Frontend
+    # staging still needs a nonzero cache key for Next dev; reserve one only
+    # for the staged source tree and never publish it as the runtime port.
+    $stageWebPort = $WebPort
+    if ($Frontend -eq "dev" -and $stageWebPort -eq 0) {
+      $stageListener = New-Object -TypeName System.Net.Sockets.TcpListener `
+        -ArgumentList ([System.Net.IPAddress]::Loopback), 0
+      try {
+        $stageListener.Start()
+        $stageWebPort = [int]$stageListener.LocalEndpoint.Port
+      }
+      finally {
+        $stageListener.Stop()
+      }
+    }
+    $stageArguments = @((Join-Path (Get-WindowsBuildToolsRoot) "stage_workspace_frontend.py"), "--repo-root", $BuildSourceRoot, "--build-root", $BuildRoot, "--mode", $Frontend)
+    if ($Frontend -eq "dev") { $stageArguments += @("--web-port", $stageWebPort.ToString()) }
     if ($BuildSnapshot) { $stageArguments += @("--source-snapshot-record", [string]$BuildSnapshot.record_path) }
     $stageOutput = (& python @stageArguments 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Native frontend staging failed: $stageOutput" }
@@ -400,7 +576,7 @@ function Ensure-ControlRoomDependencies {
     $script:FrontendSourceManifestPath = [string]$stage.manifest_path
     $script:FrontendSourceManifestSha256 = [string]$stage.manifest_sha256
     $script:StaticControlRoom = Join-Path $FrontendWorkspaceRoot "apps\control-room\out\index.html"
-    $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
+    $stagedFrontendRoot = $FrontendCacheRoot
     $dependencyWorkspace = $FrontendWorkspaceRoot
   }
   $pnpmArguments = @("install", "--frozen-lockfile")
@@ -415,10 +591,18 @@ function Ensure-ControlRoomDependencies {
     Write-Host "Replacing non-Windows node_modules with Windows dependencies"
     $pnpmArguments += "--force"
   }
-  $previousCi = $env:CI
-  $env:CI = "1"
-  Push-Location $dependencyWorkspace
+  $previousCiWasSet = Test-Path Env:CI
+  $previousCi = [Environment]::GetEnvironmentVariable("CI", "Process")
+  $previousFrontendRootWasSet = Test-Path Env:FULLMAG_FRONTEND_ROOT
+  $previousFrontendRoot = [Environment]::GetEnvironmentVariable("FULLMAG_FRONTEND_ROOT", "Process")
+  $locationPushed = $false
   try {
+    $env:CI = "1"
+    if ($stagedFrontendRoot) {
+      $env:FULLMAG_FRONTEND_ROOT = $stagedFrontendRoot
+    }
+    Push-Location $dependencyWorkspace
+    $locationPushed = $true
     Invoke-External "node" (@($PinnedPnpmCli) + $pnpmArguments)
     if ($Frontend -eq "static") {
       $env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT = "1"
@@ -431,11 +615,20 @@ function Ensure-ControlRoomDependencies {
     }
   }
   finally {
-    Pop-Location
-    if ($null -eq $previousCi) {
-      Remove-Item Env:CI -ErrorAction SilentlyContinue
-    } else {
-      $env:CI = $previousCi
+    try {
+      if ($locationPushed) { Pop-Location }
+    }
+    finally {
+      if ($previousFrontendRootWasSet) {
+        $env:FULLMAG_FRONTEND_ROOT = $previousFrontendRoot
+      } else {
+        Remove-Item Env:FULLMAG_FRONTEND_ROOT -ErrorAction SilentlyContinue
+      }
+      if (-not $previousCiWasSet) {
+        Remove-Item Env:CI -ErrorAction SilentlyContinue
+      } else {
+        $env:CI = $previousCi
+      }
     }
   }
 }
@@ -468,16 +661,14 @@ function Ensure-NodeToolchain {
 
 function Ensure-NativeRustToolchain {
   Require-Command "rustup"
-  $toolchain = "fullmag-native-x86_64-pc-windows-msvc"
+  # Keep the launcher aligned with rust-toolchain.toml and the setup manifest.
+  # The managed Rustup home already owns this stable target; do not link an
+  # unrelated user-profile nightly SDK into the build.
+  $toolchain = "stable-x86_64-pc-windows-msvc"
   $env:RUSTUP_TOOLCHAIN = $toolchain
-  if (Test-Path -LiteralPath (Join-Path $RustupHome "toolchains\$toolchain\bin\rustc.exe") -PathType Leaf) { return }
-  # Reuse an already installed host compiler as an SDK. Only the link metadata
-  # is new and is stored in the managed RUSTUP_HOME; compiler files stay intact.
-  $sdk = Join-Path $env:USERPROFILE ".rustup\toolchains\nightly-x86_64-pc-windows-msvc"
-  if (-not (Test-Path -LiteralPath (Join-Path $sdk "bin\rustc.exe") -PathType Leaf)) {
-    throw "An installed nightly Windows/MSVC Rust SDK is required for the native workspace build"
+  if (-not (Test-Path -LiteralPath (Join-Path $RustupHome "toolchains\$toolchain\bin\rustc.exe") -PathType Leaf)) {
+    throw "The managed stable Windows/MSVC Rust toolchain is missing; run scripts/windows/setup_build_environment.ps1 -Install"
   }
-  Invoke-External "rustup" @("toolchain", "link", $toolchain, $sdk)
 }
 
 function Get-SourceIdentity {
@@ -641,7 +832,7 @@ function Test-WindowsWorkspaceBuildRequired {
         [string]$candidate.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
         [string]$candidate.source_identity_check -ne "passed" -or
         [string]$candidate.local_changes_check -ne "enforced" -or
-        ($SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev" -and -not $candidate.build_source_snapshot) -or
+        ($RunMode -eq "workspace" -and -not $candidate.build_source_snapshot) -or
         -not $FrontendWorkspaceRoot -or -not $FrontendCacheRoot -or
         -not (Test-Path -LiteralPath (Join-Path $FrontendWorkspaceRoot "apps\control-room\node_modules\next\package.json") -PathType Leaf) -or
         [string]$candidate.build_version.schema -ne "fullmag.build-version.v1" -or
@@ -708,37 +899,75 @@ function Get-DirectorySha256 {
 }
 
 function Resolve-CudaCompiler {
+  $requirements = Get-WindowsBuildRequirements
+  $cudaRequirement = $null
+  if ($null -ne $requirements.tools -and
+      $requirements.tools.PSObject.Properties.Name -contains "cuda") {
+    $cudaRequirement = $requirements.tools.PSObject.Properties["cuda"].Value
+  }
+  $minimumCuda = if ($null -ne $cudaRequirement) { [string]$cudaRequirement.minimum } else { "" }
+  if ($minimumCuda -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Windows build requirements do not define a valid CUDA minimum version"
+  }
+  $minimumCudaVersion = [version]$minimumCuda
   $candidates = @()
-  if ($env:CUDACXX) {
-    $candidates += $env:CUDACXX
+  $explicitCudaCompiler = [string]$env:CUDACXX
+  if ($explicitCudaCompiler) {
+    $candidates += $explicitCudaCompiler
   }
-  $nvcc = Get-Command "nvcc" -ErrorAction SilentlyContinue
-  if ($nvcc) {
-    $candidates += $nvcc.Path
-  }
-  if ($env:CUDA_PATH) {
-    $candidates += (Join-Path $env:CUDA_PATH "bin\nvcc.exe")
-  }
-  $defaultCudaRoot = Join-Path ${env:ProgramFiles} "NVIDIA GPU Computing Toolkit\CUDA"
-  if (Test-Path -LiteralPath $defaultCudaRoot -PathType Container) {
-    $candidates += @(
-      Get-ChildItem -LiteralPath $defaultCudaRoot -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object { Join-Path $_.FullName "bin\nvcc.exe" }
-    )
-  }
-  foreach ($candidate in $candidates) {
-    if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-      return (Resolve-AbsolutePath $candidate)
+  else {
+    $nvcc = Get-Command "nvcc" -ErrorAction SilentlyContinue
+    if ($nvcc) {
+      $candidates += $nvcc.Path
+    }
+    if ($env:CUDA_PATH) {
+      $candidates += (Join-Path $env:CUDA_PATH "bin\nvcc.exe")
+    }
+    $defaultCudaRoot = Join-Path ${env:ProgramFiles} "NVIDIA GPU Computing Toolkit\CUDA"
+    if (Test-Path -LiteralPath $defaultCudaRoot -PathType Container) {
+      $candidates += @(
+        Get-ChildItem -LiteralPath $defaultCudaRoot -Directory -ErrorAction SilentlyContinue |
+          ForEach-Object { Join-Path $_.FullName "bin\nvcc.exe" }
+      )
     }
   }
-  throw "FDM GPU build requires nvcc from the CUDA Toolkit; CPU fallback is forbidden for device=gpu"
+  $seen = @{}
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+      $resolved = Resolve-AbsolutePath $candidate
+      $key = $resolved.ToLowerInvariant()
+      if ($seen.ContainsKey($key)) { continue }
+      $seen[$key] = $true
+      $versionOutput = (& $resolved "--version" 2>&1 | Out-String).Trim()
+      $exitCode = $LASTEXITCODE
+      $versionMatch = [regex]::Match($versionOutput, '(?im)\brelease\s+(\d+)\.(\d+)|\bV(\d+)\.(\d+)(?:\.(\d+))?')
+      $actualCudaVersion = $null
+      if ($versionMatch.Success) {
+        if ($versionMatch.Groups[1].Success) {
+          $actualCudaVersion = [version]::new([int]$versionMatch.Groups[1].Value, [int]$versionMatch.Groups[2].Value, 0)
+        }
+        else {
+          $patch = if ($versionMatch.Groups[5].Success) { [int]$versionMatch.Groups[5].Value } else { 0 }
+          $actualCudaVersion = [version]::new([int]$versionMatch.Groups[3].Value, [int]$versionMatch.Groups[4].Value, $patch)
+        }
+      }
+      if ($exitCode -eq 0 -and $null -ne $actualCudaVersion -and $actualCudaVersion -ge $minimumCudaVersion) {
+        return $resolved
+      }
+      Write-Verbose "Ignoring CUDA compiler ${resolved}: version output did not satisfy minimum $minimumCuda"
+    }
+  }
+  if ($explicitCudaCompiler) {
+    throw "Explicit CUDACXX does not provide CUDA Toolkit $minimumCuda or newer; CPU fallback is forbidden for device=gpu"
+  }
+  throw "FDM GPU build requires nvcc from the CUDA Toolkit at least $minimumCuda; CPU fallback is forbidden for device=gpu"
 }
 
 function Test-NvidiaRuntime {
   Require-Command "nvidia-smi"
   & nvidia-smi -L | Out-Host
   if ($LASTEXITCODE -ne 0) {
-    throw "FDM GPU run requires a working NVIDIA driver/GPU; CPU fallback is forbidden"
+    throw "GPU FEM/FDM run requires a working NVIDIA driver/GPU; CPU fallback is forbidden"
   }
 }
 
@@ -757,9 +986,700 @@ function Stage-NativeFdmDll {
   if (-not (Test-Path -LiteralPath $nativeDll -PathType Leaf)) {
     throw "CUDA build did not produce canonical fullmag_fdm.dll at $nativeDll"
   }
-  $destination = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll"
+  $destination = Assert-NativeFemCopyDestination -Path (Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll") `
+    -Base $TargetRoot -Label "native FDM launch DLL"
   Copy-Item -LiteralPath $nativeDll -Destination $destination -Force
   return (Resolve-AbsolutePath $destination)
+}
+
+function Test-NativeFemPathWithin {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Base
+  )
+  $candidate = (Resolve-AbsolutePath $Path).TrimEnd('\')
+  $root = (Resolve-AbsolutePath $Base).TrimEnd('\')
+  return $candidate.Equals($root, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $candidate.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-NativeFemPathChain {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Base,
+    [Parameter(Mandatory = $true)][string]$Label,
+    [switch]$Leaf
+  )
+  $resolved = Resolve-AbsolutePath $Path
+  $root = Resolve-AbsolutePath $Base
+  if (-not (Test-NativeFemPathWithin -Path $resolved -Base $root)) {
+    throw "$Label escapes its canonical root: $resolved"
+  }
+  $pathType = if ($Leaf) { "Leaf" } else { "Container" }
+  if (-not (Test-Path -LiteralPath $resolved -PathType $pathType)) {
+    throw "$Label is missing: $resolved"
+  }
+  $cursor = $resolved
+  while ($true) {
+    $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+        ($item.PSObject.Properties.Name -contains "LinkType" -and $item.LinkType)) {
+      throw "$Label contains a junction or symlink: $cursor"
+    }
+    if ([string]::Equals($cursor, $root, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+    $parent = Split-Path -Parent $cursor
+    if (-not $parent -or [string]::Equals($parent, $cursor, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "$Label has no safe canonical ancestor: $resolved"
+    }
+    $cursor = $parent
+  }
+  return $resolved
+}
+
+function Assert-NativeFemCopyDestination {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Base,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  $resolved = Resolve-AbsolutePath $Path
+  $root = Resolve-AbsolutePath $Base
+  if (-not (Test-NativeFemPathWithin -Path $resolved -Base $root)) {
+    throw "$Label escapes its canonical root: $resolved"
+  }
+  $parent = Split-Path -Parent $resolved
+  $null = Assert-NativeFemPathChain -Path $parent -Base $root -Label "$Label parent"
+  $existing = $null
+  try {
+    $existing = Get-Item -LiteralPath $resolved -Force -ErrorAction Stop
+  }
+  catch {
+    if ($_.CategoryInfo.Category -ne "ObjectNotFound") {
+      throw "$Label cannot be inspected before copy: $resolved ($($_.Exception.Message))"
+    }
+  }
+  if ($null -eq $existing) { return $resolved }
+  if ($existing.PSIsContainer) {
+    throw "$Label destination is an existing directory; refusing overwrite: $resolved"
+  }
+  $null = Assert-NativeFemPathChain -Path $resolved -Base $root -Label $Label -Leaf
+  return $resolved
+}
+
+function Assert-NativeFemStagedPeAudit {
+  param(
+    [Parameter(Mandatory = $true)][string]$AuditPath,
+    [Parameter(Mandatory = $true)][string]$StageRoot,
+    [AllowEmptyString()][string]$ExpectedAuditSha256 = "",
+    [AllowEmptyString()][string]$LaunchRoot = "",
+    [AllowEmptyString()][string]$LaunchBase = ""
+  )
+  $stage = Assert-NativeFemPathChain -Path $StageRoot -Base (Split-Path -Parent $StageRoot) `
+    -Label "native FEM staged runtime"
+  $audit = Assert-NativeFemPathChain -Path $AuditPath -Base (Split-Path -Parent $stage) `
+    -Label "native FEM dependency audit" -Leaf
+  $actualAuditSha256 = Get-Sha256File $audit
+  if ($ExpectedAuditSha256 -and ($ExpectedAuditSha256 -notmatch '^[0-9a-f]{64}$' -or
+      $actualAuditSha256 -ne $ExpectedAuditSha256.ToLowerInvariant())) {
+    throw "Native FEM dependency audit hash does not match the build manifest; rerun with build=True"
+  }
+  try {
+    $report = Get-Content -LiteralPath $audit -Raw | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "Native FEM dependency audit is invalid: $audit ($($_.Exception.Message))"
+  }
+  if ([int]$report.schema_version -ne 1 -or [string]$report.target -ne "x86_64-pc-windows-msvc" -or
+      [string]$report.scope -ne "bin_pe_static_and_delay_imports" -or $null -eq $report.images) {
+    throw "Native FEM dependency audit has an incompatible schema: $audit"
+  }
+  $records = @($report.images)
+  if (-not $records.Count -or -not (@($records | Where-Object { [string]$_.path -match '^bin[\\/][^\\/]+$' } ).Count -eq $records.Count)) {
+    throw "Native FEM dependency audit contains an invalid staged image path"
+  }
+  $seen = @{}
+  foreach ($record in $records) {
+    $relative = [string]$record.path
+    $hash = [string]$record.sha256
+    if ($hash -notmatch '^[0-9a-f]{64}$') { throw "Native FEM dependency audit contains an invalid image hash: $relative" }
+    $name = $relative.Substring(4)
+    $key = $name.ToLowerInvariant()
+    if ($seen.ContainsKey($key)) { throw "Native FEM dependency audit contains a duplicate image: $name" }
+    $seen[$key] = $true
+    $image = Assert-NativeFemPathChain -Path (Join-Path $stage $name) -Base $stage `
+      -Label "native FEM staged image $name" -Leaf
+    if ([System.IO.Path]::GetExtension($name).ToLowerInvariant() -notin @(".exe", ".dll")) {
+      throw "Native FEM dependency audit contains a non-PE image: $relative"
+    }
+    if ((Get-Sha256File $image) -ne $hash.ToLowerInvariant()) {
+      throw "Native FEM staged image hash does not match the dependency audit: $name"
+    }
+  }
+  $actualImages = @(Get-ChildItem -LiteralPath $stage -File -Force | Where-Object {
+    $_.Extension.ToLowerInvariant() -in @(".exe", ".dll")
+  })
+  foreach ($image in $actualImages) {
+    if (-not $seen.ContainsKey($image.Name.ToLowerInvariant())) {
+      throw "Native FEM staged PE image is missing from the dependency audit: $($image.Name)"
+    }
+  }
+  if ($actualImages.Count -ne $seen.Count) {
+    throw "Native FEM dependency audit does not cover every staged PE image"
+  }
+  if ($LaunchRoot) {
+    if (-not $LaunchBase) { throw "Native FEM launch root requires a canonical storage base" }
+    $launch = Assert-NativeFemPathChain -Path $LaunchRoot -Base $LaunchBase `
+      -Label "native FEM launch runtime"
+    foreach ($record in $records) {
+      $name = ([string]$record.path).Substring(4)
+      $launchImage = Assert-NativeFemPathChain -Path (Join-Path $launch $name) -Base $launch `
+        -Label "native FEM launch image $name" -Leaf
+      if ((Get-Sha256File $launchImage) -ne ([string]$record.sha256).ToLowerInvariant()) {
+        throw "Native FEM launch image hash does not match the dependency audit: $name"
+      }
+    }
+    $launchImages = @(Get-ChildItem -LiteralPath $launch -File -Force | Where-Object {
+      $_.Extension.ToLowerInvariant() -in @(".exe", ".dll")
+    })
+    $unauditedLaunchImages = @($launchImages | Where-Object {
+      -not $seen.ContainsKey($_.Name.ToLowerInvariant())
+    })
+    if ($launchImages.Count -ne $seen.Count -or $unauditedLaunchImages.Count -ne 0) {
+      throw "Native FEM launch directory contains an unaudited PE image"
+    }
+  }
+  return $actualAuditSha256
+}
+
+function Assert-NativeFemProviderInventory {
+  param(
+    [Parameter(Mandatory = $true)][object]$Receipt,
+    [Parameter(Mandatory = $true)][string]$ProviderRoot,
+    [Parameter(Mandatory = $true)][string]$Prefix
+  )
+  foreach ($kind in @("files", "tools")) {
+    $entries = @($Receipt.$kind)
+    if (-not $entries.Count) {
+      throw "Native FEM provider receipt has an empty $kind inventory"
+    }
+    $base = if ($kind -eq "files") { $Prefix } else { $ProviderRoot }
+    $seen = @{}
+    foreach ($entry in $entries) {
+      $path = [string]$entry.path
+      $hash = [string]$entry.sha256
+      if (-not [System.IO.Path]::IsPathRooted($path) -or
+          $hash -notmatch '^[0-9a-f]{64}$') {
+        throw "Native FEM provider receipt contains an invalid $kind inventory entry"
+      }
+      $resolved = Resolve-AbsolutePath $path
+      if (-not (Test-NativeFemPathWithin -Path $resolved -Base $base)) {
+        throw "Native FEM provider receipt $kind inventory escapes its canonical root: $path"
+      }
+      $key = $resolved.ToLowerInvariant()
+      if ($seen.ContainsKey($key)) {
+        throw "Native FEM provider receipt contains duplicate $kind inventory entry: $path"
+      }
+      $seen[$key] = $true
+      $resolved = Assert-NativeFemPathChain -Path $resolved -Base $base `
+        -Label "Native FEM provider receipt $kind inventory" -Leaf
+      $item = Get-Item -LiteralPath $resolved -Force
+      if (($entry.PSObject.Properties.Name -contains "size_bytes") -and
+          [int64]$entry.size_bytes -ne [int64]$item.Length) {
+        throw "Native FEM provider receipt size mismatch: $resolved"
+      }
+      if ((Get-Sha256File $resolved) -ne $hash) {
+        throw "Native FEM provider receipt hash mismatch: $resolved"
+      }
+    }
+    if ($kind -eq "files") {
+      $null = Assert-NativeFemPathChain -Path $base -Base $base `
+        -Label "Native FEM installed provider prefix"
+      $providerDirectories = @(Get-ChildItem -LiteralPath $base -Directory -Recurse -Force -ErrorAction Stop)
+      foreach ($directory in $providerDirectories) {
+        $null = Assert-NativeFemPathChain -Path $directory.FullName -Base $base `
+          -Label "Native FEM installed provider directory"
+      }
+      $providerFiles = @(Get-ChildItem -LiteralPath $base -File -Recurse -Force -ErrorAction Stop)
+      foreach ($providerFile in $providerFiles) {
+        $providerFilePath = Resolve-AbsolutePath $providerFile.FullName
+        $providerFileKey = $providerFilePath.ToLowerInvariant()
+        if (-not $seen.ContainsKey($providerFileKey)) {
+          throw "Native FEM provider receipt installed-prefix inventory omits a file: $providerFilePath"
+        }
+      }
+      if ($providerFiles.Count -ne $seen.Count) {
+        throw "Native FEM provider receipt installed-prefix inventory does not exactly cover its files"
+      }
+    }
+  }
+}
+
+function Assert-NativeFemProviderMpiReceipt {
+  param(
+    [Parameter(Mandatory = $true)][object]$Receipt,
+    [Parameter(Mandatory = $true)][string]$ProviderRoot
+  )
+  if ([string]::IsNullOrWhiteSpace([string]$Receipt.mpi_include) -or
+      [string]::IsNullOrWhiteSpace([string]$Receipt.mpi_library)) {
+    throw "Native FEM provider receipt does not bind both MSMPI include and library paths"
+  }
+  $mpiInclude = Assert-NativeFemPathChain -Path ([string]$Receipt.mpi_include) -Base $ProviderRoot `
+    -Label "Native FEM provider MSMPI include directory"
+  $mpiLibrary = Assert-NativeFemPathChain -Path ([string]$Receipt.mpi_library) -Base $ProviderRoot `
+    -Label "Native FEM provider MSMPI import library" -Leaf
+  if ([IO.Path]::GetFileName($mpiLibrary) -ine "msmpi.lib") {
+    throw "Native FEM provider receipt MSMPI library has the wrong filename: $mpiLibrary"
+  }
+  $mpiHeader = Assert-NativeFemPathChain -Path (Join-Path $mpiInclude "mpi.h") -Base $ProviderRoot `
+    -Label "Native FEM provider MSMPI header" -Leaf
+  $libraryTools = @($Receipt.tools | Where-Object {
+    [string]::Equals((Resolve-AbsolutePath ([string]$_.path)), $mpiLibrary, [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  $headerTools = @($Receipt.tools | Where-Object {
+    [string]::Equals((Resolve-AbsolutePath ([string]$_.path)), $mpiHeader, [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  if ($libraryTools.Count -ne 1 -or $headerTools.Count -ne 1) {
+    throw "Native FEM provider receipt MSMPI paths are not bound to the hashed tools inventory"
+  }
+  [pscustomobject]@{ include = $mpiInclude; header = $mpiHeader; library = $mpiLibrary }
+}
+
+function Assert-NativeFemProviderZstd {
+  param(
+    [Parameter(Mandatory = $true)][object]$Receipt,
+    [Parameter(Mandatory = $true)][object]$Requirements,
+    [Parameter(Mandatory = $true)][string]$ProviderRoot
+  )
+  $helper = $null
+  if ($null -ne $Requirements.provider_bootstrap -and
+      $null -ne $Requirements.provider_bootstrap.internal_helpers) {
+    $helper = $Requirements.provider_bootstrap.internal_helpers.zstd
+  }
+  $helperPropertyNames = if ($null -ne $helper) {
+    @($helper.PSObject.Properties | ForEach-Object { $_.Name })
+  } else { @() }
+  if ($null -eq $helper -or
+      $helperPropertyNames -notcontains "host_requirement" -or
+      $helper.host_requirement -isnot [bool] -or
+      [string]$helper.kind -ne "provider_bootstrap_internal_helper" -or
+      [bool]$helper.host_requirement -or
+      [string]$helper.managed_by -ne "scripts/windows/native_fem_dependencies.ps1") {
+    throw "Windows build requirements do not define zstd as the managed internal FEM bootstrap helper"
+  }
+  $metadata = $Receipt.zstd
+  if ($null -eq $metadata) { throw "Native FEM provider receipt is missing zstd helper metadata" }
+  foreach ($name in @("kind", "version", "url", "archive", "archive_name", "archive_sha256", "executable", "executable_name", "executable_sha256", "decode_memory")) {
+    if ([string]::IsNullOrWhiteSpace([string]$metadata.$name)) {
+      throw "Native FEM provider receipt zstd metadata is incomplete: $name"
+    }
+  }
+  if ([string]$metadata.kind -ne [string]$helper.kind -or
+      [string]$metadata.version -ne [string]$helper.version -or
+      [string]$metadata.url -ne [string]$helper.url -or
+      [string]$metadata.archive_name -ne [string]$helper.archive -or
+      [string]$metadata.archive_sha256 -ne [string]$helper.archive_sha256 -or
+      [string]$metadata.executable_name -ne [string]$helper.executable_name -or
+      [string]$metadata.decode_memory -ne [string]$helper.decode_memory) {
+    throw "Native FEM provider receipt zstd metadata does not match the committed helper pin"
+  }
+  if ([string]$metadata.archive_sha256 -notmatch '^[0-9a-f]{64}$' -or
+      [string]$metadata.executable_sha256 -notmatch '^[0-9a-f]{64}$') {
+    throw "Native FEM provider receipt zstd metadata contains an invalid SHA256"
+  }
+  $archive = [string]$metadata.archive
+  if (-not [System.IO.Path]::IsPathRooted($archive) -or
+      -not (Test-NativeFemPathWithin -Path $archive -Base $ProviderRoot) -or
+      [System.IO.Path]::GetFileName($archive) -ne [string]$helper.archive) {
+    throw "Native FEM provider receipt zstd archive is outside the canonical provider root or has the wrong pin"
+  }
+  $archive = Assert-NativeFemPathChain -Path $archive -Base $ProviderRoot `
+    -Label "Native FEM provider zstd archive" -Leaf
+  if ((Get-Sha256File $archive) -ne ([string]$metadata.archive_sha256).ToLowerInvariant()) {
+    throw "Native FEM provider zstd archive hash does not match the committed helper pin"
+  }
+  $executable = [string]$metadata.executable
+  $toolRoot = Join-Path $ProviderRoot ("tools\" + [string]$helper.tool_directory)
+  if (-not [System.IO.Path]::IsPathRooted($executable) -or
+      -not (Test-NativeFemPathWithin -Path $executable -Base $toolRoot) -or
+      [System.IO.Path]::GetFileName($executable) -ne [string]$helper.executable_name) {
+    throw "Native FEM provider receipt zstd executable is outside the canonical helper directory or has the wrong name"
+  }
+  $matches = @($Receipt.tools | Where-Object {
+    [string]::Equals([string]$_.path, $executable, [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  if ($matches.Count -ne 1 -or
+      [string]$matches[0].sha256 -ne [string]$metadata.executable_sha256) {
+    throw "Native FEM provider receipt zstd executable is not bound to its hashed tools inventory"
+  }
+}
+
+function Get-NativeFemBoostRequirement {
+  # Read the Boost pin from the same frozen dependency helper that performed
+  # the provider bootstrap.  Reuse must never validate against a later live
+  # checkout whose requirements may have changed after the build snapshot.
+  $dependencyScript = Join-Path $BuildSourceRoot "scripts\windows\native_fem_dependencies.ps1"
+  if (-not (Test-Path -LiteralPath $dependencyScript -PathType Leaf)) {
+    throw "Native FEM dependency helper is missing from the compiler source snapshot: $dependencyScript"
+  }
+  . $dependencyScript
+  return Get-FullmagNativeFemBoostRequirement -SourceRoot $BuildSourceRoot
+}
+
+function Assert-NativeFemProviderBoost {
+  param(
+    [Parameter(Mandatory = $true)][object]$Receipt,
+    [Parameter(Mandatory = $true)][string]$ProviderRoot
+  )
+  $requirement = Get-NativeFemBoostRequirement
+  # Get-NativeFemBoostRequirement is intentionally evaluated against the
+  # frozen source root.  Its dot-sourced helper functions are local to that
+  # function scope, so load the validator again in this admission scope.
+  # Always load the snapshot helper here: a pre-existing function from another
+  # checkout or an earlier operation must never satisfy provider admission.
+  $dependencyScript = Join-Path $BuildSourceRoot "scripts\windows\native_fem_dependencies.ps1"
+  if (-not (Test-Path -LiteralPath $dependencyScript -PathType Leaf)) {
+    throw "Native FEM dependency helper is missing from the compiler source snapshot: $dependencyScript"
+  }
+  . $dependencyScript
+  $validator = Get-Command Assert-FullmagNativeFemBoostReceipt -CommandType Function `
+    -ErrorAction SilentlyContinue
+  if ($null -eq $validator -or $null -eq $validator.ScriptBlock) {
+    throw "Native FEM Boost receipt validator could not be loaded from the compiler source snapshot"
+  }
+  return & $validator.ScriptBlock -Receipt $Receipt -Requirement $requirement `
+    -ProviderRoot $ProviderRoot
+}
+
+function Assert-NativeFemProviderReceipt {
+  param(
+    [Parameter(Mandatory = $true)][bool]$Cuda,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$CudaArchitectures
+  )
+  $providerRoot = Join-Path $BuildRoot "fem-dependencies"
+  $expectedPrefix = Join-Path $providerRoot "installed"
+  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $providerRoot -Label "native FEM provider root" -Parent $BuildRoot
+  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $expectedPrefix -Label "native FEM provider prefix" -Parent $providerRoot
+  if (-not (Test-Path -LiteralPath $expectedPrefix -PathType Container)) {
+    throw "Native FEM provider prefix is missing: $expectedPrefix"
+  }
+  $actualPrefix = [string]$env:FULLMAG_FEM_DEPENDENCY_PREFIX
+  if (-not $actualPrefix -or -not [System.IO.Path]::IsPathRooted($actualPrefix) -or
+      -not (Test-Path -LiteralPath $actualPrefix -PathType Container)) {
+    throw "Native FEM requires an absolute existing FULLMAG_FEM_DEPENDENCY_PREFIX"
+  }
+  $actualPrefix = (Resolve-AbsolutePath $actualPrefix).TrimEnd('\')
+  $canonicalPrefix = (Resolve-AbsolutePath $expectedPrefix).TrimEnd('\')
+  if (-not $actualPrefix.Equals($canonicalPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "FULLMAG_FEM_DEPENDENCY_PREFIX must be the canonical managed provider prefix: $expectedPrefix"
+  }
+
+  $receiptPath = Join-Path $providerRoot "provider-receipt.json"
+  $receiptPath = Assert-NativeFemPathChain -Path $receiptPath -Base $providerRoot `
+    -Label "Native FEM provider receipt" -Leaf
+  try {
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "Native FEM provider receipt is invalid: $receiptPath ($($_.Exception.Message))"
+  }
+  if ([string]$receipt.schema -ne "fullmag.windows.fem-providers.v1" -or $null -eq $receipt.plan) {
+    throw "Native FEM provider receipt has an incompatible schema"
+  }
+  $receiptRoot = (Resolve-AbsolutePath ([string]$receipt.plan.root)).TrimEnd('\')
+  $canonicalRoot = (Resolve-AbsolutePath $providerRoot).TrimEnd('\')
+  if (-not (Test-NativeFemPathWithin -Path $receiptRoot -Base $providerRoot) -or
+      -not $receiptRoot.Equals($canonicalRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Native FEM provider receipt root is not canonical"
+  }
+  $receiptPrefix = (Resolve-AbsolutePath ([string]$receipt.plan.prefix)).TrimEnd('\')
+  if (-not $receiptPrefix.Equals($canonicalPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Native FEM provider receipt prefix is not canonical"
+  }
+  if ([bool]$receipt.plan.cuda -ne $Cuda) {
+    throw "Native FEM provider receipt CUDA mode does not match the requested lane"
+  }
+  $receiptArchitectures = [string]$receipt.plan.cuda_architectures
+  if ($Cuda) {
+    if ($CudaArchitectures -notmatch '^\d+(;\d+)*$' -or $receiptArchitectures -ne $CudaArchitectures) {
+      throw "Native FEM provider receipt CUDA architectures do not match the requested list"
+    }
+  }
+  elseif (-not [string]::IsNullOrWhiteSpace($receiptArchitectures)) {
+    throw "CPU native FEM provider receipt must not contain CUDA architectures"
+  }
+
+  $requirements = Get-WindowsBuildRequirements
+  foreach ($name in @("hypre", "mfem", "libceed")) {
+    $tool = $requirements.tools.PSObject.Properties[$name].Value
+    $expectedVersion = if ($null -ne $tool) { [string]$tool.version } else { "" }
+    $expectedCommit = if ($null -ne $tool) { [string]$tool.commit } else { "" }
+    $matches = @($receipt.plan.providers | Where-Object { [string]$_.name -eq $name })
+    if ($matches.Count -ne 1 -or [string]$matches[0].version -ne $expectedVersion -or
+        [string]$matches[0].sha -ne $expectedCommit) {
+      throw "Native FEM provider receipt does not match the pinned $name provider"
+    }
+  }
+  $null = Assert-NativeFemProviderBoost -Receipt $receipt -ProviderRoot $providerRoot
+  Assert-NativeFemProviderInventory -Receipt $receipt -ProviderRoot $providerRoot -Prefix $expectedPrefix
+  $null = Assert-NativeFemProviderMpiReceipt -Receipt $receipt -ProviderRoot $providerRoot
+  Assert-NativeFemProviderZstd -Receipt $receipt -Requirements $requirements -ProviderRoot $providerRoot
+  $env:FULLMAG_FEM_DEPENDENCY_PREFIX = $actualPrefix
+  return $receipt
+}
+
+function Assert-NativeFemProviderArtifacts {
+  param(
+    [Parameter(Mandatory = $true)][string]$ProviderConfigPath,
+    [Parameter(Mandatory = $true)][string]$ProviderConfigSha256,
+    [Parameter(Mandatory = $true)][string]$ProviderReceiptPath,
+    [Parameter(Mandatory = $true)][string]$ProviderReceiptSha256
+  )
+  $providerRoot = Join-Path $BuildRoot "fem-dependencies"
+  $providerPrefix = Join-Path $providerRoot "installed"
+  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $providerRoot `
+    -Label "native FEM provider root" -Parent $BuildRoot
+  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $providerPrefix `
+    -Label "native FEM provider prefix" -Parent $providerRoot
+  $config = Assert-NativeFemPathChain -Path $ProviderConfigPath -Base $providerPrefix `
+    -Label "native FEM provider config" -Leaf
+  $receipt = Assert-NativeFemPathChain -Path $ProviderReceiptPath -Base $providerRoot `
+    -Label "native FEM provider receipt" -Leaf
+  $expectedReceipt = Assert-NativeFemPathChain -Path (Join-Path $providerRoot "provider-receipt.json") `
+    -Base $providerRoot -Label "native FEM canonical provider receipt" -Leaf
+  if ((Resolve-AbsolutePath $receipt) -ine (Resolve-AbsolutePath $expectedReceipt)) {
+    throw "Native FEM provider receipt path is not canonical"
+  }
+  if ($ProviderConfigSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+      $ProviderReceiptSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    throw "Native FEM provider provenance contains an invalid SHA256"
+  }
+  $actualConfigSha256 = Get-Sha256File $config
+  $actualReceiptSha256 = Get-Sha256File $receipt
+  if ($actualConfigSha256 -ne $ProviderConfigSha256.ToLowerInvariant()) {
+    throw "Native FEM provider config hash does not match its build provenance"
+  }
+  if ($actualReceiptSha256 -ne $ProviderReceiptSha256.ToLowerInvariant()) {
+    throw "Native FEM provider receipt hash does not match its build provenance"
+  }
+  try {
+    $receiptObject = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "Native FEM provider receipt is invalid: $receipt ($($_.Exception.Message))"
+  }
+  $null = Assert-NativeFemProviderMpiReceipt -Receipt $receiptObject -ProviderRoot $providerRoot
+  $null = Assert-NativeFemProviderBoost -Receipt $receiptObject -ProviderRoot $providerRoot
+  return [ordered]@{
+    provider_config = $config
+    provider_config_sha256 = $actualConfigSha256
+    provider_receipt_path = $receipt
+    provider_receipt_sha256 = $actualReceiptSha256
+  }
+}
+
+
+function Invoke-NativeFemBuild {
+  param([Parameter(Mandatory = $true)][string]$SourceRoot)
+  $helper = Join-Path (Get-WindowsBuildToolsRoot) "native_fem_package.ps1"
+  if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+    throw "Native FEM package helper is missing: $helper"
+  }
+  # The provider bootstrap is part of the closed managed FEM operation.  An
+  # explicit prefix is accepted only when it already exists; an empty prefix
+  # is materialized under this operation's canonical build root.  CUDA
+  # architectures come from the requested process environment or the live
+  # NVIDIA driver, never from a host-specific hardcoded value.
+  if ($useCuda) {
+    if ($env:FULLMAG_CUDA_ARCHITECTURES) {
+      if ($env:FULLMAG_CUDA_ARCHITECTURES -notmatch '^\d+(;\d+)*$') {
+        throw "FULLMAG_CUDA_ARCHITECTURES must be a numeric semicolon-separated list"
+      }
+    }
+    else {
+      $nvidiaSmi = Get-Command "nvidia-smi.exe" -ErrorAction SilentlyContinue
+      if (-not $nvidiaSmi) { $nvidiaSmi = Get-Command "nvidia-smi" -ErrorAction SilentlyContinue }
+      if (-not $nvidiaSmi) {
+        throw "Native FEM GPU build requires nvidia-smi.exe or explicit FULLMAG_CUDA_ARCHITECTURES"
+      }
+      $capabilityLines = @(& $nvidiaSmi.Source "--query-gpu=compute_cap" "--format=csv,noheader" 2>$null)
+      if ($LASTEXITCODE -ne 0 -or -not $capabilityLines.Count) {
+        throw "Native FEM GPU build could not query CUDA compute capabilities; set FULLMAG_CUDA_ARCHITECTURES explicitly"
+      }
+      $architectures = @()
+      foreach ($line in $capabilityLines) {
+        $capability = ([string]$line).Trim()
+        if ($capability -match '^([0-9]+)\.([0-9]+)') {
+          $architectures += ($matches[1] + $matches[2])
+        }
+        elseif ($capability -match '^\d+$') {
+          $architectures += $capability
+        }
+        else {
+          throw "Native FEM GPU build returned an invalid CUDA compute capability: $capability"
+        }
+      }
+      $architectures = @($architectures | Where-Object { $_ } | Sort-Object -Unique)
+      if (-not $architectures.Count) {
+        throw "Native FEM GPU build returned no usable CUDA compute capabilities"
+      }
+      $env:FULLMAG_CUDA_ARCHITECTURES = $architectures -join ";"
+    }
+  }
+  if (-not $env:FULLMAG_FEM_DEPENDENCY_PREFIX) {
+    $dependencyBootstrap = Join-Path (Get-WindowsBuildToolsRoot) "native_fem_dependencies.ps1"
+    if (-not (Test-Path -LiteralPath $dependencyBootstrap -PathType Leaf)) {
+      throw "Native FEM dependency bootstrap is missing: $dependencyBootstrap"
+    }
+    . $dependencyBootstrap
+    $cudaArchitectures = if ($useCuda) { [string]$env:FULLMAG_CUDA_ARCHITECTURES } else { "" }
+    $env:FULLMAG_FEM_DEPENDENCY_PREFIX = Invoke-FullmagNativeFemDependencies `
+      -RepoRoot $RepoRoot -SourceRoot $SourceRoot -StorageLayout $StorageLayout `
+      -Cuda:$useCuda -CudaArchitectures $cudaArchitectures
+  }
+  $providerCudaArchitectures = if ($useCuda) { [string]$env:FULLMAG_CUDA_ARCHITECTURES } else { "" }
+  $providerReceipt = Assert-NativeFemProviderReceipt -Cuda:$useCuda `
+    -CudaArchitectures $providerCudaArchitectures
+  . $helper
+  $previousStack = $env:FULLMAG_USE_MFEM_STACK
+  $previousCuda = $env:FULLMAG_FEM_ENABLE_CUDA
+  $previousRequire = $env:FULLMAG_FEM_REQUIRE_GPU
+  if (-not $env:FULLMAG_FEM_WITH_SLEPC) { $env:FULLMAG_FEM_WITH_SLEPC = "OFF" }
+  $env:FULLMAG_USE_MFEM_STACK = "ON"
+  $env:FULLMAG_FEM_ENABLE_CUDA = if ($useCuda) { "ON" } else { "OFF" }
+  $env:FULLMAG_FEM_REQUIRE_GPU = if ($useCuda) { "ON" } else { "OFF" }
+  try {
+    $plan = Get-FullmagMsiBuildPlan -FemMode $Device -Cuda:$useCuda `
+      -DependencyPrefix $env:FULLMAG_FEM_DEPENDENCY_PREFIX
+    $output = Invoke-FullmagMsiFemBuild -Plan $plan -RepoRoot $SourceRoot -BuildRoot $nativeFemBuildRoot
+    $output | Add-Member -NotePropertyName provider_receipt -NotePropertyValue $providerReceipt -Force
+    $providerReceiptPath = Assert-NativeFemPathChain `
+      -Path (Join-Path (Join-Path $BuildRoot "fem-dependencies") "provider-receipt.json") `
+      -Base (Join-Path $BuildRoot "fem-dependencies") -Label "native FEM provider receipt" -Leaf
+    $output | Add-Member -NotePropertyName provider_receipt_path -NotePropertyValue $providerReceiptPath -Force
+    $output | Add-Member -NotePropertyName provider_receipt_sha256 -NotePropertyValue (Get-Sha256File $providerReceiptPath) -Force
+    $script:NativeFemPlan = $plan
+    $script:NativeFemOutput = $output
+    $env:FULLMAG_FEM_LIB_DIR = [string]$output.directory
+    return $output
+  }
+  finally {
+    if ($null -eq $previousStack) { Remove-Item Env:FULLMAG_USE_MFEM_STACK -ErrorAction SilentlyContinue }
+    else { $env:FULLMAG_USE_MFEM_STACK = $previousStack }
+    if ($null -eq $previousCuda) { Remove-Item Env:FULLMAG_FEM_ENABLE_CUDA -ErrorAction SilentlyContinue }
+    else { $env:FULLMAG_FEM_ENABLE_CUDA = $previousCuda }
+    if ($null -eq $previousRequire) { Remove-Item Env:FULLMAG_FEM_REQUIRE_GPU -ErrorAction SilentlyContinue }
+    else { $env:FULLMAG_FEM_REQUIRE_GPU = $previousRequire }
+  }
+}
+
+function Stage-NativeFemRuntime {
+  param([Parameter(Mandatory = $true)]$FemOutput)
+  if (-not $FemOutput.dll -or -not (Test-Path -LiteralPath ([string]$FemOutput.dll) -PathType Leaf)) {
+    throw "Native FEM build did not produce fullmag_fem.dll"
+  }
+  if (-not $FemOutput.dll_sha256 -or -not $FemOutput.import_library_sha256) {
+    throw "Native FEM build output is missing immutable hashes"
+  }
+  $providerProvenance = Assert-NativeFemProviderArtifacts `
+    -ProviderConfigPath ([string]$FemOutput.provider_config) `
+    -ProviderConfigSha256 ([string]$FemOutput.provider_config_sha256) `
+    -ProviderReceiptPath ([string]$FemOutput.provider_receipt_path) `
+    -ProviderReceiptSha256 ([string]$FemOutput.provider_receipt_sha256)
+  $sourceFemDll = Assert-NativeFemPathChain -Path ([string]$FemOutput.dll) -Base $nativeFemBuildRoot `
+    -Label "native FEM build DLL" -Leaf
+  $expectedFemDllSha256 = ([string]$FemOutput.dll_sha256).ToLowerInvariant()
+  if ($expectedFemDllSha256 -notmatch '^[0-9a-f]{64}$' -or
+      (Get-Sha256File $sourceFemDll) -ne $expectedFemDllSha256) {
+    throw "Native FEM build DLL hash changed before staging"
+  }
+  $stageRoot = Join-Path $FemRuntimeRoot "bin"
+  Ensure-Directory $stageRoot
+  $null = Assert-NativeFemPathChain -Path $stageRoot -Base $FemRuntimeRoot `
+    -Label "native FEM staged runtime"
+  $launchRoot = Assert-NativeFemPathChain -Path (Split-Path -Parent $FullmagExe) -Base $TargetRoot `
+    -Label "native FEM launch runtime"
+  foreach ($binary in @($FullmagExe, $FullmagApiExe) + $(if ($needsDesktopRuntime) { @($FullmagUiExe) } else { @()})) {
+    $destination = Assert-NativeFemCopyDestination -Path (Join-Path $stageRoot (Split-Path -Leaf $binary)) `
+      -Base $FemRuntimeRoot -Label "native FEM staged binary"
+    Copy-Item -LiteralPath $binary -Destination $destination -Force
+  }
+  $femDllDestination = Assert-NativeFemCopyDestination -Path (Join-Path $stageRoot "fullmag_fem.dll") `
+    -Base $FemRuntimeRoot -Label "native FEM staged backend DLL"
+  Copy-Item -LiteralPath $sourceFemDll -Destination $femDllDestination -Force
+  $dumpbin = Get-Command "dumpbin.exe" -ErrorAction SilentlyContinue
+  if (-not $dumpbin) { throw "Native FEM DLL staging requires dumpbin.exe from the MSVC environment" }
+  $planPath = Join-Path $FemRuntimeRoot "windows-pe-dependency-plan.json"
+  $dependencyRoots = @()
+  . (Join-Path (Get-WindowsBuildToolsRoot) "native_fem_package.ps1")
+  $dependencyRoots += @(Get-FullmagMsiFemDependencyRoots -Plan $NativeFemPlan)
+  # The FEM feature set also links the FDM ABI.  Its Cargo build-script output
+  # is outside the FEM provider prefix, so include the frozen FDM build tree
+  # and source-root compatibility location in the explicit closure roots.
+  $dependencyRoots += @(
+    (Join-Path $nativeFdmBuildRoot "backends\fdm\Release"),
+    (Join-Path $BuildSourceRoot "backends\fdm")
+  )
+  if ($env:VCToolsRedistDir) { $dependencyRoots += $env:VCToolsRedistDir }
+  if ($env:CUDA_PATH) { $dependencyRoots += (Join-Path $env:CUDA_PATH "bin") }
+  if ($env:CUDACXX) { $dependencyRoots += (Split-Path -Parent $env:CUDACXX) }
+  $dependencyRoots = @($dependencyRoots | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) } | Sort-Object -Unique)
+  if (-not $dependencyRoots.Count) { throw "Native FEM dependency roots are empty; refusing an unclosed runtime" }
+  $planArguments = @(
+    (Join-Path (Get-WindowsBuildToolsRoot) "plan_pe_dependencies.py"),
+    "--bin", $stageRoot, "--dumpbin", $dumpbin.Source, "--output", $planPath
+  )
+  foreach ($root in $dependencyRoots) { $planArguments += @("--dependency-root", $root) }
+  if ($useCuda) { $planArguments += "--allow-cuda-driver" }
+  & python @planArguments | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Native FEM PE dependency planning failed with exit code $LASTEXITCODE" }
+  $pePlan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+  foreach ($source in $pePlan.sources) {
+    $destination = Assert-NativeFemCopyDestination -Path (Join-Path $stageRoot ([string]$source.name)) `
+      -Base $FemRuntimeRoot -Label "native FEM staged dependency"
+    Copy-Item -LiteralPath ([string]$source.source) -Destination $destination -Force
+    if ((Get-Sha256File $destination) -ne [string]$source.sha256) {
+      throw "Native FEM dependency changed during staging: $($source.name)"
+    }
+  }
+  $auditPath = Join-Path $FemRuntimeRoot "windows-pe-dependencies.json"
+  $auditArguments = @(
+    (Join-Path (Get-WindowsBuildToolsRoot) "verify_pe_dependencies.py"),
+    "--bin", $stageRoot, "--dumpbin", $dumpbin.Source, "--output", $auditPath
+  )
+  if ($useCuda) { $auditArguments += "--allow-cuda-driver" }
+  & python @auditArguments | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Native FEM PE dependency audit failed with exit code $LASTEXITCODE" }
+  $auditSha256 = Assert-NativeFemStagedPeAudit -AuditPath $auditPath -StageRoot $stageRoot
+  foreach ($path in Get-ChildItem -LiteralPath $stageRoot -File) {
+    $destination = Assert-NativeFemCopyDestination -Path (Join-Path $launchRoot $path.Name) `
+      -Base $TargetRoot -Label "native FEM launch binary"
+    Copy-Item -LiteralPath $path.FullName -Destination $destination -Force
+  }
+  $null = Assert-NativeFemStagedPeAudit -AuditPath $auditPath -StageRoot $stageRoot `
+    -ExpectedAuditSha256 $auditSha256 -LaunchRoot $launchRoot -LaunchBase $TargetRoot
+  $launchFemDll = Assert-NativeFemPathChain -Path (Join-Path $launchRoot "fullmag_fem.dll") -Base $launchRoot `
+    -Label "native FEM launch DLL" -Leaf
+  if ((Get-Sha256File $launchFemDll) -ne $expectedFemDllSha256) {
+    throw "Native FEM launch DLL hash does not match the built FEM DLL"
+  }
+  return [ordered]@{
+    device = $Device
+    requested_device = if ($env:FULLMAG_FEM_REQUESTED_DEVICE) { $env:FULLMAG_FEM_REQUESTED_DEVICE } else { $Device }
+    dependency_prefix = (Resolve-AbsolutePath $env:FULLMAG_FEM_DEPENDENCY_PREFIX)
+    dependency_plan = $pePlan
+    dependency_plan_path = $planPath
+    dependency_audit_path = $auditPath
+    dependency_audit_sha256 = $auditSha256
+    runtime_bin = $stageRoot
+    runtime_dll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fem.dll"
+    runtime_dll_sha256 = Get-Sha256File $launchFemDll
+    provider_config = $providerProvenance.provider_config
+    provider_config_sha256 = $providerProvenance.provider_config_sha256
+    provider_receipt_path = $providerProvenance.provider_receipt_path
+    provider_receipt_sha256 = $providerProvenance.provider_receipt_sha256
+    import_library_sha256 = [string]$FemOutput.import_library_sha256
+    strict_gpu = [bool]$useCuda
+  }
 }
 
 $useCuda = $Device -eq "gpu"
@@ -784,6 +1704,26 @@ $ArtifactPaths = Get-WindowsWorkspaceArtifactPaths `
 $ManifestPath = $ArtifactPaths.manifest
 $VersionIdentityPath = $ArtifactPaths.version_identity
 $VersionRecordPath = $ArtifactPaths.version_record
+$PhysicalManifestPath = $ManifestPath
+$FullRuntimeRoot = $null
+$FullCapabilityManifestPath = $null
+if ($Backend -eq "fem") {
+  $FemRuntimeRoot = Join-Path $BuildRoot "windows-fem-runtime"
+  $ManifestPath = Join-Path $FemRuntimeRoot "build-manifest.json"
+  $PhysicalManifestPath = $ManifestPath
+  $VersionIdentityPath = Join-Path $FemRuntimeRoot "build-source-identity.json"
+  $VersionRecordPath = Join-Path $FemRuntimeRoot "build-version.json"
+}
+if ($AllBackendsRequested) {
+  $FullRuntimeRoot = Join-Path $BuildRoot "windows-full-runtime"
+  $FullCapabilityManifestPath = Join-Path $FullRuntimeRoot "build-manifest.json"
+  $ManifestPath = $FullCapabilityManifestPath
+  $fullPackageHelper = Join-Path $PSScriptRoot "native_full_package.ps1"
+  if (-not (Test-Path -LiteralPath $fullPackageHelper -PathType Leaf)) {
+    throw "The full capability package helper is missing: $fullPackageHelper"
+  }
+  . $fullPackageHelper
+}
 $FullmagExe = $ArtifactPaths.binary
 $FullmagApiExe = $ArtifactPaths.api_binary
 $FullmagUiExe = $ArtifactPaths.desktop_binary
@@ -805,36 +1745,47 @@ if ($RunMode -eq "workspace" -and (Test-Path -LiteralPath $ManifestPath -PathTyp
   }
   catch { $FrontendWorkspaceRoot = $null }
 }
+$existingFemManifest = $null
+if ($Backend -eq "fem" -and (Test-Path -LiteralPath $PhysicalManifestPath -PathType Leaf)) {
+  try { $existingFemManifest = Get-Content -LiteralPath $PhysicalManifestPath -Raw | ConvertFrom-Json }
+  catch { $existingFemManifest = $null }
+}
 $BackendSourceDigest = if ($RunMode -eq "workspace") { Get-WindowsBackendSourceDigest } else { $null }
 $FrontendSourceDigest = if ($RunMode -eq "workspace" -and $Frontend -eq "static") { Get-WindowsBackendSourceDigest -FrontendSources } else { $null }
 if ($BuildMode -eq "auto") {
   $BuildMode = if (Test-WindowsWorkspaceBuildRequired -BackendDigest $BackendSourceDigest) { "true" } else { "false" }
   Write-Host "Windows workspace automatic build selection: $BuildMode"
 }
-if ($BuildMode -eq "true" -and $RunMode -eq "workspace" -and
-    $SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev") {
-  Write-Host "Capturing native backend sources for this build request"
+$nativeWorkspaceSnapshotBuild = $BuildMode -eq "true" -and $RunMode -eq "workspace" -and
+  $SelectedBackendProfile -in @("dev", "release") -and $Frontend -in @("dev", "static")
+$nativeFemSnapshotBuild = $BuildMode -eq "true" -and $Backend -eq "fem"
+if ($nativeWorkspaceSnapshotBuild -or $nativeFemSnapshotBuild) {
+  Write-Host "Capturing immutable native source inputs for this build request"
   $snapshotOutput = (& python -B (Join-Path $PSScriptRoot "build_snapshot.py") create --repo-root $RepoRoot --build-root $BuildRoot 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0) { throw "Native source snapshot failed: $snapshotOutput" }
   $BuildSnapshot = $snapshotOutput | ConvertFrom-Json
-  if ($env:FULLMAG_NATIVE_RUNTIME_ACTIVE -eq "1" -and
+  if ($nativeWorkspaceSnapshotBuild -and $env:FULLMAG_NATIVE_RUNTIME_ACTIVE -eq "1" -and
       ([string]$env:FULLMAG_NATIVE_ACTIVE_DEPENDENCY_SHA256 -notmatch '^[0-9a-f]{64}$' -or
        [string]$BuildSnapshot.dependency_source_sha256 -ne $env:FULLMAG_NATIVE_ACTIVE_DEPENDENCY_SHA256)) {
     throw "Captured dependencies differ from the active workspace; save and close it before rebuilding"
   }
   $BuildSourceRoot = [string]$BuildSnapshot.source_root
+  $StaticControlRoom = Join-Path $BuildSourceRoot "apps\control-room\out\index.html"
   $BackendSourceDigest = [string]$BuildSnapshot.backend_source_sha256
   Write-Host "Frozen source: $($BuildSnapshot.snapshot_id); later checkout edits belong to the next build"
-} elseif ($BuildMode -eq "false" -and $existingWorkspaceManifest.build_source_snapshot) {
+}
+$existingFrozenManifest = if ($Backend -eq "fem") { $existingFemManifest } else { $existingWorkspaceManifest }
+if ($BuildMode -eq "false" -and $existingFrozenManifest -and $existingFrozenManifest.build_source_snapshot) {
   if ($ExpectedBuildId -and (Get-Sha256File $ManifestPath) -ne $ExpectedBuildId) {
     throw "The requested build manifest changed before launch; refusing a different build"
   }
-  $BuildSnapshot = Read-BuildSnapshot -RecordPath ([string]$existingWorkspaceManifest.build_source_snapshot.record_path)
-  if ([string]$BuildSnapshot.inventory_sha256 -ne [string]$existingWorkspaceManifest.build_source_snapshot.inventory_sha256 -or
-      [string]$BuildSnapshot.backend_source_sha256 -ne [string]$existingWorkspaceManifest.backend_source_sha256) {
+  $BuildSnapshot = Read-BuildSnapshot -RecordPath ([string]$existingFrozenManifest.build_source_snapshot.record_path)
+  if ([string]$BuildSnapshot.inventory_sha256 -ne [string]$existingFrozenManifest.build_source_snapshot.inventory_sha256 -or
+      [string]$BuildSnapshot.backend_source_sha256 -ne [string]$existingFrozenManifest.build_source_snapshot.backend_source_sha256) {
     throw "Build manifest does not match its frozen sources"
   }
   $BuildSourceRoot = [string]$BuildSnapshot.source_root
+  $StaticControlRoom = Join-Path $BuildSourceRoot "apps\control-room\out\index.html"
 } elseif ($ExpectedBuildId) {
   throw "The requested build has no verified frozen sources"
 }
@@ -854,8 +1805,12 @@ if ($BuildMode -eq "true") {
     Write-Host "RAM-disk path normalization unsupported: keeping one durable compiler mirror; compiler TEMP uses $($VolatileBuild.temp_root)"
   }
 }
-$needsControlRoomToolchain = $RunMode -eq "workspace" -or $Frontend -eq "static" -or
-  (-not $BuildOnly -and $RunMode -in @("interactive", "workspace"))
+# Browser/script runs need Node, pnpm and Control Room assets even in the
+# BuildOnly half of a build-then-run operation. Tauri is a separate product
+# surface: only the desktop workspace publishes and validates fullmag-ui.exe.
+$needsDesktopRuntime = $RunMode -eq "workspace" -and -not $BrowserWorkspace
+$needsControlRoomToolchain = $needsDesktopRuntime -or $Frontend -eq "static" -or
+  $RunMode -eq "interactive" -or $BrowserWorkspace
 
 $nextDistDir = if ($needsControlRoomToolchain -and $Frontend -eq "dev") {
   ".next-control-room-$WebPort"
@@ -866,7 +1821,9 @@ $prepareArguments = @{
   RepoRoot = $RepoRoot
   Profile = $StorageProfile
 }
-if (-not $SkipCompatibilityLinks -and $RunMode -ne "workspace") {
+# Native FEM already resolves its build/runtime paths under managed storage;
+# do not rebind shared checkout compatibility links during a FEM operation.
+if (-not $SkipCompatibilityLinks -and $RunMode -ne "workspace" -and $Backend -ne "fem") {
   $prepareArguments.Compat = $true
 }
 if ($needsControlRoomToolchain -and $RunMode -ne "workspace") {
@@ -896,6 +1853,8 @@ $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $TargetRoot -Labe
 $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $PythonRoot -Label "Fullmag Python root" -Parent $BuildRoot
 $env:CARGO_HOME = $CargoHome
 $env:RUSTUP_HOME = $RustupHome
+$CargoBin = Join-Path $CargoHome "bin"
+Prepend-PathEntry -Path $CargoBin
 $env:CARGO_INCREMENTAL = if ($SelectedBackendProfile -eq "dev" -or ($Frontend -eq "dev" -and -not $BuildOnly)) { "1" } else { "0" }
 $env:FULLMAG_FDM_EXECUTION = $null
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $PythonRoot "managed"
@@ -913,6 +1872,13 @@ $nativeFdmBuildRoot = if ($env:FULLMAG_FDM_NATIVE_BUILD_ROOT) {
 $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $nativeFdmBuildRoot -Label "FULLMAG_FDM_NATIVE_BUILD_ROOT" -Parent $BuildRoot
 Ensure-Directory $nativeFdmBuildRoot
 $env:FULLMAG_FDM_NATIVE_BUILD_ROOT = $nativeFdmBuildRoot
+$nativeFemBuildRoot = Join-Path $BuildRoot "native-fem"
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $nativeFemBuildRoot -Label "native FEM build root" -Parent $BuildRoot
+Ensure-Directory $nativeFemBuildRoot
+if ($Backend -eq "fem") { Ensure-Directory $FemRuntimeRoot }
+$NativeFemPlan = $null
+$NativeFemOutput = $null
+$NativeFemRuntime = $null
 
 $cudaCompiler = $null
 $cudaBin = $null
@@ -936,6 +1902,7 @@ if ($SkipLocalChanges) {
 $env:FULLMAG_SOURCE_GIT_COMMIT = $sourceCommit
 $env:FULLMAG_SOURCE_WORKTREE_STATE = $sourceWorktreeState
 $env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
+$env:FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
 
 if ($BuildMode -eq "true") {
   Write-JsonAtomic -Path $versionIdentityPath -Value $sourceIdentity
@@ -965,9 +1932,9 @@ if ($BuildMode -eq "true") {
   Write-Host "Fullmag build version: $($buildVersion.semver_version)"
 }
 
-# Headless runs never launch the Control Room, so they must not be coupled to
-# the Node/pnpm profile recorded by a binary-only (`-BuildOnly`) build.  Static
-# exports always need the frontend toolchain; interactive dev runs do as well.
+# Headless runs never launch the Control Room and remain binary-only.  Static
+# exports and interactive dev runs prepare and pin the frontend toolchain during
+# BuildOnly so the subsequent runtime phase can reuse the same manifest.
 if ($needsControlRoomToolchain) {
   Ensure-NodeToolchain
 }
@@ -999,7 +1966,9 @@ if ($BuildMode -eq "true") {
   # authority for Python, frontend staging, versioning and provenance.
   $CompilerSourceRoot = $BuildSourceRoot
   if ($BuildSnapshot) {
+    Write-Host "[native-build] compiler input materialization starting"
     $CompilerInputs = Invoke-CompilerInputsTool -Command materialize -RecordPath ([string]$BuildSnapshot.record_path)
+    Write-Host "[native-build] compiler input materialization complete"
     if ([string]$CompilerInputs.snapshot_id -ne [string]$BuildSnapshot.snapshot_id -or
         [string]$CompilerInputs.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256 -or
         [string]$CompilerInputs.record_path -ne [string]$BuildSnapshot.record_path -or
@@ -1028,8 +1997,19 @@ if ($BuildMode -eq "true") {
     "--target", $TargetTriple,
     "-p", "fullmag-cli", "-p", "fullmag-api"
   )
-  if ($useCuda) {
-    $cargoArguments += @("--features", "cuda")
+  $cargoFeatures = @()
+  if ($Backend -eq "fem") {
+    # The historical fem-gpu Cargo feature enables the native FEM binding for
+    # both CPU and GPU.  CUDA is added only for the strict GPU lane.
+    Write-Host "[native-fem] provider preparation and native FEM build starting"
+    $NativeFemOutput = Invoke-NativeFemBuild -SourceRoot $CompilerSourceRoot
+    $cargoFeatures = @([string[]]$NativeFemPlan.features)
+  }
+  elseif ($useCuda) {
+    $cargoFeatures = @("cuda")
+  }
+  if ($cargoFeatures.Count) {
+    $cargoArguments += @("--features", ($cargoFeatures -join ","))
   }
   $useVolatileTemp = $null -ne $VolatileBuild -and [bool]$VolatileBuild.enabled
   $savedTemporaryEnvironment = @{}
@@ -1050,7 +2030,7 @@ if ($BuildMode -eq "true") {
     Push-Location $CompilerSourceRoot
     try {
       Invoke-External "cargo" $cargoArguments
-      if ($needsControlRoomToolchain) {
+      if ($needsDesktopRuntime) {
         # CUDA belongs to the solver packages, not the desktop shell.
         $desktopCargoArguments = @("build", "--locked") + $cargoProfileArguments + @(
           "--target", $TargetTriple,
@@ -1078,7 +2058,9 @@ if ($BuildMode -eq "true") {
   }
 
   if ($BuildSnapshot) {
+    Write-Host "[native-build] compiler input verification starting"
     $verifiedCompilerInputs = Invoke-CompilerInputsTool -Command verify -RecordPath ([string]$BuildSnapshot.record_path)
+    Write-Host "[native-build] compiler input verification complete"
     if ([string]$verifiedCompilerInputs.source_root -ne $CompilerSourceRoot -or
         [string]$verifiedCompilerInputs.snapshot_id -ne [string]$BuildSnapshot.snapshot_id -or
         [string]$verifiedCompilerInputs.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256 -or
@@ -1094,13 +2076,13 @@ if ($BuildMode -eq "true") {
   if (-not (Test-Path -LiteralPath $FullmagApiExe -PathType Leaf)) {
     throw "Native Fullmag API binary was not produced at $FullmagApiExe"
   }
-  if ($needsControlRoomToolchain -and (
+  if ($needsDesktopRuntime -and (
       -not (Test-Path -LiteralPath $FullmagUiExe -PathType Leaf) -or
       (Get-Item -LiteralPath $FullmagUiExe).Length -eq 0)) {
     throw "Native Fullmag desktop binary was not produced at $FullmagUiExe"
   }
   $versionedBinaries = @($FullmagExe, $FullmagApiExe)
-  if ($needsControlRoomToolchain) { $versionedBinaries += $FullmagUiExe }
+  if ($needsDesktopRuntime) { $versionedBinaries += $FullmagUiExe }
   foreach ($versionedBinary in $versionedBinaries) {
     $peVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($versionedBinary)
     $peNumericVersion = "$($peVersion.FileMajorPart).$($peVersion.FileMinorPart).$($peVersion.FileBuildPart).$($peVersion.FilePrivatePart)"
@@ -1114,7 +2096,19 @@ if ($BuildMode -eq "true") {
     throw "Installed Fullmag Python version does not match the generated build identity"
   }
   $nativeFdmDll = $null
-  if ($useCuda) {
+  if ($Backend -eq "fem") {
+    $NativeFemRuntime = Stage-NativeFemRuntime -FemOutput $NativeFemOutput
+    if ($AllBackendsRequested) {
+      # Stage-NativeFemRuntime audits and copies the FDM ABI closure as part of
+      # the FEM package.  Bind the aggregate capability record to that exact
+      # staged file instead of treating FEM output as an FDM build receipt.
+      $nativeFdmDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll"
+      if (-not (Test-Path -LiteralPath $nativeFdmDll -PathType Leaf)) {
+        throw "The all-backends package is missing the staged native FDM DLL: $nativeFdmDll"
+      }
+    }
+  }
+  elseif ($useCuda) {
     $nativeFdmDll = Stage-NativeFdmDll
   }
   # Capture both ends of the build.  The default path refuses a binary built
@@ -1139,12 +2133,26 @@ if ($BuildMode -eq "true") {
     throw "Fullmag source changed while the native runtime was building; rerun with build=True after the checkout is stable"
   }
   $workspaceExecutableHashes = [ordered]@{}
-  if ($RunMode -eq "workspace") {
+  if ($RunMode -eq "workspace" -and -not $BrowserWorkspace) {
     $bundleNamesOutput = (& python -c "import sys; sys.path.insert(0, sys.argv[1]); from runtime_bundle import BINARY_NAMES; print('\n'.join(BINARY_NAMES))" (Get-WindowsBuildToolsRoot) | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Native executable inventory failed" }
     foreach ($bundleName in ($bundleNamesOutput.Trim() -split '\r?\n')) {
       $workspaceExecutableHashes[$bundleName] = Get-Sha256File (Join-Path (Split-Path -Parent $FullmagExe) $bundleName)
     }
+  }
+  $frontendEntryPath = $null
+  $frontendEntrySha256 = $null
+  if ($BrowserWorkspace) {
+    $frontendEntryPath = if ($Frontend -eq "static") {
+      Join-Path $FrontendCacheRoot "out\index.html"
+    } else {
+      Join-Path $FrontendWorkspaceRoot "apps\control-room\dev-server.mjs"
+    }
+    if (-not (Test-Path -LiteralPath $frontendEntryPath -PathType Leaf) -or
+        (Get-Item -LiteralPath $frontendEntryPath -Force).Length -eq 0) {
+      throw "Native FEM browser frontend entry is missing or empty: $frontendEntryPath"
+    }
+    $frontendEntrySha256 = Get-Sha256File $frontendEntryPath
   }
   $manifest = [ordered]@{
     schema_version = 1
@@ -1152,11 +2160,12 @@ if ($BuildMode -eq "true") {
     compiler_profile = $CargoCompilerProfile
     binary = $FullmagExe
     api_binary = $FullmagApiExe
-    desktop_binary = if ($needsControlRoomToolchain) { $FullmagUiExe } else { $null }
+    desktop_binary = if ($needsDesktopRuntime) { $FullmagUiExe } else { $null }
     backend = if ($Backend -eq "auto") { "auto" } else { $Backend }
     cuda = $useCuda
-    features = @(if ($useCuda) { "cuda" })
+    features = if ($Backend -eq "fem") { @([string[]]$NativeFemPlan.features) } else { @(if ($useCuda) { "cuda" }) }
     native_fdm_dll = $nativeFdmDll
+    native_fem = $NativeFemRuntime
     workspace_namespace = $WorkspaceNamespace
     cuda_bin = $cudaBin
     cargo_target_dir = $TargetRoot
@@ -1190,6 +2199,11 @@ if ($BuildMode -eq "true") {
     frontend_cache_root = $FrontendCacheRoot
     frontend_source_manifest = $FrontendSourceManifestPath
     frontend_source_manifest_sha256 = $FrontendSourceManifestSha256
+    ui_host = if ($BrowserWorkspace) { "browser" } elseif ($needsDesktopRuntime) { "desktop" } else { $null }
+    workspace_mode = if ($BrowserWorkspace) { "empty" } elseif ($needsDesktopRuntime) { "desktop" } else { $null }
+    browser_workspace = [bool]$BrowserWorkspace
+    frontend_entry_path = $frontendEntryPath
+    frontend_entry_sha256 = $frontendEntrySha256
     source_identity_check = if ($SkipLocalChanges) { "skipped" } else { "passed" }
     local_changes_check = $localChangesCheck
     source_commit_after = [string]$finalSourceIdentity.head_commit_full
@@ -1200,11 +2214,26 @@ if ($BuildMode -eq "true") {
     static_web_sha256 = if ($Frontend -eq "static") { Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom) } else { $null }
     binary_sha256 = Get-Sha256File $FullmagExe
     api_binary_sha256 = Get-Sha256File $FullmagApiExe
-    desktop_binary_sha256 = if ($needsControlRoomToolchain) { Get-Sha256File $FullmagUiExe } else { $null }
+    desktop_binary_sha256 = if ($needsDesktopRuntime) { Get-Sha256File $FullmagUiExe } else { $null }
     native_fdm_dll_sha256 = if ($nativeFdmDll) { Get-Sha256File $nativeFdmDll } else { $null }
     built_at_utc = [string]$buildVersion.build_date_utc
   }
-  Write-JsonAtomic -Path $ManifestPath -Value $manifest
+  if ($Backend -eq "fem") {
+    $manifest.state = "completed"
+    $manifest.native_fem_attempt_id = $NativeFemAttemptId
+  }
+  $physicalManifestOutputPath = if ($AllBackendsRequested) { $PhysicalManifestPath } else { $ManifestPath }
+  Write-JsonAtomic -Path $physicalManifestOutputPath -Value $manifest
+  if ($AllBackendsRequested) {
+    $nativeFemDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fem.dll"
+    $null = New-FullmagFullRuntimeManifest `
+      -OutputRoot $FullRuntimeRoot -ManifestPath $FullCapabilityManifestPath `
+      -OriginManifestPath $PhysicalManifestPath -FullmagExe $FullmagExe `
+      -FullmagApiExe $FullmagApiExe -NativeFdmDll $nativeFdmDll `
+      -NativeFemDll $nativeFemDll -SourceCommit $sourceCommit `
+      -SourceSnapshotSha256 $sourceSnapshotSha256 -AttemptId $NativeFemAttemptId `
+      -BuildRoot $BuildRoot
+  }
 }
 else {
   if (-not (Test-Path -LiteralPath $FullmagExe -PathType Leaf)) {
@@ -1220,6 +2249,17 @@ else {
     throw "Windows runtime build manifest is missing at $ManifestPath; rerun with build=True"
   }
   $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+  if ($AllBackendsRequested) {
+    $nativeFdmDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll"
+    $nativeFemDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fem.dll"
+    $null = Assert-FullmagFullRuntimeManifest `
+      -ManifestPath $ManifestPath -OriginManifestPath $PhysicalManifestPath `
+      -FullmagExe $FullmagExe -FullmagApiExe $FullmagApiExe `
+      -NativeFdmDll $nativeFdmDll -NativeFemDll $nativeFemDll `
+      -ExpectedBuildId $ExpectedBuildId -SourceCommit $sourceCommit `
+      -SourceSnapshotSha256 $sourceSnapshotSha256 -AttemptId $NativeFemAttemptId `
+      -BuildRoot $BuildRoot
+  }
   $expectedNodeVersion = if ($needsControlRoomToolchain) { (& node --version).Trim() } else { $null }
   $expectedPnpmVersion = if ($needsControlRoomToolchain) { $PinnedPnpmVersion } else { $null }
   $manifestStructureMismatch = [int]$manifest.schema_version -ne 1 -or
@@ -1235,6 +2275,15 @@ else {
         [string]$manifest.build_version.schema -ne "fullmag.build-version.v1" -or
         [string]$manifest.build_version.git_commit -ne [string]$manifest.git_commit -or
         [string]$manifest.build_version.source_snapshot_sha256 -ne [string]$manifest.source_snapshot_sha256
+    if ($BrowserWorkspace) {
+      $manifestStructureMismatch = $manifestStructureMismatch -or
+          [string]$manifest.ui_host -ne "browser" -or
+          [string]$manifest.workspace_mode -ne "empty" -or
+          $manifest.browser_workspace -isnot [bool] -or
+          -not [bool]$manifest.browser_workspace -or
+          $null -ne $manifest.desktop_binary -or
+          $null -ne $manifest.desktop_binary_sha256
+    }
   }
   $manifestSourceMismatch = [string]$manifest.git_commit -ne $sourceCommit -or
       [string]$manifest.worktree_state -ne $sourceWorktreeState -or
@@ -1258,7 +2307,7 @@ else {
       [string]$manifest.api_binary_sha256 -ne $apiBinaryHash) {
     throw "Existing Windows runtime binary hash does not match its manifest; rerun with build=True"
   }
-  if ($needsControlRoomToolchain) {
+  if ($needsDesktopRuntime) {
     Assert-FullmagDesktopRuntime -Path $FullmagUiExe -ExpectedHash ([string]$manifest.desktop_binary_sha256)
   }
   if ($RunMode -eq "workspace") {
@@ -1268,12 +2317,72 @@ else {
         [string]$manifest.frontend_source_manifest_sha256 -ne (Get-Sha256File $frontendManifest)) {
       throw "Native workspace metadata hash does not match the build manifest; rebuild the Windows workspace"
     }
+    if ($BrowserWorkspace) {
+      $browserEntryPath = if ($Frontend -eq "static") {
+        Join-Path $FrontendCacheRoot "out\index.html"
+      } else {
+        Join-Path $FrontendWorkspaceRoot "apps\control-room\dev-server.mjs"
+      }
+      if (-not (Test-Path -LiteralPath $browserEntryPath -PathType Leaf) -or
+          (Get-Item -LiteralPath $browserEntryPath -Force).Length -eq 0 -or
+          [string]$manifest.frontend_entry_path -ne (Resolve-AbsolutePath $browserEntryPath) -or
+          [string]$manifest.frontend_entry_sha256 -notmatch '^[0-9a-f]{64}$' -or
+          [string]$manifest.frontend_entry_sha256 -ne (Get-Sha256File $browserEntryPath)) {
+        throw "Existing FEM browser frontend entry does not match the build manifest; rerun with build=True"
+      }
+    }
   }
   if ($Frontend -eq "static" -and
       [string]$manifest.static_web_sha256 -ne (Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom))) {
     throw "Existing static Control Room assets do not match the build manifest; rerun with build=True"
   }
-  if ($useCuda) {
+  if ($Backend -eq "fem" -and -not $AllBackendsRequested) {
+    if ([string]$manifest.backend -ne "fem" -or -not $manifest.native_fem -or
+        [string]$manifest.native_fem.device -ne $Device) {
+      throw "Existing Windows runtime is not a native FEM package for the requested device; rerun with build=True"
+    }
+    if ([string]$manifest.state -ne "completed" -or
+        [string]$manifest.native_fem_attempt_id -notmatch '^[0-9a-f]{32}$' -or
+        $manifest.cuda -isnot [bool] -or [bool]$manifest.cuda -ne $useCuda -or
+        $manifest.native_fem.strict_gpu -isnot [bool] -or
+        [bool]$manifest.native_fem.strict_gpu -ne $useCuda -or
+        [string]$manifest.native_fem.requested_device -ne $NativeFemRequestedDevice) {
+      throw "Existing Windows runtime has inconsistent native FEM GPU or request provenance; rerun with build=True"
+    }
+    $nativeFemDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fem.dll"
+    if (-not (Test-Path -LiteralPath $nativeFemDll -PathType Leaf)) {
+      throw "Native FEM backend DLL is missing at $nativeFemDll; rerun with build=True"
+    }
+    if ([string]$manifest.native_fem.runtime_dll_sha256 -ne (Get-Sha256File $nativeFemDll)) {
+      throw "Native FEM backend DLL hash does not match the build manifest; rerun with build=True"
+    }
+    if ($useCuda -and -not [bool]$manifest.native_fem.strict_gpu) {
+      throw "Existing FEM runtime is not strict GPU; CPU fallback is forbidden; rerun with build=True"
+    }
+    $null = Assert-NativeFemProviderArtifacts `
+      -ProviderConfigPath ([string]$manifest.native_fem.provider_config) `
+      -ProviderConfigSha256 ([string]$manifest.native_fem.provider_config_sha256) `
+      -ProviderReceiptPath ([string]$manifest.native_fem.provider_receipt_path) `
+      -ProviderReceiptSha256 ([string]$manifest.native_fem.provider_receipt_sha256)
+    $femAudit = [string]$manifest.native_fem.dependency_audit_path
+    $femRuntimeBin = [string]$manifest.native_fem.runtime_bin
+    $expectedFemRuntimeRoot = Resolve-AbsolutePath $FemRuntimeRoot
+    $expectedFemRuntimeBin = Resolve-AbsolutePath (Join-Path $expectedFemRuntimeRoot "bin")
+    $expectedFemAudit = Resolve-AbsolutePath (Join-Path $expectedFemRuntimeRoot "windows-pe-dependencies.json")
+    if ((Resolve-AbsolutePath $femRuntimeBin) -ine $expectedFemRuntimeBin -or
+        (Resolve-AbsolutePath $femAudit) -ine $expectedFemAudit) {
+      throw "Existing FEM runtime dependency paths are not canonical; rerun with build=True"
+    }
+    $femAuditSha256 = [string]$manifest.native_fem.dependency_audit_sha256
+    if ($femAuditSha256 -notmatch '^[0-9a-f]{64}$') {
+      throw "Existing FEM runtime has no immutable dependency audit hash; rerun with build=True"
+    }
+    $launchRoot = Assert-NativeFemPathChain -Path (Split-Path -Parent $FullmagExe) -Base $TargetRoot `
+      -Label "native FEM launch runtime"
+    $null = Assert-NativeFemStagedPeAudit -AuditPath $femAudit -StageRoot $femRuntimeBin `
+      -ExpectedAuditSha256 $femAuditSha256 -LaunchRoot $launchRoot -LaunchBase $TargetRoot
+  }
+  elseif ($useCuda) {
     if (-not [bool]$manifest.cuda) {
       throw "Existing Windows runtime was not built with CUDA; rerun with build=True; CPU fallback is forbidden"
     }
@@ -1291,7 +2400,22 @@ else {
   }
 }
 
-if ($useCuda) {
+if ($AllBackendsRequested) {
+  # The aggregate package deliberately leaves solver selection to the UI.
+  # In particular, do not inherit the physical FEM-GPU producer's execution
+  # variables into a workspace that advertises all four capabilities.
+  Remove-Item Env:FULLMAG_FDM_EXECUTION -ErrorAction SilentlyContinue
+  Remove-Item Env:FULLMAG_FEM_EXECUTION -ErrorAction SilentlyContinue
+  Remove-Item Env:FULLMAG_RELAX_DEVICE -ErrorAction SilentlyContinue
+  $env:FULLMAG_FULL_RUNTIME_MANIFEST = $ManifestPath
+}
+elseif ($Backend -eq "fem") {
+  if ($useCuda) { Test-NvidiaRuntime }
+  $env:FULLMAG_FDM_EXECUTION = "cpu"
+  $env:FULLMAG_FEM_EXECUTION = $Device
+  $env:FULLMAG_RELAX_DEVICE = $Device
+}
+elseif ($useCuda) {
   Test-NvidiaRuntime
   $env:FULLMAG_FDM_EXECUTION = "cuda"
 }
@@ -1323,12 +2447,22 @@ if ($RunMode -eq "workspace") {
     $manifest.python_sync_required = $false
     Write-JsonAtomic -Path $ManifestPath -Value $manifest
   }
-  $FullmagExe = Publish-NativeWorkspaceRuntime
   $env:FULLMAG_REPO_ROOT = $FrontendWorkspaceRoot
   $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
   $env:FULLMAG_STATE_ROOT = Join-Path $StorageLayout.runtime_root "state"
-  $env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev") { Join-Path $RepoRoot "apps\control-room" } else { "" }
-  $workspaceArguments = @("ui", "--web-port", $WebPort.ToString())
+  $env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev") {
+    if ($BrowserWorkspace) { Join-Path $FrontendWorkspaceRoot "apps\control-room" } else { Join-Path $RepoRoot "apps\control-room" }
+  } else { "" }
+  if ($BrowserWorkspace) {
+    # The browser CLI owns free-port selection when WebPort=0.  Passing zero
+    # as an explicit --web-port would ask the CLI to bind port zero rather
+    # than use its managed candidate list.
+    $workspaceArguments = @("ui", "--browser")
+    if ($WebPort -ne 0) { $workspaceArguments += @("--web-port", $WebPort.ToString()) }
+  } else {
+    $FullmagExe = Publish-NativeWorkspaceRuntime
+    $workspaceArguments = @("ui", "--web-port", $WebPort.ToString())
+  }
   if ($Frontend -eq "dev") { $workspaceArguments += "--dev" }
   Push-Location $RepoRoot
   try {
@@ -1361,6 +2495,10 @@ if ($OutputDir) {
   else {
     Resolve-AbsolutePath (Join-Path $RepoRoot $OutputDir)
   }
+}
+if ($resolvedOutputDir) {
+  $resolvedOutputDir = Assert-FullmagStoragePath -Layout $StorageLayout -Path $resolvedOutputDir -Label "simulation output" -Parent ([string]$StorageLayout.storage_root)
+  Ensure-Directory $resolvedOutputDir
 }
 
 $cliArguments = @()

@@ -37,6 +37,12 @@ def main() -> None:
     xaml = (ROOT / "MainWindow.axaml").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     operations = (ROOT / "Broker" / "IBrokerClient.cs").read_text(encoding="utf-8")
+    windows_root = ROOT.parents[1]
+    ba_header = (windows_root / "installer" / "FullmagBootstrapperApplication" / "FullmagBootstrapperApplication.h").read_text(encoding="utf-8")
+    ba_source = (windows_root / "installer" / "FullmagBootstrapperApplication" / "FullmagBootstrapperApplication.cpp").read_text(encoding="utf-8")
+    bootstrap_source = (windows_root / "installer" / "FullmagEnvironmentBootstrap" / "FullmagEnvironmentBootstrap.cpp").read_text(encoding="utf-8")
+    environment_script = (windows_root / "run_installer_environment.ps1").read_text(encoding="utf-8")
+    full_package_script = (windows_root / "native_full_package.ps1").read_text(encoding="utf-8")
 
     package_versions = re.findall(
         r'PackageReference Include="Avalonia(?:\.Desktop|\.Themes\.Fluent)?" Version="([^"]+)"',
@@ -136,7 +142,7 @@ def main() -> None:
         "license-accept",
         "checkout-path",
         "storage-root",
-        "runtime-lane",
+        "installation-scope",
         "environment-fields",
         "redacted-preview",
         "requirements-list",
@@ -205,6 +211,23 @@ def main() -> None:
     require(xaml, 'Technical details', "technical details disclosure")
     if xaml.count('Text="{Binding BrokerState}"') != 1:
         raise AssertionError("broker state must stay in one technical-details disclosure")
+    require(xaml, 'Text="{Binding DiagnosticDetails}"', "public blocker details binding")
+    require(xaml, 'IsVisible="{Binding HasDiagnosticDetails}"', "blocker details visibility")
+    require(xaml, 'AutomationProperties.AutomationId="diagnostic-details"', "blocker details automation id")
+    require(
+        xaml,
+        "This installer prepares all four Fullmag realizations: FDM CPU, FDM GPU, FEM CPU and FEM GPU.",
+        "all-realizations installation scope copy",
+    )
+    if "runtime-lane" in xaml or "LaneOptions" in xaml or "Simulation backend" in xaml:
+        raise AssertionError("The installer must not expose a public simulation backend selector")
+    requirements_page = xaml.index('<StackPanel IsVisible="{Binding IsRequirements}"')
+    preview_automation_id = 'AutomationProperties.AutomationId="redacted-preview"'
+    if xaml.count(preview_automation_id) != 1:
+        raise AssertionError("the settings preview must expose one stable automation id")
+    preview_control = xaml.index(preview_automation_id)
+    if preview_control < requirements_page:
+        raise AssertionError("The settings preview must remain visible on the Requirements page")
 
     forbidden_direct_writes = (
         "File.WriteAllText",
@@ -247,24 +270,72 @@ def main() -> None:
     require(view_model, "cancel_requested = true", "cancel broker operation")
     require(view_model, "A save attempt was in flight; its final write state is not confirmed", "ambiguous cancel status")
     require(view_model, "CanEditInputs", "freeze inputs during operation")
+    require(view_model, "WizardPageId.Environment => HasAdmission && EnvironmentFields.Count > 0,", "review remains available after an environment edit")
+    if "WizardPageId.Environment => PreviewReady," in view_model:
+        raise AssertionError("Review cannot require the preview that the action creates")
     require(view_model, "public bool CanCancel => !_shuttingDown && !IsCanceled && !_cancelInFlight;", "cancel available while idle and busy")
     require(view_model, "AdvanceLocalEditEpoch", "local edit epoch")
     require(view_model, "IsStaleOrCanceled", "discard stale operation response")
     require(view_model, "ReadinessConfirmed", "readiness report gate")
+    require(view_model, "DiagnosticDetails", "public diagnostic details state")
+    require(view_model, "HasDiagnosticDetails", "diagnostic visibility state")
+    require(view_model, "ReadPublicBlockers", "allowlisted blocker parser")
+    require(view_model, 'TryGetProperty("blockers"', "blocker array only")
+    require(view_model, "MaxPublicBlockers", "bounded public blocker list")
+    require(view_model, "MaxPublicBlockerLength", "bounded public blocker text")
+    if "failure_location" in view_model:
+        raise AssertionError("UI must not expose backend failure_location in public diagnostics")
     require(view_model, 'WizardPageId.Paths => "Install prerequisites"', "paths action label")
     require(view_model, "CommitConfirmed", "valid unchanged commit gate")
     require(view_model, 'JsonPayload.String(response.Payload, "state")', "commit payload state")
     require(view_model, "ResetSessionDerivedState", "session rebind invalidates stale preview")
     require(view_model, "preserveConfirmedCommit", "confirmed commit session rebind")
     require(view_model, "source_admitted", "source admission report gate")
-    if '"fdm-cpu"' in view_model:
-        raise AssertionError("UI must not expose the retired fdm-cpu lane")
+    require(view_model, 'private const string InstallationScope = "all";', "fixed all-realizations scope")
+    require(view_model, "HasInstallationScope", "all-realizations admission gate")
+    require(view_model, "IsAllInstallationScope", "init scope validation")
+    require(view_model, "InstallationScopeMatches", "single-realization response rejection")
+    if any(marker in view_model for marker in ("LaneOptions", "HasSupportedLane", "NormalizeLane", "public string Lane", "private string _lane", "ref _lane")):
+        raise AssertionError("UI must not expose or store a selectable single-realization lane")
+    if any(marker in view_model for marker in ('"native"', '"fem-cpu"', '"fem-gpu"')):
+        raise AssertionError("UI source must not retain single-realization scope literals")
     require(view_model, "UserFacingMessage", "user-facing status copy")
     require(broker_options, 'First(values, "lane"),', "lane must be explicitly supplied")
     require(app_options, "null,\n        null,\n        null,\n        null,", "app default must not select a lane")
-    require(view_model, "return string.Empty;", "blank lane stays unselected")
+    require(view_model, "lane = InstallationScope", "private all-realizations wire scope")
+    if view_model.count("lane = InstallationScope") < 4:
+        raise AssertionError("preadmission, prerequisites, setup and launch must use the all-realizations scope")
     if 'First(values, "lane") ?? "native"' in broker_options:
         raise AssertionError("UI must not silently select native when lane is absent")
+    require(ba_header, 'std::wstring requestedLane_ = L"all";', "BA defaults to the all-realizations scope")
+    require(ba_source, 'RuntimeProfileForLane(const std::wstring& lane)', "BA scope-to-profile resolver")
+    require(ba_source, 'if (EqualsInsensitive(lane, L"all")) return L"windows-native-fem-gpu";', "all scope uses the physical FEM GPU package")
+    require(ba_source, 'EqualsInsensitive(requestedLane_, L"all")', "BA launch gate requires all scope")
+    if "Select the source-first build lane" in ba_source:
+        raise AssertionError("BA must not ask the user to select a single-realization lane")
+    require(ba_source, 'windows-full-capability-package.v1', "BA accepts the full capability manifest")
+    require(ba_source, 'EqualsInsensitive(receipt.String(L"scope"), L"all")', "BA validates the all-realizations receipt scope")
+    require(bootstrap_source, 'bool ReceiptIsSafe(const std::wstring& path, const std::wstring& storageRoot,', "native bootstrap validates the selected profile")
+    require(bootstrap_source, 'const std::wstring& mode, const std::wstring& profile)', "native bootstrap validates the selected profile")
+    require(bootstrap_source, 'profile == L"windows-native-fem-gpu"', "native bootstrap distinguishes the full package")
+    require(environment_script, 'windows-full-capability-package.v1', "PowerShell validates the full capability manifest")
+    require(environment_script, 'Assert-FullmagFullRuntimeManifest', "PowerShell validates component provenance and artifacts")
+    require(environment_script, 'windows-full-workspace-build', "PowerShell dispatches the full workspace build")
+    require(environment_script, 'windows-full-workspace', "PowerShell dispatches the full workspace launch")
+    require(environment_script, '$fullBuildRoot = Assert-LocalAbsolutePath ([string]$RuntimeLayout.build_root)', "full receipt uses the runtime profile build root")
+    require(environment_script, '$initialReceipt = Get-ExistingInitialReceipt $requestedReceipt $layout $admission $identity $mapping $profile $storageRoot $runtimeLayout', "full launch passes the runtime profile to receipt validation")
+    require(environment_script, 'full_receipt_manifest_hash', "full receipt re-hashes capability and origin manifests")
+    require(environment_script, 'initial_receipt_full_runtime_mismatch', "full launch binds receipt provenance to the admitted capability manifest")
+    require(environment_script, 'full_workspace_browser_manifest_untrusted', "full package requires the browser workspace marker")
+    require(environment_script, 'full_static_web_hash_mismatch', "full package hashes the static browser tree")
+    for component in ("fdm_cpu", "fdm_gpu", "fem_cpu", "fem_gpu"):
+        require(environment_script, component, f"PowerShell requires installed {component} support")
+        require(full_package_script, component, f"full package manifest contains {component}")
+    require(environment_script, 'source_environment_receipt', "full receipt retains setup provenance")
+    require(full_package_script, 'runtime_environment = [ordered]@{', "full package leaves runtime lane selection unforced")
+    require(full_package_script, 'FULLMAG_FDM_EXECUTION = $null', "full package does not force FDM execution")
+    require(full_package_script, 'FULLMAG_FEM_EXECUTION = $null', "full package does not force FEM execution")
+    require(full_package_script, 'FULLMAG_RELAX_DEVICE = $null', "full package does not force a solver device")
     cancel_start = view_model.index("private async Task CancelAsync()")
     cancel_end = view_model.index("private async Task AdmitPathsAsync()", cancel_start)
     cancel_body = view_model[cancel_start:cancel_end]

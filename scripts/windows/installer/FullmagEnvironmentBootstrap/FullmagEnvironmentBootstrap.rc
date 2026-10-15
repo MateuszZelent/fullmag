@@ -1,0 +1,5 @@
+#include <windows.h>
+#include "resource.h"
+
+1 RT_MANIFEST "FullmagEnvironmentBootstrap.manifest"
+IDR_FULLMAG_WORKFLOW RCDATA "../../run_installer_environment.ps1"

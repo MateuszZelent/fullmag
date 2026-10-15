@@ -13,6 +13,44 @@ Skrypt korzysta z jednego resolvera
 toolchainy projektowe i dane buildu pozostają pod lokalnym
 `FULLMAG_PROJECT_STORAGE_ROOT`.
 
+## Kontrakt pełnego środowiska backendów
+
+Publiczna trasa instalatora zawsze przygotowuje installed support dla FDM CPU,
+FDM GPU, FEM CPU i FEM GPU. Nie wybiera backendu ani urządzenia w instalatorze.
+Jednym fizycznym artefaktem jest supersetowy bundle
+`windows-native-fem-gpu`; nie są wymagane cztery fizyczne buildy. Agregat
+`windows-full-runtime/build-manifest.json` musi jednak zawierać cztery osobne
+component proofs (`fdm-cpu`, `fdm-gpu`, `fem-cpu`, `fem-gpu`) związane z tym
+bundle'em i jego hashami.
+
+`Ready` oznacza zweryfikowane installed support wszystkich czterech komponentów.
+Nie oznacza GPU w komputerze, widocznego sterownika, uruchomionego solvera ani
+kwalifikacji fizyki. Brak lub mismatch jednego proofu blokuje agregat; stare
+single-lane receipts nie wystarczają. Hardware GPU i runtime są raportowane
+osobno. Wymuszone GPU kończy się jawnym błędem bez CPU fallbacku.
+
+Po przygotowaniu narzędzi pełna trasa używa rootowych recept:
+
+```powershell
+just windows-full-workspace-build backend=auto device=auto
+just windows-full-workspace backend=auto device=auto
+```
+
+Recepty pozostawiają wybór backendu i urządzenia aplikacji dla konkretnego
+modelu w istniejącym unified workspace. Nie zmieniają DSL, ProblemIR ani
+publicznego planera. Integracja agregatu, czterech proofs i obu recept jest
+obecnie **NOT VERIFIED**. Próba FEM `34113` zakończyła kompilację wszystkich
+targetów C++/CUDA oraz Rust, ale zakończyła się podczas pakowania z powodu
+brakującego receiptu providera Boost. Poprawka zakresu Boost, pięć kontroli
+natywnych i read-only admission/receipt validation providera (checkpoint
+`61949`) zakończyły się terminalnym `PASS`. Nie daje to jeszcze zbiorczego
+`Ready` ani dowodu runtime.
+
+Dawne opcje `-Lane` w `setup_build_environment.ps1` pozostają kompatybilnym
+raportem komponentowym do czasu pełnego podpięcia agregatu. Ich `ready` nie
+jest równoznaczne ze zbiorczym `Ready`; nie należy używać ich jako wyboru zakresu
+instalacji.
+
 ## Pierwsze uruchomienie
 
 Uruchom **Windows PowerShell**, nie WSL, z katalogu głównego checkoutu. Przy
@@ -23,7 +61,8 @@ checkoutu; `.env` worktree nie jest alternatywną konfiguracją. Jeżeli główn
 `.env` zawiera już `FULLMAG_PROJECT_STORAGE_ROOT`, zachowaj tę wartość i uruchom:
 
 ```powershell
-.\scripts\windows\setup_build_environment.ps1 -Lane native
+# Kompatybilny raport komponentowy; nie jest agregatem Ready.
+.\scripts\windows\setup_build_environment.ps1 -Lane all
 ```
 
 Na nowym klonie bez tej wartości ścieżkę podaje operator:
@@ -55,7 +94,8 @@ Najpierw można wyświetlić raport maszynowy bez instalowania i bez tworzenia
 project-owned tooling:
 
 ```powershell
-.\scripts\windows\setup_build_environment.ps1 -Lane fem-gpu -Json
+# Raport kompatybilności komponentów; pełne Ready wymaga agregatu.
+.\scripts\windows\setup_build_environment.ps1 -Lane all -Json
 ```
 
 Raport rozdziela `installation` (co skrypt próbował zainstalować),
@@ -102,8 +142,10 @@ Wspólny zestaw native wymaga:
   archiwum ZIP;
 - Git dla Windows.
 
-`-Lane fem-cpu` lub `-Lane fem-gpu` dodatkowo sprawdza przypięty bootstrap
-FEM. Obowiązujące piny to:
+`-Lane fem-cpu` i `-Lane fem-gpu` pozostają diagnostyką pojedynczego komponentu,
+a nie wyborem zakresu instalacji. Pełna trasa przygotowuje cztery component
+proofs z jednego bundle'u `windows-native-fem-gpu`; stare receipty jednej lane
+nie mogą zasilić agregatu `Ready`. Obowiązujące piny to:
 
 | Komponent | Wersja / commit | Właściciel instalacji |
 | --- | --- | --- |
@@ -127,7 +169,7 @@ bootstrap. Dla `-Lane fem-gpu` wymagany jest również `nvcc` z CUDA
 WiX jest opcjonalny i jest wymagany tylko po `-WithWix`:
 
 ```powershell
-.\scripts\windows\setup_build_environment.ps1 -Install -Lane native -WithWix
+.\scripts\windows\setup_build_environment.ps1 -Install -Lane all -WithWix
 ```
 
 `-WithWix` sprawdza obecnie narzędzie `wix.exe` dla przyszłego authoringu
@@ -135,6 +177,88 @@ bootstrappera Burn. Istniejący [`build_windows_msi.ps1`](../../scripts/windows/
 wywołuje WiX 3 przez `candle.exe` i `light.exe`; przejście kontroli `-WithWix`
 nie potwierdza gotowości tej ścieżki MSI. Obecna kwalifikacja MSI pozostaje
 `NOT VERIFIED`.
+
+### Dwie trasy instalatora
+
+Obsługiwane są dwie odrębne trasy. Użytkownik, który pobiera gotowy publiczny
+`fullmag.exe`, pobiera go wyłącznie z GitHub Releases maintenera; plik wykonywalny
+nie jest przechowywany w repozytorium Git ani tworzony przez instalację narzędzi na
+komputerze konsumenta. Budowanie wydania ze źródeł wymaga natomiast sklonowanego
+lub skopiowanego checkoutu z metadanymi `.git`. Archiwum ZIP bez `.git` nie jest
+wejściem tej trasy: operator musi użyć `git clone` albo samodzielnie przygotować
+repozytorium z rozwiązywalnym `HEAD` przed uruchomieniem skryptu. Skrypt nie wykonuje
+`git init` i nie zgaduje proweniencji.
+
+Producent uruchamia osobny check-first bootstrap:
+
+```powershell
+# Uruchom z głównego checkoutu i potwierdź wcześniej lokalny root storage.
+$storage = Join-Path (Split-Path (Get-Location).Path -Parent) 'storage'
+.\scripts\windows\setup_installer_build_environment.ps1 -StorageRoot $storage -Json
+.\scripts\windows\setup_installer_build_environment.ps1 -Install -StorageRoot $storage
+```
+
+Manifest [`windows_installer_build_requirements.json`](../../windows_installer_build_requirements.json)
+rozróżnia minimalne narzędzia producenta: Git i Python są wymagane przed
+odkryciem głównego checkoutu oraz ekranu `.env`, MSVC z targetem x86 i Windows
+SDK są wymagane do authoringu BA, CMake pozostaje narzędziem kompilacji pomocniczej,
+na tym etapie instalowany jest project-owned WiX 3.14.1 z przypiętego archiwum
+`candle.exe`, `light.exe`, `heat.exe`, `WixBalExtension.dll` i
+`WixUIExtension.dll`. Hash archiwum w manifeście jest lokalnym dowodem pobranego
+assetu i wymaga niezależnej weryfikacji przed publikacją.
+
+Skrypt używa [`installer_env.ps1`](../../scripts/windows/installer_env.ps1) oraz
+`scripts/fullmag_storage.py` do odczytu głównego `.env`, jawnego wyboru storage,
+walidacji resolvera i rejestracji ścieżek przed pierwszym zapisem project-owned
+narzędzi. `-Install` nie instaluje Rust, Node/pnpm, uv, just, CUDA, MPI, Ninja,
+LLVM ani MFEM/hypre/libCEED; te elementy należą do pełnego buildu źródłowego i
+pozostają w `setup_build_environment.ps1`. `fullmag.exe` z trasy producenta jest
+nadal nieweryfikowanym artefaktem wydania: ten bootstrap nie buduje BA, MSI ani
+nie dowodzi działania runtime'u.
+
+Pełny producent instalatora source-first jest osobnym wejściem:
+
+```powershell
+# Pierwszy start może przygotować minimalne narzędzia producenta.
+.\scripts\windows\build_installer_from_source.ps1 -InstallMissing -StorageRoot $storage
+
+# Kolejne buildy, po przygotowaniu narzędzi:
+just windows-installer-build
+```
+
+Producent zamraża kod, buduje BA i helper środowiska, a następnie pakuje
+`fullmag.exe` przez WiX 3 Burn. Nie wymaga gotowego MSI ani wcześniejszego buildu
+Fullmaga. Wynik i manifest są w profilu `windows-installer-source` rozwiązanym
+przez storage; komenda wypisuje dokładną ścieżkę EXE. Wersję produktu czyta z
+`[workspace.package]` zamrożonego `Cargo.toml`. Sam sukces pakowania nie dowodzi
+instalacji na czystym komputerze ani wykonania FEM GPU; te bramki pozostają
+`NOT VERIFIED` do osobnego sprawdzenia. Po instalacji środowiska kolejne buildy
+Fullmaga używają dotychczasowych zarządzanych poleceń, bez ponownego kreatora.
+
+Authoring Burnu ma dwa jawne tryby. Trasa release przekazuje istniejący MSI,
+manifest stagingu, licencję i zweryfikowaną BA; WiX root pochodzi z
+resolverowego profilu narzędzi `windows-setup`. Wywołanie wrappera powinno
+zachować `-InstallerStorageProfile windows-setup`, podczas gdy
+`-StorageProfile` opisuje wybraną trasę runtime. Dzięki temu setup i authoring
+sprawdzają ten sam project-owned `build_root`.
+Zarządzany producent source-first używa dla własnego lease/build rootu profilu
+`windows-installer-source`; nie jest to wybór backendu instalacji. Source-first
+jest obecnie jedyną wspieraną publiczną trasą EXE, także w workflow release.
+Historyczne MSI wrapping/`Route release` pozostają fail-closed do czasu
+rzeczywistego agregatu all-capability z czterema component proofs. Fizyczny
+bundle `windows-native-fem-gpu` oraz agregat
+`windows-full-runtime/build-manifest.json` muszą zachować cztery component proofs.
+GUI nie wybiera lane Burn; wybór FDM/FEM i CPU/GPU następuje dopiero dla modelu
+w aplikacji. Provenance wrappera zapisuje profile storage i narzędzi osobno.
+`-WixRoot` wskazuje dokładnie
+resolverowy `installer-tools\wix-3.14.1`; wrapper sprawdza receipt oraz hashe i
+nie korzysta z przypadkowego `candle.exe` z globalnego `PATH`. Trasa
+`-Route source-first` nie przyjmuje MSI. Wymaga zweryfikowanego
+`-EnvironmentBootstrapExe` oraz jego hasha, pełnej tożsamości źródeł i
+`-ProductVersion`; Burn przekazuje helperowi zaakceptowany checkout, storage,
+profil, tryb `setup-only` albo `initial-build` i ścieżkę receipt. Brak helpera,
+receiptu lub zgodności hashy blokuje authoring. CMake/MSVC nie są dowodem
+wykonania żadnej z tych tras; clean install i runtime pozostają `NOT VERIFIED`.
 
 ## Przyszły instalator GUI
 
@@ -228,25 +352,22 @@ ekran konfiguracji `.env` oraz własność MSI. Dokumentacja Burn:
 ## Ścieżka po setupie
 
 Po przejściu kontroli używaj zarządzanych wejść repozytorium. Natywny launcher
-Windows i trasy FEM są opisane w
-[`windows-first-development.md`](windows-first-development.md). Dla FEM
-obowiązuje `scripts/windows/run_fullmag_fem.ps1` oraz przypięty provider
-bootstrap; hostowy `cmake`, `cargo` lub bezpośrednia biblioteka mogą być tylko
-diagnostyką, gdy istnieje zarządzana recepta.
-
-Przykładowy następny krok po instalacji narzędzi FEM:
+Windows i trasy backendów są opisane w
+[`windows-first-development.md`](windows-first-development.md). Pełna trasa
+używa rootowych recept bez przypięcia backendu:
 
 ```powershell
-.\scripts\windows\setup_build_environment.ps1 -Lane fem-gpu
-just windows-build fem gpu
+just windows-full-workspace-build backend=auto device=auto
+just windows-full-workspace backend=auto device=auto
 ```
 
-`just windows-build fem gpu` jest zarządzaną receptą, która przygotowuje
-przypiętego providera i przechodzi do właściwej trasy FEM. Dla CPU użyj
-`just windows-build fem cpu`. To jest już próba buildu/runtime’u i wymaga
-własnych wejść, profilu, locka i receiptów. Zielony raport setupu sam w sobie
-ich nie tworzy; niższy launcher
-`scripts/windows/run_fullmag_fem.ps1` pozostaje granicą wykonania recepty.
+Pierwsza recepta weryfikuje lub buduje jeden supersetowy bundle
+`windows-native-fem-gpu` i agregat czterech component proofs; druga otwiera pusty
+unified workspace. Są to bramy installed support, nie dowody runtime ani fizyki.
+Wybór backendu i urządzenia pozostaje per model w aplikacji. Istniejące
+`just windows-build fem cpu/gpu` i analogiczne trasy są komponentowymi,
+manualnymi ścieżkami diagnostycznymi; ich pojedynczy receipt nie daje zbiorczego
+`Ready` i nie może cicho zastąpić wymuszonego GPU CPU.
 
 ## Co oznaczają blokady
 
@@ -254,15 +375,18 @@ ich nie tworzy; niższy launcher
   katalogu;
 - `not_verified`: narzędzie istnieje, ale wersja, provider receipt albo
   przypięcie nie zgadza się z manifestem;
-- `pending`: provider jest własnością zarządzanego bootstrapu i czeka na
-  `just windows-build fem gpu` albo odpowiadającą trasę CPU;
+- `pending`: component proof albo provider nie jest jeszcze gotowy; agregat
+  czeka na wszystkie cztery proofs, bez uznawania pojedynczej lane za Ready;
 - `blocked`: instalator, resolver, uprawnienia albo storage odmówiły działania;
-- `runtime: NOT VERIFIED`: setup nie uruchomił buildu ani solvera.
+- `runtime: NOT VERIFIED`: setup nie uruchomił buildu ani solvera;
+- `Ready`: wyłącznie cztery poprawne proofs installed support; hardware GPU i
+  runtime qualification są osobnymi statusami.
 
-Po instalacji otwórz nową powłokę i powtórz `-Json`. Jeżeli raport zawiera
-`compiler_ready_provider_pending`, uruchom właściwy zarządzany bootstrap FEM z
-jawnie wybranym profilem i architekturami CUDA; nie podmieniaj go globalnym
-LLVM, losowym Ninja ani fallbackiem CPU.
+Po instalacji otwórz nową powłokę i powtórz `-Json`, a następnie sprawdź
+`windows-full-runtime/build-manifest.json`. Jeżeli którykolwiek component proof
+jest `pending`, agregat nie jest `Ready`. Nie podmieniaj providerów globalnym
+LLVM, losowym Ninja ani fallbackiem CPU; brak sprzętu GPU pozostaje osobnym
+blokiem wykonania wymuszonego GPU.
 
 Źródła instalacyjne są dokumentowane przez właścicieli narzędzi: [Visual
 Studio C++ Build Tools](https://learn.microsoft.com/en-us/cpp/build/building-on-the-command-line),

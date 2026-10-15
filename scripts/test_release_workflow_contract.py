@@ -33,6 +33,58 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("runs-on: windows-latest", content)
         self.assertIn("publish-release:", content)
 
+    def test_source_first_windows_installer_job_publishes_verified_public_assets(self) -> None:
+        content = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("  build-windows-installer-source:\n", content)
+        source_job = content.split("  build-windows-installer-source:\n", 1)[1].split("  publish-release:\n", 1)[0]
+        for fragment in (
+            "needs: prepare-release",
+            "runs-on: windows-latest",
+            "actions/checkout@v7",
+            "actions/setup-python@v7",
+            "build_installer_from_source.ps1",
+            "-InstallMissing",
+            "-StorageRoot",
+            "FULLMAG_PROJECT_STORAGE_ROOT",
+            "Join-Path $project 'storage'",
+            "installer-source\\build-manifest.json",
+            "build_manifest_sha256",
+            "manifest.attempt_id",
+            "status.attempt_id",
+            "status.state",
+            "$null -eq $status.exit_code",
+            "status.exit_code",
+            "^[0-9a-fA-F]{32}$",
+            "artifact_sha256",
+            "fullmag-installer-receipt.json",
+            "fullmag-installer-provenance.json",
+            "fullmag.windows-installer-terminal-binding.v1",
+            "terminal_state",
+            "source_identity",
+            "terminalBindingPath",
+            "terminalBindingHash",
+            "Get-FileHash",
+            "actions/upload-artifact@v7",
+            "if-no-files-found: error",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, source_job)
+        self.assertNotIn("target\\release\\fullmag.exe", source_job)
+        publish = content.split("  publish-release:\n", 1)[1]
+        self.assertIn("build-windows-installer-source", publish.split("    runs-on:", 1)[0])
+        for asset in (
+            "windows-x86_64-source-first-installer-receipt.json",
+            "windows-x86_64-source-first-installer-provenance.json",
+            "windows-x86_64-source-first-terminal-binding.json",
+        ):
+            with self.subTest(asset=asset):
+                self.assertIn(asset, publish)
+        self.assertIn("destination = Join-Path $assetDir 'fullmag.exe'", source_job)
+        self.assertNotIn("destination = Join-Path $assetDir ($prefix + '.exe')", source_job)
+        self.assertIn("- `fullmag.exe`", publish)
+        self.assertIn("windows-x86_64-source-first-terminal-binding.json", publish)
+        self.assertNotIn("windows-x86_64-source-first.exe`", publish)
+
     def test_workflow_builds_the_complete_runtime_and_static_frontend(self) -> None:
         content = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertGreaterEqual(content.count("-p fullmag-api"), 2)

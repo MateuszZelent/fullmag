@@ -328,6 +328,9 @@ pub(crate) struct UiCli {
     /// Use the frontend dev server with hot updates instead of static assets
     #[arg(long, default_value_t = false)]
     pub dev: bool,
+    /// Host the Control Room in the system browser instead of opening Tauri
+    #[arg(long, default_value_t = false)]
+    pub browser: bool,
     #[arg(
         long,
         help = "Port for the dev control room frontend (auto-selects 3000-3010 if omitted)"

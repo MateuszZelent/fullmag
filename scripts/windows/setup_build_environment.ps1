@@ -2,10 +2,17 @@
 param(
   [switch]$Install,
 
+  [switch]$PrerequisitesOnly,
+
   [ValidateSet("native", "fem-cpu", "fem-gpu", "all")]
   [string]$Lane = "all",
 
   [string]$StorageRoot,
+
+  # A bundled pre-admission caller supplies the hash of the requirements
+  # payload it shipped. The ordinary checkout route may omit it because the
+  # source identity is admitted by the caller before full setup.
+  [string]$ExpectedRequirementsSha256,
 
   [switch]$WithWix,
 
@@ -19,6 +26,11 @@ $ProgressPreference = "SilentlyContinue"
 # wsl.exe, never copies a storage path from another host, and does not mutate a
 # project-owned directory until the shared storage resolver has accepted the
 # checkout and profile.  A system installer is invoked only with -Install.
+# -PrerequisitesOnly is the fresh-host exception: it may install only Git and
+# Python after validating the bundled payload and explicit storage input, then
+# returns their verified paths without reading Git identity, .env, or running
+# the storage resolver. The caller performs source/layout admission before
+# the full setup route is invoked.
 
 $script:Results = [System.Collections.Generic.List[object]]::new()
 $script:Requirements = $null
@@ -27,11 +39,15 @@ $script:MainRepoRoot = $null
 $script:StorageProfile = $null
 $script:Layout = $null
 $script:StorageRootValue = $null
+$script:PayloadRoot = $null
+$script:RequirementsPath = $null
+$script:RequirementsSha256 = $null
 $script:PythonCommand = $null
 $script:PythonPrefix = @()
 $script:ToolsPath = $null
 $script:ProviderRoot = $null
 $script:ProviderReceiptInventoryValidated = $false
+$script:BoostRequirement = $null
 $script:InstallAttempted = [System.Collections.Generic.HashSet[string]]::new()
 
 function Add-Result {
@@ -144,6 +160,24 @@ function Read-Requirements {
   }
 }
 
+function Assert-RequirementsHash {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter()][string]$Expected = ""
+  )
+  if ([string]::IsNullOrWhiteSpace($Expected)) {
+    return ([string](Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash).ToLowerInvariant()
+  }
+  if ($Expected -notmatch '^[0-9a-fA-F]{64}$') {
+    throw "Expected requirements SHA-256 must contain exactly 64 hexadecimal characters"
+  }
+  $actual = ([string](Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash).ToLowerInvariant()
+  if ($actual -ne $Expected.ToLowerInvariant()) {
+    throw "Requirements manifest hash does not match the verified bundled payload"
+  }
+  return $actual
+}
+
 function Get-Requirement {
   param([Parameter(Mandatory = $true)][string]$Id)
   $property = $script:Requirements.tools.PSObject.Properties[$Id]
@@ -157,6 +191,17 @@ function Get-LaneRequirementIds {
   $ids = [System.Collections.Generic.List[string]]::new()
   foreach ($laneName in $selected) {
     foreach ($id in @($lanes.$laneName.required)) {
+      if (-not $ids.Contains([string]$id)) { $ids.Add([string]$id) }
+    }
+  }
+  # Header providers are admitted by the same FEM bootstrap receipt as MFEM,
+  # HYPRE, and libCEED.  Keep the requirement in the FEM lanes even though it
+  # is maintained under provider_bootstrap rather than duplicated in every
+  # lane's required list.
+  if (@($selected | Where-Object { $_ -in @("fem_cpu", "fem_gpu") }).Count -gt 0 -and
+      $null -ne $script:Requirements.provider_bootstrap -and
+      $null -ne $script:Requirements.provider_bootstrap.required_for) {
+    foreach ($id in @($script:Requirements.provider_bootstrap.required_for)) {
       if (-not $ids.Contains([string]$id)) { $ids.Add([string]$id) }
     }
   }
@@ -478,6 +523,24 @@ function Get-CommandInfo {
   return [pscustomobject]@{ path = $command.Source; output = $result.output; version = Get-VersionObject ([string]$result.output) }
 }
 
+function Assert-ExecutablePath {
+  param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Label)
+  if ($Path -notmatch '^[A-Za-z]:[\\/]') { throw "$Label is not a local absolute path: $Path" }
+  $resolved = [System.IO.Path]::GetFullPath($Path)
+  if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) { throw "$Label is missing: $resolved" }
+  $cursor = $resolved
+  while ($cursor) {
+    $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "$Label traverses a junction or symlink: $cursor"
+    }
+    $parent = Split-Path -Parent $cursor
+    if (-not $parent -or [string]::Equals($parent, $cursor, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+    $cursor = $parent
+  }
+  return $resolved
+}
+
 function Get-VsInfo {
   $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\\Installer\\vswhere.exe"
   if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
@@ -561,11 +624,8 @@ function Get-ProviderReceipt {
   $receiptPath = Join-Path $script:ProviderRoot "provider-receipt.json"
   if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { return $null }
   try {
-    $item = Get-Item -LiteralPath $receiptPath -Force -ErrorAction Stop
-    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
-        ($item.PSObject.Properties.Name -contains "LinkType" -and $item.LinkType)) {
-      throw "Provider receipt is a reparse point"
-    }
+    $receiptPath = Assert-ProviderReceiptPathChain -Path $receiptPath -Base $script:ProviderRoot `
+      -Label "Provider receipt" -Leaf
     $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json -ErrorAction Stop
   }
   catch {
@@ -583,7 +643,30 @@ function Get-ProviderReceipt {
       throw "Provider receipt has an incomplete or duplicate provider list: $receiptPath"
     }
   }
+  $null = Assert-ProviderReceiptBoost -Receipt $receipt
   return $receipt
+}
+
+function Get-ProviderBoostRequirement {
+  if ($null -ne $script:BoostRequirement) { return $script:BoostRequirement }
+  $dependencyScript = Join-Path $script:RepoRoot "scripts\windows\native_fem_dependencies.ps1"
+  if (-not (Test-Path -LiteralPath $dependencyScript -PathType Leaf)) {
+    throw "Native FEM dependency helper is missing: $dependencyScript"
+  }
+  . $dependencyScript
+  $script:BoostRequirement = Get-FullmagNativeFemBoostRequirement -SourceRoot $script:RepoRoot
+  return $script:BoostRequirement
+}
+
+function Assert-ProviderReceiptBoost {
+  param([Parameter(Mandatory = $true)][object]$Receipt)
+  $requirement = Get-ProviderBoostRequirement
+  # The frozen dependency helper owns the archive pin, immutable install root,
+  # selected tree, required headers, and license binding. Keep setup readiness
+  # on that same fail-closed contract instead of reinterpreting the receipt.
+  $null = Assert-FullmagNativeFemBoostReceipt `
+    -Receipt $Receipt -Requirement $requirement -ProviderRoot $script:ProviderRoot
+  return $Receipt.boost
 }
 
 function Test-ProviderReceiptPathWithin {
@@ -598,6 +681,99 @@ function Test-ProviderReceiptPathWithin {
   catch { return $false }
   return [string]::Equals($candidate, $root, [System.StringComparison]::OrdinalIgnoreCase) -or
     $candidate.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ProviderReceiptPathChain {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Base,
+    [Parameter(Mandatory = $true)][string]$Label,
+    [switch]$Leaf
+  )
+  $resolved = [System.IO.Path]::GetFullPath($Path)
+  $root = [System.IO.Path]::GetFullPath($Base)
+  if (-not (Test-ProviderReceiptPathWithin -Path $resolved -Base $root)) {
+    throw "$Label escapes its canonical root: $resolved"
+  }
+  $pathType = if ($Leaf) { "Leaf" } else { "Container" }
+  if (-not (Test-Path -LiteralPath $resolved -PathType $pathType)) {
+    throw "$Label is missing: $resolved"
+  }
+  $cursor = $resolved
+  while ($true) {
+    $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+        ($item.PSObject.Properties.Name -contains "LinkType" -and $item.LinkType)) {
+      throw "$Label contains a junction or symlink: $cursor"
+    }
+    if ([string]::Equals($cursor, $root, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+    $parent = Split-Path -Parent $cursor
+    if (-not $parent -or [string]::Equals($parent, $cursor, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "$Label has no safe canonical ancestor: $resolved"
+    }
+    $cursor = $parent
+  }
+  return $resolved
+}
+
+function Assert-ProviderReceiptZstd {
+  param([Parameter(Mandatory = $true)][object]$Receipt)
+  $helper = $null
+  if ($null -ne $script:Requirements -and
+      $null -ne $script:Requirements.provider_bootstrap -and
+      $null -ne $script:Requirements.provider_bootstrap.internal_helpers) {
+    $helper = $script:Requirements.provider_bootstrap.internal_helpers.zstd
+  }
+  if ($null -eq $helper -or [string]$helper.kind -ne "provider_bootstrap_internal_helper" -or
+      [bool]$helper.host_requirement -or [string]$helper.managed_by -ne "scripts/windows/native_fem_dependencies.ps1") {
+    throw "Provider requirements do not define zstd as the managed internal FEM bootstrap helper"
+  }
+  $metadata = $Receipt.zstd
+  if ($null -eq $metadata) { throw "Provider receipt is missing zstd helper metadata" }
+  foreach ($name in @("kind", "version", "url", "archive", "archive_name", "archive_sha256", "executable", "executable_name", "executable_sha256", "decode_memory")) {
+    if ([string]::IsNullOrWhiteSpace([string]$metadata.$name)) {
+      throw "Provider receipt zstd metadata is incomplete: $name"
+    }
+  }
+  if ([string]$metadata.kind -ne [string]$helper.kind -or
+      [string]$metadata.version -ne [string]$helper.version -or
+      [string]$metadata.url -ne [string]$helper.url -or
+      [string]$metadata.archive_name -ne [string]$helper.archive -or
+      [string]$metadata.archive_sha256 -ne [string]$helper.archive_sha256 -or
+      [string]$metadata.executable_name -ne [string]$helper.executable_name -or
+      [string]$metadata.decode_memory -ne [string]$helper.decode_memory) {
+    throw "Provider receipt zstd metadata does not match the committed helper pin"
+  }
+  if ([string]$metadata.archive_sha256 -notmatch '^[0-9a-f]{64}$' -or
+      [string]$metadata.executable_sha256 -notmatch '^[0-9a-f]{64}$') {
+    throw "Provider receipt zstd metadata contains an invalid SHA256"
+  }
+  $archive = [string]$metadata.archive
+  if (-not [System.IO.Path]::IsPathRooted($archive) -or
+      -not (Test-ProviderReceiptPathWithin -Path $archive -Base $script:ProviderRoot) -or
+      [System.IO.Path]::GetFileName($archive) -ne [string]$helper.archive) {
+    throw "Provider receipt zstd archive is outside the canonical provider root or has the wrong pin"
+  }
+  $archive = Assert-ProviderReceiptPathChain -Path $archive -Base $script:ProviderRoot `
+    -Label "Provider zstd archive" -Leaf
+  $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($archiveHash -ne ([string]$metadata.archive_sha256).ToLowerInvariant()) {
+    throw "Provider zstd archive hash does not match the committed helper pin"
+  }
+  $executable = [string]$metadata.executable
+  $toolRoot = Join-Path $script:ProviderRoot ("tools\" + [string]$helper.tool_directory)
+  if (-not [System.IO.Path]::IsPathRooted($executable) -or
+      -not (Test-ProviderReceiptPathWithin -Path $executable -Base $toolRoot) -or
+      [System.IO.Path]::GetFileName($executable) -ne [string]$helper.executable_name) {
+    throw "Provider receipt zstd executable is outside the canonical helper directory or has the wrong name"
+  }
+  $matches = @($Receipt.tools | Where-Object {
+    [string]::Equals([string]$_.path, $executable, [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  if ($matches.Count -ne 1 -or
+      [string]$matches[0].sha256 -ne [string]$metadata.executable_sha256) {
+    throw "Provider receipt zstd executable is not bound to its hashed tools inventory"
+  }
 }
 
 function Assert-ProviderReceiptInventory {
@@ -661,7 +837,28 @@ function Assert-ProviderReceiptInventory {
       $actualHash = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
       if ($actualHash -ne $hash.ToLowerInvariant()) { throw "Provider receipt hash mismatch: $resolved" }
     }
+    if ($kind -eq "files") {
+      $null = Assert-ProviderReceiptPathChain -Path $base -Base $base `
+        -Label "Provider installed prefix"
+      $providerDirectories = @(Get-ChildItem -LiteralPath $base -Directory -Recurse -Force -ErrorAction Stop)
+      foreach ($directory in $providerDirectories) {
+        $null = Assert-ProviderReceiptPathChain -Path $directory.FullName -Base $base `
+          -Label "Provider installed directory"
+      }
+      $providerFiles = @(Get-ChildItem -LiteralPath $base -File -Recurse -Force -ErrorAction Stop)
+      foreach ($providerFile in $providerFiles) {
+        $providerFilePath = [System.IO.Path]::GetFullPath($providerFile.FullName)
+        $providerFileKey = $providerFilePath.ToLowerInvariant()
+        if (-not $seen.ContainsKey($providerFileKey)) {
+          throw "Provider receipt installed-prefix inventory omits a file: $providerFilePath"
+        }
+      }
+      if ($providerFiles.Count -ne $seen.Count) {
+        throw "Provider receipt installed-prefix inventory does not exactly cover its files"
+      }
+    }
   }
+  Assert-ProviderReceiptZstd -Receipt $Receipt
   $script:ProviderReceiptInventoryValidated = $true
 }
 
@@ -807,6 +1004,16 @@ function Get-ToolStatus {
         return [pscustomobject]@{ status="not_verified"; path=$script:ProviderRoot; detail="Provider receipt does not match the committed version/commit pin" }
       }
       return [pscustomobject]@{ status="pass"; version=$tool.version; path=$script:ProviderRoot; detail="provider receipt matches the committed pin; runtime/build still separate" }
+    }
+    "boost_headers" {
+      try { $receipt = Get-ProviderReceipt }
+      catch { return [pscustomobject]@{ status="blocked"; path=$script:ProviderRoot; detail=$_.Exception.Message } }
+      if ($null -eq $receipt -or $null -eq $receipt.boost) {
+        return [pscustomobject]@{ status="not_verified"; path=$script:ProviderRoot; detail="Provider receipt is missing; run the pinned FEM provider bootstrap" }
+      }
+      try { $null = Assert-ProviderReceiptInventory $receipt }
+      catch { return [pscustomobject]@{ status="blocked"; path=$script:ProviderRoot; detail=$_.Exception.Message } }
+      return [pscustomobject]@{ status="pass"; version=$tool.version; path=$script:ProviderRoot; detail="managed Boost headers receipt matches the committed pin; runtime/build still separate" }
     }
     "cuda" {
       $nvcc = Get-NvccInfo
@@ -1033,7 +1240,7 @@ function Install-Tool {
     "just" { Install-Just; return }
     "wix" { Invoke-WingetInstall $tool.install $Id; return }
     "git" { Invoke-WingetInstall $tool.install $Id; return }
-    { $_ -in @("ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed") } {
+    { $_ -in @("ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed", "boost_headers") } {
       throw "$Id is supplied by the pinned FEM provider bootstrap ($($script:Requirements.provider_bootstrap.script)); this setup script will not silently install a second global provider."
     }
     default { throw "No installer implemented for requirement '$Id'" }
@@ -1042,7 +1249,7 @@ function Install-Tool {
 
 function Test-ProviderRequirement {
   param([Parameter(Mandatory = $true)][string]$Id)
-  return $Id -in @("ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed")
+  return $Id -in @("ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed", "boost_headers")
 }
 
 function Invoke-ToolChecks {
@@ -1087,7 +1294,7 @@ function Invoke-ToolChecks {
           $status = [pscustomobject]@{ status = "blocked"; detail = $_.Exception.Message; path = ""; version = $null }
         }
       }
-      $scope = if ($id -in @("mfem", "hypre", "libceed", "ninja", "clang_cl", "msmpi_sdk")) { "provider" } elseif ($id -eq "msmpi_runtime") { "runtime" } elseif ($id -in @("msvc_x64", "windows_sdk", "rust_msvc", "cmake", "cuda")) { "compiler" } else { "check" }
+      $scope = if ($id -in @("mfem", "hypre", "libceed", "boost_headers", "ninja", "clang_cl", "msmpi_sdk")) { "provider" } elseif ($id -eq "msmpi_runtime") { "runtime" } elseif ($id -in @("msvc_x64", "windows_sdk", "rust_msvc", "cmake", "cuda")) { "compiler" } else { "check" }
       Add-Result -Id $id -Status ([string]$status.status) -Version ([string]$status.version) -Path ([string]$status.path) -Detail ([string]$status.detail) -Scope $scope
     }
     catch {
@@ -1147,8 +1354,97 @@ function Show-Report {
   if ($blockingResults.Count -gt 0) { Write-Host "Blockers:"; foreach ($blocker in $blockingResults) { Write-Host ("- " + $blocker.id + ": " + $blocker.detail) } }
 }
 
+function Show-PrerequisiteReport {
+  param(
+    [Parameter(Mandatory = $true)][object]$Git,
+    [Parameter(Mandatory = $true)][object]$Python
+  )
+  $gitPath = Assert-ExecutablePath ([string]$Git.path) "git"
+  $pythonPath = Assert-ExecutablePath ([string]$Python.command) "python"
+  $report = [ordered]@{
+    schema = "fullmag.windows-build-prerequisites.v1"
+    mode = "prerequisites-only"
+    phase = "preadmission"
+    state = "complete"
+    lane = $Lane
+    readiness = "prerequisites_ready"
+    repository = $script:RepoRoot
+    payload_root = $script:PayloadRoot
+    requirements_path = $script:RequirementsPath
+    requirements_sha256 = $script:RequirementsSha256
+    main_checkout = $script:MainRepoRoot
+    storage_root = $script:StorageRootValue
+    storage_profile = [string]$script:Requirements.storage.setup_profile
+    source_admitted = $false
+    env_write = $false
+    tools = [ordered]@{
+      git = [ordered]@{ path = $gitPath; version = [string]$Git.version }
+      python = [ordered]@{ path = $pythonPath; version = [string]$Python.version }
+    }
+    installation = [ordered]@{
+      requested = [bool]$Install
+      attempted = @($script:InstallAttempted | ForEach-Object { [string]$_ })
+    }
+    project_owned_writes = $false
+    storage_resolver = "not_run"
+    full_dependency_install = $false
+  }
+  if ($Json) { $report | ConvertTo-Json -Depth 12; return }
+  Write-Host "Fullmag Windows prerequisite bootstrap: lane=$Lane"
+  Write-Host "Repository: $($report.repository)"
+  Write-Host "Git: $gitPath"
+  Write-Host "Python: $pythonPath ($($Python.version))"
+  Write-Host "No project-owned storage or full dependency installation was performed."
+}
+
 try {
   if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw "This setup route is Windows-only and refuses WSL/Linux fallback." }
+  if ($PrerequisitesOnly) {
+    if (-not $Install) { throw "-PrerequisitesOnly requires explicit -Install" }
+    if ([string]::IsNullOrWhiteSpace($StorageRoot)) { throw "-PrerequisitesOnly requires an explicit -StorageRoot" }
+    $StorageRoot = Convert-ToLocalAbsolutePath $StorageRoot
+
+    # This branch is also invoked from the signed/bundled installer payload,
+    # before a selected checkout can be admitted.  Resolve the requirements
+    # from the payload directory itself; do not require .git or execute the
+    # source checkout's resolver/.env path before the toolchain is ready.
+    $payloadRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+    $requirementsPath = Assert-ExecutablePath (Join-Path $payloadRoot "windows_build_requirements.json") "requirements manifest"
+    $script:PayloadRoot = $payloadRoot
+    $script:RequirementsPath = $requirementsPath
+    $script:RequirementsSha256 = Assert-RequirementsHash $requirementsPath $ExpectedRequirementsSha256
+    $bootstrapRequirements = Read-Requirements $requirementsPath
+    $script:RepoRoot = $payloadRoot
+    $script:Requirements = $bootstrapRequirements
+    $script:StorageProfile = [string]$script:Requirements.storage.setup_profile
+    if ([string]::IsNullOrWhiteSpace($script:StorageProfile)) { throw "Requirements manifest has no storage setup profile" }
+    $script:StorageRootValue = $StorageRoot
+
+    $gitRequirement = $bootstrapRequirements.tools.git
+    if ($null -eq $gitRequirement -or $null -eq $gitRequirement.install -or [string]::IsNullOrWhiteSpace([string]$gitRequirement.minimum)) { throw "Git bootstrap pin is missing from the requirements manifest" }
+    Refresh-CommonWindowsToolPaths
+    $gitInfo = Get-CommandInfo "git.exe"
+    if ($null -eq $gitInfo -or -not (Test-MinimumVersion $gitInfo.version ([string]$gitRequirement.minimum))) {
+      [void]$script:InstallAttempted.Add("git")
+      Invoke-WingetInstall $gitRequirement.install "git"
+      Refresh-CommonWindowsToolPaths
+      $gitInfo = Get-CommandInfo "git.exe"
+    }
+    if ($null -eq $gitInfo -or -not (Test-MinimumVersion $gitInfo.version ([string]$gitRequirement.minimum))) {
+      throw "Git >= $($gitRequirement.minimum) is not available after the prerequisite bootstrap"
+    }
+
+    $script:PythonCommand = Get-PythonCommand
+    if ($null -eq $script:PythonCommand) {
+      [void]$script:InstallAttempted.Add("python")
+      Invoke-WingetInstall (Get-Requirement "python").install "python"
+      Refresh-CommonWindowsToolPaths
+      $script:PythonCommand = Get-PythonCommand
+    }
+    if ($null -eq $script:PythonCommand) { throw "Python >=3.12 is not available after the prerequisite bootstrap" }
+    Show-PrerequisiteReport $gitInfo $script:PythonCommand
+    exit 0
+  }
   if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
     if (-not $Install) {
       throw "git.exe is missing. Rerun with -Install after confirming this copied checkout includes its .git metadata; no git init or provenance fallback is performed."
@@ -1197,21 +1493,50 @@ try {
 }
 catch {
   if ($Json) {
-    [ordered]@{
-      schema = "fullmag.windows-build-environment-report.v1"
-      mode = if ($Install) { "install" } else { "check" }
-      lane = $Lane
-      readiness = "blocked"
-      repository = $script:RepoRoot
-      main_checkout = $script:MainRepoRoot
-      storage_profile = $script:StorageProfile
-      storage_root = $script:StorageRootValue
-      failure_location = $_.ScriptStackTrace
-      installation = [ordered]@{ requested = [bool]$Install; attempted = @($script:Results.ToArray() | Where-Object { $_.install_attempted }) }
-      checks = @($script:Results.ToArray())
-      blockers = @($_.Exception.Message)
-      runtime = [ordered]@{ status = "NOT VERIFIED" }
-    } | ConvertTo-Json -Depth 10
+    if ($PrerequisitesOnly) {
+      [ordered]@{
+        schema = "fullmag.windows-build-prerequisites.v1"
+        mode = "prerequisites-only"
+        phase = "preadmission"
+        state = "blocked"
+        lane = $Lane
+        readiness = "blocked"
+        repository = $script:RepoRoot
+        payload_root = $script:PayloadRoot
+        requirements_path = $script:RequirementsPath
+        requirements_sha256 = $script:RequirementsSha256
+        main_checkout = $script:MainRepoRoot
+        storage_root = $script:StorageRootValue
+        storage_profile = $script:StorageProfile
+        source_admitted = $false
+        env_write = $false
+        project_owned_writes = $false
+        storage_resolver = "not_run"
+        full_dependency_install = $false
+        installation = [ordered]@{
+          requested = [bool]$Install
+          attempted = @($script:InstallAttempted | ForEach-Object { [string]$_ })
+        }
+        blockers = @($_.Exception.Message)
+      } | ConvertTo-Json -Depth 10
+    }
+    else {
+      [ordered]@{
+        schema = "fullmag.windows-build-environment-report.v1"
+        mode = if ($Install) { "install" } else { "check" }
+        lane = $Lane
+        readiness = "blocked"
+        repository = $script:RepoRoot
+        main_checkout = $script:MainRepoRoot
+        storage_profile = $script:StorageProfile
+        storage_root = $script:StorageRootValue
+        failure_location = $_.ScriptStackTrace
+        installation = [ordered]@{ requested = [bool]$Install; attempted = @($script:Results.ToArray() | Where-Object { $_.install_attempted }) }
+        checks = @($script:Results.ToArray())
+        blockers = @($_.Exception.Message)
+        runtime = [ordered]@{ status = "NOT VERIFIED" }
+      } | ConvertTo-Json -Depth 10
+    }
   }
   else { [Console]::Error.WriteLine("Fullmag Windows setup blocked: " + $_.Exception.Message) }
   exit 2

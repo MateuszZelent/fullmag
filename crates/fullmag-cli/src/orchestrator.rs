@@ -8868,6 +8868,11 @@ fn resolve_rayon_cpu_threads(
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut args = ScriptCli::parse_from(raw_args);
     let ui_plan = crate::script_launch::ui_plan(&args);
+    let _browser_interrupt = if ui_plan == crate::script_launch::UiPlan::Browser {
+        Some(crate::control_room::BrowserInterruptGuard::install()?)
+    } else {
+        None
+    };
     if ui_plan == crate::script_launch::UiPlan::None {
         // `--ui none` is the headless web side.
         args.headless = true;
@@ -10561,6 +10566,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
 
         loop {
+            if crate::control_room::browser_exit_requested() {
+                live_workspace.push_log(
+                    "system",
+                    "Ctrl+C requested browser session shutdown; releasing launcher ownership",
+                );
+                return Ok(());
+            }
             if display_selection_handle.grid_refresh_command_refused() {
                 bail!("grid-only control receiver refused an unpinned command");
             }
@@ -12468,6 +12480,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
         let mut active_sequence: Option<ActiveSequenceState> = None;
         loop {
+            if crate::control_room::browser_exit_requested() {
+                live_workspace.push_log(
+                    "system",
+                    "Ctrl+C requested browser session shutdown; releasing launcher ownership",
+                );
+                break;
+            }
             if display_selection_handle.owner_session_lost() {
                 live_workspace.push_log(
                     "warning",

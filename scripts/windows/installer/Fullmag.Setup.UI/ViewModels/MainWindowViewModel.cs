@@ -13,7 +13,10 @@ namespace Fullmag.Setup.UI.ViewModels;
 
 public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
+    private const string InstallationScope = "all";
     private static readonly TimeSpan ShutdownCancelTimeout = TimeSpan.FromSeconds(2);
+    private const int MaxPublicBlockers = 32;
+    private const int MaxPublicBlockerLength = 2048;
 
     private readonly IBrokerClient _broker;
     private bool _brokerAvailable;
@@ -29,13 +32,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private WizardStepViewModel _selectedStep;
     private string _checkoutPath;
     private string _storageRoot;
-    private string _lane;
+    private bool _installationScopeValid;
     private string _sessionId = string.Empty;
     private string _admissionId = string.Empty;
     private string _storageProfile = string.Empty;
     private string _receiptPath = string.Empty;
     private string _setupMode = string.Empty;
     private string _statusMessage = "Choose a source checkout to begin.";
+    private string _diagnosticDetails = string.Empty;
     private string _redactedDiff = string.Empty;
     private string _launchMessage = string.Empty;
     private string _licenseText;
@@ -86,7 +90,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         _checkoutPath = initialCheckoutPath ?? string.Empty;
         _storageRoot = initialStorageRoot ?? string.Empty;
-        _lane = NormalizeLane(initialLane);
+        _installationScopeValid = IsAllInstallationScope(initialLane);
         _setupScript = setupScript ?? string.Empty;
         _requirementsManifest = requirementsManifest ?? string.Empty;
         _setupHash = setupHash ?? string.Empty;
@@ -98,7 +102,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             new WizardStepViewModel(2, WizardPageId.License, "License", "Review the terms before continuing."),
             new WizardStepViewModel(3, WizardPageId.Paths, "Paths", "Select the checkout and private storage root."),
             new WizardStepViewModel(4, WizardPageId.Environment, "Environment", "Review the proposed environment values."),
-            new WizardStepViewModel(5, WizardPageId.Requirements, "Requirements", "Check tools and prepare the selected lane."),
+            new WizardStepViewModel(5, WizardPageId.Requirements, "Requirements", "Check tools and prepare all four realizations."),
             new WizardStepViewModel(6, WizardPageId.Progress, "Progress", "Run setup and build preparation."),
             new WizardStepViewModel(7, WizardPageId.Ready, "Ready", "Launch the workspace when setup is complete.")
         });
@@ -119,7 +123,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     public ObservableCollection<WizardStepViewModel> Steps { get; }
-    public IReadOnlyList<string> LaneOptions { get; } = new[] { "native", "fem-cpu", "fem-gpu" };
     public ObservableCollection<EnvironmentFieldViewModel> EnvironmentFields { get; }
     public ObservableCollection<RequirementCheckViewModel> Requirements { get; }
 
@@ -183,20 +186,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public string Lane
-    {
-        get => _lane;
-        set
-        {
-            var normalized = NormalizeLane(value);
-            if (!SetProperty(ref _lane, normalized))
-            {
-                return;
-            }
-            InvalidateAdmission();
-        }
-    }
-
     public string LicenseText
     {
         get => _licenseText;
@@ -223,6 +212,21 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         get => _statusMessage;
         private set => SetProperty(ref _statusMessage, value);
     }
+
+    public string DiagnosticDetails
+    {
+        get => _diagnosticDetails;
+        private set
+        {
+            if (!SetProperty(ref _diagnosticDetails, value))
+            {
+                return;
+            }
+            RaisePropertyChanged(nameof(HasDiagnosticDetails));
+        }
+    }
+
+    public bool HasDiagnosticDetails => !string.IsNullOrWhiteSpace(DiagnosticDetails);
 
     public string RedactedDiff
     {
@@ -347,8 +351,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         WizardPageId.Welcome => true,
         WizardPageId.License => LicenseAvailable && LicenseAccepted,
-        WizardPageId.Paths => HasRequiredPaths && HasSupportedLane,
-        WizardPageId.Environment => PreviewReady,
+        WizardPageId.Paths => HasRequiredPaths && HasInstallationScope,
+        WizardPageId.Environment => HasAdmission && EnvironmentFields.Count > 0,
         WizardPageId.Requirements => (HasAdmission || HasRequiredPaths) &&
                                      (!RequirementsReady || EnvironmentFields.Count == 0),
         WizardPageId.Progress => SetupCompleted || HasCommittedSession,
@@ -365,11 +369,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool IsFinalPage => CurrentPage.Id == WizardPageId.Ready;
     public bool HasRequiredPaths => !string.IsNullOrWhiteSpace(CheckoutPath) &&
                                     !string.IsNullOrWhiteSpace(StorageRoot);
-    public bool HasSupportedLane => LaneOptions.Contains(Lane, StringComparer.OrdinalIgnoreCase);
+    public bool HasInstallationScope => _installationScopeValid;
     public bool HasCommittedSession => !string.IsNullOrWhiteSpace(_sessionId) && _requirementsReady;
     public bool HasAdmission => !string.IsNullOrWhiteSpace(_sessionId) ||
                                  !string.IsNullOrWhiteSpace(_admissionId);
-    public bool CanLaunchWorkspace => SetupCompleted &&
+    public bool CanLaunchWorkspace => _installationScopeValid && SetupCompleted &&
                                       string.Equals(_setupMode, "initial-build", StringComparison.OrdinalIgnoreCase);
     public string ReadyHeading => CanLaunchWorkspace
         ? "Fullmag is ready."
@@ -590,9 +594,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task AdmitPathsAsync()
     {
-        if (!HasRequiredPaths || !HasSupportedLane)
+        if (!HasRequiredPaths || !HasInstallationScope)
         {
-            Block("Select a source checkout, private storage root and supported build lane.");
+            Block("The installer must authorize all four runtime realizations before setup can continue.");
             return;
         }
 
@@ -603,7 +607,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 checkout_path = CheckoutPath,
                 storage_root = StorageRoot,
-                lane = Lane,
+                lane = InstallationScope,
                 setup_path = _setupScript,
                 manifest_path = _requirementsManifest,
                 setup_hash = _setupHash,
@@ -618,6 +622,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ApplyResponse(response);
         if (!response.Ok)
         {
+            return;
+        }
+        if (!InstallationScopeMatches(response.Payload))
+        {
+            Block("The installer returned a single-realization setup scope; the full four-realization installation is blocked.");
             return;
         }
 
@@ -698,6 +707,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task PrepareRequirementsAsync()
     {
+        if (!HasInstallationScope)
+        {
+            Block("The installer must authorize all four runtime realizations before setup can continue.");
+            return;
+        }
         if (!ValidateEnvironmentValues())
         {
             return;
@@ -712,7 +726,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 admission_id = _admissionId,
                 checkout_path = CheckoutPath,
                 storage_root = StorageRoot,
-                lane = Lane,
+                lane = InstallationScope,
                 setup_path = _setupScript,
                 manifest_path = _requirementsManifest,
                 setup_hash = _setupHash,
@@ -726,7 +740,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
         ApplyResponse(response);
-        var readinessConfirmed = response.Ok && ReadinessConfirmed(response.Payload, allowFreshHost: true);
+        var readinessConfirmed = response.Ok &&
+                                 InstallationScopeMatches(response.Payload) &&
+                                 ReadinessConfirmed(response.Payload, allowFreshHost: true);
         if (!response.Ok)
         {
             return;
@@ -762,6 +778,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task CommitAndSetupAsync()
     {
+        if (!HasInstallationScope)
+        {
+            Block("The installer must authorize all four runtime realizations before setup can continue.");
+            return;
+        }
         if (!PreviewReady)
         {
             Block("A current redacted preview is required before saving settings.");
@@ -806,6 +827,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
         ApplyResponse(commit);
+        if (!InstallationScopeMatches(commit.Payload))
+        {
+            Block("The installer returned a single-realization commit scope; setup remains blocked.");
+            return;
+        }
         if (!commitConfirmed)
         {
             Block("The approved environment was not confirmed as valid; setup remains blocked.");
@@ -825,7 +851,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 admission_id = _admissionId,
                 checkout_path = CheckoutPath,
                 storage_root = StorageRoot,
-                lane = Lane,
+                lane = InstallationScope,
                 storage_profile = _storageProfile,
                 receipt_path = _receiptPath,
                 mode = _setupMode,
@@ -838,6 +864,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         ApplyResponse(setup);
         SetupCompleted = setup.Ok &&
+                         InstallationScopeMatches(setup.Payload) &&
                          string.Equals(setup.State, "complete", StringComparison.OrdinalIgnoreCase) &&
                          JsonPayload.Bool(setup.Payload, "receipt_valid");
         if (SetupCompleted)
@@ -858,6 +885,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task LaunchUiAsync()
     {
+        if (!HasInstallationScope)
+        {
+            Block("The installer did not confirm all four runtime realizations; launch remains blocked.");
+            return;
+        }
         if (!SetupCompleted)
         {
             Block("Launch requires a verified setup result.");
@@ -878,7 +910,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 admission_id = _admissionId,
                 checkout_path = CheckoutPath,
                 storage_root = StorageRoot,
-                lane = Lane,
+                lane = InstallationScope,
                 storage_profile = _storageProfile,
                 receipt_path = _receiptPath,
                 license_accepted = LicenseAccepted
@@ -906,6 +938,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         object payload,
         CancellationToken cancellationToken)
     {
+        DiagnosticDetails = string.Empty;
         var response = await _broker.SendAsync(operation, payload, cancellationToken).ConfigureAwait(true);
         return response;
     }
@@ -1059,6 +1092,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             RaisePropertyChanged(nameof(HasAdmission));
         }
 
+        DiagnosticDetails = ReadPublicBlockers(payload);
+
         var storageProfile = JsonPayload.String(payload, "storage_profile");
         if (!string.IsNullOrWhiteSpace(storageProfile))
         {
@@ -1107,6 +1142,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _storageProfile = string.Empty;
         _receiptPath = string.Empty;
         _setupMode = string.Empty;
+        DiagnosticDetails = string.Empty;
         RedactedDiff = string.Empty;
         Requirements.Clear();
         RaisePropertyChanged(nameof(HasRequirements));
@@ -1285,6 +1321,40 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RaisePropertyChanged(nameof(HasRequirements));
     }
 
+    private static string ReadPublicBlockers(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("blockers", out var blockers) ||
+            blockers.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        var details = new List<string>();
+        foreach (var blocker in blockers.EnumerateArray())
+        {
+            if (details.Count >= MaxPublicBlockers)
+            {
+                break;
+            }
+            if (blocker.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var detail = blocker.GetString()?.Trim();
+            if (string.IsNullOrWhiteSpace(detail) ||
+                detail.Length > MaxPublicBlockerLength ||
+                detail.Any(char.IsControl))
+            {
+                continue;
+            }
+            details.Add(detail);
+        }
+
+        return string.Join(Environment.NewLine, details);
+    }
+
     private void OnEnvironmentFieldChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
     {
         if (eventArgs.PropertyName != nameof(EnvironmentFieldViewModel.Value))
@@ -1455,19 +1525,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             RaisePropertyChanged(nameof(StorageRoot));
         }
 
-        var lane = JsonPayload.FirstString(payload, "lane", "requested_lane");
-        if (!HasAdmission && !string.IsNullOrWhiteSpace(lane))
+        var installationScope = JsonPayload.FirstString(payload, "lane", "requested_lane");
+        _installationScopeValid = IsAllInstallationScope(installationScope);
+        if (!_installationScopeValid)
         {
-            var normalized = NormalizeLane(lane);
-            if (!string.Equals(_lane, normalized, StringComparison.Ordinal))
-            {
-                _lane = normalized;
-                RaisePropertyChanged(nameof(Lane));
-            }
-            if (string.IsNullOrWhiteSpace(normalized))
-            {
-                StatusMessage = "The installer supplied an unsupported build lane. Choose native, FEM CPU or FEM GPU.";
-            }
+            BrokerState = "blocked";
+            StatusMessage = "The installer did not authorize preparation of all four runtime realizations.";
         }
         RaisePropertyChanged(nameof(CanLaunchWorkspace));
         RaisePropertyChanged(nameof(ReadyHeading));
@@ -1531,6 +1594,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RaisePropertyChanged(nameof(ReadyHeading));
         RaisePropertyChanged(nameof(ReadyDescription));
         RedactedDiff = string.Empty;
+        DiagnosticDetails = string.Empty;
         Requirements.Clear();
         ClearEnvironmentFields();
         RaisePropertyChanged(nameof(HasRequirements));
@@ -1672,7 +1736,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RaisePropertyChanged(nameof(CanGoBack));
         RaisePropertyChanged(nameof(IsFinalPage));
         RaisePropertyChanged(nameof(HasRequiredPaths));
-        RaisePropertyChanged(nameof(HasSupportedLane));
+        RaisePropertyChanged(nameof(HasInstallationScope));
         RaisePropertyChanged(nameof(HasCommittedSession));
         RaisePropertyChanged(nameof(HasAdmission));
         RaisePropertyChanged(nameof(IsProgressIndeterminate));
@@ -1684,20 +1748,17 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RaisePropertyChanged(nameof(LicenseAvailable));
     }
 
-    private static string NormalizeLane(string? lane)
+    private static bool IsAllInstallationScope(string? scope)
     {
-        var normalized = lane?.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            return string.Empty;
-        }
-        return normalized switch
-        {
-            "native" or "windows-native" => "native",
-            "fem-gpu" or "windows-native-fem-gpu" => "fem-gpu",
-            "fem-cpu" or "windows-native-fem-cpu" => "fem-cpu",
-            _ => string.Empty
-        };
+        return string.Equals(scope?.Trim(), InstallationScope, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool InstallationScopeMatches(JsonElement payload)
+    {
+        var responseScope = JsonPayload.FirstString(payload, "lane", "requested_lane");
+        return string.IsNullOrWhiteSpace(responseScope)
+            ? _installationScopeValid
+            : IsAllInstallationScope(responseScope);
     }
 
     public Task ShutdownAsync()

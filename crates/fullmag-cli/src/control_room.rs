@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 #[cfg(unix)]
@@ -19,6 +20,46 @@ mod development_workspace_probe;
 
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
 pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
+
+static BROWSER_EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn browser_interrupt_handler(_: libc::c_int) {
+    BROWSER_EXIT_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+/// Keeps browser-hosted control rooms alive until Ctrl+C, then lets the
+/// caller's normal guards release the API, frontend, and scratch runtime.
+pub(crate) struct BrowserInterruptGuard {
+    previous: libc::sighandler_t,
+}
+
+impl BrowserInterruptGuard {
+    pub(crate) fn install() -> Result<Self> {
+        BROWSER_EXIT_REQUESTED.store(false, Ordering::SeqCst);
+        let previous = unsafe {
+            libc::signal(
+                libc::SIGINT,
+                browser_interrupt_handler as libc::sighandler_t,
+            )
+        };
+        if previous == libc::SIG_ERR as libc::sighandler_t {
+            bail!("failed to install the browser Ctrl+C handler");
+        }
+        Ok(Self { previous })
+    }
+}
+
+impl Drop for BrowserInterruptGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = libc::signal(libc::SIGINT, self.previous);
+        }
+    }
+}
+
+pub(crate) fn browser_exit_requested() -> bool {
+    BROWSER_EXIT_REQUESTED.load(Ordering::Relaxed)
+}
 
 // Keep the internal API target on IPv4 on Windows.  `localhost` may resolve
 // to an unrelated IPv6 listener (for example WSL or Docker port forwarding)
@@ -1927,7 +1968,7 @@ fn prune_control_room_logs(log_dir: &Path) {
     }
 }
 
-pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
+pub(crate) fn open_in_browser(ready: &ControlPlaneReady) -> Result<()> {
     terminal_logger().emit(
         TerminalLogSource::Web,
         format!("gui server: {}", ready.web_url),
@@ -1943,13 +1984,14 @@ pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
     match which_opener() {
         Ok(opener) => {
             let args = browser_open_args(&opener, &ready.web_url);
-            if let Err(error) = ProcessCommand::new(&opener)
+            let result = ProcessCommand::new(&opener)
                 .args(args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-            {
+                .with_context(|| format!("failed to start browser opener {opener}"));
+            if let Err(error) = &result {
                 terminal_logger().emit(
                     TerminalLogSource::Cli,
                     format!(
@@ -1958,6 +2000,7 @@ pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
                     ),
                 );
             }
+            result.map(|_| ())
         }
         Err(error) => {
             terminal_logger().emit(
@@ -1967,6 +2010,7 @@ pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
                     ready.web_url
                 ),
             );
+            Err(error).context("browser auto-launch unavailable")
         }
     }
 }
@@ -2052,7 +2096,11 @@ pub(crate) fn spawn_control_room(
     let ready =
         bootstrap_control_plane(session_id, dev_mode, requested_port, Some(live_workspace))?;
     match ui_plan {
-        UiPlan::Browser | UiPlan::None => open_in_browser(&ready),
+        UiPlan::Browser | UiPlan::None => {
+            if let Err(error) = open_in_browser(&ready) {
+                eprintln!("[fullmag] {error:#}; open {} manually", ready.web_url);
+            }
+        }
         // The launching host opens its own window for this API.
         UiPlan::DesktopHost => {}
         UiPlan::DesktopSelf => {
@@ -2068,7 +2116,9 @@ pub(crate) fn spawn_control_room(
                 eprintln!(
                     "[fullmag] could not open the desktop window ({error:#}); opening the browser"
                 );
-                open_in_browser(&ready);
+                if let Err(browser_error) = open_in_browser(&ready) {
+                    eprintln!("[fullmag] {browser_error:#}; open {} manually", ready.web_url);
+                }
             }
         }
     }

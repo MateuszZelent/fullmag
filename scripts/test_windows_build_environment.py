@@ -22,6 +22,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "windows_build_requirements.json"
 SETUP = ROOT / "scripts" / "windows" / "setup_build_environment.ps1"
+RUN_FULLMAG = ROOT / "scripts" / "windows" / "run_fullmag.ps1"
 GUIDE = ROOT / "docs" / "guides" / "windows-build-environment.md"
 
 
@@ -30,6 +31,7 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         cls.setup = SETUP.read_text(encoding="utf-8")
+        cls.run_fullmag = RUN_FULLMAG.read_text(encoding="utf-8")
         cls.guide = GUIDE.read_text(encoding="utf-8")
 
     def test_manifest_shape_and_lane_coverage(self) -> None:
@@ -58,6 +60,12 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
         self.assertFalse(receipt_contract["cpu"]["cuda"])
         self.assertTrue(receipt_contract["gpu"]["cuda"])
         self.assertEqual(receipt_contract["gpu"]["pattern"], r"^\d+(;\d+)*$")
+        zstd = self.manifest["provider_bootstrap"]["internal_helpers"]["zstd"]
+        self.assertEqual(zstd["kind"], "provider_bootstrap_internal_helper")
+        self.assertEqual(zstd["version"], "1.5.7")
+        self.assertRegex(zstd["archive_sha256"], r"^[0-9a-f]{64}$")
+        self.assertFalse(zstd["host_requirement"])
+        self.assertEqual(zstd["managed_by"], "scripts/windows/native_fem_dependencies.ps1")
         webview2 = self.manifest["desktop_runtime"]["webview2"]
         self.assertEqual(webview2["status_in_setup"], "NOT VERIFIED")
         self.assertTrue(webview2["official_url"].startswith("https://"))
@@ -117,6 +125,8 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
         self.assertIn("Get-StorageProfile", self.setup)
         self.assertIn("Get-ProviderPath", self.setup)
         self.assertIn("Get-ProviderReceiptLaneError", self.setup)
+        self.assertIn("Assert-ProviderReceiptZstd", self.setup)
+        self.assertIn("Assert-NativeFemProviderZstd", self.run_fullmag)
         self.assertIn("selected FEM storage profile", self.setup)
         self.assertIn("non-empty numeric CUDA architecture list", self.setup)
         self.assertIn("cuda_architectures", self.setup)
@@ -141,6 +151,10 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
         self.assertIn("Python >=3.12 must be available as python.exe on PATH", self.setup)
         self.assertNotIn("Get-Command py.exe", self.setup)
         self.assertIn("function Assert-ProviderReceiptInventory", self.setup)
+        self.assertIn("Assert-ProviderReceiptPathChain", self.setup)
+        self.assertIn("Provider zstd archive hash does not match", self.setup)
+        self.assertIn("installed-prefix inventory omits a file", self.setup)
+        self.assertIn("installed-prefix inventory does not exactly cover", self.setup)
         self.assertIn('"fullmag.windows.fem-providers.v1"', self.setup)
         self.assertIn("$script:ProviderReceiptInventoryValidated", self.setup)
         self.assertIn("Provider receipt installed prefix is missing", self.setup)
@@ -176,6 +190,9 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
         self.assertIn("will not silently install a second global provider", self.setup)
         for name in ("mfem", "hypre", "libceed", "msmpi_sdk"):
             self.assertIn(name, self.manifest["provider_bootstrap"]["required_for"])
+        self.assertNotIn("zstd", self.manifest["provider_bootstrap"]["required_for"])
+        self.assertNotIn("zstd", self.manifest["tools"])
+        self.assertFalse(self.manifest["provider_bootstrap"]["internal_helpers"]["zstd"]["host_requirement"])
 
     def test_documentation_mentions_boundaries_and_entrypoints(self) -> None:
         for token in (
@@ -272,6 +289,8 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
                 env=environment,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
 
         self.assertIn(completed.returncode, (0, 2), completed.stderr)
@@ -379,6 +398,18 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
             installed.write_bytes(b"installed")
             tool = provider / "tool.exe"
             tool.write_bytes(b"tool")
+            zstd = provider / "tools" / "zstd-1.5.7" / "zstd-v1.5.7-win64" / "zstd.exe"
+            zstd.parent.mkdir(parents=True)
+            zstd.write_bytes(b"zstd")
+            zstd_archive = provider / "downloads" / "zstd-v1.5.7-win64.zip"
+            zstd_archive.parent.mkdir(parents=True)
+            zstd_archive.write_bytes(b"archive metadata fixture")
+            requirements = json.loads(MANIFEST.read_text(encoding="utf-8"))
+            requirements["provider_bootstrap"]["internal_helpers"]["zstd"]["archive_sha256"] = hashlib.sha256(
+                zstd_archive.read_bytes()
+            ).hexdigest()
+            requirements_path = root / "windows_build_requirements.json"
+            requirements_path.write_text(json.dumps(requirements), encoding="utf-8")
             outside = root / "outside.dll"
             outside.write_bytes(b"outside")
             receipt_path = provider / "provider-receipt.json"
@@ -396,25 +427,42 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
                             {
                                 "path": str(tool),
                                 "sha256": hashlib.sha256(tool.read_bytes()).hexdigest(),
+                            },
+                            {
+                                "path": str(zstd),
+                                "sha256": hashlib.sha256(zstd.read_bytes()).hexdigest(),
                             }
                         ],
+                        "zstd": {
+                            "kind": "provider_bootstrap_internal_helper",
+                            "version": "1.5.7",
+                            "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip",
+                            "archive": str(zstd_archive),
+                            "archive_name": "zstd-v1.5.7-win64.zip",
+                            "archive_sha256": hashlib.sha256(zstd_archive.read_bytes()).hexdigest(),
+                            "executable": str(zstd),
+                            "executable_name": "zstd.exe",
+                            "executable_sha256": hashlib.sha256(zstd.read_bytes()).hexdigest(),
+                            "decode_memory": "2048MB",
+                        },
                     }
                 ),
                 encoding="utf-8",
             )
             driver = root / "receipt_guard.ps1"
             driver.write_text(
-                "param($Setup,$ProviderRoot,$ReceiptPath)\n"
+                "param($Setup,$RequirementsPath,$ProviderRoot,$ReceiptPath)\n"
                 "$ErrorActionPreference='Stop'\n"
                 "$tokens=$null; $errors=$null\n"
                 "$ast=[System.Management.Automation.Language.Parser]::ParseFile($Setup,[ref]$tokens,[ref]$errors)\n"
-                "foreach($name in @('Test-ProviderReceiptPathWithin','Assert-ProviderReceiptInventory')) {\n"
+                "foreach($name in @('Test-ProviderReceiptPathWithin','Assert-ProviderReceiptPathChain','Assert-ProviderReceiptZstd','Assert-ProviderReceiptInventory')) {\n"
                 "  $fn=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)\n"
                 "  if($null -eq $fn){throw \"Missing function: $name\"}\n"
                 "  . ([scriptblock]::Create($fn.Extent.Text))\n"
                 "}\n"
                 "$script:ProviderRoot=$ProviderRoot\n"
                 "$script:ProviderReceiptInventoryValidated=$false\n"
+                "$script:Requirements=Get-Content -LiteralPath $RequirementsPath -Raw | ConvertFrom-Json\n"
                 "try { $receipt=Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json; Assert-ProviderReceiptInventory -Receipt $receipt; exit 0 }\n"
                 "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }\n",
                 encoding="utf-8",
@@ -430,13 +478,42 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
                     "-File",
                     str(driver),
                     str(SETUP),
+                    str(requirements_path),
                     str(provider),
                     str(receipt_path),
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self.assertEqual(valid_result.returncode, 0, valid_result.stdout + valid_result.stderr)
+
+            extra_installed = prefix / "unexpected.dll"
+            extra_installed.write_bytes(b"unexpected")
+            extra_result = subprocess.run(
+                [
+                    powershell,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(driver),
+                    str(SETUP),
+                    str(requirements_path),
+                    str(provider),
+                    str(receipt_path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(extra_result.returncode, 2, extra_result.stdout + extra_result.stderr)
+            self.assertIn("omits", extra_result.stderr.lower())
+            extra_installed.unlink()
 
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             receipt["files"][0] = {
@@ -456,14 +533,114 @@ class WindowsBuildEnvironmentContractTests(unittest.TestCase):
                     "-File",
                     str(driver),
                     str(SETUP),
+                    str(requirements_path),
                     str(provider),
                     str(receipt_path),
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertIn("escapes", result.stderr.lower())
+
+    def test_native_run_receipt_requires_pinned_zstd_metadata(self) -> None:
+        """The runtime receipt boundary accepts the pinned helper and rejects drift."""
+
+        powershell = self._powershell_command()
+        if os.name != "nt" or powershell is None:
+            self.skipTest("Native Windows receipt fixture requires PowerShell")
+
+        with tempfile.TemporaryDirectory(prefix="fullmag-run-provider-receipt-") as temporary:
+            root = Path(temporary)
+            provider = root / "provider"
+            zstd = provider / "tools" / "zstd-1.5.7" / "zstd-v1.5.7-win64" / "zstd.exe"
+            zstd.parent.mkdir(parents=True)
+            zstd.write_bytes(b"zstd")
+            archive = provider / "downloads" / "zstd-v1.5.7-win64.zip"
+            archive.parent.mkdir(parents=True)
+            archive.write_bytes(b"archive metadata fixture")
+            requirements = json.loads(MANIFEST.read_text(encoding="utf-8"))
+            requirements["provider_bootstrap"]["internal_helpers"]["zstd"]["archive_sha256"] = hashlib.sha256(
+                archive.read_bytes()
+            ).hexdigest()
+            requirements_path = root / "windows_build_requirements.json"
+            requirements_path.write_text(json.dumps(requirements), encoding="utf-8")
+            metadata = {
+                "kind": "provider_bootstrap_internal_helper",
+                "version": "1.5.7",
+                "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip",
+                "archive": str(archive),
+                "archive_name": "zstd-v1.5.7-win64.zip",
+                "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "executable": str(zstd),
+                "executable_name": "zstd.exe",
+                "executable_sha256": hashlib.sha256(zstd.read_bytes()).hexdigest(),
+                "decode_memory": "2048MB",
+            }
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "zstd": metadata,
+                        "tools": [{"path": str(zstd), "sha256": metadata["executable_sha256"]}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            driver = root / "zstd_receipt_guard.ps1"
+            driver.write_text(
+                "param($RunScript,$RequirementsPath,$ProviderRoot,$ReceiptPath)\n"
+                "$ErrorActionPreference='Stop'\n"
+                "$tokens=$null; $errors=$null\n"
+                "$ast=[System.Management.Automation.Language.Parser]::ParseFile($RunScript,[ref]$tokens,[ref]$errors)\n"
+                "foreach($name in @('Resolve-AbsolutePath','Get-Sha256File','Test-NativeFemPathWithin','Assert-NativeFemPathChain','Assert-NativeFemProviderZstd')) {\n"
+                "  $fn=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)\n"
+                "  if($null -eq $fn){throw \"Missing function: $name\"}\n"
+                "  . ([scriptblock]::Create($fn.Extent.Text))\n"
+                "}\n"
+                "$requirements=Get-Content -LiteralPath $RequirementsPath -Raw | ConvertFrom-Json\n"
+                "$receipt=Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json\n"
+                "try { Assert-NativeFemProviderZstd -Receipt $receipt -Requirements $requirements -ProviderRoot $ProviderRoot; exit 0 }\n"
+                "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }\n",
+                encoding="utf-8",
+            )
+
+            def run_guard() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        powershell,
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                        str(driver),
+                        str(RUN_FULLMAG),
+                        str(requirements_path),
+                        str(provider),
+                        str(receipt_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+
+            valid = run_guard()
+            self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+            archive_bytes = archive.read_bytes()
+            archive.write_bytes(archive_bytes + b"tampered")
+            tampered_archive = run_guard()
+            self.assertEqual(tampered_archive.returncode, 2, tampered_archive.stdout + tampered_archive.stderr)
+            self.assertIn("archive hash", tampered_archive.stderr.lower())
+            archive.write_bytes(archive_bytes)
+            invalid = json.loads(receipt_path.read_text(encoding="utf-8"))
+            invalid["zstd"]["decode_memory"] = "128MB"
+            receipt_path.write_text(json.dumps(invalid), encoding="utf-8")
+            drifted = run_guard()
+            self.assertEqual(drifted.returncode, 2, drifted.stdout + drifted.stderr)
+            self.assertIn("does not match", drifted.stderr.lower())
 
     def test_native_main_checkout_guard_rejects_outside_and_reparse_paths(self) -> None:
         """The .env guard checks both lexical confinement and existing junctions."""

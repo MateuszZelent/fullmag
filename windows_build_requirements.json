@@ -206,6 +206,26 @@
       "official_url": "https://github.com/CEED/libCEED/releases/tag/v0.12.0",
       "requires": ["clang_cl", "cmake", "ninja"]
     },
+    "boost_headers": {
+      "kind": "project_managed_header_provider",
+      "version": "1.89.0",
+      "archive": "boost_1_89_0.zip",
+      "url": "https://archives.boost.io/release/1.89.0/source/boost_1_89_0.zip",
+      "archive_sha256": "77bee48e32cabab96a3fd2589ec3ab9a17798d330220fdd8bde6ff5611b4ccde",
+      "official_url": "https://www.boost.org/releases/1.89.0/",
+      "provider_path": "{build_root}\\fem-dependencies\\installed\\providers\\b-77bee48e32ca",
+      "include_path": "{build_root}\\fem-dependencies\\installed\\providers\\b-77bee48e32ca\\include",
+      "license_path": "{build_root}\\fem-dependencies\\installed\\providers\\b-77bee48e32ca\\share\\licenses\\boost\\LICENSE_1_0.txt",
+      "root_directory": "boost_1_89_0",
+      "include_directory": "boost",
+      "license_file": "LICENSE_1_0.txt",
+      "required_headers": ["boost/multiprecision/cpp_int.hpp", "boost/rational.hpp"],
+      "max_selected_files": 50000,
+      "max_selected_file_bytes": 33554432,
+      "max_selected_uncompressed_bytes": 536870912,
+      "scope": "FEM CPU/GPU exact integer and rational constraint arithmetic",
+      "requires": ["cmake"]
+    },
     "cuda": {
       "kind": "system",
       "command": "nvcc.exe",
@@ -313,7 +333,7 @@
     "script": "scripts/windows/native_fem_dependencies.ps1",
     "prepare_command": "just windows-build fem gpu",
     "prepare_policy": "Run only through the managed Windows build recipe after the compiler/tooling check; this setup command never invokes a provider build directly.",
-    "required_for": ["ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed"],
+    "required_for": ["ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed", "boost_headers"],
     "source_policy": "official upstream Git refs plus SHA-256-checked archives",
     "internal_helpers": {
       "zstd": {
