@@ -45629,7 +45629,8 @@
   "info": {
     "description": "Professional session-scoped API for Fullmag platform, simulation control, data, visualization, and diagnostics.",
     "license": {
-      "name": ""
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
     },
     "title": "Fullmag API v2",
     "version": "2.0.0"
