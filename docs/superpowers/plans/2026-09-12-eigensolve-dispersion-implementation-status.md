@@ -14,7 +14,7 @@ i dokumentacji nie oznaczają przebudowania tego runtime.
 | K0 analityka | Dla jednorodnego modu i skończonego airboxu:9.299249697068401GHz, różnica−0.000101Hz; otwarty film9.309813711433355GHz | Profil modu i zbieżność wymagają osobnego dowodu; nie dopasowywano parametrów |
 | Signed15 DE serial | Runbe5355a8bb904ed49c0589c69bf8f6cc: native exit0, 15 zapisanych punktów−25…+25rad/µm, wszystkie full descriptor certified; max residual1.0802441875514487e-14 | Świeży run6c9b97a7980a452cae15b203526fcb0a po poprawcef176a45fee3c5cc03de80b354555734cdbb0970f: canonical exit0/completed_unqualified; Gamma1/Floquet14, rekonstrukcja potencjału i signed state closure PASS. Historyczny failed receipt zachowany; osobna próba adaptive odrzucona przez guard tożsamości boundary |
 | Wykres signed15 | Kanoniczny plot-6c9b97a7980a452cae15b203526fcb0a/signed-fifteen-dispersion.png/pdf i plot-receipt.json: consumer PASS na świeżym serial,15punktów oraz open/finite n0 i coupled thickness32; bez fitu, odbicia i interpolacji FEM. Wcześniejszy wykres diagnostyczny zachowany | Diagnoza zbieżności/reciprocity, serial-adaptive parity; wynik NOT VERIFIED |
-| Signed15 adaptive | Run83f4a6cd976541708ac8280431b81361 native exit1: equilibrium_boundary_hash_mismatch, stored aed4fdc43d95670251a6940f224e92a211e75d01029c796fa5ae70a9e991168a, recomputed66e5db54f6e3b88f7d85f3dd12b7c5bbb63473e965d73e57d5cc17f087945a42 | Przyczyna potwierdzona: tylko modalny kind Floquet→Periodic przy Γ. Nowy proof importu i naprawa inner/outer digest certyfikatu obecne w źródłach; compiled CI, nowy runtime i parity/co-activity NOT VERIFIED |
+| Signed15 adaptive | Run83f4a6cd976541708ac8280431b81361 native exit1: equilibrium_boundary_hash_mismatch, stored aed4fdc43d95670251a6940f224e92a211e75d01029c796fa5ae70a9e991168a, recomputed66e5db54f6e3b88f7d85f3dd12b7c5bbb63473e965d73e57d5cc17f087945a42 | Przyczyna potwierdzona: tylko modalny kind Floquet→Periodic przy Γ. Nowy proof importu i naprawa inner/outer digest certyfikatu obecne w źródłach; compiled CI38706160578: 6 nowych regresji PASS; nowy runtime i parity/co-activity NOT VERIFIED |
 | Zbieżność +25rad/µm | Canonical FGMRES/EPS1e-10,3warstwy: L0=13.408272871236032GHz, L1=13.489825251951523GHz, L2=13.526688197653702GHz, L3=13.544436286304871GHz; wszystkie exit0/completed_unqualified. Osobno L3/6warstw/restart30=13.557703766420689GHz (run7d06a4c363d54b3a9e735128024d8272); restart8 zakończył się DIVERGED_ITS bez wyniku. Różnica L0FGMRES−L0GMRES=5.72e-6Hz. L1GMRES osobno przerwał guard rekurencji PETSc | Wpływ dyskretyzacji potwierdzony, zbieżność nadal NOT VERIFIED; potrzeba grubości/airboxu i analizy asymetrii. Bez osłabiania tolerancji |
 | API ownership | Commitccb6a781966f5e883de73fb5b03ef2b9305d51f7: CI38692453999 Rust job116281276566 PASS, w tym65ownershiptests i oba naprawione fixtures. Auto CI38692391217 PASS | Cały bootstrap FAIL przez browser request budget13/12; brak lokalnej kompilacji testów |
 | Mapa źródeł | Commit9c27e09ab5a7ae3e9aa7c66520b58bac047ae894: dokładny opt-in CPP-DECL, 28 testów PASS; niejednoznaczne deklaracje nadal odrzucane | Mapę0831 weryfikować razem z konsumentem energii |
@@ -28,6 +28,21 @@ w artefaktach tego wątku, logi `build245-k0-eps1e10-energy-fixed-runtime.log`,
 Historia wcześniejszych diagnoz poniżej pozostaje zachowana.
 
 
+Szczegółowe brakujące dowody serial/adaptive oraz kolejność napraw: [audyt publikacji](2026-10-15-signed15-parity-publication-audit.md).
+
+### Konsument parytetu i katalog native — etap źródłowy
+
+Konsument signed15 i optional raw binding widma v3 przeszły wspólnie
+47 interpretowanych testów oraz18 podtestów. Nie kompilowano lokalnie
+unit tests. Source review poprawił odrębne role semantic/raw/lineage,
+obsługę bezpośredniego raportu i wiązanie snapshotu kapsuły.
+Nowy catalog jest w `4ea3da4ebda4288233c9a7c3c78899b848753474`.
+Historycznych wyników nie dopisywano; real pair serial6c9…/adaptive83f…
+ma wynik NOT VERIFIED (adaptive incomplete). Publikacja brakujących bundle,
+physical projection i journalu terminalnego pozostaje OPEN według audytu.
+Tymczasowe katalogi trzech regresji zachowano do porównania z CI; nie
+usuwano execution244/245 ani cache. Build252/capsuła są nadal potrzebne.
+
 ### Kolejka i bramki po review importu
 
 - Naprawa native jest na remote w commicie
@@ -39,7 +54,9 @@ Historia wcześniejszych diagnoz poniżej pozostaje zachowana.
 - CI38705241555 ujawniło E0382 wyłącznie w nowym fixture testowym. Poprawka
   clone sygnatury jest na remote jako
   `00900295e4545580cfec7da0b9cddbcf7194a03c`; CI38706160578 jest osobnym
-  dowodem dla tego commita. Nie zamienia to źródeł już przyjętego buildu252.
+  dowodem dla tego commita: cały workflow PASS, w tym native job116325988769
+  wykonał 6 nowych testów importu/certyfikatu (6 PASS, nie pusty filtr).
+  Nie zamienia to źródeł już przyjętego buildu252.
 - Raport grubości `build245-de-k25-L3-thickness-check-20261015.json` wiąże
   rzeczywiste receipt/CSV i native spectrum: residual3warstwy
   `9.447221957997469e-14`, residual6warstw `2.2783526273107843e-14`.
@@ -65,8 +82,8 @@ outer wrapper digest, zgodnie z producentem, zamiast inner content digest.
 Nie migrowano schematów ani nie przepisano wyników build245.
 
 Nowe testy Rust podpięto do istniejących workflow GitHub Actions. Lokalnie
-nie kompilowano testów. Source-map i physics-docs gate PASS; compiled CI i
-wykonanie nowego kodu pozostają NOT VERIFIED do osobnych rezultatów.
+nie kompilowano testów. Source-map i physics-docs gate PASS; compiled CI38706160578:6 PASS.
+Managed wykonanie nowego kodu pozostaje NOT VERIFIED do osobnego rezultatu.
 
 Dla DE +25rad/µm kontrola L0→L3 (3warstwy) oraz L3/6warstw potwierdza
 wpływ dyskretyzacji. Przy sześciu warstwach zwiększono wyłącznie restart

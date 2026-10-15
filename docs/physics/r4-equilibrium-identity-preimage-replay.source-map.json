@@ -245,8 +245,15 @@
       "id": "boundary-import-tests",
       "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs",
       "symbol": "equilibrium_boundary_import_accepts_both_migration_directions",
-      "responsibility": "Covers both canonical source layouts and both Periodic/Floquet import directions; compiled execution pending CI.",
+      "responsibility": "Covers both canonical layouts and both Periodic/Floquet import directions; CI38706160578 ran six import/certificate regressions successfully.",
       "evidence_status": "source_visible"
+    },
+    {
+      "id": "signed-parity-consumer",
+      "path": "scripts/validate_signed_de_campaign_parity.py",
+      "symbol": "validate_signed_de_campaign_parity",
+      "responsibility": "Checks capsule-bound identity, semantic and raw digest roles, exact signed15 coverage, native residuals, and scheduler evidence without promoting missing physical-input projections.",
+      "evidence_status": "interpreted_pass"
     }
   ],
   "public_api": {

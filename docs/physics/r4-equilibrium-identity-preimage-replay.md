@@ -184,8 +184,10 @@ tej bramce przez main verifier.
 
 ### 7.1 Import tej samej równowagi przy przejściu Γ/Floquet
 
-Naprawa FEM CPU jest obecna w źródłach; wykonanie nowego importera pozostaje
-`NOT VERIFIED` do osobnego CI i managed runtime. Serial signed15 na build245
+Naprawa FEM CPU jest obecna w źródłach. CI38706160578, commit
+`00900295e4545580cfec7da0b9cddbcf7194a03c`, wykonało sześć regresji importu
+i digestu certyfikatu: 6 PASS. Managed wykonanie nowego importera pozostaje
+`NOT VERIFIED`. Serial signed15 na build245
 przeszedł, lecz adaptive sample 7 przy Γ odrzucił import: historyczny
 `boundary_signature` artefaktu v7 wiąże również modalne `spin_wave_bc`.
 Normalizacja Γ zmienia `Floquet` na `Periodic`, choć preimage statycznego
@@ -232,6 +234,22 @@ nie zamienia hashów ręcznie i nie zeruje energii. Docelowy operator oraz
 dynamiczne ograniczenia fazowe są nadal budowane i certyfikowane dla
 rzeczywistego k; dowód importu nie zastępuje walidacji Floqueta ani
 niezależnego count proof.
+
+### 7.2 Rozdzielenie ról hashów w porównaniu signed15
+
+Konsument `validate_signed_de_campaign_parity` wiąże identity ze snapshotem
+wybranej kapsuły i odtwarza dokładne preimage'y oraz semantic content
+artefaktów. Raw SHA wejściowego pliku workera jest osobnym dowodem;
+nie porównuje się go z semantic `content_sha256`. Pełny hash planu zawiera
+ścieżkę uruchomienia, a hash wejścia operatora zawiera lineage stanu.
+Różnica tych hashów wymaga jawnej projekcji wejść fizycznych; bez niej
+raport pozostaje `NOT VERIFIED`, zamiast zgłaszać różnicę fizyki.
+
+Bezpośredni raport k-pool nie zastępuje journalu terminalnego. Pula signed15
+obejmuje indeksy1…14, podczas gdy punkt0 jest seedem poza pulą. Zgodność
+częstotliwości/residuali i co-activity są oddzielnymi kontrolami. Nowe testy
+interpretowane:23 PASS; razem z benchmarkiem47 PASS i18 podtestów.
+To nie jest wykonany parytet dwóch nowych kampanii ani kwalifikacja naukowa.
 
 (discrete-realization)=
 ## 8. Realizacja backendów
@@ -320,10 +338,11 @@ Nowa regresja importu musi objąć oba kierunki Γ/Floquet, brak lub mutację ka
 | independent replay | `scripts/fem_equilibrium_identity_replay.py` + `replay_preimage_json` | verifier | 10 interpreted tests PASS |
 | main full identity gate | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` + `validate_r4_signed_sidecars` | verifier | 57 interpreted tests PASS; full 52-field check precedes helper |
 | mutation coverage | `scripts/test_fem_equilibrium_identity_replay.py` + `class EquilibriumIdentityReplayTests` | verifier | 10 interpreted tests PASS |
-| Γ/Floquet equilibrium import | `crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs` + `validate_modal_boundary_equilibrium_import` | FEM CPU | source-visible; compiled CI and managed execution NOT VERIFIED |
+| Γ/Floquet equilibrium import | `crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs` + `validate_modal_boundary_equilibrium_import` | FEM CPU | source-visible; compiled CI38706160578: 6 PASS; managed execution NOT VERIFIED |
 | unchanged legacy boundary digest | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `legacy_modal_boundary_snapshot_signature` | FEM CPU | source-visible; historical hash payload preserved |
 | periodic certificate digest role | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `validate_imported_periodic_mesh_certificate` | FEM CPU | source-visible; inner checks preserved, outer digest returned |
-| import proof regression | `crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs` + `equilibrium_boundary_import_accepts_both_migration_directions` | FEM CPU | source-visible; compiled tests only in GitHub Actions |
+| import proof regression | `crates/fullmag-runner/src/fem/eigen_equilibrium_boundary_import.rs` + `equilibrium_boundary_import_accepts_both_migration_directions` | FEM CPU | CI38706160578/job116325988769: 6 PASS; compiled tests only in GitHub Actions |
+| signed15 parity consumer | `scripts/validate_signed_de_campaign_parity.py` + `validate_signed_de_campaign_parity` | verifier | 23 interpreted tests PASS; actual adaptive campaign and assembled-input projection NOT VERIFIED |
 
 Obecność helpera i zielone testy kontraktowe nie promują statusu do runtime
 qualification. Do tego potrzebne są exact artefakty managed runnera, native
