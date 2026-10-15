@@ -132,6 +132,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/batches/{batch_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_batches_batch_id_commands"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/run-intent": {
         parameters: {
             query?: never;
@@ -477,6 +493,22 @@ export interface paths {
         };
         get: operations["platform_get_platform_compute_nodes_node_id"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/compute/nodes/{node_id}/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_compute_nodes_node_id_policy"];
+        put: operations["platform_put_platform_compute_nodes_node_id_policy"];
         post?: never;
         delete?: never;
         options?: never;
@@ -6342,13 +6374,55 @@ export interface components {
         CompressionProfile: "speed" | "balanced" | "smallest";
         /** @enum {string} */
         ComputeAdmissionState: "not_evaluated";
+        ComputeNodeParallelismPattern: {
+            /** @enum {string} */
+            kind: "single_process";
+        } | {
+            /** Format: int32 */
+            gpus_per_rank: number;
+            /** @enum {string} */
+            kind: "distributed";
+            /** Format: int32 */
+            ranks: number;
+            /** Format: int32 */
+            ranks_per_node: number;
+            /** Format: int32 */
+            threads_per_rank: number;
+        };
+        ComputeNodePolicyBudget: {
+            /** Format: int64 */
+            cpu_millis: number;
+            /** Format: int64 */
+            gpu_memory_bytes: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            storage_bytes: number;
+        };
+        /** @description Versioned public projection of the host admission policy. */
+        ComputeNodePolicyDocumentResource: {
+            allowed_cpu_ids: number[];
+            allowed_gpu_uuids: string[];
+            allowed_parallelism_patterns: components["schemas"]["ComputeNodeParallelismPattern"][];
+            draining: boolean;
+            /** Format: int32 */
+            max_parallel_workers: number;
+            priority_order: number[];
+            reserved_budget: components["schemas"]["ComputeNodePolicyBudget"];
+            reserved_gpu_vram_bytes_by_uuid?: {
+                [key: string]: number;
+            };
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+        };
         /**
          * @description Read-only host policy snapshot. Mutations require the separate operator
          *     authorization contract and are intentionally not part of this resource.
          */
         ComputeNodePolicyResource: {
-            /** @description Versioned NodePolicy document, kept open for forward-compatible fields. */
-            policy: Record<string, unknown>;
+            /** @description Operator-controlled policy document without internal host identity. */
+            policy: components["schemas"]["ComputeNodePolicyDocumentResource"];
             status: components["schemas"]["ComputeNodePolicyStatusResource"];
         };
         ComputeNodePolicyStatusResource: {
@@ -6359,6 +6433,23 @@ export interface components {
             over_budget: boolean;
             /** Format: int64 */
             revision: number;
+        };
+        ComputeNodePolicyUpdate: {
+            allowed_cpu_ids: number[];
+            allowed_gpu_uuids: string[];
+            allowed_parallelism_patterns: components["schemas"]["ComputeNodeParallelismPattern"][];
+            draining: boolean;
+            /** Format: int32 */
+            max_parallel_workers: number;
+            priority_order: number[];
+            reserved_budget: components["schemas"]["ComputeNodePolicyBudget"];
+            reserved_gpu_vram_bytes_by_uuid?: {
+                [key: string]: number;
+            };
+        };
+        /** @description A public update excludes server-owned host identity and revision. */
+        ComputeNodePolicyUpdateRequest: {
+            policy: components["schemas"]["ComputeNodePolicyUpdate"];
         };
         /** @description One host inventory and the freshness of its latest observation. */
         ComputeNodeResource: {
@@ -11890,6 +11981,8 @@ export interface components {
             state: components["schemas"]["ProjectBatchCaseState"];
         };
         ProjectBatchCaseTaskSummaryResource: {
+            /** @description True when a durable pre-claim cancellation request exists for this task. */
+            cancellation_requested: boolean;
             lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
             task_id: string;
         };
@@ -11910,7 +12003,29 @@ export interface components {
             next_cursor?: string | null;
         };
         /** @enum {string} */
-        ProjectBatchExpansionState: "pending" | "expanding" | "complete" | "stopped";
+        ProjectBatchCommandAction: "pause_admission" | "resume_admission" | "cancel_admission";
+        /** @enum {string} */
+        ProjectBatchCommandDisposition: "accepted" | "replayed";
+        ProjectBatchCommandRequest: {
+            action: components["schemas"]["ProjectBatchCommandAction"];
+            command_id: string;
+            /** Format: int64 */
+            expected_revision: number;
+            reason: string;
+        };
+        ProjectBatchCommandResource: {
+            action: components["schemas"]["ProjectBatchCommandAction"];
+            batch_id: string;
+            command_id: string;
+            /** Format: int64 */
+            command_revision: number;
+            disposition: components["schemas"]["ProjectBatchCommandDisposition"];
+            expansion_state: components["schemas"]["ProjectBatchExpansionState"];
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @enum {string} */
+        ProjectBatchExpansionState: "pending" | "expanding" | "complete" | "stopped" | "paused" | "cancelled";
         /** @enum {string} */
         ProjectBatchFailurePolicy: "continue_independent" | "stop_admission";
         ProjectBatchListQuery: {
@@ -11966,6 +12081,11 @@ export interface components {
             batch_id: string;
             /** Format: int64 */
             case_count: number;
+            /**
+             * Format: int64
+             * @description Revision used to fence pause, resume, and cancel-admission commands.
+             */
+            command_revision: number;
             /** @description State of the committed expansion cursor, which can lag a durable child. */
             expansion_state: components["schemas"]["ProjectBatchExpansionState"];
             failure_policy: components["schemas"]["ProjectBatchFailurePolicy"];
@@ -16596,6 +16716,72 @@ export interface operations {
             };
         };
     };
+    persistence_post_persistence_projects_project_id_batches_batch_id_commands: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Durable batch identity */
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectBatchCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical batch command replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchCommandResource"];
+                };
+            };
+            /** @description Durable batch admission command accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchCommandResource"];
+                };
+            };
+            /** @description Invalid batch command */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted batch is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project scope, command revision, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Durable batch state is inconsistent */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     persistence_post_persistence_projects_project_id_run_intent: {
         parameters: {
             query?: never;
@@ -17831,6 +18017,124 @@ export interface operations {
                 content?: never;
             };
             /** @description Configured host inventory could not be safely observed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_compute_nodes_node_id_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable compute-node identity */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current operator policy and live admission status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeNodePolicyResource"];
+                };
+            };
+            /** @description The requested compute node is not configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configured host policy could not be safely read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_put_platform_compute_nodes_node_id_policy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag returned by GET for the policy revision being edited */
+                "If-Match": string;
+                /** @description Bearer capability issued by the local Fullmag desktop application */
+                Authorization: string;
+            };
+            path: {
+                /** @description Stable compute-node identity */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComputeNodePolicyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Policy saved; existing allocations remain unchanged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeNodePolicyResource"];
+                };
+            };
+            /** @description Policy values are invalid for the configured host */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A local desktop-operator capability is required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The requested compute node is not configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The policy changed while it was being edited */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description If-Match does not identify the current policy revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configured host policy could not be safely updated */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -567,14 +567,14 @@ wykonujący solver bez durable RunSpec.
 | `GET /v2/platform/compute/nodes` — istnieje dla lokalnego hosta; lista zdalna i stronicowanie są proponowane | Inventory/topologia, observed/revision/epoch |
 | `GET /v2/platform/compute/nodes/{node_id}` — istnieje dla skonfigurowanego lokalnego hosta | Snapshot węzła; zdalni providerzy pozostają proponowani |
 | `GET /v2/platform/compute/nodes/{node_id}/telemetry` | Bieżące bounded samples, per-resource freshness |
-| `GET/PUT /v2/platform/compute/nodes/{node_id}/policy` | Operator policy z If-Match i uprawnieniem; validation preview przed apply |
+| `GET/PUT /v2/platform/compute/nodes/{node_id}/policy` — istnieje dla lokalnego hosta | Typed policy; desktop operator capability, `If-Match`/ledger CAS i walidacja przed durable apply; brak lokalnej capability daje tylko odczyt |
 | `GET/POST /v2/platform/compute/profiles` | Katalog; POST tworzy nową immutable wersję, nie zmienia użytej |
 | `GET /v2/platform/compute/queue` | Stronicowany read-model istniejących schedulerów, bez drugiej kolejki |
 | `POST /v2/persistence/projects/{project_id}/execution-previews` | Plan legalności i szacowany placement bez lease/spawnu |
 | `POST /v2/persistence/projects/{project_id}/runs` — istnieje | Rozszerzony typowany request przyjęcia z profile/resource snapshot |
 | `GET /v2/persistence/projects/{project_id}/runs/{run_id}` — istnieje | Run/Tasks; rozszerzone references do allocation i executed receipt |
 | `POST/GET .../projects/{project_id}/batches` — parent przyjęcia/listy istnieje | Immutable przyjęcie i stronicowana lista kolekcji; idempotentny parent nie oznacza opublikowanych child runów |
-| `GET .../batches/{batch_id}/cases` — manifest projection istnieje | Stronicowane parametry z nazwami osi i jednostkami kanonicznymi oraz planowane RunIds ze stanu `pending_expansion`; child-run status i output refs wymagają schedulera |
+| `GET .../batches/{batch_id}/cases` — manifest projection istnieje | Stronicowane parametry z nazwami osi i jednostkami kanonicznymi oraz planowane RunIds; opublikowane child runy zwracają lifecycle tasków i informację o trwałym żądaniu anulowania przed claimem |
 | `POST .../batches/{batch_id}/commands` | Pause admission/resume/cancel/retry; ACK + command lifecycle |
 | `GET /v2/platform/compute/allocations/{allocation_id}` | Read-only szczegóły przydziału; bez tokenów operacyjnych |
 | `GET /v2/platform/compute/events/ws` | Proponowane platform-scoped invalidations; potrzebne bez aktywnej sesji |
@@ -618,9 +618,19 @@ wdrożenia.
 
 Mutacje Settings korzystają z typowanej walidacji i optimistic concurrency.
 Nie wysyłają dowolnego polecenia shell ani ścieżki do urządzenia. Lokalny
-instance pin nie jest autoryzacją; polityki operatora wymagają kontrolowanego
-kanału usługi. Zdalny target wymaga uwierzytelnienia, ACL projektu/puli oraz
-TLS, a sekrety pozostają w magazynie poświadczeń poza eksportem problemu.
+instance pin ani Origin nie są autoryzacją. Desktop generuje jednorazową,
+losową capability dla swojego API sidecara i udostępnia ją wyłącznie głównemu
+oknu Tauri z dokładnym lokalnym URL przez IPC. Frontend trzyma ją tylko w
+pamięci procesu; standalone browser i uruchomienie z `FULLMAG_UI_URL` pozostają
+read-only. `PUT .../policy` wymaga `Authorization: Bearer <capability>` oraz
+`If-Match: "compute-node-policy:<node_id>:<revision>"`; brak capability daje
+403, brak precondition 428, nieaktualna rewizja 412, a wyścig CAS w ledgerze
+409. Zapis waliduje limity względem jawnej konfiguracji hosta. Nie zmienia już
+istniejących rezerwacji: obniżenie limitu może oznaczyć politykę jako
+`over_budget` i blokować nowe admission do czasu zakończenia pracy. Sekrety i
+administracja runtime service nie są częścią tej capability. Zdalny target
+wymaga osobnego uwierzytelnienia, ACL projektu/puli oraz TLS, a sekrety
+pozostają poza eksportem problemu.
 
 ## 9. Python, IR, CLI i odtwarzalność
 

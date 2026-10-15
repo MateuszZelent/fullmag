@@ -216,11 +216,13 @@ import {
   PROJECT_RUN_TASK_CANCELLATION_PATH,
   PROJECT_BATCHES_PATH,
   PROJECT_BATCH_CASES_PATH,
+  PROJECT_BATCH_COMMANDS_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_OUTPUT_STORAGE_PATH,
   PLATFORM_COMPUTE_PROFILES_PATH,
   PLATFORM_COMPUTE_PREVIEW_PATH,
   PLATFORM_COMPUTE_NODES_PATH,
+  PLATFORM_COMPUTE_NODE_POLICY_PATH,
   PLATFORM_HEALTH_PATH,
   WORKSPACE_ITEMS_PATH,
   WORKSPACE_ITEM_FORGET_PATH,
@@ -275,6 +277,8 @@ import type {
   ExecutionProfileCatalogQuery, ExecutionProfileCatalogResource,
   ComputePreviewRequest, ComputePreviewResource,
   ComputeNodesResource,
+  ComputeNodePolicyResource,
+  ComputeNodePolicyUpdateRequest,
   PublishExecutionProfileRequest, PublishExecutionProfileResource,
 } from "./apiTypes";
 import type {
@@ -526,6 +530,8 @@ import type {
   ProjectRunTaskCancellationResource,
   ProjectBatchSubmitRequest,
   ProjectBatchSubmitResource,
+  ProjectBatchCommandRequest,
+  ProjectBatchCommandResource,
   ProjectBatchListQuery,
   ProjectBatchListResource,
   ProjectBatchCasesQuery,
@@ -992,6 +998,11 @@ function sessionScopeHeaders(options: RequestOptions): Record<string, string> {
     : {};
 }
 
+interface ComputeNodePolicyWriteOptions extends RequestOptions {
+  readonly operatorCapability: string;
+  readonly expectedRevision: number;
+}
+
 function baseRevisionPayload(options?: AuthoringWriteOptions): { base_revision?: number } {
   return options?.baseRevision === undefined
     ? {}
@@ -1157,6 +1168,27 @@ export class ControlRoomApi {
   readonly platform = {
     computeNodes: (options?: RequestOptions) =>
       this.requestJson<ComputeNodesResource>(PLATFORM_COMPUTE_NODES_PATH, options),
+    computeNodePolicy: (nodeId: string, options?: RequestOptions) =>
+      this.requestJson<ComputeNodePolicyResource>(
+        PLATFORM_COMPUTE_NODE_POLICY_PATH,
+        options,
+        { path: { node_id: nodeId } },
+      ),
+    updateComputeNodePolicy: (
+      nodeId: string,
+      input: ComputeNodePolicyUpdateRequest,
+      options: ComputeNodePolicyWriteOptions,
+    ) =>
+      this.putJson<ComputeNodePolicyResource, ComputeNodePolicyUpdateRequest>(
+        PLATFORM_COMPUTE_NODE_POLICY_PATH,
+        input,
+        { sessionScopeKey: options.sessionScopeKey, signal: options.signal },
+        { path: { node_id: nodeId } },
+        {
+          Authorization: `Bearer ${options.operatorCapability}`,
+          "If-Match": `"compute-node-policy:${nodeId}:${options.expectedRevision}"`,
+        },
+      ),
     computeExecutionPreview: (input: ComputePreviewRequest, options?: RequestOptions) =>
       this.postJson<ComputePreviewResource, ComputePreviewRequest>(PLATFORM_COMPUTE_PREVIEW_PATH, input, options),
     computeProfiles: (query: ExecutionProfileCatalogQuery = {}, options?: RequestOptions) =>
@@ -3150,6 +3182,18 @@ export class ControlRoomApi {
           options,
           { path: { project_id: projectId, batch_id: batchId }, query },
         ),
+      commandBatch: (
+        projectId: string,
+        batchId: string,
+        request: ProjectBatchCommandRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<ProjectBatchCommandResource, ProjectBatchCommandRequest>(
+          PROJECT_BATCH_COMMANDS_PATH,
+          request,
+          options,
+          { path: { project_id: projectId, batch_id: batchId } },
+        ),
       getRun: (projectId: string, runId: string, options?: RequestOptions) =>
         this.requestJson<ProjectRunResource>(
           PROJECT_RUN_PATH,
@@ -3833,11 +3877,12 @@ export class ControlRoomApi {
     body: TBody,
     options: RequestOptions = {},
     params?: Record<string, unknown>,
+    additionalHeaders: Readonly<Record<string, string>> = {},
   ): Promise<TResponse> {
     const result = await this.transport.PUT(path as never, {
       body,
       cache: "no-store",
-      headers: sessionScopeHeaders(options),
+      headers: { ...sessionScopeHeaders(options), ...additionalHeaders },
       params,
       signal: options.signal,
     } as never);

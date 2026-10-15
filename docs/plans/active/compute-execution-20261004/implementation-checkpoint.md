@@ -1,6 +1,6 @@
 # Checkpoint implementacji Compute execution
 
-Zlecenie: cały zakres E0–E7, bez redukcji celu. Aktualizacja: 2026-10-13.
+Zlecenie: cały zakres E0–E7, bez redukcji celu. Aktualizacja: 2026-10-15.
 Checkout: `C:/git/fullmag/fullmag`, branch `master`, zgodnie z jawnym
 poleceniem użytkownika; bez nowego worktree. Baza pierwszego etapu:
 `e012c8c46c6d5c62fcd2fde45009b1a59eaf971b`.
@@ -23,8 +23,8 @@ odczytowego Compute environment pozostaje zachowana.
 | E1 | W toku: typed ComputeResources i profile materialization per Study/step, Python/SceneDocument/script round-trip zasobów, Preview/Settings plumbing, allowlista `FULLMAG_CPU_THREADS` dla zadeklarowanych profili oraz użycie external resolution dla typed Auto | Pełne CLI/env compatibility, durable Submit provenance i runtime |
 | E2 | W toku: host ledger, typed service policy, host-aware admission/recovery, pre-spawn cancellation, walidowany `ComputeNodeSnapshot` v2 z lease'em publishera i epoch fencing requestu/rezerwacji; explicit CPU/GPU placement jest porównywany z bieżącym inventory; sampler publikuje topologię Linux/Windows, CPU set i limit cgroup Linux; owner-bound CPU admission używa minimum budżetu polityki i świeżej efektywnej pojemności OS/cgroup | Windows Job quota i wielogrupowa affinity Windows pozostają nieraportowane; runtime affinity proof, Linux build, migracja i ścieżki recovery |
 | E3 | W toku: exact host lease/UUID binding, GPU visibility checks, przypięte CPU IDs, fail-closed OS affinity oraz źródłowa polityka pul wątków FEM; wcześniejszy Windows backend-dev potwierdził API przed ostatnią zmianą pul | measured receipts, NUMA placement, Linux build i Linux/Windows runtime execution proof; aktualne źródła pul nie są skompilowane |
-| E4 | W toku: profile drafts, compute preview, Jobs/Cancel, statusy solverów, `stale` po 30 s, podsumowanie polityki batcha oraz podwidoki Settings Overview/Resources/Profiles z inwentarzem tylko do odczytu | Generated OpenAPI/types, pełne resource-policy mutation APIs/facade, pełna integracja Study/Jobs i browser proof na bieżącym backendzie |
-| E5 | W toku: typed case bindings/materialization, trwały `FmsBatchIntent` i sequence-fenced cursor, parent Submit/List/Cases, OutputStorage snapshot, fair publisher child RunIntent, `max_parallel_cases`, `failure_policy`/`stopped` i Inspector z lifecycle oraz odkrywaniem SolutionSetów | Batch retry/cancel, pełne przeglądanie artefaktów wyników i runtime/browser proof pozostają otwarte |
+| E4 | W toku: profile drafts, compute preview, Jobs/Cancel, statusy solverów, `stale` po 30 s, podsumowanie polityki batcha oraz podwidoki Settings Overview/Resources/Profiles; dodano typowany, rewizyjny GET/PUT NodePolicy z lokalną capability operatora, CAS i walidacją po stronie hosta | Pozostałe mutacje zasobów/profili, pełna integracja Study/Jobs oraz browser/runtime proof na bieżącym backendzie |
+| E5 | W toku: typed case bindings/materialization, trwały `FmsBatchIntent` i sequence-fenced cursor, parent Submit/List/Cases, OutputStorage snapshot, fair publisher child RunIntent, `max_parallel_cases`, `failure_policy`/`stopped`, pause/resume/cancel admission, Inspector z lifecycle i SolutionSetami, task-level oraz batch-level cancel/stop z czytelnym durable cancellation intent | Retry failed attempts, pełne przeglądanie artefaktów wyników, obsługa case’ów oczekujących na materializację oraz runtime/browser proof pozostają otwarte |
 | E6 | Oczekuje | Remote providers, CAS transfers, cluster allocation i reconnect |
 | E7 | Oczekuje | Noty numeryczne, partition/collectives, wykonanie i kwalifikacja distributed solve |
 
@@ -2998,3 +2998,267 @@ przeglądarki zablokowała dostęp do otwartego adresu localhost.
 Repo pozostaje na `master`, `HEAD`, `origin/master` i live remote są zgodne na
 `279b634ea57f0d6383d58793c9e065e58ad45eea`; unmerged entries i staged paths są
 puste. Wspólne dirty pliki pozostają zachowane i niestage'owane.
+
+### E4 — lokalna edycja polityki węzła — 15.10.2026
+
+Settings → Compute → Resources pozwala lokalnemu operatorowi aplikacji
+edytować CPU IDs, allowlistę GPU UUID, rezerwy CPU/RAM/scratch i VRAM per GPU,
+limit workerów oraz draining. Nieedytowane priority order i parallelism
+patterns są zachowywane. Zmiana polityki wpływa na przyszłe admission;
+istniejące rezerwacje pozostają bez zmian.
+
+Typed GET/PUT API zwraca dokument polityki bez wewnętrznego host ID. PUT wymaga
+ephemeral capability z natywnej aplikacji oraz If-Match dla aktualnej rewizji;
+host waliduje politykę względem skonfigurowanej pojemności, a zapis używa CAS
+ledgeru. Konflikt zachowuje draft i wymaga jawnego porównania oraz rebase.
+Tauri udostępnia capability tylko głównemu oknu pod skonfigurowanym scheme,
+hostem, portem i ścieżką; tryb z zewnętrznym UI oraz zwykła przeglądarka są
+read-only. Wybór granicy „lokalny operator aplikacji” i limit stale 30 s
+pochodzą od użytkownika.
+
+Weryfikacja na HEAD `d9f2beadef172be080ae6844ff43e8fa846ee3b9`:
+managed `api-openapi-codegen` zakończył się `passed` (kompilacja binarnego API
+do generowania OpenAPI, bez testów); wygenerowano typy i klienta v2; statyczna
+higiena API oraz `git diff --check` dla zmienionych plików zadania: **PASS**.
+ESLint nie rozpoczął analizy, bo konfiguracja nie może załadować
+`@eslint/compat`. Skan React Doctor nie zwrócił wyniku przez 25 s i został
+przerwany. Typecheck nie uruchomiono, ponieważ konfiguracja obejmuje testy;
+testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z AGENTS.md.
+Browser proof edytora, obsługi błędów w działającej aplikacji i runtime
+admission pozostaje **NOT VERIFIED**.
+
+Lokalny `master`, `origin/master` i live remote zgadzają się na
+`d9f2beadef172be080ae6844ff43e8fa846ee3b9`; unmerged entries i staged paths są
+puste. Pełny status nadal nie może wejść do submodule
+`external_solvers/3`; wspólne dirty pliki poza zakresem zachowano, zmian nie
+stage'owano i nie tworzono worktree ani commitów.
+
+Szacunkowe pokrycie całości E0–E7 wynosi **55–60%**: E0–E1 są w większości
+zrealizowane; E2–E5 pozostają częściowe, a E6–E7 nierozpoczęte. Ten fragment
+zamyka lokalną warstwę authoringu polityki, ale nie kwalifikuje browser/runtime
+zachowania ani skuteczności admission. Otwarte pozostają m.in. pełna kwalifikacja
+profili i zasobów, batch lifecycle/cancellation oraz wszystkie etapy E6–E7.
+
+### E4 — odizolowanie capability operatora od workerów — 15.10.2026
+
+Przegląd granicy procesu wykazał, że API otrzymuje losowy token operatora w
+zmiennej środowiskowej, a potomne `Command` domyślnie dziedziczą środowisko.
+Wspólny helper usuwa capability przed każdym wykrytym spawnem w API: accepted
+worker, FEM preparator, runtime service i jego schedulery, semantic validator,
+NVIDIA telemetry i resource-pool discovery. Dodano regresję źródłową dla
+`Command::env_remove`; skrypt solvera nie powinien otrzymać uprawnienia PUT.
+
+Zarządzany `api-service-source-check` zakończył się `passed` dla HEAD
+`d9f2beadef172be080ae6844ff43e8fa846ee3b9` (receipt
+`7dd8a94e650b4f82976c12a1fa3d0431`); obejmuje API, runtime service oraz
+powiązane schedulery/workery. `api-resource-pool-check` także `passed`
+(receipt `f2578f714f8b4e829a3bd93a19356138`). Pierwszy check puli miał
+`source_changed`: w trakcie zmienił się niezwiązany
+`crates/fullmag-application/src/batch_expansion_tests.rs`; porównanie hashy
+potwierdziło, że był to jedyny zmieniony plik. Po ustabilizowaniu snapshotu
+powtórny check przeszedł. Ten plik zachowano bez zmian przez zadanie.
+
+Testów nie kompilowano ani nie uruchamiano. Browser proof nadal
+**NOT VERIFIED**; backendowi API nie przekazano rzeczywistej capability przez
+działającą aplikację. Scoped `git diff --check` dla zmian tej poprawki:
+**PASS**. Zmian nie stage'owano; brak commitów i nowego worktree.
+
+### Bieżący snapshot — 15.10.2026
+
+Lokalny `master`, `origin/master` i live remote wskazują
+`f4c15a8781a8bc43fa72464b81d074aaa973898c`. Końcowe zarządzane
+`api-service-source-check` (`064f4be337794edd870ec44342433692`) oraz
+`api-resource-pool-check` (`f5e47e72a4cc45ff8089e74288d311cd`) zakończyły się
+`passed` dla tego SHA przy `source_changed=false`. `project-entrypoint-check`
+zakończył się `passed` dla wcześniejszego source HEAD
+`df12c14ae5bc3d17fa8867c9da802eead51e88de`; nie traktuję go jako kontroli
+całego bieżącego commita. Scoped `git diff --check` dla zmienionych plików
+zadania także przeszedł. Nie kompilowano ani nie uruchamiano testów jednostkowych.
+
+Brak konfliktów merge i staged paths; dirty pliki wspólnego checkoutu, w tym
+prace poza zakresem, pozostają zachowane. Zmian nie stage'owano, nie
+commitowano ani nie tworzono nowego worktree. Szacunek pokrycia E0–E7 pozostaje
+**55–60%**; etapy E2–E5 są nadal częściowe, a E6–E7 oczekują na realizację.
+
+### E5 — anulowanie zadania w opublikowanym case — 15.10.2026
+
+`ProjectBatchesSection` udostępnia Cancel dla accepted/queued oraz Stop dla
+preparing/running tasków wybranego child runu. Wykorzystuje istniejącą trwałą
+mutację `cancelRunTask`: przed claimem żądanie jest związane z aktualną rewizją
+katalogu, a po claimie wysyła komendę Stop. Po ACK odświeżane są run, cases i
+batch; niepowodzenie mutacji jest rozróżnione od zaakceptowanej mutacji z
+nieudanym odświeżeniem. Dodano źródłowe regresje dla Stop aktywnego taska i
+rewizyjnego cancel queued taska.
+
+`git diff --check` dla komponentu i regresji: **PASS**. ESLint nie uruchomił
+analizy, bo host nie ma dostępnego executable `eslint`; testów nie kompilowano
+ani nie uruchamiano. To kontrola taska child, nie atomowy batch-level pause/
+cancel; retry oraz browser/runtime proof nadal pozostają otwarte. Bieżący
+checkout jest na `master` i `origin/master` `08c633413ae0afab4b0c658eee6e160763059be0`;
+zmiany pozostają unstaged, bez commita i bez worktree.
+
+### E5 — trwałe komendy admission dla batcha — 15.10.2026 (WIP)
+
+Checkpoint ekspansji batcha w wersji v2 zachowuje teraz append-only historię
+komend z revision CAS, payload digest i idempotentnym replay; v1 bez komend
+pozostaje czytelne. API źródłowo obsługuje
+pause/resume oraz `cancel_admission`; cancel zatrzymuje publikację następnych
+cases, a już opublikowane przypadki mogą dokończyć pracę. Publisher serializuje
+odczyt bramki, zapis child RunIntent i przesunięcie kursora na wspólnym writerze,
+więc komenda przyjęta przed publikacją nie przepuszcza kolejnego case. Lista
+batchy zwraca stan expansion i revision komend. Dodano regresję store dla
+replay, pause/resume, cancel admission i monotonicznego kursora.
+
+Scoped `git diff --check` dla zmian Rust tej części: **PASS**. `just
+generate-api-openapi` zakończyło się błędem procesu `-1073741502`; OpenAPI i
+wygenerowany klient pozostają nieodświeżone. Nie kompilowano ani nie uruchamiano
+testów jednostkowych zgodnie z AGENTS.md. UI jeszcze nie wysyła tych komend;
+widok batcha rozpoznaje stany paused/cancelled. Cancel aktywnych child tasks,
+retry i indeks attemptów pozostają otwarte.
+Browser/runtime proof: **NOT VERIFIED**.
+
+Snapshot 15.10.2026: `master` i `origin/master` wskazują
+`8d8ec18a31ff038e3a1b0f374fe5b8977f4b20ae`; unmerged entries i staged paths są
+puste. Wspólny checkout zawiera również dirty pliki spoza tej części; żadnego
+nie stage'owano ani nie commitowano i nie tworzono worktree. Pokrycie E0–E7
+pozostaje szacunkowo **55–60%**: ten backendowy fragment jest WIP do czasu
+generacji klienta, UI, pełnego batch lifecycle i wymaganej kwalifikacji.
+
+### E5 — batch-level cancellation i paged task fanout — 15.10.2026
+
+Batch inspector udostępnia teraz dwie osobne akcje. Gdy batch może jeszcze
+publikować cases, `Cancel pending` trwale zamyka admission; po ACK pobiera cały
+stabilny case prefix i zleca cancel accepted/queued tasków po ich bieżącej
+rewizji katalogu. Aktywne taski pozostają uruchomione. `Stop active + cancel
+pending` używa tego samego fence admission, dodatkowo wysyła Stop do
+preparing/running tasków i czeka w UI na osobne terminalne statusy.
+Stronicowanie case’ów sprawdza postęp cursorów i duplikaty między stronami.
+Niejednoznaczna odpowiedź zachowuje ten sam batch command ID i zestaw task
+cancellation IDs; jawne HTTP 4xx wymaga refreshu i ponownego wyboru akcji. Case
+task summary zwraca zwalidowane względem katalogu
+`cancellation_requested`, więc odświeżenie nie tworzy nowego żądania dla taska,
+który już ma trwałą cancellation intent. Case’y oczekujące na materializację są
+raportowane do ponownego sprawdzenia po refreshu.
+
+Dodano źródłowe regresje UI dla obu ścieżek, retry po utracie odpowiedzi,
+revision-fenced queued task i pomijania istniejącej cancellation intent;
+test Rust sprawdza przejście `cancellation_requested=false → true`. Testów nie
+kompilowano ani nie uruchamiano zgodnie z AGENTS.md. `api-openapi-codegen`
+(`4400c5471dcf461381eede39f4830ff9`) oraz generated client (`721d10352df44d08a85e9747a0ce9d9b`)
+zakończyły się `passed`; `api-hygiene`
+(`c061039baf2f4041afa8b0667c0db1c1`) także `passed`. `git diff --check` dla
+zmienianych plików przechodzi. Rustfmt check nie wystartował: jego proces nie
+mógł skanonizować katalogu repozytorium z powodu `Access denied`.
+
+Frontend `production-source` pozostaje **NOT VERIFIED** — host nie ma
+skonfigurowanego `typescript-native`; ESLint pozostaje **NOT VERIFIED** z powodu
+brakującego `@eslint/compat`. Browser, managed runtime, rzeczywiste terminalne
+receipts i skuteczność zwolnienia zasobów także **NOT VERIFIED**. Lokalny
+`master` i `origin/master` wskazują `8dd76eb9b39bdd5b9b97ac67b00877400820fe82`;
+ten równoległy commit dotyczy wyłącznie browser/runtime evidence dla innego
+obszaru. Staged paths są puste; istniejące dirty pliki zadania i prace spoza
+zakresu zostały zachowane, bez commitów i bez nowego worktree. Pokrycie E0–E7
+szacuję obecnie na **60–62%**. E1–E5 wciąż są częściowe; E6–E7 pozostają
+nierozpoczęte.
+
+### Bieżący snapshot po synchronizacji mastera — 15.10.2026
+
+Lokalny `master`, `origin/master` i `origin/HEAD` wskazują
+`3982c38a5f40575a12085f0367706eb7c30b0359`. Od snapshotu kontroli E5 na
+`8dd76eb9b39bdd5b9b97ac67b00877400820fe82` historia remote przesunęła się o
+cztery pliki testów/dokumentacji poza zmianą Compute Environment i batch
+cancellation. Z tego powodu nie przypisuję wcześniejszym kontrolom statusu
+pełnego sprawdzenia nowego SHA; zachowują wartość dla niezmienionych źródeł API.
+
+`git diff --cached --name-only` i `git ls-files -u` są puste: nie ma staged
+paths ani nierozwiązanych konfliktów. Wspólny checkout zawiera liczne lokalne,
+niestage'owane zmiany w Compute Environment, API, Inspectorze oraz innych
+obszarach; pozostawiono je bez zmian. Nie utworzono worktree ani commitów.
+
+Pokrycie pozostaje szacunkowo **60–62%**. E0 jest zrealizowany; E1–E5 są
+częściowe, w tym E5 ma trwałe komendy admission, przegląd paginowanych cases
+i batch-level cancellation. Retry attempts z lineage oraz pełne browse/
+materialization reconciliation nadal są otwarte. E6–E7 nie rozpoczęto. Testów
+jednostkowych nie kompilowano ani nie uruchamiano; browser, managed runtime,
+terminalne receipts i zwolnienie zasobów są **NOT VERIFIED**. Kontrole
+`api-openapi-codegen`, generated client i `api-hygiene` zakończyły się
+`passed` na wcześniejszym snapshotcie, ale nie są pełną bramką dla aktualnego
+HEAD.
+
+### E3 — wielogrupowe CPU affinity Windows — 15.10.2026
+
+Windows worker mapuje przydzielone globalne CPU IDs na posortowane
+`GROUP_AFFINITY` i ustawia `JobObjectGroupInformationEx` całego worker Job po
+przypisaniu procesu, ale przed zwolnieniem bramki startowej. Odczyt
+`QueryInformationJobObject` musi dokładnie zgadzać się z żądaniem; błąd lub
+różnica pozostawia solver przed startem i zgłasza awarię przygotowania.
+Windows probe odczytuje tę samą affinity Job, mapuje maski grup na CPU IDs
+snapshotu i odrzuca pustą, zduplikowaną albo niezgodną z bieżącą topologią
+maskę. Dodano regresje źródłowe dla mapowania przez granicę grupy i
+odrzucenia CPU spoza topologii.
+
+`git diff --check` dla obu źródeł: **PASS**. `cargo fmt --check` i bezpośredni
+`rustfmt --check` nie mogły skanonizować katalogu repozytorium (`Access
+denied`). Zarządzana recepta `windows-backend-dev` najpierw nie wystartowała
+przez błąd obiektu NT w Git Bash; bezpośredni launcher Windows zakończył
+preflight na odmowie dostępu do `storage/.initialize.lock`. Nie rozpoczął się
+build, testów jednostkowych nie kompilowano ani nie uruchamiano, a kompilacja
+Windows i rzeczywiste runtime affinity pozostają **NOT VERIFIED**. Nie
+obchodzono blokady storage.
+
+### E5 — odzyskiwanie materializacji child run — 15.10.2026
+
+Inspector batcha udostępnia teraz `Materialize tasks` dla opublikowanego child
+runu w stanie `pending_materialization`. Akcja wywołuje istniejący, idempotentny
+`POST /v2/persistence/projects/{project_id}/runs/{run_id}/materialization`;
+po sukcesie resource hook unieważnia szczegóły runu, listę runów i przypadki
+batcha na zwróconej `catalog_revision`, a Inspector odświeża ich status.
+Niepewny wynik transportu zachowuje dokładne `run_id` i pokazuje retry, dzięki
+czemu ponowienie korzysta z tej samej trwałej tożsamości child runu.
+Jednoznaczne odrzucenie HTTP 4xx dostaje osobny komunikat z kodem i przyczyną;
+nie jest etykietowane jako niepewny timeout i nie oferuje „Retry materialization”.
+Backendowa
+granica znajduje się w `crates/fullmag-api/src/router_v2/handlers/persistence/projects.rs`
+(handler materializacji); trwały helper
+`crates/fullmag-api/src/run_intent_persistence.rs::materialize_accepted_run_catalog`
+zwraca istniejący katalog przy powtórzeniu tej samej materializacji.
+
+Dodano test UI dla timeoutu, retry tego samego `run_id`, odrębnej odpowiedzi
+409 oraz test resource hooka sprawdzający unieważnienie trzech rodzin zasobów.
+Testów nie kompilowano
+ani nie uruchamiano zgodnie z AGENTS.md. `git diff --check` dla zmienionych
+plików przechodzi; React Doctor dla zmienionego zakresu uruchomił się, lecz
+pozostaje **NOT VERIFIED**: po wyborze projektu nie zwrócił postępu ani wyniku
+przez kilka minut i został przerwany. Browser proof także **NOT VERIFIED**:
+lokalny workspace na `localhost:3197` zwrócił `ERR_CONNECTION_REFUSED`.
+Zmiana zamyka ręczną ścieżkę uzgodnienia
+pojedynczej opublikowanej materializacji; nie realizuje retry attempts z
+lineage ani pełnego lifecycle/reconciliation wszystkich batch cases.
+
+Snapshot: lokalny `master` i `origin/master` wskazują
+`5260690815131bc610450606398e951439d6f290` (`docs(refactor): record passing
+Control Room integration gates`). `git fetch origin` zakończył się
+powodzeniem, a bieżący odczyt `origin/master` jest zgodny z lokalnym HEAD;
+nie ma nierozwiązanych wpisów indeksu.
+Wspólny checkout nadal ma liczne niestage'owane zmiany z kilku prac; zachowano
+je bez commitów i bez nowego worktree. Pokrycie E0–E7 nadal szacuję na około
+**62%**: E0 ukończony, E1–E5 częściowe, E6–E7 nierozpoczęte. Build Windows,
+testy, browser, managed runtime i terminalne receipts pozostają **NOT VERIFIED**.
+
+### E2 — nieznana pojemność CPU nie otwiera admission — 15.10.2026
+
+`compute_node_probe` nie publikuje już efektywnej pojemności wyliczonej z
+affinity lub `available_parallelism`, kiedy próbka limitu CPU zawiodła.
+Windows raportuje `Unlimited` wyłącznie poza Job Object; wewnątrz Job Object
+oznacza quota jako `Unsupported`, bo przy zagnieżdżonych jobach nie można
+potwierdzić limitu przodka. `HostResourceLedger` odrzuca teraz owner-bound
+rezerwację CPU, jeśli efektywna pojemność jest niedostępna, zamiast traktować
+brak obserwacji jak brak limitu. Odmowa nie publikuje rezerwacji.
+
+Dodano źródłowe regresje dla nieznanego limitu w samplerze i admission ledger.
+`git diff --check` dla obu plików: **PASS**. Read-only `rustfmt --check`
+przetworzył pliki, lecz zgłosił istniejące różnice formatowania w innych
+fragmentach tych dużych, lokalnie zmienionych źródeł; nie przeformatowano ich
+hurtowo. Testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z
+AGENTS.md. Linux/Windows build, runtime admission i affinity pozostają
+**NOT VERIFIED**.

@@ -67,6 +67,7 @@ export function computeNodesResourceRevision(data: ComputeNodesResource): string
       state: node.state,
       stale_after_seconds: node.stale_after_seconds,
       snapshot: node.snapshot,
+      node_policy: node.node_policy,
     })),
   }) ?? "null";
 }

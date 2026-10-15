@@ -2,7 +2,12 @@
 
 import { useCallback, useRef } from "react";
 
-import type { ProjectRunListResource, ProjectRunResource, ProjectRunTaskCancellationRequest } from "../api/apiTypes";
+import type {
+  ProjectRunListResource,
+  ProjectRunMaterializationResource,
+  ProjectRunResource,
+  ProjectRunTaskCancellationRequest,
+} from "../api/apiTypes";
 import { assertSolutionSetRunId, ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
 import { useResource } from "./useResource";
@@ -90,6 +95,22 @@ export function useProjectRunResource(projectId: string, runId: string | null) {
   });
 }
 
+export function useMaterializeProjectRun(projectId: string) {
+  const { api, resources } = useKernel();
+
+  return useCallback(
+    async (runId: string): Promise<ProjectRunMaterializationResource> => {
+      const materialization = await api.persistence.projects.materializeRun(projectId, runId);
+      const revision = materialization.catalog_revision;
+      resources.invalidate(projectRunResourceKey(projectId, runId), revision);
+      resources.invalidatePrefix(`project-runs:${encodeURIComponent(projectId)}:`, revision);
+      resources.invalidatePrefix(`project-batch-cases:${encodeURIComponent(projectId)}:`, revision);
+      return materialization;
+    },
+    [api, projectId, resources],
+  );
+}
+
 export function useCancelProjectRunTask(
   projectId: string,
   runId: string | null,
@@ -147,5 +168,34 @@ export function useCancelProjectRunTask(
       return cancellation;
     },
     [api, cursor, projectId, resources, runId],
+  );
+}
+
+export function useCancelProjectRunTaskById(projectId: string) {
+  const { api, resources } = useKernel();
+
+  return useCallback(
+    async (
+      runId: string,
+      taskId: string,
+      request: ProjectRunTaskCancellationRequest,
+    ) => {
+      const cancellation = await api.persistence.projects.cancelRunTask(
+        projectId,
+        runId,
+        taskId,
+        request,
+      );
+      resources.invalidate(
+        projectRunResourceKey(projectId, runId),
+        cancellation.catalog_revision,
+      );
+      resources.invalidatePrefix(
+        `project-runs:${encodeURIComponent(projectId)}:`,
+        cancellation.catalog_revision,
+      );
+      return cancellation;
+    },
+    [api, projectId, resources],
   );
 }

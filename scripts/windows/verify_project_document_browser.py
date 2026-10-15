@@ -142,8 +142,18 @@ def _validate_browser_report(report: dict, report_root: Path, workspace_url: str
     _require(report.get("second_download") == "roundtrip.fms", "Reopened project archive name was unexpected")
     _require(isinstance(report.get("archive_bytes"), int) and report["archive_bytes"] > 4,
              "Project archive download was empty or too short")
-    for field in ("current_session_requests", "current_session_websocket_requests", "forbidden_runtime_requests", "page_errors"):
+    for field in ("runtime_session_requests", "current_session_websocket_requests", "forbidden_runtime_requests", "page_errors"):
         _require(report.get(field) == [], f"Project lifecycle report contains forbidden {field}: {report.get(field)!r}")
+    current_requests = report.get("current_session_requests")
+    host_requests = report.get("host_telemetry_requests")
+    allowed_host_reads = {
+        "GET /v2/sessions/current/diagnostics/cpu",
+        "GET /v2/sessions/current/diagnostics/gpu",
+    }
+    _require(isinstance(current_requests, list) and isinstance(host_requests, list),
+             "Project lifecycle report omitted current-session and host telemetry observations")
+    _require(current_requests == host_requests and all(value in allowed_host_reads for value in current_requests),
+             "Only the two exact host telemetry GET aliases may appear in current-session observations")
 
     expected_404 = report.get("expected_idle_404_max_counts")
     _require(expected_404 == EXPECTED_IDLE_404_MAX_COUNTS, "Project lifecycle report changed the allowed idle 404 contract")
@@ -245,6 +255,16 @@ def exercise(repo: Path, run_root: Path, receipt: dict, get, frontend_dependency
         proof["api_port"] = get.api_port
         proof["api_instance_id_before"] = api_instance_id
         proof["checks"].append("owned-native-api-health-and-instance-identity")
+        for path in (
+            "/v2/workspace/items",
+            "/v2/workspace/settings/telemetry.enabled",
+            "/v2/workspace/settings/update.available",
+            "/v2/persistence/projects/project-00000000000000000000000000000000/runs",
+        ):
+            status, _, _ = get(path)
+            _require(status == 200, f"Project browser storage preflight returned HTTP {status}: {path}")
+            _require(get.instance_id == api_instance_id, "Storage preflight used a different API instance")
+        proof["checks"].append("isolated-workspace-database-and-empty-project-run-catalog-readable")
 
         _require(not port_is_open(PORT), f"Fixed browser port {PORT} is already in use; no listener will be stopped")
         with socket.socket() as probe:

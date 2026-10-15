@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 
 #[path = "owned_worker_process.rs"]
 mod owned_worker_process;
+#[path = "compute_operator_env.rs"]
+mod compute_operator_env;
 use owned_worker_process::OwnedWorkerProcess;
 
 const STORE_WRITER_RETRY_LIMIT: Duration = Duration::from_secs(5);
@@ -326,6 +328,7 @@ where
     H: FnMut() -> Result<()>,
 {
     let mut command = Command::new(executable);
+    compute_operator_env::remove_local_compute_operator_token(&mut command);
     command
         .arg("--store-root")
         .arg(store_root)

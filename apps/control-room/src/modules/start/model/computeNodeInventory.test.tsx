@@ -222,6 +222,20 @@ describe("compute-node snapshot inventory", () => {
     expect(html).toContain("Draining");
     expect(html).toContain("3 / 4");
     expect(html).toContain("CPU reserve");
+    expect(html).toContain("Policy editing is available in the local Fullmag desktop app.");
+    expect(html).toContain("This browser view is read-only.");
+
+    const editableNodePolicy = summary.nodes[0]?.nodePolicy;
+    if (!editableNodePolicy) throw new Error("The test fixture must include the node policy.");
+    const localOperatorHtml = renderToStaticMarkup(
+      <ComputeNodeInventoryDetails
+        canEditNodePolicy
+        onUpdateNodePolicy={async () => editableNodePolicy}
+        summary={summary}
+      />,
+    );
+    expect(localOperatorHtml).toContain("Edit policy");
+    expect(localOperatorHtml).not.toContain("This browser view is read-only.");
   });
 
   it("rejects snapshots with a mismatched host identity or unsupported schema", () => {

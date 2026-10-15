@@ -388,8 +388,11 @@ pub const FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_LEGACY_SCHEMA: &str =
     "batch_output_storage_snapshot.v1";
 pub const FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA: &str = "batch_output_storage_snapshot.v2";
 pub const FMS_BATCH_EXPANSION_MANIFEST_SCHEMA: &str = "batch_expansion_manifest.v2";
-pub const FMS_BATCH_EXPANSION_PROGRESS_SCHEMA: &str = "batch_expansion_progress.v1";
+pub const FMS_BATCH_EXPANSION_PROGRESS_LEGACY_SCHEMA: &str = "batch_expansion_progress.v1";
+pub const FMS_BATCH_EXPANSION_PROGRESS_SCHEMA: &str = "batch_expansion_progress.v2";
+pub const FMS_BATCH_COMMAND_SCHEMA: &str = "batch_command.v1";
 const FMS_BATCH_EXPANSION_MAX_CASES: usize = 10_000;
+pub(crate) const FMS_BATCH_COMMAND_HISTORY_MAX: usize = 128;
 
 /// Immutable accepted batch intent, published before any child run is
 /// acknowledged. The application owns the typed request and expansion
@@ -755,6 +758,9 @@ pub struct FmsBatchExpansionProgress {
     pub next_case_index: u64,
     pub sequence: u64,
     pub state: FmsBatchExpansionState,
+    /// Append-only admission command history. Empty is the legacy v1 form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<FmsBatchCommandIntent>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -765,6 +771,104 @@ pub enum FmsBatchExpansionState {
     Expanding,
     Complete,
     Stopped,
+    Paused,
+    Cancelled,
+}
+
+/// Durable admission commands for an accepted batch. CancelAdmission stops
+/// publishing future cases and lets already-published cases finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FmsBatchCommandAction {
+    PauseAdmission,
+    ResumeAdmission,
+    CancelAdmission,
+}
+
+impl FmsBatchCommandAction {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::PauseAdmission => "pause_admission",
+            Self::ResumeAdmission => "resume_admission",
+            Self::CancelAdmission => "cancel_admission",
+        }
+    }
+}
+
+/// Immutable command receipt appended to the batch expansion checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsBatchCommandIntent {
+    pub schema_version: String,
+    pub batch_id: String,
+    pub command_id: String,
+    pub expected_revision: u64,
+    pub revision: u64,
+    pub action: FmsBatchCommandAction,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+    pub payload_sha256: String,
+}
+
+impl FmsBatchCommandIntent {
+    pub fn new(
+        batch_id: impl Into<String>,
+        command_id: impl Into<String>,
+        expected_revision: u64,
+        action: FmsBatchCommandAction,
+        reason: impl Into<String>,
+    ) -> Self {
+        let batch_id = batch_id.into();
+        let command_id = command_id.into();
+        let reason = reason.into();
+        let revision = expected_revision.saturating_add(1);
+        let payload_sha256 = canonical_json_sha256(&serde_json::json!({
+            "batch_id": batch_id,
+            "command_id": command_id,
+            "expected_revision": expected_revision,
+            "revision": revision,
+            "action": action.as_str(),
+            "reason": reason,
+        }));
+        Self {
+            schema_version: FMS_BATCH_COMMAND_SCHEMA.into(),
+            batch_id,
+            command_id,
+            expected_revision,
+            revision,
+            action,
+            reason,
+            created_at: Utc::now(),
+            payload_sha256,
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_BATCH_COMMAND_SCHEMA {
+            bail!("unsupported batch command schema `{}`", self.schema_version);
+        }
+        crate::repository_path::validate_store_id(&self.batch_id)?;
+        crate::repository_path::validate_store_id(&self.command_id)?;
+        if self.revision != self.expected_revision.checked_add(1).context("batch command revision overflow")? {
+            bail!("batch command revision does not follow its expected revision");
+        }
+        if self.reason.trim().is_empty() || self.reason.len() > 1024 {
+            bail!("batch command reason must be nonempty and at most 1024 bytes");
+        }
+        validate_sha256(&self.payload_sha256, "payload_sha256")?;
+        let expected = canonical_json_sha256(&serde_json::json!({
+            "batch_id": self.batch_id,
+            "command_id": self.command_id,
+            "expected_revision": self.expected_revision,
+            "revision": self.revision,
+            "action": self.action.as_str(),
+            "reason": self.reason,
+        }));
+        if self.payload_sha256 != expected {
+            bail!("batch command payload digest does not match its contents");
+        }
+        Ok(())
+    }
 }
 
 impl FmsBatchExpansionProgress {
@@ -796,6 +900,7 @@ impl FmsBatchExpansionProgress {
             next_case_index,
             sequence,
             state,
+            commands: Vec::new(),
             updated_at: Utc::now(),
         };
         progress.validate()?;
@@ -818,7 +923,9 @@ impl FmsBatchExpansionProgress {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != FMS_BATCH_EXPANSION_PROGRESS_SCHEMA {
+        if self.schema_version != FMS_BATCH_EXPANSION_PROGRESS_SCHEMA
+            && self.schema_version != FMS_BATCH_EXPANSION_PROGRESS_LEGACY_SCHEMA
+        {
             bail!(
                 "unsupported batch expansion progress schema `{}`",
                 self.schema_version
@@ -834,6 +941,26 @@ impl FmsBatchExpansionProgress {
         {
             bail!("batch expansion progress counters are outside their valid range");
         }
+        if self.commands.len() > FMS_BATCH_COMMAND_HISTORY_MAX {
+            bail!("batch command history exceeds its limit");
+        }
+        if self.schema_version == FMS_BATCH_EXPANSION_PROGRESS_LEGACY_SCHEMA
+            && !self.commands.is_empty()
+        {
+            bail!("legacy batch expansion progress cannot contain command history");
+        }
+        let mut command_ids = BTreeSet::new();
+        for (index, command) in self.commands.iter().enumerate() {
+            command.validate()?;
+            let expected_revision = u64::try_from(index)?;
+            if command.batch_id != self.batch_id
+                || command.expected_revision != expected_revision
+                || command.revision != expected_revision + 1
+                || !command_ids.insert(command.command_id.as_str())
+            {
+                bail!("batch command history is inconsistent with its batch or revision");
+            }
+        }
         let expected_state = if self.next_case_index == 0 {
             FmsBatchExpansionState::Pending
         } else if self.next_case_index == self.total_cases {
@@ -844,7 +971,18 @@ impl FmsBatchExpansionProgress {
         let valid_stopped_state = self.state == FmsBatchExpansionState::Stopped
             && self.next_case_index > 0
             && self.next_case_index < self.total_cases;
-        if self.state != expected_state && !valid_stopped_state {
+        let latest_action = self.commands.last().map(|command| command.action);
+        let valid_command_state = match self.state {
+            FmsBatchExpansionState::Paused => {
+                self.next_case_index < self.total_cases
+                    && latest_action == Some(FmsBatchCommandAction::PauseAdmission)
+            }
+            FmsBatchExpansionState::Cancelled => {
+                latest_action == Some(FmsBatchCommandAction::CancelAdmission)
+            }
+            _ => false,
+        };
+        if self.state != expected_state && !valid_stopped_state && !valid_command_state {
             bail!("batch expansion progress state does not match its cursor");
         }
         Ok(())
@@ -891,6 +1029,37 @@ pub enum BatchExpansionProgressCommitDisposition {
     Accepted,
     Replayed,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchCommandCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchCommandConflict {
+    Revision { expected: u64, actual: u64 },
+    Identity,
+    InvalidTransition { action: &'static str, state: FmsBatchExpansionState },
+}
+
+impl std::fmt::Display for BatchCommandConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Revision { expected, actual } => write!(
+                formatter,
+                "batch command revision conflict: expected {expected}, found {actual}"
+            ),
+            Self::Identity => formatter.write_str("batch command id was reused for another request"),
+            Self::InvalidTransition { action, state } => write!(
+                formatter,
+                "batch command `{action}` is invalid while expansion is {state:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BatchCommandConflict {}
 
 /// Result of publishing an immutable batch parent intent.
 #[derive(Debug, Clone, PartialEq, Eq)]

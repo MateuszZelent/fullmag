@@ -2011,7 +2011,25 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             from windows.verify_project_document_browser import exercise as exercise_project_browser
             if frontend_dependency_workspace is None:
                 raise storage.StorageError("Project browser proof requires verified frontend dependencies")
-            with_api("project-document-browser", {}, lambda get: exercise_project_browser(
+            # The scrubbed API environment deliberately has no user profile.
+            # Give the browser its own workspace DB and managed accepted-store
+            # layout; never inherit the user's database or run catalog.
+            browser_layout = storage.resolve_layout(repo, "development-backend-api-checks")
+            browser_runs = storage.validate_path(fixture_storage / "runs" / worktree, run_root,
+                                                "project browser fixture runs")
+            browser_runs.mkdir(parents=True, exist_ok=False)
+            browser_state = storage.validate_path(run_root / "project-browser-user-state", run_root,
+                                                 "project browser workspace state")
+            marker = fixture_storage / ".fullmag-storage.json"
+            storage.atomic_json(marker, {"schema": storage.SCHEMA, "project_root": browser_layout["project_root"]})
+            browser_config = {
+                "FULLMAG_STATE_DIR": str(browser_state),
+                "FULLMAG_PROJECT_STORAGE_ROOT": str(fixture_storage),
+                "FULLMAG_RUNS_ROOT": str(browser_runs),
+                "FULLMAG_WORKTREE_ID": worktree,
+            }
+            receipt["project_browser_storage"] = {**browser_config, "marker": str(marker)}
+            with_api("project-document-browser", browser_config, lambda get: exercise_project_browser(
                 repo, run_root, receipt, get, frontend_dependency_workspace))
             return
         with_api("project-document", {}, project_document)

@@ -248,6 +248,34 @@ weryfikuje go z durable lease przed native preparation. Stare bramki nie są
 automatycznie migrowane, a no-spawn i Consumed recovery nadal wymagają odbioru.
 
 
+## Lokalny operator polityki węzła (2026-10-15)
+
+Zapis `NodePolicy` przez lokalny API sidecar jest autoryzowany jednorazową,
+losową capability wydaną przez aplikację desktopową Tauri. Sidecar tworzy
+128-bitowy token przy starcie i przekazuje go API przez środowisko procesu;
+API trzyma go tylko w pamięci. Komenda Tauri zwraca go wyłącznie oknu `main`,
+którego scheme, host, port i ścieżka zgadzają się z lokalnym URL tej aplikacji.
+Frontend przechowuje token wyłącznie w pamięci i wysyła go w nagłówku Bearer.
+Uruchomienie z zewnętrznym `FULLMAG_UI_URL` oraz samodzielny browser nie dostają
+capability i mogą tylko odczytywać inventory/politykę.
+
+`Origin`, `api_instance_id` i port sidecara nie są dowodem tożsamości. API
+nasłuchuje także na interfejsach sieciowych, dlatego zapis bez dokładnej
+capability fail-closed zwraca 403. Trasy `GET` i `PUT`
+`/v2/platform/compute/nodes/{node_id}/policy` udostępniają typed policy bez
+wewnętrznego `host_id`. `GET` zwraca rewizję i ETag;
+`PUT` wymaga `If-Match`, waliduje proposed policy względem jawnej konfiguracji
+hosta i używa compare-and-swap ledgeru. Brak precondition zwraca 428,
+nieaktualny ETag 412, a równoległy zapis przegrywający CAS 409. Istniejące
+rezerwacje pozostają niezmienione; nowa polityka może pokazać `over_budget`
+i blokować przyszłe admission, aż aktywna praca zwolni zasoby. Capability nie
+przyznaje uprawnień do administracji runtime service ani do zdalnego targetu.
+Zdalny operator wymaga osobnego uwierzytelnienia, ACL i TLS. API jawnie usuwa
+zmienną capability przed uruchomieniem każdego procesu potomnego; worker,
+preparator, runtime service, walidator i narzędzia hosta nie przekazują jej
+dalej do kodu solvera.
+
+
 Żądanie anulowania przed claimem zapisujemy jako osobny immutable intent
 ze snapshotem i expected catalog revision, bez fikcyjnego solver attempt lub
 WorkerCommand. NEW admission i Pending→Consumed launch sprawdzają intent

@@ -20,6 +20,7 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::compute_operator_env::remove_local_compute_operator_token;
 use crate::{
     router_v2::handlers::platform::{
         development_backend::DevelopmentBackendConfig, development_restart::RestartableWorkspace,
@@ -785,6 +786,7 @@ fn run_semantic_validator(
 ) -> Result<Vec<u8>> {
     ensure_before_deadline(deadline, "semantic capsule validator launch")?;
     let mut command = Command::new(python);
+    remove_local_compute_operator_token(&mut command);
     command
         .arg("-B")
         .arg(helper)

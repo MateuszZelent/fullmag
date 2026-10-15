@@ -18,6 +18,7 @@ pub struct ApiSidecar {
     child: Child,
     port: u16,
     api_instance_id: String,
+    local_compute_operator_capability: String,
     prepared_attach: Option<fullmag_runtime_control::application_attach::PreparedApplicationAttach>,
     runtime_attach:
         Option<fullmag_runtime_control::application_attach::BackgroundApplicationAttach>,
@@ -31,6 +32,7 @@ impl ApiSidecar {
         })?;
 
         let port = find_free_port().ok_or("no free API port available")?;
+        let local_compute_operator_capability = uuid::Uuid::new_v4().simple().to_string();
         let repo_root = discover_repo_root(&api_exe);
         let web_static_dir = resolve_web_static_dir(&repo_root);
 
@@ -51,6 +53,10 @@ impl ApiSidecar {
         let mut cmd = Command::new(&api_exe);
         cmd.current_dir(&repo_root)
             .env("FULLMAG_API_PORT", port.to_string())
+            .env(
+                "FULLMAG_LOCAL_COMPUTE_OPERATOR_TOKEN",
+                &local_compute_operator_capability,
+            )
             .env("FULLMAG_REPO_ROOT", &repo_root)
             .env("FULLMAG_STATE_ROOT", &state_root)
             .stdin(Stdio::null())
@@ -77,6 +83,7 @@ impl ApiSidecar {
             child,
             port,
             api_instance_id: String::new(),
+            local_compute_operator_capability,
             prepared_attach: None,
             runtime_attach: None,
         };
@@ -105,6 +112,10 @@ impl ApiSidecar {
 
     pub fn base_url(&self) -> String {
         format!("http://localhost:{}/", self.port)
+    }
+
+    pub(crate) fn local_compute_operator_capability(&self) -> String {
+        self.local_compute_operator_capability.clone()
     }
 
     pub fn ui_url(&self) -> String {

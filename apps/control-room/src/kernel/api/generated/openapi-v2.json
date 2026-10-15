@@ -6337,12 +6337,177 @@
         ],
         "type": "string"
       },
+      "ComputeNodeParallelismPattern": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "single_process"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "gpus_per_rank": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "distributed"
+                ],
+                "type": "string"
+              },
+              "ranks": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ranks_per_node": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "threads_per_rank": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ranks",
+              "threads_per_rank",
+              "ranks_per_node",
+              "gpus_per_rank",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ComputeNodePolicyBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "cpu_millis": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_millis",
+          "memory_bytes",
+          "gpu_memory_bytes",
+          "storage_bytes"
+        ],
+        "type": "object"
+      },
+      "ComputeNodePolicyDocumentResource": {
+        "additionalProperties": false,
+        "description": "Versioned public projection of the host admission policy.",
+        "properties": {
+          "allowed_cpu_ids": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "allowed_gpu_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "allowed_parallelism_patterns": {
+            "items": {
+              "$ref": "#/components/schemas/ComputeNodeParallelismPattern"
+            },
+            "type": "array"
+          },
+          "draining": {
+            "type": "boolean"
+          },
+          "max_parallel_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "priority_order": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "reserved_budget": {
+            "$ref": "#/components/schemas/ComputeNodePolicyBudget"
+          },
+          "reserved_gpu_vram_bytes_by_uuid": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "revision",
+          "allowed_cpu_ids",
+          "allowed_gpu_uuids",
+          "reserved_budget",
+          "max_parallel_workers",
+          "priority_order",
+          "draining",
+          "allowed_parallelism_patterns"
+        ],
+        "type": "object"
+      },
       "ComputeNodePolicyResource": {
         "description": "Read-only host policy snapshot. Mutations require the separate operator\nauthorization contract and are intentionally not part of this resource.",
         "properties": {
           "policy": {
-            "description": "Versioned NodePolicy document, kept open for forward-compatible fields.",
-            "type": "object"
+            "$ref": "#/components/schemas/ComputeNodePolicyDocumentResource",
+            "description": "Operator-controlled policy document without internal host identity."
           },
           "status": {
             "$ref": "#/components/schemas/ComputeNodePolicyStatusResource"
@@ -6385,6 +6550,85 @@
           "draining",
           "over_budget",
           "blocking_reasons"
+        ],
+        "type": "object"
+      },
+      "ComputeNodePolicyUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_cpu_ids": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "allowed_gpu_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "allowed_parallelism_patterns": {
+            "items": {
+              "$ref": "#/components/schemas/ComputeNodeParallelismPattern"
+            },
+            "type": "array"
+          },
+          "draining": {
+            "type": "boolean"
+          },
+          "max_parallel_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "priority_order": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "reserved_budget": {
+            "$ref": "#/components/schemas/ComputeNodePolicyBudget"
+          },
+          "reserved_gpu_vram_bytes_by_uuid": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "allowed_cpu_ids",
+          "allowed_gpu_uuids",
+          "reserved_budget",
+          "max_parallel_workers",
+          "priority_order",
+          "draining",
+          "allowed_parallelism_patterns"
+        ],
+        "type": "object"
+      },
+      "ComputeNodePolicyUpdateRequest": {
+        "additionalProperties": false,
+        "description": "A public update excludes server-owned host identity and revision.",
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/ComputeNodePolicyUpdate"
+          }
+        },
+        "required": [
+          "policy"
         ],
         "type": "object"
       },
@@ -28329,6 +28573,10 @@
       },
       "ProjectBatchCaseTaskSummaryResource": {
         "properties": {
+          "cancellation_requested": {
+            "description": "True when a durable pre-claim cancellation request exists for this task.",
+            "type": "boolean"
+          },
           "lifecycle": {
             "$ref": "#/components/schemas/ProjectRunTaskLifecycle"
           },
@@ -28338,7 +28586,8 @@
         },
         "required": [
           "task_id",
-          "lifecycle"
+          "lifecycle",
+          "cancellation_requested"
         ],
         "type": "object"
       },
@@ -28395,12 +28644,94 @@
         ],
         "type": "object"
       },
+      "ProjectBatchCommandAction": {
+        "enum": [
+          "pause_admission",
+          "resume_admission",
+          "cancel_admission"
+        ],
+        "type": "string"
+      },
+      "ProjectBatchCommandDisposition": {
+        "enum": [
+          "accepted",
+          "replayed"
+        ],
+        "type": "string"
+      },
+      "ProjectBatchCommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ProjectBatchCommandAction"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "expected_revision",
+          "action",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchCommandResource": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ProjectBatchCommandAction"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "command_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/ProjectBatchCommandDisposition"
+          },
+          "expansion_state": {
+            "$ref": "#/components/schemas/ProjectBatchExpansionState"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "disposition",
+          "batch_id",
+          "command_id",
+          "action",
+          "revision",
+          "command_revision",
+          "expansion_state"
+        ],
+        "type": "object"
+      },
       "ProjectBatchExpansionState": {
         "enum": [
           "pending",
           "expanding",
           "complete",
-          "stopped"
+          "stopped",
+          "paused",
+          "cancelled"
         ],
         "type": "string"
       },
@@ -28552,6 +28883,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "command_revision": {
+            "description": "Revision used to fence pause, resume, and cancel-admission commands.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "expansion_state": {
             "$ref": "#/components/schemas/ProjectBatchExpansionState",
             "description": "State of the committed expansion cursor, which can lag a durable child."
@@ -28584,6 +28921,7 @@
           "case_count",
           "failure_policy",
           "published_case_count",
+          "command_revision",
           "expansion_state"
         ],
         "type": "object"
@@ -45681,6 +46019,78 @@
         ]
       }
     },
+    "/v2/persistence/projects/{project_id}/batches/{batch_id}/commands": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_project_id_batches_batch_id_commands",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Durable batch identity",
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectBatchCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBatchCommandResource"
+                }
+              }
+            },
+            "description": "Identical batch command replayed"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBatchCommandResource"
+                }
+              }
+            },
+            "description": "Durable batch admission command accepted"
+          },
+          "400": {
+            "description": "Invalid batch command"
+          },
+          "404": {
+            "description": "Accepted batch is missing"
+          },
+          "409": {
+            "description": "Project scope, command revision, or lifecycle conflict"
+          },
+          "500": {
+            "description": "Durable batch state is inconsistent"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
     "/v2/persistence/projects/{project_id}/run-intent": {
       "post": {
         "operationId": "persistence_post_persistence_projects_project_id_run_intent",
@@ -47394,6 +47804,121 @@
           },
           "503": {
             "description": "Configured host inventory could not be safely observed"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/compute/nodes/{node_id}/policy": {
+      "get": {
+        "operationId": "platform_get_platform_compute_nodes_node_id_policy",
+        "parameters": [
+          {
+            "description": "Stable compute-node identity",
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputeNodePolicyResource"
+                }
+              }
+            },
+            "description": "Current operator policy and live admission status"
+          },
+          "404": {
+            "description": "The requested compute node is not configured"
+          },
+          "503": {
+            "description": "The configured host policy could not be safely read"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      },
+      "put": {
+        "operationId": "platform_put_platform_compute_nodes_node_id_policy",
+        "parameters": [
+          {
+            "description": "Stable compute-node identity",
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ETag returned by GET for the policy revision being edited",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer capability issued by the local Fullmag desktop application",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComputeNodePolicyUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputeNodePolicyResource"
+                }
+              }
+            },
+            "description": "Policy saved; existing allocations remain unchanged"
+          },
+          "400": {
+            "description": "Policy values are invalid for the configured host"
+          },
+          "403": {
+            "description": "A local desktop-operator capability is required"
+          },
+          "404": {
+            "description": "The requested compute node is not configured"
+          },
+          "409": {
+            "description": "The policy changed while it was being edited"
+          },
+          "412": {
+            "description": "If-Match does not identify the current policy revision"
+          },
+          "428": {
+            "description": "If-Match is required"
+          },
+          "503": {
+            "description": "The configured host policy could not be safely updated"
           }
         },
         "tags": [

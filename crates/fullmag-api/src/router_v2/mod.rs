@@ -39,6 +39,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::platform::compute_nodes::get_compute_node),
         )
         .route(
+            "/v2/platform/compute/nodes/:node_id/policy",
+            get(handlers::platform::compute_nodes::get_compute_node_policy)
+                .put(handlers::platform::compute_nodes::put_compute_node_policy),
+        )
+        .route(
             "/v2/platform/compute/profiles",
             get(handlers::platform::compute_profiles::get_compute_profiles)
                 .post(handlers::platform::compute_profiles::post_compute_profile)
@@ -1204,6 +1209,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/:project_id/batches/:batch_id/cases",
             get(handlers::persistence::projects::list_batch_cases),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/batches/:batch_id/commands",
+            post(handlers::persistence::projects::command_batch),
         )
         .route(
             "/v2/persistence/projects/:project_id/runs/:run_id",

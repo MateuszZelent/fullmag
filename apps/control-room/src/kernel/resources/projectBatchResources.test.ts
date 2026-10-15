@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   ProjectBatchCasesResource,
   ProjectBatchListResource,
 } from "../api/apiTypes";
 import {
+  loadAllProjectBatchCases,
   projectBatchCasesResourceKey,
+  projectBatchCasesResourcePrefix,
   projectBatchesResourceKey,
   validateProjectBatchCasesEnvelope,
   validateProjectBatchesEnvelope,
@@ -18,6 +20,7 @@ function batchPage(): ProjectBatchListResource {
       accepted_at: "2026-10-07T12:00:00Z",
       batch_id: "batch-a",
       case_count: 4,
+      command_revision: 0,
       expansion_state: "expanding",
       failure_policy: "continue_independent",
       manifest_sha256: "a".repeat(64),
@@ -62,6 +65,10 @@ describe("saved project batch resources", () => {
     const incomplete = batchPage();
     incomplete.batches[0]!.expansion_state = "complete";
     expect(() => validateProjectBatchesEnvelope(incomplete, "project-a")).toThrow();
+
+    const invalidCommandRevision = batchPage();
+    invalidCommandRevision.batches[0]!.command_revision = -1;
+    expect(() => validateProjectBatchesEnvelope(invalidCommandRevision, "project-a")).toThrow();
 
     const stopped = batchPage();
     stopped.batches[0]!.failure_policy = "stop_admission";
@@ -135,7 +142,7 @@ describe("saved project batch resources", () => {
         run_id: "run-a",
         catalog_state: "materialized",
         catalog_revision: 3,
-        tasks: [{ task_id: "task-a", lifecycle: "queued" }],
+        tasks: [{ task_id: "task-a", lifecycle: "queued", cancellation_requested: false }],
       },
     };
     expect(validateProjectBatchCasesEnvelope(materialized, "batch-a")).toBe(materialized);
@@ -167,8 +174,50 @@ describe("saved project batch resources", () => {
     expect(() => validateProjectBatchCasesEnvelope(mismatchedPublishedRun, "batch-a")).toThrow();
 
     const duplicateTasks = structuredClone(materialized);
-    duplicateTasks.cases[0]!.published_run!.tasks.push({ task_id: "task-a", lifecycle: "running" });
+    duplicateTasks.cases[0]!.published_run!.tasks.push({
+      task_id: "task-a",
+      lifecycle: "running",
+      cancellation_requested: false,
+    });
     expect(() => validateProjectBatchCasesEnvelope(duplicateTasks, "batch-a")).toThrow();
+
+    const missingCancellationState = structuredClone(materialized);
+    delete (missingCancellationState.cases[0]!.published_run!.tasks[0] as { cancellation_requested?: boolean }).cancellation_requested;
+    expect(() => validateProjectBatchCasesEnvelope(missingCancellationState, "batch-a")).toThrow();
+  });
+
+  it("loads every batch case page and rejects duplicate cases or cursor loops", async () => {
+    const firstPage = casePage();
+    const secondPage = casePage();
+    secondPage.cases[0] = {
+      ...secondPage.cases[0]!,
+      case_id: "case-b",
+      planned_run_id: "run-b",
+    };
+    secondPage.next_cursor = null;
+    const loadPage = vi.fn()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
+
+    const cases = await loadAllProjectBatchCases("batch-a", loadPage);
+
+    expect(cases.map((item) => item.case_id)).toEqual(["case-a", "case-b"]);
+    expect(loadPage).toHaveBeenNthCalledWith(1, { cursor: null, limit: 100 });
+    expect(loadPage).toHaveBeenNthCalledWith(2, { cursor: "case-a", limit: 100 });
+
+    const duplicateFirstPage = casePage();
+    const duplicateSecondPage = casePage();
+    duplicateSecondPage.next_cursor = null;
+    const duplicatePages = vi.fn()
+      .mockResolvedValueOnce(duplicateFirstPage)
+      .mockResolvedValueOnce(duplicateSecondPage);
+    await expect(loadAllProjectBatchCases("batch-a", duplicatePages))
+      .rejects.toThrow("duplicate case");
+
+    const loopPage = casePage();
+    loopPage.next_cursor = "case-a";
+    await expect(loadAllProjectBatchCases("batch-a", async () => loopPage))
+      .rejects.toThrow("did not advance");
   });
 
   it("keeps project, batch, cursor, and page size separate in resource keys", () => {
@@ -184,5 +233,7 @@ describe("saved project batch resources", () => {
       .not.toBe(casesKey);
     expect(projectBatchCasesResourceKey("project-a", "batch-a", { limit: 20 }))
       .not.toBe(casesKey);
+    expect(projectBatchCasesResourcePrefix("project-a", "batch-a"))
+      .toBe("project-batch-cases:project-a:batch-a:");
   });
 });

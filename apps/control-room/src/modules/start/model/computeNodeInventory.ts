@@ -8,6 +8,7 @@ import type {
   ComputeNodeGpuPartition,
   ComputeNodeGpuSummary,
   ComputeNodeInventorySummary,
+  ComputeNodeParallelismPattern,
   ComputeNodePolicySummary,
   ComputeNodeSnapshotSummary,
 } from "./types";
@@ -29,6 +30,11 @@ function nonNegativeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
+}
+
+function positiveInteger(value: unknown): number | null {
+  const parsed = nonNegativeInteger(value);
+  return parsed !== null && parsed > 0 ? parsed : null;
 }
 
 function readReported<T>(input: unknown, parse: ValueParser<T>): ComputeNodeFact<T> {
@@ -205,7 +211,38 @@ function parseUniqueStringList(value: unknown): readonly string[] | null {
   return new Set(parsed).size === parsed.length ? parsed : null;
 }
 
-function parseNodePolicy(input: unknown): ComputeNodePolicySummary | null {
+function parseParallelismPatterns(value: unknown): readonly ComputeNodeParallelismPattern[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) return null;
+  const parsed: ComputeNodeParallelismPattern[] = [];
+  for (const item of value) {
+    const pattern = asRecord(item);
+    if (pattern?.kind === "single_process") {
+      parsed.push({ kind: "single_process" });
+      continue;
+    }
+    if (pattern?.kind !== "distributed") return null;
+    const ranks = positiveInteger(pattern.ranks);
+    const threadsPerRank = positiveInteger(pattern.threads_per_rank);
+    const ranksPerNode = positiveInteger(pattern.ranks_per_node);
+    const gpusPerRank = nonNegativeInteger(pattern.gpus_per_rank);
+    if (
+      ranks === null || threadsPerRank === null || ranksPerNode === null ||
+      gpusPerRank === null || ranksPerNode > ranks
+    ) return null;
+    parsed.push({
+      kind: "distributed",
+      ranks,
+      threads_per_rank: threadsPerRank,
+      ranks_per_node: ranksPerNode,
+      gpus_per_rank: gpusPerRank,
+    });
+  }
+  return new Set(parsed.map((item) => JSON.stringify(item))).size === parsed.length
+    ? parsed
+    : null;
+}
+
+export function parseComputeNodePolicyResource(input: unknown): ComputeNodePolicySummary | null {
   const resource = asRecord(input);
   const policy = asRecord(resource?.policy);
   const status = asRecord(resource?.status);
@@ -221,7 +258,7 @@ function parseNodePolicy(input: unknown): ComputeNodePolicySummary | null {
   const allowedCpuIds = parseIntegerList(policy?.allowed_cpu_ids);
   const allowedGpuUuids = parseUniqueStringList(policy?.allowed_gpu_uuids);
   const priorityOrder = parseIntegerList(policy?.priority_order, true);
-  const patterns = policy?.allowed_parallelism_patterns;
+  const patterns = parseParallelismPatterns(policy?.allowed_parallelism_patterns);
   const reasons = parseUniqueStringList(status?.blocking_reasons);
 
   if (
@@ -234,7 +271,7 @@ function parseNodePolicy(input: unknown): ComputeNodePolicySummary | null {
     cpuReserveMillis === null || memoryReserveBytes === null || scratchReserveBytes === null ||
     reservedBudget?.gpu_memory_bytes !== 0 ||
     allowedCpuIds === null || allowedGpuUuids === null || priorityOrder === null ||
-    !Array.isArray(patterns) || patterns.length < 1 || patterns.length > 64 ||
+    patterns === null ||
     reasons === null || typeof policy.draining !== "boolean" ||
     typeof status.draining !== "boolean" || policy.draining !== status.draining ||
     typeof status.over_budget !== "boolean"
@@ -264,6 +301,7 @@ function parseNodePolicy(input: unknown): ComputeNodePolicySummary | null {
     gpuVramReserves: normalizedGpuReserves,
     priorityOrder,
     parallelismPatternCount: patterns.length,
+    allowedParallelismPatterns: patterns,
   };
 }
 
@@ -379,7 +417,7 @@ export function summarizeComputeNodeInventory(
     return {
       nodeId: node.node_id,
       state,
-      nodePolicy: parseNodePolicy(node.node_policy),
+      nodePolicy: parseComputeNodePolicyResource(node.node_policy),
       snapshot: parsedSnapshot && sampleFreshness !== parsedSnapshot.sample.freshness
         ? { ...parsedSnapshot, sample: { ...parsedSnapshot.sample, freshness: sampleFreshness } }
         : parsedSnapshot,

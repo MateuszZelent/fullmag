@@ -2,13 +2,27 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "../api/ControlRoomApi";
-import { useCancelProjectRunTask } from "./projectRunResources";
+import {
+  useCancelProjectRunTask,
+  useMaterializeProjectRun,
+} from "./projectRunResources";
 
-const stub = vi.hoisted(() => ({ cancel: vi.fn(), invalidate: vi.fn() }));
+const stub = vi.hoisted(() => ({
+  cancel: vi.fn(),
+  materialize: vi.fn(),
+  invalidate: vi.fn(),
+  invalidatePrefix: vi.fn(),
+}));
 vi.mock("../KernelContext", () => ({
   useKernel: () => ({
-    api: { persistence: { projects: { cancelRunTask: stub.cancel } } },
-    resources: { invalidate: stub.invalidate },
+    api: { persistence: { projects: {
+      cancelRunTask: stub.cancel,
+      materializeRun: stub.materialize,
+    } } },
+    resources: {
+      invalidate: stub.invalidate,
+      invalidatePrefix: stub.invalidatePrefix,
+    },
   }),
 }));
 
@@ -22,9 +36,21 @@ function mountedCancellation() {
   return cancel;
 }
 
+function mountedMaterialization() {
+  let materialize!: ReturnType<typeof useMaterializeProjectRun>;
+  function Probe() {
+    materialize = useMaterializeProjectRun("project-a");
+    return null;
+  }
+  renderToStaticMarkup(<Probe />);
+  return materialize;
+}
+
 beforeEach(() => {
   stub.cancel.mockReset();
+  stub.materialize.mockReset();
   stub.invalidate.mockReset();
+  stub.invalidatePrefix.mockReset();
 });
 
 describe("durable pre-claim cancellation retry", () => {
@@ -59,5 +85,28 @@ describe("durable pre-claim cancellation retry", () => {
     stub.cancel.mockResolvedValueOnce({ catalog_revision: 8 });
     await mountedCancellation()("task-a", "stop");
     expect(stub.cancel).toHaveBeenCalledWith("project-a", "run-a", "task-a", { reason: "stop" });
+  });
+});
+
+describe("idempotent child-run task materialization", () => {
+  it("invalidates run, run-list, and batch-case resources at the returned catalog revision", async () => {
+    stub.materialize.mockResolvedValue({
+      catalog_revision: 11,
+      execution_state: "pending_preparation",
+      run_id: "run-a",
+      task_ids: ["task-a"],
+    });
+    const materialize = mountedMaterialization();
+
+    await expect(materialize("run-a")).resolves.toMatchObject({
+      catalog_revision: 11,
+      run_id: "run-a",
+      task_ids: ["task-a"],
+    });
+
+    expect(stub.materialize).toHaveBeenCalledWith("project-a", "run-a");
+    expect(stub.invalidate).toHaveBeenCalledWith("project-run:project-a:run-a", 11);
+    expect(stub.invalidatePrefix).toHaveBeenCalledWith("project-runs:project-a:", 11);
+    expect(stub.invalidatePrefix).toHaveBeenCalledWith("project-batch-cases:project-a:", 11);
   });
 });

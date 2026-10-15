@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use crate::process_environment::remove_local_compute_operator_token;
 
 /// Validate an explicit writable-state override before any caller creates files.
 pub fn validated_state_override(value: Option<PathBuf>) -> io::Result<Option<PathBuf>> {
@@ -479,6 +480,7 @@ fn flags_for(isolated: bool) -> Vec<String> {
 
 fn candidate_command(candidate: &Candidate) -> Command {
     let mut command = Command::new(&candidate.program);
+    remove_local_compute_operator_token(&mut command);
     command.args(&candidate.args);
     command
 }
@@ -536,6 +538,7 @@ impl ResolvedInterpreter {
     /// their own arguments.
     pub fn command(&self, root: &Path) -> io::Result<Command> {
         let mut command = Command::new(&self.path);
+        remove_local_compute_operator_token(&mut command);
         if self.isolated {
             configure_packaged_python(&mut command, root)?;
         } else {
@@ -600,6 +603,7 @@ fn resolve_with(
             ));
         }
         let mut command = Command::new(&bundle_python);
+        remove_local_compute_operator_token(&mut command);
         configure_packaged_python(&mut command, root).map_err(|error| {
             InterpreterError::BundleBroken {
                 reason: error.to_string(),

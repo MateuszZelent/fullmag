@@ -29,6 +29,8 @@ import type {
   ProjectBatchCasesResource,
   ProjectBatchListQuery,
   ProjectBatchListResource,
+  ProjectBatchCommandRequest,
+  ProjectBatchCommandResource,
   ProjectBatchSubmitRequest,
   ProjectBatchSubmitResource,
 } from "./apiTypes";
@@ -5424,6 +5426,7 @@ describe("ControlRoomApi", () => {
         max_parallel_cases: 2,
         failure_policy: "continue_independent",
         published_case_count: 0,
+        command_revision: 0,
         expansion_state: "pending",
       }],
       next_cursor: null,
@@ -5439,6 +5442,21 @@ describe("ControlRoomApi", () => {
       }],
       next_cursor: null,
     };
+    const commandRequest: ProjectBatchCommandRequest = {
+      action: "pause_admission",
+      command_id: "command-1",
+      expected_revision: 0,
+      reason: "Pause from inspector",
+    };
+    const commandAccepted: ProjectBatchCommandResource = {
+      action: "pause_admission",
+      batch_id: "batch-1",
+      command_id: "command-1",
+      command_revision: 1,
+      disposition: "accepted",
+      expansion_state: "paused",
+      revision: 0,
+    };
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
       fetchImpl: async (input, init) => {
@@ -5448,7 +5466,11 @@ describe("ControlRoomApi", () => {
           method: init?.method,
           url,
         });
-        if (init?.method === "POST") return jsonResponse(accepted, { status: 201 });
+        if (init?.method === "POST") {
+          return url.endsWith("/commands")
+            ? jsonResponse(commandAccepted, { status: 202 })
+            : jsonResponse(accepted, { status: 201 });
+        }
         if (url.includes("/cases")) return jsonResponse(casesPage);
         return jsonResponse(batchPage);
       },
@@ -5461,20 +5483,26 @@ describe("ControlRoomApi", () => {
     const cases = await api.persistence.projects.listBatchCases(
       "project-1", "batch-1", casesQuery,
     );
+    const commanded = await api.persistence.projects.commandBatch(
+      "project-1", "batch-1", commandRequest,
+    );
 
     expect(submitted).toEqual(accepted);
     expect(listed).toEqual(batchPage);
     expect(cases).toEqual(casesPage);
+    expect(commanded).toEqual(commandAccepted);
     expect(requests.map(({ method, url }) => ({ method, url: new URL(url).pathname }))).toEqual([
       { method: "POST", url: "/v2/persistence/projects/project-1/batches" },
       { method: "GET", url: "/v2/persistence/projects/project-1/batches" },
       { method: "GET", url: "/v2/persistence/projects/project-1/batches/batch-1/cases" },
+      { method: "POST", url: "/v2/persistence/projects/project-1/batches/batch-1/commands" },
     ]);
     expect(requests[0]?.body).toEqual(batchRequest);
     const batchListUrl = new URL(requests[1]!.url);
     expect(batchListUrl.searchParams.get("limit")).toBe("25");
     expect(batchListUrl.searchParams.get("cursor")).toBe("batch-prev");
     expect(new URL(requests[2]!.url).searchParams.get("limit")).toBe("10");
+    expect(requests[3]?.body).toEqual(commandRequest);
   });
 
   it("loads and patches object interaction resources through v2 model facade methods", async () => {

@@ -1,4 +1,7 @@
-import type { ComputeNodesState } from "@/kernel/api/apiTypes";
+import type {
+  ComputeNodePolicyUpdateRequest,
+  ComputeNodesState,
+} from "@/kernel/api/apiTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
 /**
@@ -137,7 +140,18 @@ export interface ComputeNodePolicySummary {
   readonly gpuVramReserves: Readonly<Record<string, number>>;
   readonly priorityOrder: readonly number[];
   readonly parallelismPatternCount: number;
+  readonly allowedParallelismPatterns: readonly ComputeNodeParallelismPattern[];
 }
+
+export type ComputeNodeParallelismPattern =
+  | { readonly kind: "single_process" }
+  | {
+      readonly kind: "distributed";
+      readonly ranks: number;
+      readonly threads_per_rank: number;
+      readonly ranks_per_node: number;
+      readonly gpus_per_rank: number;
+    };
 
 export interface ComputeNodeInventoryNodeSummary {
   readonly nodeId: string;
@@ -159,10 +173,16 @@ export interface ComputeNodeInventorySummary {
 export interface ComputeProbeController {
   readonly compute: ComputeProbeState;
   readonly nodeInventory: ComputeNodeInventorySummary;
+  readonly canEditNodePolicy: boolean;
   readonly refreshing: boolean;
   readonly stale: boolean;
   readonly error: string | null;
   readonly refresh: () => void;
+  readonly updateNodePolicy: (
+    nodeId: string,
+    expectedRevision: number,
+    request: ComputeNodePolicyUpdateRequest,
+  ) => Promise<ComputeNodePolicySummary>;
 }
 
 export type DocumentMode = "read_write" | "read_only";

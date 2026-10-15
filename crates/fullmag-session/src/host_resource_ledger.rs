@@ -2178,9 +2178,10 @@ impl HostResourceLedger {
         Ok(())
     }
 
-    /// Bound new CPU admission and launch to the configured policy and, when
-    /// available, the latest effective OS/cgroup capacity. The snapshot is an
-    /// admission limit only; it does not prove that a worker enforces it.
+    /// Bound new CPU admission and launch to the configured policy and the
+    /// latest effective OS/cgroup capacity. Unknown capacity cannot authorize
+    /// an owner-bound CPU reservation; the snapshot still does not prove that
+    /// a worker enforces the limit.
     fn validate_observed_cpu_capacity_locked(
         &self,
         document: &HostResourceLedgerDocument,
@@ -2199,7 +2200,12 @@ impl HostResourceLedger {
             .context("host CPU admission requires a published compute-node sample")?;
         let observed_capacity_millis = match &snapshot.cpu.effective_capacity_millis {
             crate::compute_node_snapshot::Observation::Available { value } => *value,
-            crate::compute_node_snapshot::Observation::Unavailable { .. } => return Ok(()),
+            crate::compute_node_snapshot::Observation::Unavailable { reason } => {
+                return Err(HostResourceCapacityUnavailable(format!(
+                    "host CPU admission requires an observed effective CPU capacity ({reason:?})"
+                ))
+                .into());
+            }
         };
         let capacity_millis = document
             .policy
@@ -4653,14 +4659,9 @@ mod tests {
         let policy = policy();
         let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
         let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
-        let mut sample = compute_node_snapshot(
-            &policy,
-            ledger.node_id(),
-            chrono::Utc::now(),
-            1,
-            1,
-        );
-        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        let mut sample = compute_node_snapshot(&policy, ledger.node_id(), chrono::Utc::now(), 1, 1);
+        sample.schema_version =
+            crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
         sample.runtime_owner_id = ledger.owner_id();
         sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
         sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
@@ -4752,6 +4753,43 @@ mod tests {
         let error = ledger.reserve(&second).unwrap_err();
         assert!(error.is::<HostResourceCapacityUnavailable>());
         assert_eq!(ledger.read().unwrap().reservations.len(), 1);
+    }
+
+    #[test]
+    fn host_reservation_rejects_unknown_effective_cpu_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = compute_node_snapshot(&policy, ledger.node_id(), chrono::Utc::now(), 1, 1);
+        sample.schema_version =
+            crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
+        sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        sample.cpu.effective_capacity_millis =
+            crate::compute_node_snapshot::Observation::Unavailable {
+                reason: crate::compute_node_snapshot::UnavailableReason::Unsupported,
+            };
+        ledger
+            .publish_compute_node_snapshot_with_owner(&owner, &sample)
+            .unwrap();
+
+        let mut request = request(
+            &policy,
+            &format!("sha256:{}", "1".repeat(64)),
+            "unknown-effective-cpu",
+            budget(100, 1024, 0),
+            &[],
+            &[],
+            &[],
+        );
+        request.expected_compute_node_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        request.expected_compute_node_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+
+        let error = ledger.reserve(&request).unwrap_err();
+        assert!(error.is::<HostResourceCapacityUnavailable>());
+        assert!(ledger.read().unwrap().reservations.is_empty());
     }
 
     #[test]

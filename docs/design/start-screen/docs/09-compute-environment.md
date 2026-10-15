@@ -143,6 +143,25 @@ pozostaje lokalnie na współdzielonym masterze. Do działającej, zarządzanej
 kopii frontendu zsynchronizowano wyłącznie pliki tego zadania z kontrolą
 hashy; nie restartowano backendu ani nie przenoszono storage.
 
+### Uzupełnienie — lokalna edycja polityki operatora (2026-10-15)
+
+Settings → Compute → Resources ma teraz edytor polityki lokalnego węzła.
+Operator może zmienić dozwolone CPU IDs i GPU UUID, rezerwy CPU/RAM/scratch
+i VRAM per urządzenie, limit aktywnych workerów oraz draining. Priorytety
+admission i dozwolone wzorce równoległości są zachowywane z bieżącej polityki.
+Zapis wpływa na przyszłe przyjęcia; nie zmienia istniejących rezerwacji.
+
+Typed v2 API udostępnia GET/PUT dokument polityki. PUT wymaga ephemeral
+capability wydanej przez lokalną aplikację desktopową oraz If-Match z rewizją
+polityki; walidacja hosta i zapis CAS w ledgerze rozstrzygają zmianę. Zwykły
+browser i tryb aplikacji z zewnętrznym UI pozostają tylko do odczytu.
+Wygenerowanie OpenAPI i klienta, statyczna kontrola API oraz diff check
+przeszły. Lint nie wystartował z powodu brakującego @eslint/compat, a scoped
+React Doctor nie oddał wyniku. Nie uruchamiano testów jednostkowych zgodnie
+z AGENTS.md. Browser proof edytora i runtime admission pozostają
+**NOT VERIFIED**; wcześniejszy browser proof z 2026-10-04 dotyczy wyłącznie
+odczytowego UI.
+
 ## Projekt dalszego rozwoju
 
 [Settings i wiele urządzeń](10-compute-settings-and-multi-device.md) opisuje

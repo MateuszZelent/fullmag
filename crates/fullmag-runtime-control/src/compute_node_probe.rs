@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use crate::process_environment::remove_local_compute_operator_token;
 use chrono::{DateTime, Utc};
 use fullmag_session::{
     compute_node_snapshot::{
@@ -67,6 +68,11 @@ fn sample_compute_node_inner(
         &allowed_cpu_ids_probe,
         &cpu_quota_probe,
     );
+    let cpu_capacity_unavailable_reason = cpu_quota_probe
+        .as_ref()
+        .err()
+        .map(probe_failure_reason)
+        .unwrap_or(UnavailableReason::ProbeFailed);
     let memory = observe_memory();
     let gpus = discover_nvidia_gpus();
     let now = Utc::now();
@@ -84,7 +90,7 @@ fn sample_compute_node_inner(
             reason: UnavailableReason::ProbeFailed,
         },
         Err(_) => Observation::Unavailable {
-            reason: UnavailableReason::ProbeFailed,
+            reason: cpu_capacity_unavailable_reason,
         },
     };
     let (memory_total_bytes, memory_available_bytes) = match memory {
@@ -191,16 +197,16 @@ fn effective_cpu_capacity_millis(
                 .context("allowed logical CPU capacity overflow")
         })
         .transpose()?;
+    let quota = quota.as_ref().map_err(|error| {
+        anyhow::anyhow!(
+            "effective CPU capacity is unknown because quota sampling failed: {error:#}"
+        )
+    })?;
     match (allowed_capacity, quota) {
-        (Some(allowed), Ok(CpuQuota::Limited { capacity_millis })) => {
-            Ok(allowed.min(*capacity_millis))
-        }
-        (Some(allowed), Ok(CpuQuota::Unlimited)) => Ok(allowed),
-        (Some(allowed), Err(_)) => Ok(allowed.min(fallback?)),
-        (None, Ok(CpuQuota::Limited { capacity_millis })) => {
-            Ok(fallback?.min(*capacity_millis))
-        }
-        (None, Ok(CpuQuota::Unlimited) | Err(_)) => fallback,
+        (Some(allowed), CpuQuota::Limited { capacity_millis }) => Ok(allowed.min(*capacity_millis)),
+        (Some(allowed), CpuQuota::Unlimited) => Ok(allowed),
+        (None, CpuQuota::Limited { capacity_millis }) => Ok(fallback?.min(*capacity_millis)),
+        (None, CpuQuota::Unlimited) => fallback,
     }
 }
 
@@ -751,7 +757,18 @@ fn limited_cpu_quota(quota: u64, period: u64) -> Result<CpuQuota> {
 
 #[cfg(windows)]
 fn observe_cpu_quota() -> Result<CpuQuota> {
-    bail!("Windows CPU quota sampling is unsupported")
+    let process = unsafe { GetCurrentProcess() };
+    let mut in_job = 0i32;
+    if unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) } == 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("check Windows CPU quota job membership");
+    }
+    if in_job != 0 {
+        bail!(
+            "Windows effective CPU quota is unsupported inside a Job Object because ancestor job limits are not observable"
+        );
+    }
+    Ok(CpuQuota::Unlimited)
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -913,6 +930,10 @@ fn observe_windows_numa_node(group: u16, group_local_id: u16) -> Option<u32> {
 
 #[cfg(windows)]
 fn observe_allowed_cpu_ids(topology: &CpuTopology) -> Result<BTreeSet<u32>> {
+    if let Some(allowed) = observe_current_job_cpu_affinity(topology)? {
+        return Ok(allowed);
+    }
+
     let process = unsafe { GetCurrentProcess() };
     let mut group_count = 1u16;
     let mut process_groups = [0u16; 1];
@@ -974,6 +995,99 @@ fn observe_allowed_cpu_ids(topology: &CpuTopology) -> Result<BTreeSet<u32>> {
     Ok(allowed)
 }
 
+#[cfg(windows)]
+fn observe_current_job_cpu_affinity(
+    topology: &CpuTopology,
+) -> Result<Option<BTreeSet<u32>>> {
+    const JOB_OBJECT_GROUP_INFORMATION_EX: i32 = 14;
+
+    let process = unsafe { GetCurrentProcess() };
+    let mut in_job = 0i32;
+    if unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("check Windows worker job membership");
+    }
+    if in_job == 0 {
+        return Ok(None);
+    }
+
+    let topology_groups = topology
+        .logical_cpus
+        .iter()
+        .filter_map(|cpu| cpu.processor_group)
+        .collect::<BTreeSet<_>>();
+    if topology_groups.is_empty() {
+        bail!("Windows job affinity requires processor-group topology");
+    }
+    let mut affinities = vec![WindowsGroupAffinity::default(); topology_groups.len()];
+    let buffer_bytes = affinities
+        .len()
+        .checked_mul(std::mem::size_of::<WindowsGroupAffinity>())
+        .and_then(|bytes| u32::try_from(bytes).ok())
+        .context("Windows job affinity buffer size overflow")?;
+    let mut returned_bytes = 0u32;
+    if unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JOB_OBJECT_GROUP_INFORMATION_EX,
+            affinities.as_mut_ptr().cast(),
+            buffer_bytes,
+            &mut returned_bytes,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("read Windows worker job processor-group affinity");
+    }
+    let entry_bytes = std::mem::size_of::<WindowsGroupAffinity>();
+    if returned_bytes == 0
+        || returned_bytes > buffer_bytes
+        || returned_bytes as usize % entry_bytes != 0
+    {
+        bail!("Windows job returned an invalid processor-group affinity size");
+    }
+    affinities.truncate(returned_bytes as usize / entry_bytes);
+    Ok(Some(cpu_ids_for_group_affinities(&affinities, topology)?))
+}
+
+#[cfg(windows)]
+fn cpu_ids_for_group_affinities(
+    affinities: &[WindowsGroupAffinity],
+    topology: &CpuTopology,
+) -> Result<BTreeSet<u32>> {
+    let mut allowed = BTreeSet::new();
+    let mut seen_groups = BTreeSet::new();
+    for affinity in affinities {
+        if affinity.mask == 0 || !seen_groups.insert(affinity.group) {
+            bail!("Windows job affinity has an empty or repeated processor group");
+        }
+        let mut topology_mask = 0usize;
+        for cpu in topology
+            .logical_cpus
+            .iter()
+            .filter(|cpu| cpu.processor_group == Some(affinity.group))
+        {
+            let group_local_id = cpu
+                .group_logical_cpu_id
+                .context("Windows CPU topology is missing a group-local identifier")?;
+            if u32::from(group_local_id) >= usize::BITS {
+                bail!("Windows group-local CPU identifier exceeds the affinity mask width");
+            }
+            let bit = 1usize << group_local_id;
+            topology_mask |= bit;
+            if affinity.mask & bit != 0 {
+                allowed.insert(cpu.id);
+            }
+        }
+        if topology_mask & affinity.mask != affinity.mask {
+            bail!("Windows job affinity references a CPU outside current topology");
+        }
+    }
+    if allowed.is_empty() {
+        bail!("Windows job affinity has no CPU in the observed topology");
+    }
+    Ok(allowed)
+}
+
 #[cfg(not(any(target_os = "linux", windows)))]
 fn observe_cpu_topology() -> Result<CpuTopology> {
     bail!("CPU topology sampling is unsupported on this operating system")
@@ -996,8 +1110,7 @@ struct WindowsProcessorNumber {
 
 #[cfg(windows)]
 #[repr(C)]
-#[derive(Default)]
-#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct WindowsGroupAffinity {
     mask: usize,
     group: u16,
@@ -1023,6 +1136,18 @@ unsafe extern "system" {
         node_number: *mut u16,
     ) -> i32;
     fn GetCurrentProcess() -> *mut std::ffi::c_void;
+    fn IsProcessInJob(
+        process: *mut std::ffi::c_void,
+        job: *mut std::ffi::c_void,
+        result: *mut i32,
+    ) -> i32;
+    fn QueryInformationJobObject(
+        job: *mut std::ffi::c_void,
+        information_class: i32,
+        information: *mut std::ffi::c_void,
+        information_length: u32,
+        returned_length: *mut u32,
+    ) -> i32;
     fn GetProcessAffinityMask(
         process: *mut std::ffi::c_void,
         process_affinity_mask: *mut usize,
@@ -1116,7 +1241,9 @@ fn discover_nvidia_gpus() -> Result<Vec<GpuDeviceSnapshot>> {
 
 fn query_nvidia_smi(query: &str, deadline: Instant) -> Result<Vec<u8>> {
     let query_arg = format!("--query-gpu={query}");
-    let mut child = Command::new("nvidia-smi")
+    let mut command = Command::new("nvidia-smi");
+    remove_local_compute_operator_token(&mut command);
+    let mut child = command
         .args([query_arg.as_str(), "--format=csv,noheader,nounits"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1323,6 +1450,67 @@ pub fn current_host_boot_id(_now: DateTime<Utc>) -> Result<String> {
 mod tests {
     use super::*;
 
+    #[cfg(all(windows, target_pointer_width = "64"))]
+    #[test]
+    fn windows_job_affinity_reports_exact_cpu_ids_across_groups() {
+        let topology = CpuTopology {
+            logical_cpus: vec![
+                CpuLogicalProcessor {
+                    id: 0,
+                    socket_id: None,
+                    numa_node_id: None,
+                    core_id: None,
+                    smt_sibling_ids: vec![0],
+                    processor_group: Some(0),
+                    group_logical_cpu_id: Some(0),
+                },
+                CpuLogicalProcessor {
+                    id: 63,
+                    socket_id: None,
+                    numa_node_id: None,
+                    core_id: None,
+                    smt_sibling_ids: vec![63],
+                    processor_group: Some(0),
+                    group_logical_cpu_id: Some(63),
+                },
+                CpuLogicalProcessor {
+                    id: 64,
+                    socket_id: None,
+                    numa_node_id: None,
+                    core_id: None,
+                    smt_sibling_ids: vec![64],
+                    processor_group: Some(1),
+                    group_logical_cpu_id: Some(0),
+                },
+            ],
+        };
+        let affinities = [
+            WindowsGroupAffinity {
+                mask: 1 | (1usize << 63),
+                group: 0,
+                reserved: [0; 3],
+            },
+            WindowsGroupAffinity {
+                mask: 1,
+                group: 1,
+                reserved: [0; 3],
+            },
+        ];
+        assert_eq!(
+            cpu_ids_for_group_affinities(&affinities, &topology).unwrap(),
+            BTreeSet::from([0, 63, 64])
+        );
+        assert!(cpu_ids_for_group_affinities(
+            &[WindowsGroupAffinity {
+                mask: 0b10,
+                group: 1,
+                reserved: [0; 3],
+            }],
+            &topology,
+        )
+        .is_err());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_cpu_id_list_expands_ranges_and_rejects_ambiguous_sets() {
@@ -1376,6 +1564,15 @@ mod tests {
             .unwrap(),
             500
         );
+    }
+
+    #[test]
+    fn unknown_cpu_quota_does_not_publish_fallback_capacity() {
+        let fallback: Result<u64> = Ok(2000);
+        let allowed: Result<BTreeSet<u32>> = Ok([0, 1].into_iter().collect());
+        let quota: Result<CpuQuota> = Err(anyhow::anyhow!("quota sampling is unsupported"));
+
+        assert!(effective_cpu_capacity_millis(fallback, &allowed, &quota).is_err());
     }
 
     #[cfg(target_os = "linux")]

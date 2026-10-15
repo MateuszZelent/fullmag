@@ -4158,6 +4158,53 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
     assert_eq!(published_run["catalog_revision"], 1);
     assert_eq!(published_run["tasks"].as_array().unwrap().len(), 1);
     assert_eq!(published_run["tasks"][0]["lifecycle"], "accepted");
+    assert_eq!(published_run["tasks"][0]["cancellation_requested"], false);
+
+    let task_id = published_run["tasks"][0]["task_id"].as_str().unwrap();
+    let cancellation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v2/persistence/projects/project-batch-http/runs/{first_run_id}/tasks/{task_id}/cancellation",
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "reason": "batch cancellation reconciliation test",
+                        "cancellation_id": "cancel-batch-case",
+                        "expected_catalog_revision": 1,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancellation.status(), StatusCode::ACCEPTED);
+
+    let cancellation_reflected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(concat!(
+                    "/v2/persistence/projects/project-batch-http/batches/batch-http/cases",
+                    "?limit=1",
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancellation_reflected.status(), StatusCode::OK);
+    let cancellation_reflected = body_json(cancellation_reflected).await;
+    assert_eq!(
+        cancellation_reflected["cases"][0]["published_run"]["tasks"][0]
+            ["cancellation_requested"],
+        true
+    );
 
     let second_page = app
         .clone()

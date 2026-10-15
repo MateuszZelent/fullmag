@@ -10,7 +10,9 @@ import type {
   ComputeNodeInventorySummary,
   ComputeNodePolicySummary,
   ComputeNodeSnapshotSummary,
+  ComputeProbeController,
 } from "./model/types";
+import { ComputeNodePolicyEditor } from "./ComputeNodePolicyEditor";
 
 const BYTE_GIB = 1024 ** 3;
 const cpuFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 });
@@ -23,8 +25,12 @@ const timestampFormat = new Intl.DateTimeFormat("en-US", {
 
 export function ComputeNodeInventoryDetails({
   summary,
+  canEditNodePolicy = false,
+  onUpdateNodePolicy,
 }: {
   readonly summary: ComputeNodeInventorySummary;
+  readonly canEditNodePolicy?: boolean;
+  readonly onUpdateNodePolicy?: ComputeProbeController["updateNodePolicy"];
 }) {
   if (!summary.hasSnapshot) return null;
 
@@ -48,6 +54,8 @@ export function ComputeNodeInventoryDetails({
               nodeState={node.state}
               nodePolicy={node.nodePolicy}
               snapshot={node.snapshot}
+              canEditNodePolicy={canEditNodePolicy}
+              onUpdateNodePolicy={onUpdateNodePolicy}
             />
           ) : (
             <article className="fm-start-compute-settings__gpu-card" key={node.nodeId}>
@@ -74,10 +82,14 @@ function NodeSnapshotCard({
   nodeState,
   nodePolicy,
   snapshot,
+  canEditNodePolicy,
+  onUpdateNodePolicy,
 }: {
   readonly nodeState: ComputeNodeInventorySummary["nodes"][number]["state"];
   readonly nodePolicy: ComputeNodePolicySummary | null;
   readonly snapshot: ComputeNodeSnapshotSummary;
+  readonly canEditNodePolicy: boolean;
+  readonly onUpdateNodePolicy?: ComputeProbeController["updateNodePolicy"];
 }) {
   const freshness = snapshot.sample.freshness;
   const status = nodeStatePresentation(nodeState, freshness);
@@ -191,11 +203,11 @@ function NodeSnapshotCard({
           <span
             className="fm-start-compute-settings__status"
             data-state={nodePolicy
-              ? nodePolicy.overBudget ? "unavailable" : nodePolicy.draining ? "unknown" : "ready"
+              ? nodePolicy.overBudget || nodePolicy.blockingReasons.length > 0 ? "unavailable" : nodePolicy.draining ? "unknown" : "ready"
               : "unknown"}
           >
             {nodePolicy
-              ? nodePolicy.overBudget ? "Over budget" : nodePolicy.draining ? "Draining" : "Accepting new work"
+              ? nodePolicy.overBudget ? "Over budget" : nodePolicy.draining ? "Draining" : nodePolicy.blockingReasons.length > 0 ? "Existing policy conflict" : nodePolicy.activeWorkers >= nodePolicy.maxParallelWorkers ? "Worker limit reached" : "Accepting new work"
               : "Not reported"}
           </span>
         </div>
@@ -244,8 +256,15 @@ function NodeSnapshotCard({
           </p>
         )}
       </div>
+      <ComputeNodePolicyEditor
+        canEdit={canEditNodePolicy}
+        nodeId={snapshot.nodeId}
+        onUpdate={onUpdateNodePolicy}
+        policy={nodePolicy}
+        snapshot={snapshot}
+      />
       <p className="fm-start-compute-settings__reason">
-        Observed capacity and memory are readings, not reservations. The policy is read-only here; a concrete device is resolved when a run starts.
+        Observed capacity and memory are readings, not reservations. A concrete device is resolved when a run starts.
       </p>
     </article>
   );

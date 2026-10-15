@@ -1,7 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { ComputeNodePolicyUpdateRequest } from "@/kernel/api/apiTypes";
+import { useKernel } from "@/kernel/KernelContext";
+import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 import {
   usePlatformCapabilitiesResource,
   usePlatformComputeNodesResource,
@@ -14,13 +17,17 @@ import {
   describeRuntimeLanes,
   isTelemetrySampleStale,
 } from "./computeTelemetry";
-import { summarizeComputeNodeInventory } from "./computeNodeInventory";
+import {
+  parseComputeNodePolicyResource,
+  summarizeComputeNodeInventory,
+} from "./computeNodeInventory";
 import type { ComputeProbeController, ComputeProbeState } from "./types";
 
 export const COMPUTE_POLL_MS = 5000;
 
 /** One owner for the rail, settings, templates and project compatibility checks. */
 export function useComputeProbe(): ComputeProbeController {
+  const { api } = useKernel();
   const cpu = useCpuTelemetryResource();
   const gpu = useGpuTelemetryResource();
   const capabilities = usePlatformCapabilitiesResource();
@@ -41,7 +48,31 @@ export function useComputeProbe(): ComputeProbeController {
   const [desktopRefreshing, setDesktopRefreshing] = useState(false);
   const [desktopFailed, setDesktopFailed] = useState(false);
   const [desktopRefreshId, setDesktopRefreshId] = useState(0);
+  const operatorCapability = useRef<string | null>(null);
+  const [canEditNodePolicy, setCanEditNodePolicy] = useState(false);
   const needsDesktop = cpu.status === "error" && gpu.status === "error" && !cpu.data && !gpu.data;
+
+  useEffect(() => {
+    const invoke = tauriInvoke();
+    if (!invoke) return;
+    let cancelled = false;
+    void invoke<unknown>("local_compute_operator_capability").then((value) => {
+      if (cancelled) return;
+      if (typeof value === "string" && /^[0-9a-f]{32}$/.test(value)) {
+        operatorCapability.current = value;
+        setCanEditNodePolicy(true);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        operatorCapability.current = null;
+        setCanEditNodePolicy(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+      operatorCapability.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +106,22 @@ export function useComputeProbe(): ComputeProbeController {
   const { refetch: refetchGpu } = gpu;
   const { refetch: refetchCapabilities } = capabilities;
   const { refetch: refetchNodeInventory } = nodeInventoryResource;
+  const updateNodePolicy = useCallback(async (
+    nodeId: string,
+    expectedRevision: number,
+    request: ComputeNodePolicyUpdateRequest,
+  ) => {
+    const capability = operatorCapability.current;
+    if (!capability) throw new Error("Policy changes are available only in the local Fullmag desktop app.");
+    const policy = await api.platform.updateComputeNodePolicy(nodeId, request, {
+      operatorCapability: capability,
+      expectedRevision,
+    });
+    refetchNodeInventory();
+    const parsed = parseComputeNodePolicyResource(policy);
+    if (!parsed) throw new Error("The API returned an invalid compute-node policy.");
+    return parsed;
+  }, [api, refetchNodeInventory]);
   const refresh = useCallback(() => {
     setFreshnessNow(Date.now());
     refetchCpu();
@@ -144,6 +191,7 @@ export function useComputeProbe(): ComputeProbeController {
   return {
     compute,
     nodeInventory,
+    canEditNodePolicy,
     refreshing: (needsDesktop && desktopRefreshing) ||
       nodeInventoryResource.status === "loading" ||
       (nodeInventoryResource.status === "stale" && !nodeInventoryResource.refreshError) ||
@@ -156,5 +204,6 @@ export function useComputeProbe(): ComputeProbeController {
         : "Some host readings could not be retrieved. Refresh to try again."
       : null,
     refresh,
+    updateNodePolicy,
   };
 }

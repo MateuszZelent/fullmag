@@ -1,6 +1,7 @@
 //! Native service discovery and authenticated terminal lifecycle observation.
 //! Failed observation never starts a service or proves a safe workspace restart.
 use anyhow::{bail, Context, Result};
+use crate::process_environment::remove_local_compute_operator_token;
 use fullmag_session::{
     repository_path::checked_path,
     runtime_service::{
@@ -783,6 +784,7 @@ pub(crate) fn ensure_config_cancellable(
         .create_new(true)
         .open(launcher_paths.stderr)?;
     let mut command = Command::new(executable);
+    remove_local_compute_operator_token(&mut command);
     command
         .arg("--config")
         .arg(&pinned_path)

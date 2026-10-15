@@ -8,7 +8,7 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { startSettings, type RecentView } from "../model/startSettings";
 import type { RecentIndexController } from "../model/useRecentIndex";
 import type { WorkspaceItemsController } from "../model/useWorkspaceItems";
-import type { ComputeNodeInventorySummary, ComputeProbeState, ScannedLocation } from "../model/types";
+import type { ComputeNodeInventorySummary, ComputeProbeController, ComputeProbeState, ScannedLocation } from "../model/types";
 
 import { ComputeEnvironmentSettings } from "./ComputeEnvironmentSettings";
 import { IndexedLocations } from "./IndexedLocations";
@@ -33,6 +33,8 @@ interface SettingsSectionProps {
   readonly workspace?: WorkspaceItemsController;
   readonly compute?: ComputeProbeState;
   readonly nodeInventory?: ComputeNodeInventorySummary;
+  readonly canEditNodePolicy?: boolean;
+  readonly onUpdateNodePolicy?: ComputeProbeController["updateNodePolicy"];
   readonly refreshing?: boolean;
   readonly stale?: boolean;
   readonly computeError?: string | null;
@@ -44,6 +46,8 @@ export function SettingsSection({
   workspace,
   compute,
   nodeInventory,
+  canEditNodePolicy = false,
+  onUpdateNodePolicy,
   refreshing = false,
   stale = false,
   computeError = null,
@@ -84,6 +88,8 @@ export function SettingsSection({
           <ComputeEnvironmentSettings
             compute={compute}
             nodeInventory={nodeInventory}
+            canEditNodePolicy={canEditNodePolicy}
+            onUpdateNodePolicy={onUpdateNodePolicy}
             view={computeView === "resources" ? "resources" : "overview"}
             error={computeError}
             onRefresh={onRefreshCompute}

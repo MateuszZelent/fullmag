@@ -44,6 +44,7 @@ mod artifacts;
 mod assets;
 mod build_info;
 mod coordinator_persistence;
+pub(crate) mod compute_operator_env;
 mod development_handoff_validation;
 mod development_owner_control;
 mod development_consumer_readiness;
@@ -2457,6 +2458,7 @@ async fn main() {
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
         development_restart_transport: router_v2::handlers::platform::development_transport::DevelopmentRestartTransportConfig::from_environment(),
         development_consumer_readiness: Default::default(),
+        local_compute_operator_token: router_v2::middleware::compute_operator_auth::local_compute_operator_token_from_environment().map(Arc::<str>::from),
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(
             &repo_root,
@@ -2690,7 +2692,9 @@ async fn vision() -> Json<VisionResponse> {
 }
 
 pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
-    let output = Command::new("nvidia-smi")
+    let mut command = Command::new("nvidia-smi");
+    compute_operator_env::remove_local_compute_operator_token(&mut command);
+    let output = command
         .args([
             "--query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu",
             "--format=csv,noheader,nounits",

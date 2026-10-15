@@ -385,6 +385,8 @@ export function StartScreen({ kernel }: ModuleProps) {
             <SettingsSection
               compute={compute}
               nodeInventory={computeProbe.nodeInventory}
+              canEditNodePolicy={computeProbe.canEditNodePolicy}
+              onUpdateNodePolicy={computeProbe.updateNodePolicy}
               computeError={computeProbe.error}
               refreshing={computeProbe.refreshing}
               stale={computeProbe.stale}

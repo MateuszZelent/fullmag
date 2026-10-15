@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { isForbiddenRuntimeMutation } from "./project-lifecycle-request-policy.mjs";
+import { isForbiddenRuntimeMutation, isHostTelemetryRead } from "./project-lifecycle-request-policy.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3104/workspace";
 const sessionMode = process.env.CONTROL_ROOM_PROJECT_SESSION_MODE ?? "active";
@@ -56,6 +56,8 @@ async function clickFileCommand(page, label) {
 
 const requests = [];
 const currentSessionRequests = [];
+const runtimeSessionRequests = [];
+const hostTelemetryRequests = [];
 const currentSessionWebSocketRequests = [];
 const forbiddenRuntimeRequests = [];
 const consoleErrors = [];
@@ -107,6 +109,8 @@ function buildReport() {
     byte_roundtrip: byteRoundtrip,
     close_project: closeProject,
     current_session_requests: currentSessionRequests,
+    runtime_session_requests: runtimeSessionRequests,
+    host_telemetry_requests: hostTelemetryRequests,
     current_session_websocket_requests: currentSessionWebSocketRequests,
     forbidden_runtime_requests: forbiddenRuntimeRequests,
     expected_idle_404_max_counts: Object.fromEntries(expectedIdle404MaxCounts),
@@ -155,6 +159,7 @@ try {
     requests.push(method + " " + path);
     if (isCurrentSessionPath(path)) {
       currentSessionRequests.push(method + " " + path);
+      (isHostTelemetryRead(method, path) ? hostTelemetryRequests : runtimeSessionRequests).push(method + " " + path);
     }
     if (isForbiddenRuntimeMutation(method, path, sessionMode)) {
       forbiddenRuntimeRequests.push(method + " " + path);
@@ -282,8 +287,8 @@ try {
 
   if (sessionMode === "absent") {
     assert(
-      currentSessionRequests.length === 0,
-      `No-session project lifecycle called current-session HTTP routes: ${JSON.stringify(currentSessionRequests)}`,
+      runtimeSessionRequests.length === 0,
+      `No-session project lifecycle called runtime-session HTTP routes: ${JSON.stringify(runtimeSessionRequests)}`,
     );
     assert(
       currentSessionWebSocketRequests.length === 0,

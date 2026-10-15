@@ -28,14 +28,14 @@ describe("ComputeEnvironmentSettings probe state", () => {
     expect(html).toContain(`dateTime="${new Date(sampledAt).toISOString()}"`);
   });
 
-  it("keeps resource inventory separate from telemetry and does not imply policy editing", () => {
+  it("keeps resource inventory separate from telemetry and explains the policy boundary", () => {
     const html = renderToStaticMarkup(
       <ComputeEnvironmentSettings compute={undefined} view="resources" />,
     );
 
     expect(html).toContain("Compute resources");
     expect(html).toContain("No host inventory snapshot is available.");
-    expect(html).toContain("it does not change host resource policy");
+    expect(html).toContain("Hardware readings and solver availability remain separate from host admission policy.");
     expect(html).not.toContain("Not probed");
   });
 });

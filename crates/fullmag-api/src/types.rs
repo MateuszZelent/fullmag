@@ -122,6 +122,8 @@ pub(crate) struct AppState {
         crate::router_v2::handlers::platform::development_transport::DevelopmentRestartTransportConfig,
     pub development_consumer_readiness:
         crate::development_consumer_readiness::DevelopmentConsumerReadiness,
+    /// Short-lived desktop-app capability used only for local NodePolicy writes.
+    pub local_compute_operator_token: Option<Arc<str>>,
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,

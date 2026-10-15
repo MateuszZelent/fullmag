@@ -117,6 +117,8 @@ pub(crate) struct ProjectBatchSummaryResource {
     /// Committed `next_case_index` watermark; a durable child may be visible in
     /// Cases before this cursor advances after publication.
     pub published_case_count: u64,
+    /// Revision used to fence pause, resume, and cancel-admission commands.
+    pub command_revision: u64,
     /// State of the committed expansion cursor, which can lag a durable child.
     pub expansion_state: ProjectBatchExpansionState,
 }
@@ -135,6 +137,43 @@ pub(crate) enum ProjectBatchExpansionState {
     Expanding,
     Complete,
     Stopped,
+    Paused,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectBatchCommandRequest {
+    pub command_id: String,
+    pub expected_revision: u64,
+    pub action: ProjectBatchCommandAction,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectBatchCommandAction {
+    PauseAdmission,
+    ResumeAdmission,
+    CancelAdmission,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectBatchCommandDisposition {
+    Accepted,
+    Replayed,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectBatchCommandResource {
+    pub disposition: ProjectBatchCommandDisposition,
+    pub batch_id: String,
+    pub command_id: String,
+    pub action: ProjectBatchCommandAction,
+    pub revision: u64,
+    pub command_revision: u64,
+    pub expansion_state: ProjectBatchExpansionState,
 }
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams, ToSchema)]
@@ -194,6 +233,8 @@ pub(crate) struct ProjectBatchCasePublishedRunResource {
 pub(crate) struct ProjectBatchCaseTaskSummaryResource {
     pub task_id: String,
     pub lifecycle: ProjectRunTaskLifecycle,
+    /// True when a durable pre-claim cancellation request exists for this task.
+    pub cancellation_requested: bool,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

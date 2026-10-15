@@ -1,4 +1,6 @@
 //! Native accepted-run service. UI is an attaching client, never its owner.
+#[path = "compute_operator_env.rs"]
+mod compute_operator_env;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     host_resource_ledger::{HostInventoryOwner, HostResourceLedger},
@@ -254,6 +256,7 @@ fn logged_command(bin: &Path, logs: &Path, role: &str) -> Result<(Command, PathB
         .create_new(true)
         .open(&stderr)?;
     let mut command = Command::new(bin);
+    crate::compute_operator_env::remove_local_compute_operator_token(&mut command);
     command.stdout(Stdio::from(out)).stderr(Stdio::from(err));
     #[cfg(windows)]
     {

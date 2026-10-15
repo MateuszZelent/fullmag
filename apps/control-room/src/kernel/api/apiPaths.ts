@@ -1096,6 +1096,10 @@ export const PROJECT_BATCH_CASES_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/batches/{batch_id}/cases",
 );
 
+export const PROJECT_BATCH_COMMANDS_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/batches/{batch_id}/commands",
+);
+
 export const PROJECT_RUN_MATERIALIZATION_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/materialization",
 );
@@ -1187,3 +1191,4 @@ export const PLATFORM_COMPUTE_PROFILES_PATH = openApiV2Path("/v2/platform/comput
 export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute/preview");
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");
 export const PLATFORM_COMPUTE_NODE_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}");
+export const PLATFORM_COMPUTE_NODE_POLICY_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}/policy");

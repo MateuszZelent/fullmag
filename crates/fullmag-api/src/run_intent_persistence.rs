@@ -825,7 +825,10 @@ pub(crate) fn expand_pending_batch_children(
         }
         if matches!(
             progress.state,
-            FmsBatchExpansionState::Complete | FmsBatchExpansionState::Stopped
+            FmsBatchExpansionState::Complete
+                | FmsBatchExpansionState::Stopped
+                | FmsBatchExpansionState::Paused
+                | FmsBatchExpansionState::Cancelled
         ) {
             continue;
         }
@@ -874,6 +877,9 @@ pub(crate) fn expand_pending_batch_children(
                     progress.next_case_index,
                     next_sequence,
                 )?;
+                let mut stopped = stopped;
+                stopped.commands = progress.commands.clone();
+                stopped.validate_for_manifest(&intent, &manifest_bytes)?;
                 match store.commit_batch_expansion_progress(progress.sequence, &stopped) {
                     Ok(BatchExpansionProgressCommitDisposition::Accepted)
                     | Ok(BatchExpansionProgressCommitDisposition::Replayed) => {}
@@ -932,6 +938,29 @@ pub(crate) fn expand_pending_batch_children(
                 batch_case_idempotency_key(&intent.batch_id, &case.case_id),
                 materialized.specification,
             );
+            // The same writer lease protects the command gate, durable child
+            // publication, and cursor advance. A command ACK therefore means
+            // no later case can slip through this admission boundary.
+            let _publication = store.write_transaction()?;
+            let latest_progress = store
+                .read_batch_expansion_progress(&intent.batch_id)?
+                .context("accepted batch expansion cursor disappeared before child publication")?;
+            if latest_progress.sequence != progress.sequence
+                || latest_progress.next_case_index != progress.next_case_index
+                || latest_progress.state != progress.state
+            {
+                progress = latest_progress;
+                if matches!(
+                    progress.state,
+                    FmsBatchExpansionState::Complete
+                        | FmsBatchExpansionState::Stopped
+                        | FmsBatchExpansionState::Paused
+                        | FmsBatchExpansionState::Cancelled
+                ) {
+                    break;
+                }
+                continue;
+            }
             let receipt = match commit_validated_run_intent_with_backlog_limit(
                 store,
                 &child_intent,
@@ -963,8 +992,10 @@ pub(crate) fn expand_pending_batch_children(
                 .sequence
                 .checked_add(1)
                 .context("batch expansion sequence overflow")?;
-            let next_progress =
+            let mut next_progress =
                 FmsBatchExpansionProgress::new(&intent, total_cases, next_index, next_sequence)?;
+            next_progress.commands = progress.commands.clone();
+            next_progress.validate_for_manifest(&intent, &manifest_bytes)?;
             match store.commit_batch_expansion_progress(progress.sequence, &next_progress) {
                 Ok(BatchExpansionProgressCommitDisposition::Accepted)
                 | Ok(BatchExpansionProgressCommitDisposition::Replayed) => {

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use utoipa::ToSchema;
 
 use fullmag_session::compute_node_snapshot::COMPUTE_NODE_SAMPLE_STALE_AFTER_SECONDS;
@@ -34,10 +35,68 @@ pub struct ComputeNodeResource {
 /// authorization contract and are intentionally not part of this resource.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ComputeNodePolicyResource {
-    /// Versioned NodePolicy document, kept open for forward-compatible fields.
-    #[schema(value_type = Object)]
-    pub policy: Value,
+    /// Operator-controlled policy document without internal host identity.
+    pub policy: ComputeNodePolicyDocumentResource,
     pub status: ComputeNodePolicyStatusResource,
+}
+
+/// Versioned public projection of the host admission policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeNodePolicyDocumentResource {
+    pub schema_version: String,
+    pub revision: u64,
+    pub allowed_cpu_ids: BTreeSet<u32>,
+    pub allowed_gpu_uuids: BTreeSet<String>,
+    pub reserved_budget: ComputeNodePolicyBudget,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reserved_gpu_vram_bytes_by_uuid: BTreeMap<String, u64>,
+    pub max_parallel_workers: u32,
+    pub priority_order: Vec<i32>,
+    pub draining: bool,
+    pub allowed_parallelism_patterns: Vec<ComputeNodeParallelismPattern>,
+}
+
+/// A public update excludes server-owned host identity and revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeNodePolicyUpdateRequest {
+    pub policy: ComputeNodePolicyUpdate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeNodePolicyUpdate {
+    pub allowed_cpu_ids: BTreeSet<u32>,
+    pub allowed_gpu_uuids: BTreeSet<String>,
+    pub reserved_budget: ComputeNodePolicyBudget,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reserved_gpu_vram_bytes_by_uuid: BTreeMap<String, u64>,
+    pub max_parallel_workers: u32,
+    pub priority_order: Vec<i32>,
+    pub draining: bool,
+    pub allowed_parallelism_patterns: Vec<ComputeNodeParallelismPattern>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeNodePolicyBudget {
+    pub cpu_millis: u64,
+    pub memory_bytes: u64,
+    pub gpu_memory_bytes: u64,
+    pub storage_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ComputeNodeParallelismPattern {
+    SingleProcess {},
+    Distributed {
+        ranks: u32,
+        threads_per_rank: u32,
+        ranks_per_node: u32,
+        gpus_per_rank: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

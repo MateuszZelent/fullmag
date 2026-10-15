@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isForbiddenRuntimeMutation } from "./project-lifecycle-request-policy.mjs";
+import { isForbiddenRuntimeMutation, isHostTelemetryRead } from "./project-lifecycle-request-policy.mjs";
+
+test("only the two exact host telemetry GET aliases are session-free reads", () => {
+  for (const device of ["cpu", "gpu"]) {
+    const path = `/v2/sessions/current/diagnostics/${device}`;
+    assert.equal(isHostTelemetryRead("GET", path), true);
+    assert.equal(isHostTelemetryRead("POST", path), false);
+    assert.equal(isHostTelemetryRead("GET", path + "/extra"), false);
+  }
+  assert.equal(isHostTelemetryRead("GET", "/v2/sessions/current/status"), false);
+  assert.equal(isHostTelemetryRead("GET", "/v2/sessions/current/diagnostics/solver-profile"), false);
+});
 
 test("session-free lifecycle rejects transient session creation and deletion", () => {
   assert.equal(isForbiddenRuntimeMutation("POST", "/v2/sessions", "absent"), true);

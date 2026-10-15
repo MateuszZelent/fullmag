@@ -36,6 +36,8 @@ use crate::schemas::projects::{
     ProjectBatchCaseState, ProjectBatchCaseSummaryResource, ProjectBatchCaseTaskSummaryResource,
     ProjectBatchExpansionState, ProjectBatchListQuery, ProjectBatchFailurePolicy,
     ProjectBatchListResource, ProjectBatchSummaryResource,
+    ProjectBatchCommandAction, ProjectBatchCommandDisposition, ProjectBatchCommandRequest,
+    ProjectBatchCommandResource,
     ProjectCreateRequest, ProjectDocumentMode, ProjectDocumentResource, ProjectMigrationResource,
     ProjectRunCatalogState, ProjectRunExecutionState, ProjectRunListQuery, ProjectRunListResource,
     ProjectRunMaterializationResource, ProjectRunMinimumResourceBudgetResource,
@@ -247,17 +249,34 @@ fn project_batch_case_published_run(
                     case.case_id
                 )));
             }
-            let tasks = catalog
-                .tasks
-                .into_iter()
-                .map(|task| ProjectBatchCaseTaskSummaryResource {
+            let catalog_revision = catalog.revision;
+            let mut tasks = Vec::with_capacity(catalog.tasks.len());
+            for task in catalog.tasks {
+                let cancellation = store
+                    .read_task_cancellation_intent(expected_run_id, &task.task_id)
+                    .map_err(|error| {
+                        ApiError::internal(format!(
+                            "read batch child cancellation intent: {error:#}"
+                        ))
+                    })?;
+                if let Some(intent) = &cancellation {
+                    intent
+                        .validate_task_scope(store, &task, catalog_revision)
+                        .map_err(|error| {
+                            ApiError::internal(format!(
+                                "invalid batch child cancellation scope: {error:#}"
+                            ))
+                        })?;
+                }
+                tasks.push(ProjectBatchCaseTaskSummaryResource {
                     task_id: task.task_id,
                     lifecycle: task.lifecycle.into(),
-                })
-                .collect();
+                    cancellation_requested: cancellation.is_some(),
+                });
+            }
             (
                 ProjectRunCatalogState::Materialized,
-                Some(catalog.revision),
+                Some(catalog_revision),
                 tasks,
             )
         }
@@ -607,8 +626,8 @@ pub async fn list_batches(
             let progress = store
                 .read_batch_expansion_progress(&intent.batch_id)
                 .map_err(|error| ApiError::internal(format!("read batch expansion progress: {error:#}")))?;
-            let (published_case_count, expansion_state) = progress.map_or(
-                (0, ProjectBatchExpansionState::Pending),
+            let (published_case_count, command_revision, expansion_state) = progress.map_or(
+                (0, 0, ProjectBatchExpansionState::Pending),
                 |progress| {
                     let state = match progress.state {
                         fullmag_session::FmsBatchExpansionState::Pending => {
@@ -623,8 +642,18 @@ pub async fn list_batches(
                         fullmag_session::FmsBatchExpansionState::Stopped => {
                             ProjectBatchExpansionState::Stopped
                         }
+                        fullmag_session::FmsBatchExpansionState::Paused => {
+                            ProjectBatchExpansionState::Paused
+                        }
+                        fullmag_session::FmsBatchExpansionState::Cancelled => {
+                            ProjectBatchExpansionState::Cancelled
+                        }
                     };
-                    (progress.next_case_index, state)
+                    (
+                        progress.next_case_index,
+                        progress.commands.len() as u64,
+                        state,
+                    )
                 },
             );
             let max_parallel_cases = intent
@@ -639,13 +668,14 @@ pub async fn list_batches(
                 case_count,
                 max_parallel_cases,
                 published_case_count,
+                command_revision,
                 expansion_state,
             ));
         }
         let start = if let Some(cursor) = cursor {
             matched
                 .iter()
-                .position(|(intent, _, _, _, _)| intent.batch_id == cursor)
+                .position(|(intent, _, _, _, _, _)| intent.batch_id == cursor)
                 .map(|position| position + 1)
                 .ok_or_else(|| ApiError::bad_request("batch cursor is not in this project"))?
         } else {
@@ -661,13 +691,13 @@ pub async fn list_batches(
             page.pop();
         }
         let next_cursor = if has_more {
-            page.last().map(|(intent, _, _, _, _)| intent.batch_id.clone())
+            page.last().map(|(intent, _, _, _, _, _)| intent.batch_id.clone())
         } else {
             None
         };
         let batches = page
             .into_iter()
-            .map(|(intent, case_count, max_parallel_cases, published_case_count, expansion_state)| {
+            .map(|(intent, case_count, max_parallel_cases, published_case_count, command_revision, expansion_state)| {
                 let manifest_sha256 = intent
                     .specification
                     .get("manifest_sha256")
@@ -691,6 +721,7 @@ pub async fn list_batches(
                     max_parallel_cases,
                     failure_policy,
                     published_case_count,
+                    command_revision,
                     expansion_state,
                 })
             })
@@ -704,6 +735,155 @@ pub async fn list_batches(
     .await
     .map_err(|error| ApiError::internal(format!("batch list task failed: {error}")))??;
     Ok(Json(resource))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/persistence/projects/{project_id}/batches/{batch_id}/commands",
+    params(
+        ("project_id" = String, Path, description = "Pinned project identity"),
+        ("batch_id" = String, Path, description = "Durable batch identity")
+    ),
+    request_body = ProjectBatchCommandRequest,
+    responses(
+        (status = 202, description = "Durable batch admission command accepted", body = ProjectBatchCommandResource),
+        (status = 200, description = "Identical batch command replayed", body = ProjectBatchCommandResource),
+        (status = 400, description = "Invalid batch command"),
+        (status = 404, description = "Accepted batch is missing"),
+        (status = 409, description = "Project scope, command revision, or lifecycle conflict"),
+        (status = 500, description = "Durable batch state is inconsistent")
+    ),
+    tag = "persistence"
+)]
+pub async fn command_batch(
+    Path((project_id, batch_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ProjectBatchCommandRequest>,
+) -> Result<(StatusCode, Json<ProjectBatchCommandResource>), ApiError> {
+    let project_id = ProjectId::parse(project_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid project_id: {error}")))?;
+    fullmag_session::repository_path::validate_store_id(&batch_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid batch_id: {error}")))?;
+    fullmag_session::repository_path::validate_store_id(&request.command_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid command_id: {error}")))?;
+    let action = match request.action {
+        ProjectBatchCommandAction::PauseAdmission => {
+            fullmag_session::FmsBatchCommandAction::PauseAdmission
+        }
+        ProjectBatchCommandAction::ResumeAdmission => {
+            fullmag_session::FmsBatchCommandAction::ResumeAdmission
+        }
+        ProjectBatchCommandAction::CancelAdmission => {
+            fullmag_session::FmsBatchCommandAction::CancelAdmission
+        }
+    };
+    let command = fullmag_session::FmsBatchCommandIntent::new(
+        batch_id.clone(),
+        request.command_id,
+        request.expected_revision,
+        action,
+        request.reason,
+    );
+    command
+        .validate()
+        .map_err(|error| ApiError::bad_request(format!("invalid batch command: {error}")))?;
+    let result = tokio::task::spawn_blocking(move || {
+        let store_root = state
+            .submit_store_root
+            .as_ref()
+            .ok_or_else(|| ApiError::internal("managed batch storage is not configured"))?;
+        let store = open_existing_run_store(store_root)?;
+        let intent = store
+            .read_batch_intent(&batch_id)
+            .map_err(|error| ApiError::internal(format!("read batch intent: {error:#}")))?
+            .ok_or_else(|| ApiError::not_found("accepted batch is missing"))?;
+        if intent
+            .specification
+            .pointer("/request/template/snapshot/project_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(project_id.as_str())
+        {
+            return Err(ApiError::conflict("batch belongs to another project"));
+        }
+        let disposition = store.commit_batch_command(&command).map_err(|error| {
+            map_run_store_error(error, |error| {
+                if let Some(conflict) = error.downcast_ref::<fullmag_session::BatchCommandConflict>() {
+                    let code = match conflict {
+                        fullmag_session::BatchCommandConflict::Revision { .. } => {
+                            "batch_command_revision_conflict"
+                        }
+                        fullmag_session::BatchCommandConflict::Identity => {
+                            "batch_command_identity_conflict"
+                        }
+                        fullmag_session::BatchCommandConflict::InvalidTransition { .. } => {
+                            "batch_command_state_conflict"
+                        }
+                    };
+                    ApiError::conflict_with_code(code, format!("{error:#}"))
+                } else {
+                    ApiError::internal(format!("recording batch command: {error:#}"))
+                }
+            })
+        })?;
+        let progress = store
+            .read_batch_expansion_progress(&batch_id)
+            .map_err(|error| ApiError::internal(format!("read batch command state: {error:#}")))?
+            .ok_or_else(|| ApiError::internal("batch command checkpoint disappeared"))?;
+        let expansion_state = match progress.state {
+            fullmag_session::FmsBatchExpansionState::Pending => ProjectBatchExpansionState::Pending,
+            fullmag_session::FmsBatchExpansionState::Expanding => ProjectBatchExpansionState::Expanding,
+            fullmag_session::FmsBatchExpansionState::Complete => ProjectBatchExpansionState::Complete,
+            fullmag_session::FmsBatchExpansionState::Stopped => ProjectBatchExpansionState::Stopped,
+            fullmag_session::FmsBatchExpansionState::Paused => ProjectBatchExpansionState::Paused,
+            fullmag_session::FmsBatchExpansionState::Cancelled => ProjectBatchExpansionState::Cancelled,
+        };
+        let command_record = progress
+            .commands
+            .iter()
+            .find(|entry| entry.command_id == command.command_id)
+            .ok_or_else(|| ApiError::internal("accepted batch command is missing from checkpoint"))?;
+        let status = match disposition {
+            fullmag_session::BatchCommandCommitDisposition::Accepted => StatusCode::ACCEPTED,
+            fullmag_session::BatchCommandCommitDisposition::Replayed => StatusCode::OK,
+        };
+        let response = ProjectBatchCommandResource {
+            disposition: match disposition {
+                fullmag_session::BatchCommandCommitDisposition::Accepted => {
+                    ProjectBatchCommandDisposition::Accepted
+                }
+                fullmag_session::BatchCommandCommitDisposition::Replayed => {
+                    ProjectBatchCommandDisposition::Replayed
+                }
+            },
+            batch_id: batch_id.clone(),
+            command_id: command_record.command_id.clone(),
+            action: request_action_from_storage(command_record.action),
+            revision: command_record.revision,
+            command_revision: u64::try_from(progress.commands.len())
+                .map_err(|_| ApiError::internal("batch command revision exceeds u64"))?,
+            expansion_state,
+        };
+        Ok::<_, ApiError>((status, response))
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("batch command task failed: {error}")))??;
+    Ok((result.0, Json(result.1)))
+}
+
+fn request_action_from_storage(
+    action: fullmag_session::FmsBatchCommandAction,
+) -> ProjectBatchCommandAction {
+    match action {
+        fullmag_session::FmsBatchCommandAction::PauseAdmission => {
+            ProjectBatchCommandAction::PauseAdmission
+        }
+        fullmag_session::FmsBatchCommandAction::ResumeAdmission => {
+            ProjectBatchCommandAction::ResumeAdmission
+        }
+        fullmag_session::FmsBatchCommandAction::CancelAdmission => {
+            ProjectBatchCommandAction::CancelAdmission
+        }
+    }
 }
 
 #[utoipa::path(

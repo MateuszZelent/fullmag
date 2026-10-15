@@ -31,6 +31,20 @@ z bazą 1a0198ef31d16b7f283e50c79ace24538a05b9cd i jawnym dirty provenance.
 Przeszła do przygotowania zależności. Wynik kompilacji i publikacja nowego
 manifestu pozostają wymagane; samo przechwycenie nie zalicza buildu.
 
+Wynik próby e87965eccad443abba20c0a4441e3f4a: **PASS, exit 0**,
+terminalny build-status.json zakończony 15.10.2026 10:07:50 UTC.
+Profil backend-dev, source_identity_check=passed, manifest SHA-256
+340c667b3756a46f089338ac9216897598631d674eaef6b72472ea2072678a32.
+Backend, pomocnicze procesy i desktop skompilowano z utrwalonej kopii mimo
+późniejszych commitów checkoutu. Nie kompilowano lokalnych testów jednostkowych.
+To build natywnego pakietu Windows, bez awansu FEM/GPU/solver/release.
+Po etapie zachowano cache przyrostowy, nowy pakiet, snapshot, log i provenance;
+brak usuwania danych. Wolne miejsce: C 23.91 GiB, R 69.91 GiB.
+Starsze dane wymagają ponownej oceny referencji przed ewentualnym cleanup.
+
+Na dokładnym powyższym manifeście uruchomiono nową bramkę browser lifecycle.
+Jej wynik nie jest jeszcze znany; sam udany build nie zalicza M1.
+
 ## Nowa zamknięta bramka M1
 
 Przygotowana recepta `just verify-windows-project-document-browser <build_id>`
@@ -43,8 +57,9 @@ Backend jest prywatnym procesem API istniejącego verifiera. Frontend jest
 kontrolowaną kopią aktualnego produktu /workspace na localhost:3269, z
 walidowanymi istniejącymi zależnościami. Nie ma fixture route ani mock API.
 Cykl ma wykazać sessions=[] przed/po, stałą instancję API, New/Save/Open/Save/
-Close, identyczne archiwum, powrót do launchera oraz zero HTTP/WS current-session
-i mutacji solvera. Zdjęcia New/reopened/closed i pełne logi/raport porażki są
+Close, identyczne archiwum, powrót do launchera oraz zero żądań runtime-session,
+WS current-session i mutacji solvera (hostowe aliasy opisano poniżej).
+Zdjęcia New/reopened/closed i pełne logi/raport porażki są
 artefaktami. Własne PID-y są rejestrowane, procesy czekają na terminalny stan,
 a port ma być zamknięty. Źródła, zależności i helper muszą pozostać zgodne.
 
@@ -57,6 +72,28 @@ Pięć interpretowanych kontroli błędnego scope/trybu/URL PASS bez uruchamiani
 API ani przeglądarki: receipt
 windows-control-room-source-check/project-browser-input-validation/e6cd2bc03c4545d384808e2faf8bb2a0.
 Nie jest to dowód udanego cyklu New/Open/Save.
+
+Pierwsze rzeczywiste wykonanie a0cbe81fea6f4f73ab09b8b038ef5918 zakończyło
+się **FAIL**: New/Save/Open/Save/Close i byte_roundtrip przeszły, sessions=[]
+przed/po i ten sam API instance, lecz test odrzucił sześć GET host CPU/GPU.
+Oba handlery platform/system.rs nie przyjmują State ani RuntimeSession;
+wersjonowany compute-resource-execution-v1.md jawnie zachowuje te aliasy
+session diagnostics jako adapter host telemetry, a test session_scope.rs
+wyklucza je z wymogu session scope header. To zbyt szeroki warunek verifiera,
+nie dowód utworzenia runtime ani powód do usunięcia sprzętu z launchera.
+
+Doprecyzowanie scope: wymagane jest zero żądań
+runtime-session i zero WS/mutacji sesji. Wyłącznie dokładne GET
+/v2/sessions/current/diagnostics/cpu oraz /gpu są osobno raportowanymi
+host_telemetry_requests. Pełna lista current_session_requests pozostaje
+w raporcie; Python wymaga jej równości liście host i sprawdza każdy literal.
+POST do tych ścieżek, suffix, status i solver-profile nie uzyskują wyjątku.
+Nowa regresja tej granicy daje **4/4 PASS** razem z wcześniejszymi ochronami.
+Migracja aliasów do platformy pozostaje pracą P3a, nie jest tu pozorowana.
+
+Wszystkie własne procesy pierwszej próby są terminalne/waited, port 3269
+zamknięty; źródła i zależności zachowały fingerprinty. Raport i logi porażki
+zachowane. Scenariusz po precyzyjnym dopasowaniu kontraktu wymaga powtórzenia.
 
 Review wskazało lukę: samo sessions=[] przed/po oraz brak current-session
 requests nie wyklucza chwilowego POST /v2/sessions i późniejszego DELETE.
@@ -105,3 +142,8 @@ Odbiór po publikacji c689caee2188a86e645e26aa03270e9212c1f7ca:
 build Next również zakończone poprawnie. Zamknięto źródłowy odbiór regresji
 retencji powłoki. To nie zastępuje natywnego browser lifecycle ani kwalifikacji
 solverów. Python/Rust tego runu nadal w toku w chwili checkpointu.
+
+Python job 116363230506 zakończył się: 337 testów meshing, **1 error / 1 skip**.
+Wcześniejsze pięć błędów fixture nie powraca. Jedynym błędem pozostaje dokładnie
+test_swept_source_face_lower_bounds_compose_before_generation i tet4
+0.08431461176486649 < 0.1. Artefakt CI 11964501312 zachowany. Progu nie zmieniono.

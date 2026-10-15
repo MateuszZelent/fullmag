@@ -65,7 +65,7 @@ impl OwnedWorkerProcess {
                 )),
             });
         }
-        if let Err(error) = set_process_cpu_affinity(&child, cpu_ids) {
+        if let Err(error) = job.set_cpu_affinity(cpu_ids) {
             // The worker is still at the stdin barrier and has no solver.
             drop(child.stdin.take());
             let _ = child.kill();
@@ -362,69 +362,13 @@ fn configure_cpu_affinity(_command: &mut Command, cpu_ids: &BTreeSet<u32>) -> io
 }
 
 #[cfg(windows)]
-fn set_process_cpu_affinity(child: &Child, cpu_ids: &BTreeSet<u32>) -> io::Result<()> {
-    use std::os::windows::io::AsRawHandle;
-
-    let Some((group, mask)) = windows_cpu_affinity_group_mask(cpu_ids)? else {
-        return Ok(());
-    };
-    let handle = child.as_raw_handle();
-    let mut group_count = 1u16;
-    let mut process_groups = [0u16; 1];
-    if unsafe { GetProcessGroupAffinity(handle, &mut group_count, process_groups.as_mut_ptr()) }
-        == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    if group_count != 1 || process_groups[0] != group {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "worker process group differs from its pinned CPU group",
-        ));
-    }
-    if unsafe { SetProcessAffinityMask(handle, mask) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let mut observed_process_mask = 0usize;
-    let mut observed_system_mask = 0usize;
-    if unsafe {
-        GetProcessAffinityMask(
-            handle,
-            &mut observed_process_mask,
-            &mut observed_system_mask,
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    if observed_process_mask != mask || observed_system_mask & mask != mask {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Windows applied a narrower CPU affinity mask than requested",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn windows_cpu_affinity_group_mask(
+fn windows_cpu_affinity_group_masks(
     cpu_ids: &BTreeSet<u32>,
-) -> io::Result<Option<(u16, usize)>> {
-    let Some(first_cpu) = cpu_ids.iter().next().copied() else {
-        return Ok(None);
-    };
-    let group = u16::try_from(first_cpu / 64)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "CPU group exceeds u16"))?;
-    let mut mask = 0usize;
+) -> io::Result<Vec<WindowsGroupAffinity>> {
+    let mut masks = std::collections::BTreeMap::<u16, usize>::new();
     for cpu_id in cpu_ids {
         let cpu_group = u16::try_from(*cpu_id / 64)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "CPU group exceeds u16"))?;
-        if cpu_group != group {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "one worker CPU affinity mask cannot span processor groups",
-            ));
-        }
         let group_local_id = *cpu_id % 64;
         if group_local_id >= usize::BITS {
             return Err(io::Error::new(
@@ -432,28 +376,25 @@ fn windows_cpu_affinity_group_mask(
                 "CPU ID exceeds the process affinity mask width",
             ));
         }
-        mask |= 1usize << group_local_id;
+        *masks.entry(cpu_group).or_default() |= 1usize << group_local_id;
     }
-    Ok(Some((group, mask)))
+    Ok(masks
+        .into_iter()
+        .map(|(group, mask)| WindowsGroupAffinity {
+            mask,
+            group,
+            reserved: [0; 3],
+        })
+        .collect())
 }
 
 #[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetProcessGroupAffinity(
-        process: windows_sys::Win32::Foundation::HANDLE,
-        group_count: *mut u16,
-        group_array: *mut u16,
-    ) -> i32;
-    fn SetProcessAffinityMask(
-        process: windows_sys::Win32::Foundation::HANDLE,
-        affinity_mask: usize,
-    ) -> i32;
-    fn GetProcessAffinityMask(
-        process: windows_sys::Win32::Foundation::HANDLE,
-        process_affinity_mask: *mut usize,
-        system_affinity_mask: *mut usize,
-    ) -> i32;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct WindowsGroupAffinity {
+    mask: usize,
+    group: u16,
+    reserved: [u16; 3],
 }
 
 impl Deref for OwnedWorkerProcess {
@@ -502,6 +443,55 @@ impl WindowsJob {
             return Err(io::Error::last_os_error());
         }
         Ok(job)
+    }
+
+    fn set_cpu_affinity(&self, cpu_ids: &BTreeSet<u32>) -> io::Result<()> {
+        const JOB_OBJECT_GROUP_INFORMATION_EX: i32 = 14;
+
+        let requested = windows_cpu_affinity_group_masks(cpu_ids)?;
+        if requested.is_empty() {
+            return Ok(());
+        }
+        let information_bytes = requested
+            .len()
+            .checked_mul(std::mem::size_of::<WindowsGroupAffinity>())
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Windows CPU affinity size overflow")
+            })?;
+        let set = unsafe {
+            windows_sys::Win32::System::JobObjects::SetInformationJobObject(
+                self.handle,
+                JOB_OBJECT_GROUP_INFORMATION_EX,
+                requested.as_ptr().cast(),
+                information_bytes,
+            )
+        };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut observed = vec![WindowsGroupAffinity::default(); requested.len()];
+        let mut returned_bytes = 0u32;
+        let query = unsafe {
+            windows_sys::Win32::System::JobObjects::QueryInformationJobObject(
+                self.handle,
+                JOB_OBJECT_GROUP_INFORMATION_EX,
+                observed.as_mut_ptr().cast(),
+                information_bytes,
+                &mut returned_bytes,
+            )
+        };
+        if query == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if returned_bytes != information_bytes || observed != requested {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Windows job applied a different CPU group affinity than requested",
+            ));
+        }
+        Ok(())
     }
 
     fn assign(&self, child: &Child) -> io::Result<()> {
@@ -598,18 +588,37 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
-    fn windows_cpu_affinity_maps_one_processor_group_and_rejects_cross_group_masks() {
+    fn windows_cpu_affinity_maps_cpu_ids_across_processor_groups() {
         assert_eq!(
-            windows_cpu_affinity_group_mask(&BTreeSet::new()).unwrap(),
-            None
+            windows_cpu_affinity_group_masks(&BTreeSet::new()).unwrap(),
+            Vec::<WindowsGroupAffinity>::new()
         );
         assert_eq!(
-            windows_cpu_affinity_group_mask(&BTreeSet::from([65, 67])).unwrap(),
-            Some((1, 0b1010))
+            windows_cpu_affinity_group_masks(&BTreeSet::from([65, 67])).unwrap(),
+            vec![WindowsGroupAffinity {
+                mask: 0b1010,
+                group: 1,
+                reserved: [0; 3],
+            }]
         );
-        assert!(windows_cpu_affinity_group_mask(&BTreeSet::from([63, 64])).is_err());
-        assert!(windows_cpu_affinity_group_mask(&BTreeSet::from([u32::MAX])).is_err());
+        assert_eq!(
+            windows_cpu_affinity_group_masks(&BTreeSet::from([63, 64])).unwrap(),
+            vec![
+                WindowsGroupAffinity {
+                    mask: 1usize << 63,
+                    group: 0,
+                    reserved: [0; 3],
+                },
+                WindowsGroupAffinity {
+                    mask: 1,
+                    group: 1,
+                    reserved: [0; 3],
+                },
+            ]
+        );
+        assert!(windows_cpu_affinity_group_masks(&BTreeSet::from([u32::MAX])).is_err());
     }
 
     #[test]

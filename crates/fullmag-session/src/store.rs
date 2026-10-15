@@ -588,6 +588,106 @@ impl SessionStore {
         Ok(Some(progress))
     }
 
+    /// Append a durable admission command to the expansion checkpoint. The
+    /// checkpoint writer serializes commands against child publication.
+    pub fn commit_batch_command(
+        &self,
+        command: &FmsBatchCommandIntent,
+    ) -> Result<BatchCommandCommitDisposition> {
+        command.validate()?;
+        let _lease = self.write_transaction()?;
+        let intent = self
+            .read_batch_intent(&command.batch_id)?
+            .context("batch command parent intent is missing")?;
+        let manifest_bytes = self
+            .cas
+            .get(&intent.manifest_object_ref)?
+            .context("batch expansion manifest object is missing")?;
+        intent.validate_manifest_bytes(&manifest_bytes)?;
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)?;
+        let total_cases = manifest
+            .get("cases")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+            .context("batch expansion manifest has no cases array")?;
+        let total_cases = u64::try_from(total_cases)?;
+        let mut progress = match self.read_batch_expansion_progress(&command.batch_id)? {
+            Some(progress) => progress,
+            None => FmsBatchExpansionProgress::new(&intent, total_cases, 0, 1)?,
+        };
+
+        if let Some(existing) = progress
+            .commands
+            .iter()
+            .find(|existing| existing.command_id == command.command_id)
+        {
+            if existing.payload_sha256 == command.payload_sha256 {
+                return Ok(BatchCommandCommitDisposition::Replayed);
+            }
+            return Err(BatchCommandConflict::Identity.into());
+        }
+        let actual_revision = u64::try_from(progress.commands.len())?;
+        if command.expected_revision != actual_revision || command.revision != actual_revision + 1 {
+            return Err(BatchCommandConflict::Revision {
+                expected: command.expected_revision,
+                actual: actual_revision,
+            }
+            .into());
+        }
+
+        let next_state = match (progress.state, command.action) {
+            (
+                FmsBatchExpansionState::Pending | FmsBatchExpansionState::Expanding,
+                FmsBatchCommandAction::PauseAdmission,
+            ) if progress.next_case_index < progress.total_cases => {
+                FmsBatchExpansionState::Paused
+            }
+            (FmsBatchExpansionState::Paused, FmsBatchCommandAction::ResumeAdmission) => {
+                if progress.next_case_index == 0 {
+                    FmsBatchExpansionState::Pending
+                } else if progress.next_case_index == progress.total_cases {
+                    FmsBatchExpansionState::Complete
+                } else {
+                    FmsBatchExpansionState::Expanding
+                }
+            }
+            (
+                FmsBatchExpansionState::Pending
+                | FmsBatchExpansionState::Expanding
+                | FmsBatchExpansionState::Paused,
+                FmsBatchCommandAction::CancelAdmission,
+            ) => FmsBatchExpansionState::Cancelled,
+            (state, action) => {
+                return Err(BatchCommandConflict::InvalidTransition {
+                    action: action.as_str(),
+                    state,
+                }
+                .into())
+            }
+        };
+
+        if progress.commands.len() >= FMS_BATCH_COMMAND_HISTORY_MAX {
+            anyhow::bail!("batch command history is full");
+        }
+        progress.commands.push(command.clone());
+        progress.sequence = progress
+            .sequence
+            .checked_add(1)
+            .context("batch expansion sequence overflow")?;
+        progress.schema_version = FMS_BATCH_EXPANSION_PROGRESS_SCHEMA.into();
+        progress.state = next_state;
+        progress.updated_at = chrono::Utc::now();
+        progress.validate_for_manifest(&intent, &manifest_bytes)?;
+        let json = serde_json::to_vec_pretty(&progress)?;
+        if json.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES {
+            anyhow::bail!("batch expansion progress exceeds metadata budget");
+        }
+        let relative = format!("batches/{}/expansion_progress.json", command.batch_id);
+        let path = create_parent(&self.root, &relative)?;
+        atomic_write(&path, &json)?;
+        Ok(BatchCommandCommitDisposition::Accepted)
+    }
+
     /// Advance a batch's durable child-publication cursor under a sequence
     /// fence. Replaying the exact latest checkpoint is idempotent.
     pub fn commit_batch_expansion_progress(
@@ -626,6 +726,9 @@ impl SessionStore {
             if current == *progress {
                 return Ok(BatchExpansionProgressCommitDisposition::Replayed);
             }
+            if current.commands != progress.commands {
+                anyhow::bail!("batch expansion progress cannot alter command history");
+            }
             if current.sequence != expected_sequence {
                 anyhow::bail!(
                     "batch expansion progress sequence conflict: expected {expected_sequence}, found {}",
@@ -634,7 +737,10 @@ impl SessionStore {
             }
             if matches!(
                 current.state,
-                FmsBatchExpansionState::Complete | FmsBatchExpansionState::Stopped
+                FmsBatchExpansionState::Complete
+                    | FmsBatchExpansionState::Stopped
+                    | FmsBatchExpansionState::Paused
+                    | FmsBatchExpansionState::Cancelled
             )
                 || progress.sequence != current.sequence.checked_add(1).context("batch progress sequence overflow")?
                 || progress.next_case_index < current.next_case_index
@@ -5724,10 +5830,47 @@ mod tests {
                 .unwrap(),
             BatchExpansionProgressCommitDisposition::Replayed
         );
-        let completed_progress = FmsBatchExpansionProgress::new(&first, 1, 1, 2).unwrap();
+        let pause = FmsBatchCommandIntent::new(
+            "batch-1",
+            "pause-1",
+            0,
+            FmsBatchCommandAction::PauseAdmission,
+            "operator pause",
+        );
+        assert_eq!(
+            store.commit_batch_command(&pause).unwrap(),
+            BatchCommandCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store.commit_batch_command(&pause).unwrap(),
+            BatchCommandCommitDisposition::Replayed
+        );
+        let paused_progress = store
+            .read_batch_expansion_progress("batch-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(paused_progress.state, FmsBatchExpansionState::Paused);
+        let resume = FmsBatchCommandIntent::new(
+            "batch-1",
+            "resume-1",
+            1,
+            FmsBatchCommandAction::ResumeAdmission,
+            "operator resume",
+        );
+        assert_eq!(
+            store.commit_batch_command(&resume).unwrap(),
+            BatchCommandCommitDisposition::Accepted
+        );
+        let resumed_progress = store
+            .read_batch_expansion_progress("batch-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed_progress.state, FmsBatchExpansionState::Pending);
+        let mut completed_progress = FmsBatchExpansionProgress::new(&first, 1, 1, 4).unwrap();
+        completed_progress.commands = resumed_progress.commands.clone();
         assert_eq!(
             store
-                .commit_batch_expansion_progress(1, &completed_progress)
+                .commit_batch_expansion_progress(3, &completed_progress)
                 .unwrap(),
             BatchExpansionProgressCommitDisposition::Accepted
         );
@@ -5735,9 +5878,10 @@ mod tests {
             store.read_batch_expansion_progress("batch-1").unwrap(),
             Some(completed_progress.clone())
         );
-        let backwards_progress = FmsBatchExpansionProgress::new(&first, 1, 0, 3).unwrap();
+        let mut backwards_progress = FmsBatchExpansionProgress::new(&first, 1, 0, 5).unwrap();
+        backwards_progress.commands = completed_progress.commands.clone();
         assert!(store
-            .commit_batch_expansion_progress(2, &backwards_progress)
+            .commit_batch_expansion_progress(4, &backwards_progress)
             .is_err());
         assert_eq!(store.find_batch_intent("submit-batch-1").unwrap(), Some(first.clone()));
         assert_eq!(store.list_batch_intents().unwrap(), vec![first]);
@@ -5756,6 +5900,33 @@ mod tests {
         mismatched_manifest.payload_sha256 = canonical_json_sha256(&mismatched_manifest.specification);
         assert!(store.commit_batch_intent(&mismatched_manifest).is_err());
         assert!(store.read_batch_intent("batch-4").unwrap().is_none());
+
+        let mut cancel_batch = make_intent("batch-cancel", "cancel admission");
+        cancel_batch.idempotency_key = "submit-batch-cancel".into();
+        store.commit_batch_intent(&cancel_batch).unwrap();
+        let cancel_initial = FmsBatchExpansionProgress::new(&cancel_batch, 1, 0, 1).unwrap();
+        store
+            .commit_batch_expansion_progress(0, &cancel_initial)
+            .unwrap();
+        let cancel = FmsBatchCommandIntent::new(
+            "batch-cancel",
+            "cancel-1",
+            0,
+            FmsBatchCommandAction::CancelAdmission,
+            "operator cancelled admission",
+        );
+        assert_eq!(
+            store.commit_batch_command(&cancel).unwrap(),
+            BatchCommandCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store
+                .read_batch_expansion_progress("batch-cancel")
+                .unwrap()
+                .unwrap()
+                .state,
+            FmsBatchExpansionState::Cancelled
+        );
     }
 
     #[test]

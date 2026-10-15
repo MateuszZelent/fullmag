@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 const MAX_PROJECT_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
@@ -20,6 +20,10 @@ pub struct AppConfig {
     pub ui_url: String,
     pub launch_intent: String,
 }
+
+/// Ephemeral capability held by the native desktop process for its API sidecar.
+#[derive(Debug, Clone, Default)]
+pub struct LocalComputeOperatorCapability(pub Option<String>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PickedTextFile {
@@ -847,6 +851,29 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_app_config(app: AppHandle) -> AppConfig {
     app.state::<AppConfig>().inner().clone()
+}
+
+/// Expose the sidecar capability only to the main window loaded from its exact
+/// local app origin. It is returned to memory only; it is never persisted.
+#[tauri::command]
+pub fn local_compute_operator_capability(
+    window: WebviewWindow,
+    config: State<'_, AppConfig>,
+    capability: State<'_, LocalComputeOperatorCapability>,
+) -> Option<String> {
+    if window.label() != "main" {
+        return None;
+    }
+    let current = window.url().ok()?;
+    let expected = url::Url::parse(&config.ui_url).ok()?;
+    if current.scheme() != expected.scheme()
+        || current.host_str() != expected.host_str()
+        || current.port_or_known_default() != expected.port_or_known_default()
+        || current.path() != expected.path()
+    {
+        return None;
+    }
+    capability.0.clone()
 }
 
 #[cfg(test)]

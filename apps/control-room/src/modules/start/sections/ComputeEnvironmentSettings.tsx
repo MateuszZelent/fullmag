@@ -11,6 +11,7 @@ import type {
   ComputeEnvironment,
   ComputeNodeInventorySummary,
   ComputeProbeState,
+  ComputeProbeController,
   GpuInfo,
   SolverKind,
 } from "../model/types";
@@ -32,6 +33,8 @@ const LANE_ORDER: readonly { readonly backend: SolverKind; readonly device: "CPU
 export interface ComputeEnvironmentSettingsProps {
   readonly compute: ComputeProbeState;
   readonly nodeInventory?: ComputeNodeInventorySummary;
+  readonly canEditNodePolicy?: boolean;
+  readonly onUpdateNodePolicy?: ComputeProbeController["updateNodePolicy"];
   readonly view?: "overview" | "resources";
   readonly refreshing?: boolean;
   readonly stale?: boolean;
@@ -42,6 +45,8 @@ export interface ComputeEnvironmentSettingsProps {
 export function ComputeEnvironmentSettings({
   compute,
   nodeInventory,
+  canEditNodePolicy = false,
+  onUpdateNodePolicy,
   view = "overview",
   refreshing = false,
   stale = false,
@@ -125,27 +130,28 @@ export function ComputeEnvironmentSettings({
         </>
       ) : null}
 
-      {!overview ? (
-        nodeInventory ? (
+      <div hidden={overview}>
+        {nodeInventory ? (
           <>
             <ComputeNodeInventoryStatus
               className="fm-start-compute-settings__policy"
               summary={nodeInventory}
             />
-            <ComputeNodeInventoryDetails summary={nodeInventory} />
+            <ComputeNodeInventoryDetails
+              canEditNodePolicy={canEditNodePolicy}
+              onUpdateNodePolicy={onUpdateNodePolicy}
+              summary={nodeInventory}
+            />
           </>
         ) : (
           <p className="fm-start-compute-settings__notice" role="status">
             No host inventory snapshot is available.
           </p>
-        )
-      ) : null}
-
-      {!overview ? (
+        )}
         <p className="fm-start-compute-settings__policy">
-          This view reports observed inventory; it does not change host resource policy.
+          Hardware readings and solver availability remain separate from host admission policy. A concrete device is resolved when a run starts.
         </p>
-      ) : null}
+      </div>
 
       {overview && error ? (
         <p className="fm-start-compute-settings__error" role="alert">
