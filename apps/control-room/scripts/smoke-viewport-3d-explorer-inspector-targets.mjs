@@ -404,8 +404,11 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       partId: "part-empty-range",
       scopeKind: "part",
     });
-    if (!fieldResource.hasTargetPart || !fieldResource.hasValues) {
-      throw new Error(`FEM FMVP field resource did not expose decoded values for part-empty-range: ${JSON.stringify(fieldResource)}.`);
+    if (fieldResource.status !== "ready" || fieldResource.hasTargetPart || fieldResource.hasValues) {
+      throw new Error(`Empty FEM part unexpectedly acquired a field envelope: ${JSON.stringify(fieldResource)}.`);
+    }
+    if (!fixture.emptyPartFieldResponses.some((entry) => entry.partId === "part-empty-range" && entry.status === 204 && entry.nodeIndices.length === 0)) {
+      throw new Error("Empty FEM part did not receive the explicit empty scoped response.");
     }
     assertFieldRequest(fixture, {
       component: "full",
@@ -444,6 +447,17 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       throw new Error(`Positive-control part B was not visibly rendered in its solid-color baseline: ${JSON.stringify({ positiveRedPixels })}.`);
     }
     await enableMagnitudeSurfaceColoring(page, fixture, "fem-visible");
+    const positiveFieldResource = await waitForFdmFieldResource(page, quantityId, {
+      component: "full",
+      partId: "part-visible",
+      scopeKind: "part",
+    });
+    if (positiveFieldResource.status !== "ready" || !positiveFieldResource.hasTargetPart || !positiveFieldResource.hasValues) {
+      throw new Error(`Nonempty FEM part did not acquire its own field envelope: ${JSON.stringify(positiveFieldResource)}.`);
+    }
+    if (!fixture.emptyPartFieldResponses.some((entry) => entry.partId === "part-visible" && entry.status === 200 && entry.nodeIndices.join(",") === "4,5,6,7")) {
+      throw new Error("Positive FEM part did not receive its exact scoped node membership.");
+    }
     const positiveOverride = assertMagnitudeThicknessOverride(fixture, "fem-visible");
     const positiveDelta = await waitForViewportPixelDelta(
       page,
@@ -464,6 +478,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       },
       fieldRequests: fixture.fieldRequests,
       fieldResource,
+      scopedFieldResponses: fixture.emptyPartFieldResponses,
+      positiveFieldResource,
       positiveControlPartB: {
         fieldColorDelta: positiveDelta,
         nodeCount: 4,
@@ -472,7 +488,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
         visualizationOverride: positiveOverride,
       },
       projectionMode: "thickness_average_z",
-      topology: "FEM FMVP v2 full-domain H_eff vector",
+      topology: "FEM scoped H_eff: empty part 204; nonempty part FMVP v3 explicit node indices",
+      qualificationScope: "Scoped empty-support browser behavior; full-domain empty-selection mapper regression is covered separately by unit tests.",
     };
   } finally {
     await page.close();
@@ -657,6 +674,19 @@ async function installFixtureApi(page, fixture) {
           fdmFieldVectorBuffer({ quantityId, gridShape: fixture.domain.grid?.shape }),
           fieldVectorHeaders(fieldRequest),
         );
+      }
+      if (fixture.emptyPartFieldResponses && fieldRequest.scopeKind === "part") {
+        const part = fixture.manifest.mesh_parts.find((entry) => entry.id === fieldRequest.scopeId);
+        if (!part) throw new Error(`Unknown scoped FEM fixture part ${fieldRequest.scopeId}.`);
+        const nodeIndices = part.node_indices ?? Array.from({ length: part.node_count }, (_, index) => part.node_start + index);
+        fixture.emptyPartFieldResponses.push({
+          partId: part.id,
+          nodeIndices,
+          status: nodeIndices.length === 0 ? 204 : 200,
+        });
+        if (nodeIndices.length === 0) return fulfillEmpty(route, 204);
+        const scoped = fdmScopedFieldVectorBuffer({ fieldRequest, fixture, nodeIndices });
+        return fulfillBinary(route, scoped.buffer, scoped.headers);
       }
       const scoped = fdmScopedFieldVectorBuffer({ fieldRequest, fixture });
       return fulfillBinary(route, scoped.buffer, scoped.headers);
@@ -1774,6 +1804,10 @@ function createEmptyPartColorFixture() {
   });
   fixture.fieldVectorFactory = (fieldQuantityId) =>
     femEmptyPartColorFieldVectorBuffer(fieldQuantityId);
+  fixture.emptyPartFieldResponses = [];
+  fixture.scopedNodeValue = (nodeIndex) => [
+    [1, 2, 3, 4, 1_000, 10_000, 100_000, 1_000_000][nodeIndex], 0, 0,
+  ];
   fixture.manifest = {
     generation_id: "1",
     mesh_parts: [
@@ -2006,12 +2040,12 @@ function fdmFieldVectorBuffer({ quantityId = "m", gridShape = FDM_TARGET_GRID_SH
   return buffer;
 }
 
-function fdmScopedFieldVectorBuffer({ fieldRequest, fixture }) {
-  const cellIndices = fixture.fdmMembership
+function fdmScopedFieldVectorBuffer({ fieldRequest, fixture, nodeIndices = null }) {
+  const cellIndices = nodeIndices ?? (fixture.fdmMembership
     ? resolveFdmScopedCellIndices({ fieldRequest, fixture })
     : fieldRequest.scopeKind === "airbox"
       ? [4, 5, 6, 7]
-      : [0, 1, 2, 3];
+      : [0, 1, 2, 3]);
   const encoder = new TextEncoder();
   const scopeKindBytes = encoder.encode(fieldRequest.scopeKind ?? "full");
   const resolvedScopeId =
@@ -2076,7 +2110,9 @@ function fdmScopedFieldVectorBuffer({ fieldRequest, fixture }) {
   for (let point = 0; point < cellIndices.length; point += 1) {
     const cellIndex = cellIndices[point];
     const varying = (cellIndex % 3) * 0.25;
-    if (fieldRequest.quantityId === "H_eff") {
+    if (nodeIndices && fixture.scopedNodeValue) {
+      values.set(fixture.scopedNodeValue(cellIndex), point * 3);
+    } else if (fieldRequest.quantityId === "H_eff") {
       values[point * 3] = 0.5;
       values[point * 3 + 1] = 1;
       values[point * 3 + 2] = varying;
