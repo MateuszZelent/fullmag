@@ -1475,7 +1475,7 @@ export function buildViewport3DProjectionNodeMembership(
   const start = Math.max(0, Math.floor(rawStart));
   const rawCount = selection.nodeCount ?? selection.node_count;
   const count =
-    rawCount === undefined || (rawCount <= 0 && start > 0)
+    rawCount === undefined
       ? vertexCount - start
       : Math.max(0, Math.floor(rawCount));
   const end = Number.isNaN(count)

@@ -52,6 +52,7 @@ on:
       - 'apps/control-room/src/modules/viewport-3d/viewport3dResources*'
       - 'apps/control-room/src/modules/viewport-3d/model/modeCompositionViewportProjection*'
       - 'apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer*'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dFieldMapping*'
       - 'apps/control-room/src/modules/analysis-plots/referenceOverlaySeries.test.ts'
       - 'apps/control-room/src/modules/analysis-plots/useAnalysisPlotsController.ts'
       - 'apps/control-room/src/modules/analysis-plots/referenceChartQuantity.test.ts'
@@ -122,6 +123,7 @@ on:
       - 'apps/control-room/src/modules/viewport-3d/viewport3dResources*'
       - 'apps/control-room/src/modules/viewport-3d/model/modeCompositionViewportProjection*'
       - 'apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer*'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dFieldMapping*'
       - 'apps/control-room/src/modules/analysis-plots/referenceOverlaySeries.test.ts'
       - 'apps/control-room/src/modules/analysis-plots/useAnalysisPlotsController.ts'
       - 'apps/control-room/src/modules/analysis-plots/referenceChartQuantity.test.ts'
@@ -216,7 +218,7 @@ jobs:
           src/kernel/visualization/ModeFieldOverlayIntent.test.ts
           src/kernel/visualization/ModeFieldOverlayIntentController.test.ts
           src/kernel/resources/modeFieldOverlayResources.test.ts
-          src/modules/viewport-3d/viewport3dResources.test.ts src/modules/viewport-3d/model/modeCompositionViewportProjection.test.ts src/modules/viewport-3d/layers/MeshPartLayer.test.ts
+          src/modules/viewport-3d/viewport3dResources.test.ts src/modules/viewport-3d/model/modeCompositionViewportProjection.test.ts src/modules/viewport-3d/layers/MeshPartLayer.test.ts src/modules/viewport-3d/viewport3dFieldMapping.test.ts
           src/modules/analysis-plots/referenceOverlaySeries.test.ts
           src/modules/analysis-plots/referenceChartQuantity.test.ts
           src/shared/domain/analysis/modalDampingObservables.test.ts

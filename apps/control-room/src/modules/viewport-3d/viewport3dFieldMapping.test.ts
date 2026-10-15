@@ -539,6 +539,121 @@ describe("viewport3dFieldMapping", () => {
     expect(result?.projectedSamplesPerBinMin).toBe(2);
   });
 
+  it("keeps explicit zero node counts empty while omitted counts select the suffix", () => {
+    const camelCaseZero = buildViewport3DProjectionNodeMembership(
+      { nodeStart: 3, nodeCount: 0 },
+      6,
+    );
+    const snakeCaseZero = buildViewport3DProjectionNodeMembership(
+      { node_start: 3, node_count: 0 },
+      6,
+    );
+    const omittedCount = buildViewport3DProjectionNodeMembership(
+      { nodeStart: 3 },
+      6,
+    );
+    const explicitEmptyIndices = buildViewport3DProjectionNodeMembership(
+      { nodeIndices: [], nodeStart: 3, nodeCount: 3 },
+      6,
+    );
+    const explicitEmptySnakeCaseIndices =
+      buildViewport3DProjectionNodeMembership(
+        { node_indices: [], node_start: 3, node_count: 3 },
+        6,
+      );
+
+    expect(camelCaseZero?.cacheKey).toBe("range:3:3:6");
+    expect(snakeCaseZero?.cacheKey).toBe("range:3:3:6");
+    expect(omittedCount?.cacheKey).toBe("range:3:6:6");
+    expect(camelCaseZero?.cacheKey).not.toBe(omittedCount?.cacheKey);
+    for (const nodeIndex of [0, 1, 2, 3, 4, 5]) {
+      expect(camelCaseZero?.contains(nodeIndex)).toBe(false);
+      expect(snakeCaseZero?.contains(nodeIndex)).toBe(false);
+      expect(explicitEmptyIndices?.contains(nodeIndex)).toBe(false);
+      expect(explicitEmptySnakeCaseIndices?.contains(nodeIndex)).toBe(false);
+    }
+    expect(omittedCount?.contains(2)).toBe(false);
+    expect(omittedCount?.contains(3)).toBe(true);
+    expect(omittedCount?.contains(5)).toBe(true);
+  });
+
+  it("omits scalar and complex thickness projections for an explicit empty node range", () => {
+    const positions = Float32Array.from([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 10,
+      1, 0, 10,
+      0, 1, 10,
+    ]);
+    const surfaceIndices = Uint32Array.from([3, 4, 5]);
+    const nodeIndices = Uint32Array.from([0, 1, 2, 3, 4, 5]);
+    const scalarFieldVector = vectorField([
+      1, 2, 3,
+      2, 3, 4,
+      3, 4, 5,
+      4, 5, 6,
+      5, 6, 7,
+      6, 7, 8,
+    ]);
+    const complexValues = new Float64Array(6 * 6);
+    for (let nodeIndex = 0; nodeIndex < 6; nodeIndex += 1) {
+      const value = nodeIndex + 1;
+      complexValues[nodeIndex * 6] = value;
+      complexValues[nodeIndex * 6 + 1] = value * 10;
+      complexValues[nodeIndex * 6 + 3] = value * 2;
+      complexValues[nodeIndex * 6 + 4] = value * 20;
+    }
+    const complexFieldVector: DecodedComplexFieldVector = {
+      componentCount: 3,
+      dtype: "complex128",
+      grid: [6, 1, 1],
+      indexing: "explicit_node_indices",
+      nodeIndices,
+      pointCount: 6,
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      valueCount: complexValues.length,
+      values: complexValues,
+    };
+    const targetNodeIndices = Uint32Array.from([0, 1, 2, 3, 4, 5]);
+
+    for (const selection of [
+      { nodeStart: 3, nodeCount: 0 },
+      { node_start: 3, node_count: 0 },
+    ]) {
+      const projectionNodeMembership =
+        buildViewport3DProjectionNodeMembership(selection, 6);
+
+      expect(projectionNodeMembership?.contains(3)).toBe(false);
+      expect(projectionNodeMembership?.contains(5)).toBe(false);
+      expect(
+        buildThicknessAverageZScalarColors(
+          scalarFieldVector,
+          positions,
+          surfaceIndices,
+          6,
+          "x",
+          "plasma",
+          undefined,
+          Number.POSITIVE_INFINITY,
+          targetNodeIndices,
+          projectionNodeMembership,
+        ),
+      ).toBeNull();
+      expect(
+        buildProjectedComplexSurfaceShaderValues({
+          complexFieldVector,
+          positions,
+          projectionNodeMembership,
+          projectionMode: "thickness_average_z",
+          surfaceIndices,
+          targetNodeIndices,
+          vertexCount: 6,
+        }),
+      ).toBeNull();
+    }
+  });
+
   it("keeps explicit global field indices while restricting thickness projection membership", () => {
     const positions = Float32Array.from([
       0, 0, 0,
