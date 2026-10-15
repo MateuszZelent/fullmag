@@ -4,6 +4,7 @@ on:
   push:
     branches: ['codex/eigensolve-dispersion-plan-20260912']
     paths:
+      - 'packages/fullmag-py/**'
       - 'crates/fullmag-ir/**'
       - 'crates/fullmag-plan/**'
       - 'crates/fullmag-application/**'
@@ -27,7 +28,9 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install Python runtime for API script round-trip regression
-        run: python -m pip install -e packages/fullmag-py
+        run: python -m pip install -e packages/fullmag-py pytest
+      - name: Verify public nodal material binding and canonical authoring round-trip
+        run: python -m pytest packages/fullmag-py/tests/test_material_nodal_field_binding.py packages/fullmag-py/tests/test_material_nodal_authoring_roundtrip.py -q
       - name: Resolve canonical project storage for publication tests
         shell: python
         run: |
@@ -119,4 +122,5 @@ jobs:
           name: scope-storage-preflight-${{ github.run_id }}
           path: ${{ runner.temp }}/scope-storage-preflight.json
           if-no-files-found: warn
+
 

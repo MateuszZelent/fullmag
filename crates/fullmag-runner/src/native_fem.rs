@@ -2148,6 +2148,7 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
         hmax: 0.4,
         initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
         material: MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 800e3,
             exchange_stiffness: 13e-12,
@@ -2930,6 +2931,9 @@ impl NativeFemBackend {
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
         let backend_create_started = std::time::Instant::now();
+        plan.material.validate_nodal_fields(&plan.mesh).map_err(|reason| RunError {
+            message: format!("native FEM material binding rejected before ABI packaging: {reason}"),
+        })?;
         configure_managed_openmpi_environment();
         let inferred_element_markers = normalized_native_runtime_element_markers(plan)?;
         let runtime_plan;
@@ -2943,6 +2947,9 @@ impl NativeFemBackend {
         } else {
             plan
         };
+        // The source binding was checked before this derived marker-role view.
+        // This checked adapter changes cell tags only; it neither reorders nodes
+        // nor transfers coefficients. Preserve the original source binding.
         fullmag_ir::validate_mesh_for_execution(&plan.mesh).map_err(|errors| RunError {
             message: format!(
                 "native FEM mesh validation failed before ABI packaging: {}",
@@ -8090,6 +8097,7 @@ mod tests {
                 [0.9874406319167053, 0.15799050110667284, 0.0],
             ],
             material: MaterialIR {
+                nodal_field_binding: None,
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,

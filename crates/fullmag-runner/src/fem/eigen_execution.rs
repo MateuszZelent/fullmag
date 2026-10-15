@@ -125,6 +125,93 @@ pub(crate) fn reject_unsupported_floquet_dynamic_demag(
     Ok(())
 }
 
+/// Reject material fields that the runner-assembled operators cannot consume.
+///
+/// Equal nodal values preserve the scalar operator exactly. Shared-domain operators
+/// keep their separate field-aware path and must return before this guard.
+fn reject_runner_operator_nodal_material_overrides(
+    material: &fullmag_ir::MaterialIR,
+    include_damping: bool,
+    interfacial_dmi: Option<f64>,
+    bulk_dmi: Option<f64>,
+) -> Result<(), RunError> {
+    reject_nodal_material_profile(
+        "Ms",
+        material.ms_field.as_deref(),
+        material.saturation_magnetisation.max(1e-30),
+    )?;
+    reject_nodal_material_profile("A", material.a_field.as_deref(), material.exchange_stiffness)?;
+    reject_nodal_material_profile(
+        "Ku1",
+        material.ku_field.as_deref(),
+        material
+            .uniaxial_anisotropy
+            .filter(|value| value.abs() > 0.0)
+            .unwrap_or(0.0),
+    )?;
+    reject_nodal_material_profile(
+        "Ku2",
+        material.ku2_field.as_deref(),
+        if material.uniaxial_anisotropy.is_some_and(|value| value.abs() > 0.0) {
+            material.uniaxial_anisotropy_k2.unwrap_or(0.0)
+        } else { 0.0 },
+    )?;
+    reject_nodal_material_profile(
+        "Kc1",
+        material.kc1_field.as_deref(),
+        material
+            .cubic_anisotropy_kc1
+            .filter(|value| value.abs() > 0.0)
+            .unwrap_or(0.0),
+    )?;
+    reject_nodal_material_profile(
+        "Kc2",
+        material.kc2_field.as_deref(),
+        if material.cubic_anisotropy_kc1.is_some_and(|value| value.abs() > 0.0) {
+            material.cubic_anisotropy_kc2.unwrap_or(0.0)
+        } else { 0.0 },
+    )?;
+    // The modal anisotropy helper consumes Kc1/Kc2 only, so Kc3's effective
+    // coefficient in this runner-assembled operator is zero.
+    reject_nodal_material_profile("Kc3", material.kc3_field.as_deref(), 0.0)?;
+    reject_nodal_material_profile(
+        "Dind",
+        material.dind_field.as_deref(),
+        interfacial_dmi.unwrap_or(0.0),
+    )?;
+    reject_nodal_material_profile(
+        "Dbulk",
+        material.dbulk_field.as_deref(),
+        bulk_dmi.unwrap_or(0.0),
+    )?;
+
+    // Ignore intentionally omits damping. Include keeps the scalar alpha
+    // semantics and therefore cannot silently discard a different nodal field.
+    if include_damping {
+        reject_nodal_material_profile(
+            "alpha",
+            material.alpha_field.as_deref(),
+            material.damping,
+        )?;
+    }
+    Ok(())
+}
+
+fn reject_nodal_material_profile(
+    field_name: &str,
+    values: Option<&[f64]>,
+    effective_scalar: f64,
+) -> Result<(), RunError> {
+    if values.is_some_and(|values| values.iter().any(|value| *value != effective_scalar)) {
+        return Err(RunError {
+            message: format!(
+                "FEM eigen runner-assembled operator cannot represent nodal {field_name} values that differ from its effective scalar coefficient"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Execute one k-path sample while keeping private tracking outputs separate
 /// from the public selector that controls expensive phi/H sidecar generation.
 pub(super) fn execute_fem_eigen_path_single_k(
@@ -1530,6 +1617,12 @@ fn execute_native_gpu_k0_kittel_modal(
     state_artifact_sample_index: Option<usize>,
     defer_mode_output_selection_binding: bool,
 ) -> Result<ExecutedRun, RunError> {
+    plan
+        .material
+        .validate_nodal_fields(&plan.mesh)
+        .map_err(|reason| RunError {
+            message: format!("FEM eigen material binding rejected before solve: {reason}"),
+        })?;
     validate_eigen_equilibrium_certificate(plan, expected_handoff, None)?;
     let initial_magnetization = plan.equilibrium_magnetization.clone();
     let requested_modes = plan.count as usize;
@@ -1598,6 +1691,12 @@ fn execute_native_gpu_k0_kittel_modal(
             native_gpu_k0_kittel_execution_provenance(plan),
         );
     }
+    reject_runner_operator_nodal_material_overrides(
+        &plan.material,
+        matches!(plan.damping_policy, EigenDampingPolicyIR::Include),
+        plan.interfacial_dmi,
+        plan.bulk_dmi,
+    )?;
     let (stiffness_field, mass) = assemble_full_2x2_operator_real(
         plan,
         &problem.topology,
@@ -1935,6 +2034,9 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     potential_publication: Option<&EigenPathPotentialPublication>,
 ) -> Result<ExecutedRun, RunError> {
+    plan.material.validate_nodal_fields(&plan.mesh).map_err(|reason| RunError {
+        message: format!("FEM eigen material binding rejected before execution: {reason}"),
+    })?;
     let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy)?;
     validate_modal_solver_policy_admission(plan, try_gpu, use_native_modal_production)?;
     crate::eigen::output_selection::validate_eigen_spectrum_quantities(outputs).map_err(
@@ -2193,6 +2295,13 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
                 potential_publication,
             );
         }
+        // Shared-domain execution returned above; this branch assembles a scalar-material runner matrix.
+        reject_runner_operator_nodal_material_overrides(
+            &plan.material,
+            matches!(plan.damping_policy, EigenDampingPolicyIR::Include),
+            plan.interfacial_dmi,
+            plan.bulk_dmi,
+        )?;
         let (stiffness, mass) = assemble_full_2x2_operator_real(
             plan,
             topology,
@@ -2304,6 +2413,12 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
             eigenpairs
         }
     } else {
+        reject_runner_operator_nodal_material_overrides(
+            &plan.material,
+            matches!(plan.damping_policy, EigenDampingPolicyIR::Include),
+            plan.interfacial_dmi,
+            plan.bulk_dmi,
+        )?;
         let operator = assemble_projected_scalar_operator_real(
             plan,
             topology,
@@ -2418,6 +2533,13 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
         solver_kind = "cpu_sparse_lobpcg";
     }
     let complex_eigenpairs = if complex_reduction {
+        // This is the nonshared runner-assembled complex operator; the shared-domain provider returned above.
+        reject_runner_operator_nodal_material_overrides(
+            &plan.material,
+            matches!(plan.damping_policy, EigenDampingPolicyIR::Include),
+            plan.interfacial_dmi,
+            plan.bulk_dmi,
+        )?;
         let (stiffness, mass) = if is_full_2x2 {
             assemble_projected_full_2x2_operator_complex(
                 plan,
@@ -3157,5 +3279,130 @@ mod tests {
             ]
         );
         assert_eq!(action, StepAction::Stop);
+    }
+}
+
+
+#[cfg(test)]
+mod runner_operator_nodal_material_guard_tests {
+    use super::reject_runner_operator_nodal_material_overrides;
+    use fullmag_ir::MaterialIR;
+
+    fn check(material: &MaterialIR, include_damping: bool) -> Result<(), super::RunError> {
+        reject_runner_operator_nodal_material_overrides(
+            material, include_damping, material.interfacial_dmi, material.bulk_dmi,
+        )
+    }
+
+    fn material_with_scalars() -> MaterialIR {
+        let mut material = MaterialIR::default();
+        material.saturation_magnetisation = 1.25;
+        material.exchange_stiffness = 2.5;
+        material.damping = 0.125;
+        material.uniaxial_anisotropy = Some(3.0);
+        material.cubic_anisotropy_kc1 = Some(4.0);
+        material.cubic_anisotropy_kc3 = Some(7.0);
+        material.bulk_dmi = Some(8.0);
+        material
+    }
+
+    #[test]
+    fn equal_profiles_pass_and_varying_profiles_fail_for_all_nine_fields() {
+        let cases: [(&str, f64, fn(&mut MaterialIR, Vec<f64>)); 9] = [
+            ("Ms", 1.25, |material, values| material.ms_field = Some(values)),
+            ("A", 2.5, |material, values| material.a_field = Some(values)),
+            ("Ku1", 3.0, |material, values| material.ku_field = Some(values)),
+            ("Ku2", 0.0, |material, values| material.ku2_field = Some(values)),
+            ("Kc1", 4.0, |material, values| material.kc1_field = Some(values)),
+            ("Kc2", 0.0, |material, values| material.kc2_field = Some(values)),
+            ("Kc3", 0.0, |material, values| material.kc3_field = Some(values)),
+            ("Dind", 0.0, |material, values| material.dind_field = Some(values)),
+            ("Dbulk", 8.0, |material, values| material.dbulk_field = Some(values)),
+        ];
+
+        for (field_name, scalar, set_field) in cases {
+            let mut uniform = material_with_scalars();
+            set_field(&mut uniform, vec![scalar, scalar]);
+            assert!(
+                check(&uniform, false).is_ok(),
+                "uniform {field_name} profile should match its scalar coefficient"
+            );
+
+            let mut varying = material_with_scalars();
+            set_field(&mut varying, vec![scalar, scalar + 1.0]);
+            let error = check(&varying, false)
+                .expect_err("a varying profile must fail closed");
+            assert!(
+                error.message.contains(field_name),
+                "expected an error naming {field_name}, got: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn optional_scalar_defaults_and_effective_ms_clamp_are_exact() {
+        let mut material = MaterialIR::default();
+        material.ms_field = Some(vec![1e-30, 1e-30]);
+        material.a_field = Some(vec![0.0, 0.0]);
+        material.ku_field = Some(vec![0.0, 0.0]);
+        material.ku2_field = Some(vec![0.0, 0.0]);
+        material.kc1_field = Some(vec![0.0, 0.0]);
+        material.kc2_field = Some(vec![0.0, 0.0]);
+        material.kc3_field = Some(vec![0.0, 0.0]);
+        material.dind_field = Some(vec![0.0, 0.0]);
+        material.dbulk_field = Some(vec![0.0, 0.0]);
+
+        assert!(
+            check(&material, false).is_ok()
+        );
+    }
+
+    #[test]
+    fn alpha_is_ignored_only_for_ignore_policy_and_exact_under_include() {
+        let mut material = material_with_scalars();
+        material.alpha_field = Some(vec![0.125, 0.126]);
+        assert!(
+            check(&material, false).is_ok(),
+            "Ignore policy intentionally omits damping"
+        );
+        let error = check(&material, true)
+            .expect_err("Include must reject an alpha profile that differs from scalar damping");
+        assert!(error.message.contains("alpha"));
+
+        material.alpha_field = Some(vec![0.125, 0.125]);
+        assert!(
+            check(&material, true).is_ok(),
+            "an exact scalar alpha profile is equivalent under Include"
+        );
+    }
+
+    #[test]
+    fn effective_dmi_plan_terms_are_not_raw_material_scalars() {
+        let mut material = material_with_scalars();
+        material.dind_field = Some(vec![0.004, 0.004]);
+        assert!(reject_runner_operator_nodal_material_overrides(
+            &material, false, Some(0.004), Some(8.0),
+        ).is_ok());
+        let error = reject_runner_operator_nodal_material_overrides(
+            &material, false, None, Some(8.0),
+        ).expect_err("an absent effective DMI term cannot consume a nonzero nodal profile");
+        assert!(error.message.contains("Dind"));
+    }
+
+    #[test]
+    fn higher_order_fields_follow_the_actual_parent_term_activation() {
+        let mut material = material_with_scalars();
+        material.uniaxial_anisotropy = None;
+        material.uniaxial_anisotropy_k2 = Some(3.0);
+        material.ku2_field = Some(vec![3.0, 3.0]);
+        assert!(check(&material, false).unwrap_err().message.contains("Ku2"));
+        material.ku2_field = Some(vec![0.0, 0.0]);
+        material.cubic_anisotropy_kc1 = None;
+        material.cubic_anisotropy_kc2 = Some(4.0);
+        material.kc2_field = Some(vec![4.0, 4.0]);
+        assert!(check(&material, false).unwrap_err().message.contains("Kc2"));
+        material.kc2_field = Some(vec![0.0, 0.0]);
+        assert!(check(&material, false).is_ok());
     }
 }

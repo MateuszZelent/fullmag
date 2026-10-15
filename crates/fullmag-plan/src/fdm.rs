@@ -2387,6 +2387,15 @@ pub(crate) fn plan_fdm(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if let Some(material) = problem.materials.iter().find(|material| {
+        material.nodal_field_binding.is_some()
+            || material.ms_field.is_some() || material.a_field.is_some() || material.alpha_field.is_some()
+    }) {
+        return Err(PlanError { reasons: vec![format!(
+            "material '{}' has FEM nodal arrays/binding; FDM requires an explicit cell field source and does not reinterpret FEM node order; fallback=none",
+            material.name,
+        )] });
+    }
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
@@ -4156,6 +4165,15 @@ pub(crate) fn plan_fdm_multilayer(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if let Some(material) = problem.materials.iter().find(|material| {
+        material.nodal_field_binding.is_some()
+            || material.ms_field.is_some() || material.a_field.is_some() || material.alpha_field.is_some()
+    }) {
+        return Err(PlanError { reasons: vec![format!(
+            "material '{}' has FEM nodal arrays/binding; FDM requires an explicit cell field source and does not reinterpret FEM node order; fallback=none",
+            material.name,
+        )] });
+    }
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;

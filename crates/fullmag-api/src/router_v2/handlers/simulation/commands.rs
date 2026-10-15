@@ -1148,6 +1148,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             object_regions.push(ir);
         }
         materials.push(MaterialIR {
+            nodal_field_binding: None,
             alpha_field: None,
             a_field: None,
             cubic_anisotropy_axis1: None,

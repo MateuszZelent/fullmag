@@ -561,6 +561,7 @@ mod tests {
             enable_exchange: true,
             enable_demag: false,
             material: MaterialIR {
+                nodal_field_binding: None,
                 name: "mat".to_string(),
                 saturation_magnetisation: 8.0e5,
                 exchange_stiffness: 1.0e-11,

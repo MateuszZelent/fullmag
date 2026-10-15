@@ -2,14 +2,63 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+import re
 import warnings
 
-from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive, require_finite
+from fullmag._validation import (
+    as_vector3,
+    parse_finite_float,
+    require_finite,
+    require_non_empty,
+    require_non_negative,
+    require_positive,
+    require_positive_int,
+)
 from fullmag.init import InitialMagnetization, SampledMagnetization
 from fullmag.init.magnetization import UniformMagnetization
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
 from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialNodalFieldBinding:
+    """Identity of the canonical mesh node ordering used by material nodal fields."""
+
+    canonical_mesh_fingerprint: str
+    node_count: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.canonical_mesh_fingerprint, str):
+            raise TypeError("canonical_mesh_fingerprint must be a string")
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", self.canonical_mesh_fingerprint) is None:
+            raise ValueError(
+                "canonical_mesh_fingerprint must use sha256:<64 lowercase hex>"
+            )
+        object.__setattr__(
+            self, "node_count", require_positive_int(self.node_count, "node_count")
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        self.__post_init__()
+        return {
+            "canonical_mesh_fingerprint": self.canonical_mesh_fingerprint,
+            "node_count": self.node_count,
+        }
+
+
+_MATERIAL_NODAL_FIELD_RULES: tuple[tuple[str, str, bool, bool], ...] = (
+    ("Ms_field", "ms_field", True, False),
+    ("A_field", "a_field", False, True),
+    ("alpha_field", "alpha_field", False, True),
+    ("Ku_field", "ku_field", False, False),
+    ("Ku2_field", "ku2_field", False, False),
+    ("Kc1_field", "kc1_field", False, False),
+    ("Kc2_field", "kc2_field", False, False),
+    ("Kc3_field", "kc3_field", False, False),
+    ("Dind_field", "dind_field", False, False),
+    ("Dbulk_field", "dbulk_field", False, False),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +114,7 @@ class Material:
     Kc3_field: list[float] | None = None
     Dind_field: list[float] | None = None
     Dbulk_field: list[float] | None = None
+    nodal_field_binding: MaterialNodalFieldBinding | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
@@ -85,6 +135,7 @@ class Material:
             require_finite(self.Dind, "Dind")
         if self.Dbulk is not None:
             require_finite(self.Dbulk, "Dbulk")
+        self._validate_nodal_fields()
         _warn_if_suspicious_si("Ms", self.Ms, lower=1.0e3, upper=1.0e8, unit="A/m")
         _warn_if_suspicious_si("A", self.A, lower=1.0e-14, upper=1.0e-8, unit="J/m")
         _warn_if_suspicious_si("alpha", self.alpha, lower=0.0, upper=10.0, unit="dimensionless")
@@ -103,7 +154,48 @@ class Material:
         if self.Dbulk is not None:
             _warn_if_suspicious_si("Dbulk", self.Dbulk, lower=-1.0e-1, upper=1.0e-1, unit="J/m^2")
 
+    def _validate_nodal_fields(self) -> None:
+        fields = [
+            (field_name, ir_name, getattr(self, field_name), positive, non_negative)
+            for field_name, ir_name, positive, non_negative in _MATERIAL_NODAL_FIELD_RULES
+            if getattr(self, field_name) is not None
+        ]
+        binding = self.nodal_field_binding
+        if binding is not None and not isinstance(binding, MaterialNodalFieldBinding):
+            raise TypeError("nodal_field_binding must be a MaterialNodalFieldBinding")
+        if fields and binding is None:
+            raise ValueError("material nodal fields require nodal_field_binding")
+        if binding is not None and not fields:
+            raise ValueError("nodal_field_binding requires at least one material nodal field")
+        if binding is None:
+            return
+
+        for field_name, ir_name, values, positive, non_negative in fields:
+            if isinstance(values, (str, bytes, bytearray)) or not isinstance(values, Sequence):
+                raise TypeError(f"{field_name} must be a sequence of finite numbers")
+            if len(values) == 0:
+                raise ValueError(f"{field_name} must not be empty")
+            if len(values) != binding.node_count:
+                raise ValueError(
+                    f"{field_name} has {len(values)} values, but nodal_field_binding "
+                    f"declares {binding.node_count} nodes"
+                )
+            for index, value in enumerate(values):
+                parse_finite_float(
+                    value,
+                    f"Material.{ir_name}[{index}]",
+                    positive=positive,
+                    non_negative=non_negative,
+                )
+
     def to_ir(self) -> dict[str, object]:
+        self._validate_nodal_fields()
+        nodal_fields = {
+            ir_name: [float(value) for value in getattr(self, field_name)]
+            if getattr(self, field_name) is not None
+            else None
+            for field_name, ir_name, _, _ in _MATERIAL_NODAL_FIELD_RULES
+        }
         return {
             "name": self.name,
             "saturation_magnetisation": self.Ms,
@@ -119,16 +211,9 @@ class Material:
             "cubic_anisotropy_axis2": list(self.anisC2) if self.anisC2 else None,
             "interfacial_dmi": self.Dind,
             "bulk_dmi": self.Dbulk,
-            "ms_field": self.Ms_field,
-            "a_field": self.A_field,
-            "alpha_field": self.alpha_field,
-            "ku_field": self.Ku_field,
-            "ku2_field": self.Ku2_field,
-            "kc1_field": self.Kc1_field,
-            "kc2_field": self.Kc2_field,
-            "kc3_field": self.Kc3_field,
-            "dind_field": self.Dind_field,
-            "dbulk_field": self.Dbulk_field,
+            **nodal_fields,
+            **({"nodal_field_binding": self.nodal_field_binding.to_ir()}
+               if self.nodal_field_binding is not None else {}),
         }
 
 

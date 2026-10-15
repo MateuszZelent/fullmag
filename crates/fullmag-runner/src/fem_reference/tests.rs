@@ -34,6 +34,7 @@ fn make_test_plan(enable_demag: bool) -> FemPlanIR {
         hmax: 1.0,
         initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
         material: MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 800e3,
             exchange_stiffness: 13e-12,
@@ -212,6 +213,7 @@ fn make_box_demag_plan() -> FemPlanIR {
         hmax: 10e-9,
         initial_magnetization: vec![[0.0, 0.0, 1.0]; 8],
         material: MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 800e3,
             exchange_stiffness: 13e-12,
@@ -395,6 +397,7 @@ fn make_shared_domain_airbox_demag_plan() -> FemPlanIR {
         hmax: 10e-9,
         initial_magnetization: vec![[0.0, 0.0, 1.0]; 64],
         material: MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 800e3,
             exchange_stiffness: 13e-12,

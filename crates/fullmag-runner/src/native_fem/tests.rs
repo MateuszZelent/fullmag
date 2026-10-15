@@ -41,6 +41,7 @@ fn make_test_plan() -> FemPlanIR {
         hmax: 0.4,
         initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
         material: MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 800e3,
             exchange_stiffness: 13e-12,
@@ -162,6 +163,7 @@ fn make_exchange_only_plan() -> FemPlanIR {
             [0.9874406319167053, 0.15799050110667284, 0.0],
         ],
         material: MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 800e3,
             exchange_stiffness: 13e-12,

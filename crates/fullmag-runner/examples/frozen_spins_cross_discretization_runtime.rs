@@ -348,6 +348,7 @@ fn fem_plan(n: u32) -> Result<FemPlanIR, Box<dyn Error>> {
         initial_magnetization: references,
         frozen_spins: Some(resolved),
         material: fullmag_ir::MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 800e3,
             exchange_stiffness: 13e-12,

@@ -6513,6 +6513,7 @@ mod tests {
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 5],
             frozen_spins: None,
             material: fullmag_ir::MaterialIR {
+                nodal_field_binding: None,
                 name: "mat".to_string(),
                 saturation_magnetisation: 1.0,
                 exchange_stiffness: 1.0e-11,

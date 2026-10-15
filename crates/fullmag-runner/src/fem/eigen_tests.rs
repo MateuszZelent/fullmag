@@ -4044,6 +4044,7 @@ pub(super) fn minimal_native_modal_plan() -> FemEigenPlanIR {
             [1.0, 0.0, 0.0],
         ],
         material: fullmag_ir::MaterialIR {
+            nodal_field_binding: None,
             name: "Py".to_string(),
             saturation_magnetisation: 8.0e5,
             exchange_stiffness: 1.3e-11,

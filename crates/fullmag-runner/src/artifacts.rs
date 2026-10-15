@@ -7615,6 +7615,7 @@ mod tests {
                 initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
                 frozen_spins: None,
                 material: MaterialIR {
+                    nodal_field_binding: None,
                     name: "Py".to_string(),
                     saturation_magnetisation: 800e3,
                     exchange_stiffness: 13e-12,
@@ -7791,6 +7792,7 @@ mod tests {
                 hmax: 0.4,
                 equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 4],
                 material: MaterialIR {
+                    nodal_field_binding: None,
                     name: "Py".to_string(),
                     saturation_magnetisation: 800e3,
                     exchange_stiffness: 13e-12,

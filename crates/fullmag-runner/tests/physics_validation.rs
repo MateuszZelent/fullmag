@@ -725,6 +725,7 @@ fn sp4_reversal_dynamics() {
 /// Permalloy MaterialIR for FEM eigen tests.
 fn fem_permalloy() -> MaterialIR {
     MaterialIR {
+        nodal_field_binding: None,
         name: "Py".to_string(),
         saturation_magnetisation: 800e3,
         exchange_stiffness: 13e-12,

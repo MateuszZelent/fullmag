@@ -1,4 +1,4 @@
-use crate::model::MaterialIR;
+use crate::model::{MaterialIR, MaterialNodalFieldBindingIR};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
@@ -52,6 +52,8 @@ struct MaterialIRV04Def {
     dind_field: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dbulk_field: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    nodal_field_binding: Option<MaterialNodalFieldBindingIR>,
 }
 
 /// Decode the V04 material array through the strict remote mirror while

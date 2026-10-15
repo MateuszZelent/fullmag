@@ -87,6 +87,7 @@ from fullmag.model.outputs import (
     Snapshot,
 )
 from fullmag.model.problem import FdmPbc, ParallelExecutionPolicy, Problem
+from fullmag.model.structure import Material, MaterialNodalFieldBinding
 from fullmag.model.study import (
     DEFAULT_RELAXATION_MAX_STEPS,
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
@@ -512,14 +513,14 @@ def render_loaded_problem_as_script(
             surface=surface,
         )
     )
-    rotated_dmi_lines = _render_rotated_interfacial_dmi(
+    dmi_term_lines = _render_dmi_terms(
         base_problem,
         overrides=overrides,
         surface=surface,
     )
-    if rotated_dmi_lines:
+    if dmi_term_lines:
         lines.append("")
-        lines.extend(rotated_dmi_lines)
+        lines.extend(dmi_term_lines)
     region_owned_lines, region_vars = _render_region_owned_authoring(
         base_problem,
         magnet_vars,
@@ -3595,6 +3596,333 @@ def _render_geometry_visualization_hints(
     return lines
 
 
+
+_MATERIAL_NODAL_AUTHORING: tuple[tuple[str, str], ...] = (
+    ("Ms_field", "ms_field"),
+    ("A_field", "a_field"),
+    ("alpha_field", "alpha_field"),
+    ("Ku_field", "ku_field"),
+    ("Ku2_field", "ku2_field"),
+    ("Kc1_field", "kc1_field"),
+    ("Kc2_field", "kc2_field"),
+    ("Kc3_field", "kc3_field"),
+    ("Dind_field", "dind_field"),
+    ("Dbulk_field", "dbulk_field"),
+)
+
+_MATERIAL_SCALAR_AUTHORING: tuple[tuple[str, str], ...] = (
+    ("Ms", "saturation_magnetisation"),
+    ("Aex", "exchange_stiffness"),
+    ("alpha", "damping"),
+    ("Dind", "interfacial_dmi"),
+    ("Dbulk", "bulk_dmi"),
+)
+
+# Keep the legacy geometry-override fallback values identical in both the
+# emitted script and the temporary Material used to validate nodal payloads.
+_DEFAULT_OVERRIDE_MATERIAL_MS = 800000.0
+_DEFAULT_OVERRIDE_MATERIAL_A = 1.3e-11
+_DEFAULT_OVERRIDE_MATERIAL_ALPHA = 0.02
+
+
+def _material_payload_value(
+    payload: Mapping[str, object],
+    public_name: str,
+    ir_name: str | None = None,
+) -> object:
+    """Read one canonical material value, accepting public and IR spellings."""
+    if ir_name is None:
+        ir_name = public_name
+    has_public = public_name in payload
+    has_ir = ir_name in payload
+    public_value = payload.get(public_name)
+    ir_value = payload.get(ir_name)
+    if (
+        has_public
+        and has_ir
+        and public_name != ir_name
+        and public_value != ir_value
+    ):
+        raise ValueError(
+            f"conflicting material values for {public_name!r} and {ir_name!r}"
+        )
+    if has_public:
+        return public_value
+    if has_ir:
+        return ir_value
+    return None
+
+
+def _material_number(
+    payload: Mapping[str, object],
+    public_name: str,
+    ir_name: str,
+    *,
+    default: float | None = None,
+) -> float | None:
+    raw = _material_payload_value(payload, public_name, ir_name)
+    if raw is None:
+        return default
+    value = _number_or_none(raw)
+    if value is None:
+        raise ValueError(f"material {public_name} must be a finite number")
+    return value
+
+
+def _material_authoring_payload(material: object) -> dict[str, object]:
+    wire = material.to_ir()
+    payload: dict[str, object] = {
+        "Ms": wire.get("saturation_magnetisation"),
+        "Aex": wire.get("exchange_stiffness"),
+        "alpha": wire.get("damping"),
+        "Dind": wire.get("interfacial_dmi"),
+        "Dbulk": wire.get("bulk_dmi"),
+        "nodal_field_binding": wire.get("nodal_field_binding"),
+    }
+    for public_name, ir_name in _MATERIAL_NODAL_AUTHORING:
+        payload[public_name] = wire.get(ir_name)
+    return payload
+
+
+def _merge_material_authoring_payload(
+    base: dict[str, object],
+    override: Mapping[str, object],
+) -> dict[str, object]:
+    merged = dict(base)
+    aliases = (*_MATERIAL_SCALAR_AUTHORING, *_MATERIAL_NODAL_AUTHORING)
+    for public_name, ir_name in aliases:
+        if public_name in override and ir_name != public_name:
+            merged.pop(ir_name, None)
+        if ir_name in override and ir_name != public_name:
+            merged.pop(public_name, None)
+    merged.update(override)
+    return merged
+
+
+def _override_material_records(
+    problem: Problem,
+    overrides: Mapping[str, object] | None,
+) -> list[dict[str, object]]:
+    geometries = (overrides or {}).get("geometries")
+    if not isinstance(geometries, list):
+        return []
+
+    base_by_name = {
+        magnet.name: _material_authoring_payload(magnet.material)
+        for magnet in problem.magnets
+    }
+    records: list[dict[str, object]] = []
+    for raw_geometry in geometries:
+        geometry = _normalize_mapping(raw_geometry)
+        if str(geometry.get("role") or "magnet") != "magnet":
+            continue
+        name = str(geometry.get("name") or "")
+        material = _merge_material_authoring_payload(
+            dict(base_by_name.get(name, {})),
+            _normalize_mapping(geometry.get("material")),
+        )
+        raw_stack = geometry.get("physics_stack")
+        physics_stack = _ensure_geometry_physics_stack(
+            raw_stack,
+            material_dind=_material_payload_value(
+                material, "Dind", "interfacial_dmi"
+            ),
+            material_dbulk=_material_payload_value(
+                material, "Dbulk", "bulk_dmi"
+            ),
+        )
+        records.append(
+            {
+                "name": name,
+                "material": material,
+                "raw_physics_stack": raw_stack,
+                "physics_stack": physics_stack,
+            }
+        )
+    return records
+
+
+def _material_payloads(
+    problem: Problem,
+    overrides: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    records = _override_material_records(problem, overrides)
+    if records:
+        return [cast(dict[str, object], record["material"]) for record in records]
+    return [_material_authoring_payload(magnet.material) for magnet in problem.magnets]
+
+
+def _material_scalar_values(
+    problem: Problem,
+    overrides: Mapping[str, object] | None,
+    public_name: str,
+    ir_name: str,
+) -> list[float]:
+    values: list[float] = []
+    for payload in _material_payloads(problem, overrides):
+        raw = _material_payload_value(payload, public_name, ir_name)
+        if raw is None:
+            continue
+        value = _number_or_none(raw)
+        if value is None:
+            raise ValueError(f"material {public_name} must be a finite number")
+        values.append(value)
+    return values
+
+
+def _material_has_nodal_field(
+    payloads: Sequence[Mapping[str, object]],
+    public_name: str,
+    ir_name: str,
+) -> bool:
+    return any(
+        _material_payload_value(payload, public_name, ir_name) is not None
+        for payload in payloads
+    )
+
+
+def _render_material_nodal_assignments(
+    var_name: str,
+    payload: Mapping[str, object],
+    *,
+    material_name: str,
+) -> list[str]:
+    field_values = {
+        public_name: _material_payload_value(payload, public_name, ir_name)
+        for public_name, ir_name in _MATERIAL_NODAL_AUTHORING
+    }
+    raw_binding = payload.get("nodal_field_binding")
+    if not any(value is not None for value in field_values.values()) and raw_binding is None:
+        return []
+
+    if isinstance(raw_binding, MaterialNodalFieldBinding):
+        binding = raw_binding
+    elif isinstance(raw_binding, Mapping):
+        binding = MaterialNodalFieldBinding(
+            canonical_mesh_fingerprint=cast(
+                str, raw_binding.get("canonical_mesh_fingerprint")
+            ),
+            node_count=cast(int, raw_binding.get("node_count")),
+        )
+    elif raw_binding is None:
+        binding = None
+    else:
+        raise TypeError(
+            "nodal_field_binding must be a MaterialNodalFieldBinding or mapping"
+        )
+
+    material = Material(
+        name=material_name or "material",
+        Ms=cast(
+            float,
+            _material_number(
+                payload,
+                "Ms",
+                "saturation_magnetisation",
+                default=_DEFAULT_OVERRIDE_MATERIAL_MS,
+            ),
+        ),
+        A=cast(
+            float,
+            _material_number(
+                payload,
+                "Aex",
+                "exchange_stiffness",
+                default=_DEFAULT_OVERRIDE_MATERIAL_A,
+            ),
+        ),
+        alpha=cast(
+            float,
+            _material_number(payload, "alpha", "damping", default=_DEFAULT_OVERRIDE_MATERIAL_ALPHA),
+        ),
+        Dind=_material_number(payload, "Dind", "interfacial_dmi"),
+        Dbulk=_material_number(payload, "Dbulk", "bulk_dmi"),
+        **field_values,
+        nodal_field_binding=binding,
+    )
+    wire = material.to_ir()
+    lines = [
+        f"{var_name}.{public_name} = {_py_parameter_literal(wire[ir_name])}"
+        for public_name, ir_name in _MATERIAL_NODAL_AUTHORING
+        if wire.get(ir_name) is not None
+    ]
+    if binding is not None:
+        binding_wire = binding.to_ir()
+        lines.append(
+            f"{var_name}.nodal_field_binding = fm.MaterialNodalFieldBinding("
+            f"canonical_mesh_fingerprint={_py_repr(binding_wire['canonical_mesh_fingerprint'])}, "
+            f"node_count={binding_wire['node_count']})"
+        )
+    return lines
+
+
+def _override_stack_has_channel(
+    raw_stack: object,
+    channel: str,
+) -> bool:
+    if not isinstance(raw_stack, list):
+        return False
+    return any(
+        _normalize_mapping(item).get("kind") == channel
+        for item in raw_stack
+        if isinstance(item, Mapping)
+    )
+
+
+def _override_dmi_channel(
+    problem: Problem,
+    overrides: Mapping[str, object] | None,
+    *,
+    channel: str,
+    stack_kind: str,
+    value_getter,
+) -> tuple[bool, float | None]:
+    records = _override_material_records(problem, overrides)
+    if not records:
+        return False, None
+    has_channel_override = any(
+        _override_stack_has_channel(record.get("raw_physics_stack"), stack_kind)
+        for record in records
+    )
+    if not has_channel_override:
+        return False, None
+
+    values = [
+        value
+        for record in records
+        if _override_stack_has_channel(record.get("raw_physics_stack"), stack_kind)
+        for value in (value_getter(cast(list[dict[str, object]], record["physics_stack"])),)
+        if value is not None
+    ]
+    if values and any(value != values[0] for value in values[1:]):
+        raise ValueError(
+            f"canonical script rewrite requires one global {channel} value across geometry overrides"
+        )
+    return True, values[0] if values else None
+
+
+def _effective_dmi_channel(
+    problem: Problem,
+    overrides: Mapping[str, object] | None,
+    *,
+    channel: str,
+    term_type: type,
+    stack_kind: str,
+    value_getter,
+) -> tuple[int, float | None]:
+    overridden, override_value = _override_dmi_channel(
+        problem,
+        overrides,
+        channel=channel,
+        stack_kind=stack_kind,
+        value_getter=value_getter,
+    )
+    if overridden:
+        return (1 if override_value is not None else 0), override_value
+    terms = [term for term in problem.energy if isinstance(term, term_type)]
+    return len(terms), float(terms[0].D) if terms else None
+
+
 def _render_geometry_and_materials(
     problem: Problem,
     magnet_vars: dict[str, str],
@@ -3608,6 +3936,7 @@ def _render_geometry_and_materials(
         fdm = _fdm_from_overrides(problem, overrides)
         return _render_geometries_from_override(
             geometries_override,
+            problem=problem,
             magnet_vars=magnet_vars,
             source_root=source_root,
             overrides=overrides,
@@ -3675,12 +4004,17 @@ def _render_geometry_and_materials(
                 lines.extend(rendered_initial)
             else:
                 lines.append(rendered_initial)
-        dmi = _magnet_dmi(problem, magnet.name)
-        if dmi is not None:
-            lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
-        bulk_dmi = _magnet_bulk_dmi(problem, magnet.name)
-        if bulk_dmi is not None:
-            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
+        if magnet.material.Dind is not None:
+            lines.append(f"{var_name}.Dind = {_py_number(magnet.material.Dind)}")
+        if magnet.material.Dbulk is not None:
+            lines.append(f"{var_name}.Dbulk = {_py_number(magnet.material.Dbulk)}")
+        lines.extend(
+            _render_material_nodal_assignments(
+                var_name,
+                _material_authoring_payload(magnet.material),
+                material_name=magnet.material.name,
+            )
+        )
         lines.append("")
     for geometry in problem.auxiliary_geometries:
         role = problem.auxiliary_geometry_roles.get(geometry.geometry_name, "antenna")
@@ -4184,6 +4518,7 @@ def _render_coupling_endpoint_expr(
 def _render_geometries_from_override(
     geometries: list[object],
     *,
+    problem: Problem,
     magnet_vars: dict[str, str],
     source_root: Path,
     overrides: dict[str, object],
@@ -4192,6 +4527,10 @@ def _render_geometries_from_override(
 ) -> list[str]:
     initial_state_override = _normalize_mapping(overrides.get("initial_state"))
     lines = ["# Geometry & Material"]
+    material_records = {
+        str(record.get("name") or ""): record
+        for record in _override_material_records(problem, overrides)
+    }
     for geo_obj in geometries:
         g = _normalize_mapping(geo_obj)
         name = str(g.get("name", ""))
@@ -4242,22 +4581,43 @@ def _render_geometries_from_override(
         if isinstance(region_name, str) and region_name and region_name != name:
             lines.append(f"{var_name}.region_name = {_py_repr(region_name)}")
 
-        mat = _normalize_mapping(g.get("material"))
-        lines.append(f"{var_name}.Ms = {_py_number(float(str(mat.get('Ms', 800000))))}")
-        lines.append(f"{var_name}.Aex = {_py_number(float(str(mat.get('Aex', 1.3e-11))))}")
-        lines.append(f"{var_name}.alpha = {_py_number(float(str(mat.get('alpha', 0.02))))}")
-        lines.extend(_render_absorbing_boundary(var_name, g.get("absorbing_boundary")))
-        physics_stack = _ensure_geometry_physics_stack(
-            g.get("physics_stack"),
-            material_dind=mat.get("Dind"),
-            material_dbulk=mat.get("Dbulk"),
+        record = material_records.get(name, {})
+        mat = cast(dict[str, object], record.get("material", {}))
+        ms = _material_payload_value(mat, "Ms", "saturation_magnetisation")
+        exchange = _material_payload_value(mat, "Aex", "exchange_stiffness")
+        alpha = _material_payload_value(mat, "alpha", "damping")
+        lines.append(
+            f"{var_name}.Ms = {_py_number(float(str(_DEFAULT_OVERRIDE_MATERIAL_MS if ms is None else ms)))}"
         )
-        dmi = _physics_stack_dmi_value(physics_stack)
-        if dmi is not None:
-            lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
-        bulk_dmi = _physics_stack_bulk_dmi_value(physics_stack)
-        if bulk_dmi is not None:
-            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
+        lines.append(
+            f"{var_name}.Aex = {_py_number(float(str(_DEFAULT_OVERRIDE_MATERIAL_A if exchange is None else exchange)))}"
+        )
+        lines.append(
+            f"{var_name}.alpha = {_py_number(float(str(_DEFAULT_OVERRIDE_MATERIAL_ALPHA if alpha is None else alpha)))}"
+        )
+        raw_dind = _material_payload_value(mat, "Dind", "interfacial_dmi")
+        if raw_dind is not None:
+            lines.append(f"{var_name}.Dind = {_py_number(float(str(raw_dind)))}")
+        raw_dbulk = _material_payload_value(mat, "Dbulk", "bulk_dmi")
+        if raw_dbulk is not None:
+            lines.append(f"{var_name}.Dbulk = {_py_number(float(str(raw_dbulk)))}")
+        lines.extend(
+            _render_material_nodal_assignments(
+                var_name,
+                mat,
+                material_name=name,
+            )
+        )
+        lines.extend(_render_absorbing_boundary(var_name, g.get("absorbing_boundary")))
+        physics_stack = cast(
+            list[dict[str, object]],
+            record.get("physics_stack")
+            or _ensure_geometry_physics_stack(
+                g.get("physics_stack"),
+                material_dind=raw_dind,
+                material_dbulk=raw_dbulk,
+            ),
+        )
         uniaxial = _physics_stack_uniaxial_params(physics_stack)
         if uniaxial is not None:
             ku1_val = uniaxial["ku1"]  # type: ignore[index]
@@ -9841,19 +10201,19 @@ def _export_geometry_entry(
     bounds_min, bounds_max = _geometry_bounds(geom, source_root=source_root)
 
     # --- Material ---
+    material_ir = mat.to_ir()
     material: dict[str, object] = {
         "Ms": mat.Ms if mat.Ms is not None else None,
         "Aex": mat.A if mat.A is not None else None,
         "alpha": mat.alpha,
-        "Dind": None,
-        "Dbulk": None,
+        "Dind": mat.Dind,
+        "Dbulk": mat.Dbulk,
+        "nodal_field_binding": material_ir.get("nodal_field_binding"),
     }
+    for public_name, ir_name in _MATERIAL_NODAL_AUTHORING:
+        material[public_name] = material_ir.get(ir_name)
     dmi_val = _magnet_dmi(problem, magnet.name)
-    if dmi_val is not None:
-        material["Dind"] = dmi_val
     bulk_dmi_val = _magnet_bulk_dmi(problem, magnet.name)
-    if bulk_dmi_val is not None:
-        material["Dbulk"] = bulk_dmi_val
     physics_stack: list[dict[str, object]] = [
         {"kind": "exchange", "enabled": _problem_has_exchange(problem), "params": None},
         {"kind": "demag", "enabled": _problem_has_demag(problem), "params": None},
@@ -10277,20 +10637,11 @@ def _material_dmi_mirror_matches(
     *,
     parameter: str,
     explicit_value: float,
+    overrides: Mapping[str, object] | None = None,
 ) -> bool:
-    """Return whether one explicit DMI term mirrors every material value.
-
-    The legacy flat API promotes a material ``Dind``/``Dbulk`` assignment to
-    one energy term while retaining the material coefficient.  Canonical
-    rendering can preserve that representation only when all referenced
-    magnets carry the same scalar value as the explicit term; otherwise the
-    explicit-first renderer would silently overwrite a per-magnet value.
-    """
-    values = [
-        getattr(magnet.material, parameter)
-        for magnet in problem.magnets
-        if getattr(magnet.material, parameter) is not None
-    ]
+    """Return whether an explicit DMI term mirrors every raw scalar value."""
+    ir_name = "interfacial_dmi" if parameter == "Dind" else "bulk_dmi"
+    values = _material_scalar_values(problem, overrides, parameter, ir_name)
     return bool(values) and all(value == explicit_value for value in values)
 
 
@@ -10368,18 +10719,45 @@ def _script_api_surface(
     couplings_override = (overrides or {}).get("couplings")
     monitors_override = (overrides or {}).get("planar_monitors")
     rotated_dmi_override = (overrides or {}).get("rotated_interfacial_dmi")
-    # Rotated interfacial DMI is a study-level term in the public API.  A
-    # legacy ``fm.Problem``/``problem`` entry point can still author it
-    # directly, so promote that flat source to the canonical study surface
-    # instead of rendering an invalid ``fm.terms`` call (or dropping it).
+    # Global DMI terms without a scalar material mirror require the canonical
+    # study registry; nodal arrays and their binding also stay on that surface.
     has_rotated_dmi = any(
         isinstance(term, RotatedInterfacialDMI) for term in problem.energy
     ) or _number_or_none(rotated_dmi_override) is not None
+    material_payloads = _material_payloads(problem, overrides)
+    has_nodal_material_fields = any(
+        _material_payload_value(payload, public_name, ir_name) is not None
+        for payload in material_payloads
+        for public_name, ir_name in _MATERIAL_NODAL_AUTHORING
+    )
+    interfacial_count, _ = _effective_dmi_channel(
+        problem,
+        overrides,
+        channel="interfacial DMI",
+        term_type=InterfacialDMI,
+        stack_kind="interfacial_dmi",
+        value_getter=_physics_stack_dmi_value,
+    )
+    bulk_count, _ = _effective_dmi_channel(
+        problem,
+        overrides,
+        channel="bulk DMI",
+        term_type=BulkDMI,
+        stack_kind="bulk_dmi",
+        value_getter=_physics_stack_bulk_dmi_value,
+    )
+    requires_dmi_registry = (
+        interfacial_count > 0
+        and not _material_scalar_values(problem, overrides, "Dind", "interfacial_dmi")
+    ) or (
+        bulk_count > 0
+        and not _material_scalar_values(problem, overrides, "Dbulk", "bulk_dmi")
+    )
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
     ) or problem.monitors or (
         isinstance(monitors_override, list) and len(monitors_override) > 0
-    ) or has_rotated_dmi:
+    ) or has_rotated_dmi or has_nodal_material_fields or requires_dmi_registry:
         return "study"
     return "study" if surface == "study" else "flat"
 
@@ -10485,6 +10863,73 @@ def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
         if isinstance(term, RotatedInterfacialDMI):
             return term.D
     return None
+
+
+def _render_dmi_terms(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    surface: str,
+) -> list[str]:
+    lines: list[str] = []
+    for (
+        channel,
+        term_type,
+        stack_kind,
+        value_getter,
+        scalar_name,
+        scalar_ir_name,
+        constructor,
+    ) in (
+        (
+            "interfacial DMI",
+            InterfacialDMI,
+            "interfacial_dmi",
+            _physics_stack_dmi_value,
+            "Dind",
+            "interfacial_dmi",
+            "InterfacialDMI",
+        ),
+        (
+            "bulk DMI",
+            BulkDMI,
+            "bulk_dmi",
+            _physics_stack_bulk_dmi_value,
+            "Dbulk",
+            "bulk_dmi",
+            "BulkDMI",
+        ),
+    ):
+        count, value = _effective_dmi_channel(
+            problem,
+            overrides,
+            channel=channel,
+            term_type=term_type,
+            stack_kind=stack_kind,
+            value_getter=value_getter,
+        )
+        if count == 0:
+            continue
+        if _material_scalar_values(problem, overrides, scalar_name, scalar_ir_name):
+            # Scalar material values remain the source of the promoted term;
+            # the scalar-mirror validation below protects this representation.
+            continue
+        if surface != "study":
+            raise ValueError(
+                f"{channel} without a scalar material mirror requires the canonical study API surface"
+            )
+        assert value is not None
+        lines.append(
+            f"study.terms.add(fm.{constructor}(D={_py_float_roundtrip(value)}))"
+        )
+
+    rotated_lines = _render_rotated_interfacial_dmi(
+        problem,
+        overrides=overrides,
+        surface=surface,
+    )
+    lines.extend(rotated_lines)
+    return lines
 
 
 def _render_rotated_interfacial_dmi(
@@ -11412,24 +11857,22 @@ def _validate_energy_terms(
     exchange_count = 0
     demag_count = 0
     zeeman_count = 0
-    conventional_dmi_count = 0
-    rotated_dmi_count = 0
     rotated_override_present = overrides is not None and "rotated_interfacial_dmi" in overrides
-    material_dind_present = False
-    material_dbulk_present = False
-    material_dmi_field_present = False
-    for magnet in problem.magnets:
-        material = magnet.material
-        material_dind_present |= material.Dind is not None
-        material_dbulk_present |= material.Dbulk is not None
-        material_dmi_field_present |= (
-            (material.Dind_field is not None and len(material.Dind_field) > 0)
-            or (material.Dbulk_field is not None and len(material.Dbulk_field) > 0)
-        )
-    if material_dmi_field_present:
-        raise ValueError(
-            "canonical flat-script rewrite does not support spatial material DMI fields"
-        )
+
+    payloads = _material_payloads(problem, overrides)
+    dind_values = _material_scalar_values(
+        problem, overrides, "Dind", "interfacial_dmi"
+    )
+    dbulk_values = _material_scalar_values(
+        problem, overrides, "Dbulk", "bulk_dmi"
+    )
+    material_dind_or_field_present = bool(dind_values) or _material_has_nodal_field(
+        payloads, "Dind_field", "dind_field"
+    )
+    material_dbulk_or_field_present = bool(dbulk_values) or _material_has_nodal_field(
+        payloads, "Dbulk_field", "dbulk_field"
+    )
+
     for term in problem.energy:
         if isinstance(term, Exchange):
             exchange_count += 1
@@ -11437,19 +11880,15 @@ def _validate_energy_terms(
         if isinstance(term, Zeeman):
             zeeman_count += 1
             continue
-        if isinstance(term, InterfacialDMI):
-            # Presence is part of the IR contract even when D=0.  Keep the
-            # authored no-op, but reject a channel combination that the
-            # planner would reject after this script is serialized.
-            conventional_dmi_count += 1
+        if isinstance(term, (InterfacialDMI, BulkDMI)):
+            # Conventional terms are counted after applying any geometry
+            # physics-stack override, so raw scalar and field inputs remain
+            # distinct from explicit global energy terms.
             continue
         if isinstance(term, RotatedInterfacialDMI):
             # A rotated-DMI override replaces the authored term during
             # canonical rendering, so validate the effective term set rather
             # than counting the shadowed base value as well.
-            if rotated_override_present:
-                continue
-            rotated_dmi_count += 1
             continue
         if isinstance(term, Demag):
             demag_count += 1
@@ -11467,65 +11906,90 @@ def _validate_energy_terms(
                     "canonical flat-script rewrite does not yet support explicit demag realizations"
                 )
             continue
-        if isinstance(term, BulkDMI):
-            conventional_dmi_count += 1
-            continue
         if isinstance(term, (OerstedCylinder, OerstedField, Magnetoelastic, UniaxialAnisotropy, CubicAnisotropy, ThermalNoise)):
             continue
         raise ValueError(
             f"canonical flat-script rewrite does not yet support energy term {type(term).__name__}"
         )
+
+    interfacial_count, interfacial_value = _effective_dmi_channel(
+        problem,
+        overrides,
+        channel="interfacial DMI",
+        term_type=InterfacialDMI,
+        stack_kind="interfacial_dmi",
+        value_getter=_physics_stack_dmi_value,
+    )
+    bulk_count, bulk_value = _effective_dmi_channel(
+        problem,
+        overrides,
+        channel="bulk DMI",
+        term_type=BulkDMI,
+        stack_kind="bulk_dmi",
+        value_getter=_physics_stack_bulk_dmi_value,
+    )
     if rotated_override_present:
-        override_d = _number_or_none(overrides.get("rotated_interfacial_dmi"))
-        if override_d is not None:
-            rotated_dmi_count += 1
-        effective_rotated_dmi_present = override_d is not None
+        rotated_count = (
+            1
+            if _number_or_none(overrides.get("rotated_interfacial_dmi")) is not None
+            else 0
+        )
     else:
-        effective_rotated_dmi_present = rotated_dmi_count > 0
-    if (material_dind_present or material_dbulk_present) and effective_rotated_dmi_present:
+        rotated_count = sum(
+            1
+            for term in problem.energy
+            if isinstance(term, RotatedInterfacialDMI)
+        )
+
+    if (material_dind_or_field_present or material_dbulk_or_field_present) and rotated_count:
         raise ValueError(
             "canonical flat-script rewrite does not support mixed conventional and rotated DMI terms"
         )
-    explicit_interfacial_terms = [
-        term for term in problem.energy if isinstance(term, InterfacialDMI)
-    ]
-    explicit_bulk_terms = [term for term in problem.energy if isinstance(term, BulkDMI)]
+
     if (
-        material_dind_present
-        and explicit_interfacial_terms
+        dind_values
+        and interfacial_count
         and not _material_dmi_mirror_matches(
             problem,
             parameter="Dind",
-            explicit_value=explicit_interfacial_terms[0].D,
+            explicit_value=cast(float, interfacial_value),
+            overrides=overrides,
         )
     ):
         raise ValueError(
             "canonical flat-script rewrite does not support combining explicit and material interfacial DMI"
         )
     if (
-        material_dbulk_present
-        and explicit_bulk_terms
+        dbulk_values
+        and bulk_count
         and not _material_dmi_mirror_matches(
             problem,
             parameter="Dbulk",
-            explicit_value=explicit_bulk_terms[0].D,
+            explicit_value=cast(float, bulk_value),
+            overrides=overrides,
         )
     ):
         raise ValueError(
             "canonical flat-script rewrite does not support combining explicit and material bulk DMI"
         )
+
     if exchange_count > 1 or demag_count > 1:
         raise ValueError(
             "canonical flat-script rewrite currently supports at most one exchange term and one demag term"
         )
-    if conventional_dmi_count and rotated_dmi_count:
+    if interfacial_count > 1 or bulk_count > 1 or rotated_count > 1:
+        raise ValueError(
+            "canonical script rewrite currently supports at most one explicit DMI term per channel"
+        )
+    if rotated_count and (interfacial_count or bulk_count):
         raise ValueError(
             "canonical flat-script rewrite does not support mixed conventional and rotated DMI terms"
         )
-    if zeeman_count > 1 or conventional_dmi_count + rotated_dmi_count > 1:
+    if zeeman_count > 1:
         raise ValueError(
-            "canonical flat-script rewrite does not yet support multiple Zeeman or DMI terms"
+            "canonical flat-script rewrite does not yet support multiple Zeeman terms"
         )
+
 
 
 def _builder_source_kind(entrypoint_kind: str) -> str:

@@ -197,6 +197,7 @@ from .spin_transport import (
 from .structure import (
     Ferromagnet,
     Material,
+    MaterialNodalFieldBinding,
     MaterialParameterAssignment,
     MaterialParameterField,
     ObjectRegion,
@@ -353,6 +354,7 @@ __all__ = [
     "OerstedField",
     "MagnetostrictionLaw",
     "Material",
+    "MaterialNodalFieldBinding",
     "MaterialParameterAssignment",
     "MaterialParameterField",
     "MechanicalBoundaryCondition",

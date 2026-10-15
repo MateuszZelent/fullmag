@@ -2628,6 +2628,7 @@ mod tests {
             hmax: 1.0,
             equilibrium_magnetization: vec![[1.0, 0.0, 0.0]],
             material: fullmag_ir::MaterialIR {
+                nodal_field_binding: None,
                 name: "mat".to_string(),
                 saturation_magnetisation: 8.0e5,
                 exchange_stiffness: 1.3e-11,

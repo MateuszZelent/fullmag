@@ -154,6 +154,7 @@ from fullmag.model.study import (
 from fullmag.model.structure import (
     Ferromagnet,
     Material,
+    MaterialNodalFieldBinding,
     MaterialParameterAssignment,
     MaterialParameterField,
     ObjectRegion,
@@ -579,6 +580,17 @@ class MagnetHandle:
         self._absorbing_boundary: AbsorbingBoundaryLayer | None = None
         self.Dind: float | None = None
         self.Dbulk: float | None = None
+        self.Ms_field: list[float] | None = None
+        self.A_field: list[float] | None = None
+        self.alpha_field: list[float] | None = None
+        self.Ku_field: list[float] | None = None
+        self.Ku2_field: list[float] | None = None
+        self.Kc1_field: list[float] | None = None
+        self.Kc2_field: list[float] | None = None
+        self.Kc3_field: list[float] | None = None
+        self.Dind_field: list[float] | None = None
+        self.Dbulk_field: list[float] | None = None
+        self.nodal_field_binding: MaterialNodalFieldBinding | None = None
         self.Ku1: float | None = None
         self.anisU: tuple[float, float, float] | None = None
         self.Kc1: float | None = None
@@ -686,6 +698,17 @@ class MagnetHandle:
             Kc1=self.Kc1,
             Dind=self.Dind,
             Dbulk=self.Dbulk,
+            Ms_field=self.Ms_field,
+            A_field=self.A_field,
+            alpha_field=self.alpha_field,
+            Ku_field=self.Ku_field,
+            Ku2_field=self.Ku2_field,
+            Kc1_field=self.Kc1_field,
+            Kc2_field=self.Kc2_field,
+            Kc3_field=self.Kc3_field,
+            Dind_field=self.Dind_field,
+            Dbulk_field=self.Dbulk_field,
+            nodal_field_binding=self.nodal_field_binding,
         )
 
         if self._m_value is None:
@@ -2477,6 +2500,9 @@ class StudyUniverseConfig:
 # Context-bound world state
 # ---------------------------------------------------------------------------
 
+StudyEnergyTerm = InterfacialDMI | BulkDMI | RotatedInterfacialDMI
+
+
 @dataclass
 class _WorldState:
     """Mutable accumulator for the flat API — one per script."""
@@ -2560,7 +2586,7 @@ class _WorldState:
     _spin_torque_activation: dict[str, bool] = field(default_factory=dict)
     _spin_transports: list[SpinDriftDiffusion] = field(default_factory=list)
     _oersted_terms: list[OerstedCylinder | OerstedField] = field(default_factory=list)
-    _explicit_energy_terms: list[RotatedInterfacialDMI] = field(default_factory=list)
+    _explicit_energy_terms: list[StudyEnergyTerm] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
@@ -5660,20 +5686,47 @@ class StudyFieldDriveRegistry:
 class StudyEnergyTermRegistry:
     """Explicit global energy terms that do not belong to material handles."""
 
-    def add(self, term: RotatedInterfacialDMI) -> RotatedInterfacialDMI:
-        if not isinstance(term, RotatedInterfacialDMI):
+    def add(self, term: StudyEnergyTerm) -> StudyEnergyTerm:
+        if not isinstance(term, (InterfacialDMI, BulkDMI, RotatedInterfacialDMI)):
             raise TypeError(
-                "study.terms.add() currently requires RotatedInterfacialDMI"
+                "study.terms.add() requires InterfacialDMI, BulkDMI, or RotatedInterfacialDMI"
             )
+
+        if isinstance(term, InterfacialDMI):
+            term_type = InterfacialDMI
+            channel = "interfacial_dmi"
+        elif isinstance(term, BulkDMI):
+            term_type = BulkDMI
+            channel = "bulk_dmi"
+        else:
+            term_type = RotatedInterfacialDMI
+            channel = "rotated_interfacial_dmi"
         if any(
+            isinstance(existing, term_type)
+            for existing in _state._explicit_energy_terms
+        ):
+            raise ValueError(f"{channel} may be authored only once")
+
+        if isinstance(term, RotatedInterfacialDMI):
+            if any(
+                isinstance(existing, (InterfacialDMI, BulkDMI))
+                for existing in _state._explicit_energy_terms
+            ):
+                raise ValueError(
+                    "rotated interfacial DMI cannot be combined with conventional DMI terms"
+                )
+        elif any(
             isinstance(existing, RotatedInterfacialDMI)
             for existing in _state._explicit_energy_terms
         ):
-            raise ValueError("rotated_interfacial_dmi may be authored only once")
+            raise ValueError(
+                "rotated interfacial DMI cannot be combined with conventional DMI terms"
+            )
+
         _state._explicit_energy_terms.append(term)
         return term
 
-    def items(self) -> tuple[RotatedInterfacialDMI, ...]:
+    def items(self) -> tuple[StudyEnergyTerm, ...]:
         return tuple(_state._explicit_energy_terms)
 
 
@@ -9530,15 +9583,25 @@ def _build_problem(
         energy.append(Exchange())
     if s._magnets and s._demag_enabled:
         energy.append(Demag(realization=s._demag_realization))
-    # Check if any magnet has DMI
-    for h in s._magnets:
-        if h.Dind is not None:
-            energy.append(InterfacialDMI(D=h.Dind))
-            break
-    for h in s._magnets:
-        if h.Dbulk is not None:
-            energy.append(BulkDMI(D=h.Dbulk))
-            break
+    # Material scalars are promoted only when their channel is not already
+    # represented by an explicit study energy term. This preserves raw
+    # scalar=None when an explicit DMI term accompanies nodal material fields.
+    has_explicit_interfacial_dmi = any(
+        isinstance(term, InterfacialDMI) for term in s._explicit_energy_terms
+    )
+    has_explicit_bulk_dmi = any(
+        isinstance(term, BulkDMI) for term in s._explicit_energy_terms
+    )
+    if not has_explicit_interfacial_dmi:
+        for h in s._magnets:
+            if h.Dind is not None:
+                energy.append(InterfacialDMI(D=h.Dind))
+                break
+    if not has_explicit_bulk_dmi:
+        for h in s._magnets:
+            if h.Dbulk is not None:
+                energy.append(BulkDMI(D=h.Dbulk))
+                break
     energy.extend(s._explicit_energy_terms)
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))

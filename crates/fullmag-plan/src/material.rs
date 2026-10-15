@@ -265,6 +265,33 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     object_translation: [f64; 3],
     excluded_region_ids: &BTreeSet<String>,
 ) -> Result<Vec<f64>, String> {
+    let base_values = vec![base_value; points.len()];
+    resolve_spatial_parameter_with_base_values_excluding_regions(
+        problem, owner_object_id, parameter, &base_values, points,
+        object_translation, excluded_region_ids,
+    )
+}
+
+/// Resolve scalar or already mesh-validated nodal bases through one region policy.
+/// A base profile is not an override competing at an invented priority.
+pub(crate) fn resolve_spatial_parameter_with_base_values_excluding_regions(
+    problem: &ProblemIR,
+    owner_object_id: &str,
+    parameter: MaterialParameterNameIR,
+    base_values: &[f64],
+    points: &[[f64; 3]],
+    object_translation: [f64; 3],
+    excluded_region_ids: &BTreeSet<String>,
+) -> Result<Vec<f64>, String> {
+    if base_values.len() != points.len() {
+        return Err(format!(
+            "material parameter {:?} base profile length {} does not match sample count {}",
+            parameter, base_values.len(), points.len(),
+        ));
+    }
+    for &value in base_values {
+        validate_resolved_parameter_value(parameter, value)?;
+    }
     // Gather active object regions for this owner
     let enabled_regions = problem
         .object_regions
@@ -329,11 +356,11 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     overrides.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let mut resolved_values = if overrides.is_empty() {
-        vec![base_value; points.len()]
+        base_values.to_vec()
     } else {
         let point_spacing = characteristic_point_spacing(points);
         let mut resolved_values = Vec::with_capacity(points.len());
-        for &point in points {
+        for (&point, &base_value) in points.iter().zip(base_values) {
             let mut active_at_point = Vec::new();
             for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in
                 &overrides
@@ -395,7 +422,14 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                     .expect("resolver winner must be one of the active candidates");
                 let value = evaluate_parameter_field(selected.2, point, object_translation)?;
                 validate_resolved_parameter_value(parameter, value)?;
-                resolved_values.push(base_value + selected.3 * (value - base_value));
+                let weight = selected.3;
+                let resolved = if weight == 1.0 {
+                    value
+                } else {
+                    (1.0 - weight) * base_value + weight * value
+                };
+                validate_resolved_parameter_value(parameter, resolved)?;
+                resolved_values.push(resolved);
             }
         }
         resolved_values
@@ -601,7 +635,17 @@ pub(crate) fn build_material_field_plans(
         MaterialParameterNameIR::Ms,
         MaterialParameterNameIR::Aex,
         MaterialParameterNameIR::Alpha,
+        MaterialParameterNameIR::Ku1,
+        MaterialParameterNameIR::Ku2,
+        MaterialParameterNameIR::Kc1,
+        MaterialParameterNameIR::Kc2,
+        MaterialParameterNameIR::Kc3,
+        MaterialParameterNameIR::Dind,
+        MaterialParameterNameIR::Dbulk,
     ];
+    let parent_material = problem.magnets.iter()
+        .find(|magnet| magnet.name == owner_id || magnet.object_id.as_deref() == Some(owner_id))
+        .and_then(|magnet| problem.materials.iter().find(|material| material.name == magnet.material));
 
     let enabled_regions = problem
         .object_regions
@@ -618,10 +662,27 @@ pub(crate) fn build_material_field_plans(
             .iter()
             .any(|f| f.owner_object == owner_id && f.parameter == param);
 
-        if has_overrides || has_assignments {
-            let mut source_kind = MaterialFieldSourceKind::Override;
+        let has_nodal_base = parent_material.is_some_and(|material| match param {
+            MaterialParameterNameIR::Ms => material.ms_field.is_some(),
+            MaterialParameterNameIR::Aex => material.a_field.is_some(),
+            MaterialParameterNameIR::Alpha => material.alpha_field.is_some(),
+            MaterialParameterNameIR::Ku1 => material.ku_field.is_some(),
+            MaterialParameterNameIR::Ku2 => material.ku2_field.is_some(),
+            MaterialParameterNameIR::Kc1 => material.kc1_field.is_some(),
+            MaterialParameterNameIR::Kc2 => material.kc2_field.is_some(),
+            MaterialParameterNameIR::Kc3 => material.kc3_field.is_some(),
+            MaterialParameterNameIR::Dind => material.dind_field.is_some(),
+            MaterialParameterNameIR::Dbulk => material.dbulk_field.is_some(),
+            MaterialParameterNameIR::AnisotropyAxis => false,
+        });
+        if has_nodal_base || has_overrides || has_assignments {
+            let mut source_kind = if has_overrides || has_assignments {
+                MaterialFieldSourceKind::Override
+            } else {
+                MaterialFieldSourceKind::Parent
+            };
             let mut requires_sampling = false;
-            let mut requires_mesh_revision = false;
+            let mut requires_mesh_revision = has_nodal_base;
 
             for r in &enabled_regions {
                 for o in &r.material_overrides {
@@ -758,5 +819,120 @@ mod tests {
         )
         .expect("corner profile should resolve");
         assert!((values[0] - 0.6).abs() < 1e-12);
+    }
+}
+
+
+#[cfg(test)]
+mod nodal_base_regressions {
+    use super::*;
+
+    #[test]
+    fn nodal_base_preserves_values_instead_of_scalar_initialization() {
+        let problem = ProblemIR::bootstrap_example();
+        let points = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let values = resolve_spatial_parameter_with_base_values_excluding_regions(
+            &problem, "strip", MaterialParameterNameIR::Ms, &[7.0e5, 9.0e5],
+            &points, [0.0; 3], &BTreeSet::new(),
+        ).unwrap();
+        assert_eq!(values, vec![7.0e5, 9.0e5]);
+    }
+
+    #[test]
+    fn nodal_base_uses_existing_override_policy() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.material_parameter_fields.push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "node-base-override".into(),
+            owner_object: "strip".into(),
+            region_id: None,
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Linear {
+                base: 8.0e5, gradient: [1.0e5, 0.0, 0.0],
+                frame: RegionFrameIR::World, unit: Some("A/m".into()),
+            },
+            priority: 0,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+        let points = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let values = resolve_spatial_parameter_with_base_values_excluding_regions(
+            &problem, "strip", MaterialParameterNameIR::Ms, &[7.0e5, 1.1e6],
+            &points, [0.0; 3], &BTreeSet::new(),
+        ).unwrap();
+        assert_eq!(values, vec![8.0e5, 9.0e5]);
+    }
+
+    #[test]
+    fn nodal_base_rejects_shape_and_invalid_magnetic_values() {
+        let problem = ProblemIR::bootstrap_example();
+        let points = [[0.0; 3], [1.0; 3]];
+        for values in [vec![8.0e5], vec![8.0e5, 0.0], vec![8.0e5, f64::NAN]] {
+            assert!(resolve_spatial_parameter_with_base_values_excluding_regions(
+                &problem, "strip", MaterialParameterNameIR::Ms, &values,
+                &points, [0.0; 3], &BTreeSet::new(),
+            ).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod nodal_base_blending_regressions {
+    use super::*;
+
+    #[test]
+    fn region_transition_blends_against_each_local_nodal_base() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions.push(fullmag_ir::ObjectRegionIR {
+            region_id: "strip:transition".into(), owner_object: "strip".into(), name: "transition".into(),
+            shape: fullmag_ir::RegionShapeIR::Box { size: [2.0; 3], center: [1.0, 0.0, 0.0] },
+            frame: RegionFrameIR::World, enabled: true, priority: 10, mesh_policy: None,
+            material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+                parameter: MaterialParameterNameIR::Ms,
+                value: MaterialParameterFieldIR::Constant { value: serde_json::json!(1.0e6), unit: Some("A/m".into()) },
+                priority: 10, conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            }],
+            texture_override: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Project,
+            material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Metric {
+                width: 2.0, scope: fullmag_ir::MaterialTransitionScopeIR::Boundary,
+            }),
+        });
+        let values = resolve_spatial_parameter_with_base_values_excluding_regions(
+            &problem, "strip", MaterialParameterNameIR::Ms, &[6.0e5, 8.0e5],
+            &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], [0.0; 3], &BTreeSet::new(),
+        ).unwrap();
+        assert_eq!(values, vec![8.0e5, 9.0e5]);
+    }
+
+    #[test]
+    fn absorbing_layer_adds_to_each_authored_nodal_alpha() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.magnets[0].absorbing_boundary = Some(fullmag_ir::AbsorbingBoundaryLayerIR {
+            total_width_m: 4.0, ramp_width_m: 2.0, max_damping: 0.5,
+            faces: vec![AbsorbingBoundaryFaceIR::XPlus],
+            profile: AbsorbingBoundaryProfileIR::Linear,
+            frame: AbsorbingBoundaryFrameIR::Object,
+        });
+        let values = resolve_spatial_parameter_with_base_values_excluding_regions(
+            &problem, "strip", MaterialParameterNameIR::Alpha, &[0.1, 0.2],
+            &[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], [0.0; 3], &BTreeSet::new(),
+        ).unwrap();
+        assert_eq!(values[0], 0.1);
+        assert!((values[1] - 0.7).abs() < 1.0e-15);
+    }
+
+    #[test]
+    fn full_override_does_not_overflow_through_a_subtracted_base() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.material_parameter_fields.push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "finite-endpoint".into(), owner_object: "strip".into(), region_id: None,
+            parameter: MaterialParameterNameIR::Ku1,
+            value: MaterialParameterFieldIR::Constant { value: serde_json::json!(1.0e308), unit: Some("J/m^3".into()) },
+            priority: 10, conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+        let values = resolve_spatial_parameter_with_base_values_excluding_regions(
+            &problem, "strip", MaterialParameterNameIR::Ku1, &[-1.0e308, 1.0e308],
+            &[[0.0; 3], [1.0; 3]], [0.0; 3], &BTreeSet::new(),
+        ).unwrap();
+        assert_eq!(values, vec![1.0e308, 1.0e308]);
     }
 }

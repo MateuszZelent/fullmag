@@ -526,6 +526,7 @@ mod tests {
             hmax: 1.0,
             equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 4],
             material: MaterialIR {
+                nodal_field_binding: None,
                 name: "Permalloy".to_string(),
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,

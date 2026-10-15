@@ -1088,3 +1088,14 @@ tablice w `build_region_material_fields`, a eigen nie przechodzi przez ten sam
 krok. Native kontroluje długości i wartości, lecz nie źródłową tożsamość siatki.
 Wiązanie, wspólny resolver i testy round-trip/plannera wymagają implementacji.
 Sukces serializacji ani kontroli źródeł nie jest kwalifikacją MFEM/GPU lub fizyki.
+
+### Realizacja kontraktu w źródłach
+
+Nowy publiczny `MaterialNodalFieldBinding` przechowuje fingerprint `sha256:` i liczbę węzłów; Python waliduje skończone wartości i ponownie sprawdza mutable arrays przy `to_ir()`. Planer FEM weryfikuje tożsamość końcowej siatki, używa jednej bazy nodalnej w resolverze wszystkich dziesięciu parametrów i map ownerów. Metoda realizacji `bound_nodal_values` oznacza pobranie wartości z indeksów tego mesha, a nie sampling współrzędnych. FDM odmawia tego layoutu. Odczyt historycznego IR pozostaje oddzielony od dopuszczenia nowego obliczenia.
+
+`MagnetHandle` i kanoniczny eksport zachowują tablice oraz binding. Jawne `study.terms.add(InterfacialDMI(...))` i `BulkDMI(...)` korzystają z istniejących typów energii; rejestr dopuszcza jeden term na kanał. Wartości nodalne DMI nadpisują lokalny skalar i mogą być heterogeniczne. Nie utożsamiamy profilu z globalnym termem ani nie dopisujemy skalaru, gdy w wejściu był `None`.
+
+Obsługa materiału w planie nie dowodzi obsługi każdego profilu przez operator. Shared-domain MFEM konsumuje nodalne Ms i zachowuje dotychczasowe odmowy pozostałych nieobsługiwanych pól. Operator składany ze skalarów musi odmówić aktywnemu profilowi, którego nie używa. Jawna polityka damping Ignore pozostaje intencją wyłączenia dampingu. Przekazanie alpha przez FFI nie dowodzi aktywnego przestrzennego dampingu.
+
+Status: źródła i regresje w implementacji; testy GHA, wykonanie FEM/GPU i kwalifikacja fizyczna pozostają NOT VERIFIED do uzyskania osobnych dowodów. Historyczny opis bazowego commita powyżej pozostaje opisem tamtego źródła.
+

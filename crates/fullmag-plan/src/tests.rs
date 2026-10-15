@@ -6229,6 +6229,7 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
     ir.materials[0].cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
     ir.materials[0].cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
     ir.materials.push(fullmag_ir::MaterialIR {
+        nodal_field_binding: None,
         name: "Co".to_string(),
         saturation_magnetisation: 1.1e6,
         exchange_stiffness: 20e-12,
@@ -6383,6 +6384,7 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
         serde_json::json!({"device": "cuda", "device_index": 0}),
     );
     ir.materials.push(fullmag_ir::MaterialIR {
+        nodal_field_binding: None,
         name: "Co".to_string(),
         saturation_magnetisation: 1.1e6,
         exchange_stiffness: 20e-12,
@@ -6513,6 +6515,7 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
     ir.materials[0].uniaxial_anisotropy = Some(0.0);
     ir.materials[0].anisotropy_axis = Some([0.0, 1.0, 0.0]);
     ir.materials.push(fullmag_ir::MaterialIR {
+        nodal_field_binding: None,
         name: "CoFeB".to_string(),
         saturation_magnetisation: 1.1e6,
         exchange_stiffness: 15e-12,
@@ -10836,6 +10839,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         .strategy = "multilayer_convolution".to_string();
 
     ir.materials.push(fullmag_ir::MaterialIR {
+        nodal_field_binding: None,
         name: "CoFeB".to_string(),
         saturation_magnetisation: 1.1e6,
         exchange_stiffness: 20e-12,
@@ -13304,6 +13308,8 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             realization: fullmag_ir::RequestedFemDemagIR::Auto,
         },
     ];
+    freeze_mesh_before_authoring_nodal_fixture(&mut ir);
+    assert_eq!(ir.materials[0].nodal_field_binding.as_ref().unwrap().node_count, 8);
     ir.materials[0].ms_field = Some(vec![
         760_000.0, 760_000.0, 780_000.0, 790_000.0, 800_000.0, 810_000.0, 820_000.0, 830_000.0,
     ]);
@@ -17201,6 +17207,7 @@ fn fem_planner_accepts_uniform_uniaxial_anisotropy_on_certified_mixed_p1() {
         ir.materials[0].uniaxial_anisotropy = Some(1.0e5);
         ir.materials[0].uniaxial_anisotropy_k2 = Some(2.0e4);
         ir.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        freeze_mesh_before_authoring_nodal_fixture(&mut ir);
         let node_count = ir
             .geometry_assets
             .as_ref()
@@ -17238,7 +17245,8 @@ fn fem_planner_accepts_cpu_dmi_terms_and_nodal_d_fields_on_certified_mixed_p1() 
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
         fullmag_ir::RequestedFemDemagIR::Auto,
     );
-    let node_count = ir
+    freeze_mesh_before_authoring_nodal_fixture(&mut ir);
+        let node_count = ir
         .geometry_assets
         .as_ref()
         .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
@@ -18714,6 +18722,7 @@ fn fem_planner_rejects_conflicting_nodal_and_element_coefficient_realizations() 
 fn fem_cpu_relaxation_rejects_conflicting_nodal_and_element_ms_before_native_create() {
     let mut ir = fem_minimal_test_ir();
     ir.materials.push(fullmag_ir::MaterialIR {
+        nodal_field_binding: None,
         name: "Co".to_string(),
         saturation_magnetisation: 1.1e6,
         exchange_stiffness: 13e-12,
@@ -19829,3 +19838,165 @@ fn fem_eigen_branch_tracking_tetra_single_and_path_remain_plannable() {
         assert!(matches!(planned.backend_plan, BackendPlanIR::FemEigen(_)));
     }
 }
+
+mod mesh_bound_material_regressions {
+    use super::*;
+
+    fn bound_profile_ir() -> ProblemIR {
+        let mut ir = fem_minimal_test_ir();
+        ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+        let baseline = plan(&ir).expect("material fixture must plan before authoring a nodal profile");
+        let BackendPlanIR::Fem(baseline) = baseline.backend_plan else {
+            panic!("expected FEM fixture");
+        };
+        let mesh = baseline.mesh;
+        ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset.as_mut().unwrap().mesh = Some(mesh.clone());
+        let material = &mut ir.materials[0];
+        material.nodal_field_binding = Some(fullmag_ir::MaterialNodalFieldBindingIR {
+            canonical_mesh_fingerprint: mesh.topology_fingerprint_v6(),
+            node_count: mesh.nodes.len(),
+        });
+        material.ms_field = Some(vec![7.0e5, 8.0e5, 9.0e5, 1.0e6]);
+        material.a_field = Some(vec![1.0e-11, 1.1e-11, 1.2e-11, 1.3e-11]);
+        material.alpha_field = Some(vec![0.01, 0.02, 0.03, 0.04]);
+        material.ku_field = Some(vec![-100.0, 200.0, 300.0, 400.0]);
+        material.ku2_field = Some(vec![10.0, -20.0, 30.0, 40.0]);
+        material.kc1_field = Some(vec![1.0, 2.0, -3.0, 4.0]);
+        material.kc2_field = Some(vec![5.0, -6.0, 7.0, 8.0]);
+        material.kc3_field = Some(vec![-9.0, 10.0, 11.0, 12.0]);
+        material.dind_field = Some(vec![1.0e-3, 2.0e-3, -3.0e-3, 4.0e-3]);
+        material.dbulk_field = Some(vec![-1.0e-3, 2.0e-3, 3.0e-3, 4.0e-3]);
+        material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+        material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+        ir
+    }
+
+    fn as_eigen(mut ir: ProblemIR) -> ProblemIR {
+        ir.study = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        })).study;
+        ir
+    }
+
+    #[test]
+    fn transient_and_eigen_preserve_the_same_ten_authored_nodal_profiles() {
+        let ir = bound_profile_ir();
+        let authored = ir.materials[0].clone();
+        let transient = plan(&ir).expect("bound transient nodal material must plan");
+        let eigen = plan(&as_eigen(ir)).expect("bound eigen nodal material must plan");
+        let BackendPlanIR::Fem(transient_fem) = transient.backend_plan else {
+            panic!("expected time-domain FEM");
+        };
+        let BackendPlanIR::FemEigen(eigen_fem) = eigen.backend_plan else {
+            panic!("expected eigen FEM");
+        };
+        assert_eq!(transient_fem.material, authored);
+        assert_eq!(eigen_fem.material, authored);
+        assert_eq!(transient.common.material_field_plans.len(), 10);
+        assert_eq!(eigen.common.material_field_plans.len(), 10);
+        for field in transient.common.material_field_plans.iter().chain(&eigen.common.material_field_plans) {
+            assert_eq!(field.realization_location, fullmag_ir::MaterialFieldLocationIR::Node);
+            assert!(field.requires_mesh_revision);
+            assert_eq!(field.realization_method.as_deref(), Some("bound_nodal_values"));
+            assert_eq!(field.statistics.as_ref().unwrap().sample_count, 4);
+        }
+        assert_eq!(transient_fem.dind_field, authored.dind_field);
+        assert_eq!(transient_fem.dbulk_field, authored.dbulk_field);
+    }
+
+    #[test]
+    fn both_fem_planners_reject_same_count_reordered_node_snapshots() {
+        for eigen in [false, true] {
+            let mut ir = bound_profile_ir();
+            let mesh = ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset.as_mut().unwrap().mesh.as_mut().unwrap();
+            mesh.nodes.swap(0, 1);
+            // Preserve the physical tetrahedron and face; only global numbering changed.
+            mesh.cells = fullmag_ir::FemConnectivityIR::from_tet4(vec![[1, 0, 2, 3]]);
+            mesh.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[1, 0, 2]]);
+            if eigen { ir = as_eigen(ir); }
+            let error = plan(&ir).expect_err("same node count is not a mesh/order binding");
+            assert!(error.reasons.join("; ").contains("fingerprint"), "{:?}", error.reasons);
+        }
+    }
+
+    #[test]
+    fn both_fem_planners_reject_unbound_legacy_nodal_inputs() {
+        for eigen in [false, true] {
+            let mut ir = bound_profile_ir();
+            ir.materials[0].nodal_field_binding = None;
+            if eigen { ir = as_eigen(ir); }
+            let error = plan(&ir).expect_err("unbound input must not be discarded or silently rebound");
+            assert!(error.reasons.join("; ").contains("nodal_field_binding"));
+        }
+    }
+
+    #[test]
+    fn an_exchange_profile_below_an_unrelated_absolute_epsilon_is_not_erased() {
+        let mut ir = bound_profile_ir();
+        let scalar = ir.materials[0].exchange_stiffness;
+        let values = vec![scalar, scalar + 1.0e-20, scalar, scalar];
+        ir.materials[0].a_field = Some(values.clone());
+        let planned = plan(&ir).expect("tiny but authored exchange difference is legal");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else { panic!("expected FEM"); };
+        assert_eq!(fem.material.a_field, Some(values));
+    }
+
+    #[test]
+    fn fdm_does_not_reinterpret_mesh_bound_nodal_arrays_as_cell_samples() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.materials[0].ms_field = Some(vec![7.0e5, 9.0e5]);
+        ir.materials[0].nodal_field_binding = Some(fullmag_ir::MaterialNodalFieldBindingIR {
+            canonical_mesh_fingerprint: format!("sha256:{}", "a".repeat(64)),
+            node_count: 2,
+        });
+        let error = plan(&ir).expect_err("FDM must reject FEM node-order semantics");
+        assert!(error.reasons.join("; ").contains("nodal"), "{:?}", error.reasons);
+    }
+
+    #[test]
+    fn air_nodes_are_not_included_in_magnetic_owner_profile_statistics() {
+        let mut ir = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single { k_vector: [0.0; 3] }));
+        let mesh = ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset.as_mut().unwrap().mesh.as_mut().unwrap();
+        mesh.periodic_boundary_pairs.clear();
+        mesh.periodic_node_pairs.clear();
+        let baseline = plan(&ir).expect("free-boundary airbox fixture must plan");
+        let BackendPlanIR::FemEigen(baseline) = baseline.backend_plan else { panic!("expected eigen"); };
+        let mesh = baseline.mesh;
+        let scalar = ir.materials[0].saturation_magnetisation;
+        let mut values = vec![1.0e12; mesh.nodes.len()];
+        for (index, value) in values.iter_mut().take(4).enumerate() { *value = 7.0e5 + index as f64 * 1.0e5; }
+        ir.materials[0].ms_field = Some(values);
+        ir.materials[0].nodal_field_binding = Some(fullmag_ir::MaterialNodalFieldBindingIR {
+            canonical_mesh_fingerprint: mesh.topology_fingerprint_v6(), node_count: mesh.nodes.len(),
+        });
+        ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset.as_mut().unwrap().mesh = Some(mesh);
+        let planned = plan(&ir).expect("bound full-mesh profile must be restricted to magnetic ownership");
+        let field = planned.common.material_field_plans.iter().find(|field| field.parameter == fullmag_ir::MaterialParameterNameIR::Ms).unwrap();
+        let stats = field.statistics.as_ref().unwrap();
+        assert_eq!(stats.sample_count, 4);
+        assert_eq!(stats.min, 7.0e5);
+        assert_eq!(stats.max, 1.0e6);
+        let BackendPlanIR::FemEigen(fem) = planned.backend_plan else { panic!("expected eigen"); };
+        assert!(fem.material.ms_field.as_ref().unwrap().iter().skip(4).all(|value| *value == scalar));
+    }
+}
+
+// Author test arrays only after the mesh packing contract has fixed node order.
+// This fixture helper never transfers an existing nodal profile.
+fn freeze_mesh_before_authoring_nodal_fixture(ir: &mut ProblemIR) {
+    assert!(ir.materials.iter().all(|material| !material.has_nodal_fields()));
+    let resolved = crate::mesh::resolve_fem_domain_mesh_asset(ir, true)
+        .expect("fixture mesh must resolve before authoring material arrays")
+        .expect("nodal fixture requires an explicit FEM domain mesh");
+    let binding = fullmag_ir::MaterialNodalFieldBindingIR {
+        canonical_mesh_fingerprint: resolved.mesh.topology_fingerprint_v6(),
+        node_count: resolved.mesh.nodes.len(),
+    };
+    let asset = ir.geometry_assets.as_mut().unwrap()
+        .fem_domain_mesh_asset.as_mut().unwrap();
+    asset.mesh = Some(resolved.mesh);
+    asset.build_report = resolved.build_report;
+    ir.materials[0].nodal_field_binding = Some(binding);
+}
+

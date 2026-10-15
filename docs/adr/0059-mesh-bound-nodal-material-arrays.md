@@ -50,3 +50,18 @@ FDM używa pól komórkowych i innego porządku. Binding nodalny FEM w żądaniu
 ## Stan
 
 Decyzja semantyczna **zaakceptowana**. Kontrakt zapisany; implementacja bindingu, wspólnego resolvera oraz wymienione bramki są **TODO / NOT VERIFIED**. Nie zmieniono chronionego worktree ani danych storage.
+
+## Doprecyzowanie implementacji i granic operatorów — 15.10.2026
+
+Wspólny resolver oraz poprawne przypisanie do siatki nie dowodzą, że każdy operator FEM EIGEN używa wszystkich współczynników. Audyt źródeł `bfcc2c5f5f1047bfae9e8fec2f936e6ee7f62f3f` wykazał rzeczywiste użycie nodalnego Ms w operatorze shared-domain MFEM. Ta trasa nadal odrzuca nodalne A, aktywne pola Ku/Kc i pola DMI według istniejącego kontraktu zakresu. Nodalne alpha jest przenoszone, lecz przy jawnej polityce Ignore damping pozostaje wyłączony. Nie jest to dowód obsługi przestrzennego dampingu.
+
+Operatory składane z samych skalarów muszą odrzucić aktywne nodalne nadpisania przed złożeniem macierzy. Wektor identyczny w każdym węźle z rzeczywistym skalarnym współczynnikiem operatora jest równoważny; różnice oceniamy dokładnie, bez tolerancji absolutnej wspólnej dla różnych jednostek. Nie wolno zastępować zmiennego profilu średnią. Dla alpha jawne Ignore oznacza pominięcie członu zgodnie z intencją; Include wymaga rzeczywistej obsługi profilu albo odmowy. Obsługa pełnych profili w tych operatorach pozostaje osobnym rozszerzeniem, nie cichym fallbackiem.
+
+Odczyt historycznego IR bez bindingu pozostaje możliwy. Nowe konstrukcje Pythona z tablicami wymagają bindingu; oba planery FEM sprawdzają go względem końcowej siatki. Wczesna walidacja IR sprawdza kształt nowego typowanego bindingu, a granica wykonania niezależnie odmawia historycznych niezwiązanych tablic.
+
+Kanoniczny authoring używa istniejącego MagnetHandle: jawne atrybuty dziesięciu tablic oraz nodal_field_binding są przekazywane do Material i eksportowane jako edytowalny skrypt. Nie wprowadzamy fikcyjnego setteru material. Istniejący rejestr study.terms.add rozszerza dopuszczone istniejące termy o InterfacialDMI i BulkDMI obok RotatedInterfacialDMI. Jawny term zapobiega automatycznemu dodaniu drugiego termu tego samego kanału; oryginalne skalary oraz profile materiału pozostają odrębne. Nodalne wartości DMI mogą różnić się między węzłami; nie muszą być równe skalarnemu termowi. Konflikty z wariantem rotated oraz istniejące reguły skalarnych mirrorów pozostają jawne.
+
+Testy pozytywne tworzą profil dopiero na końcowym, uporządkowanym snapshotcie siatki. Pomocnik testowy nie przenosi istniejącego profilu. Osobne regresje obejmują zmianę numeracji, brak bindingu, owner/airbox, wszystkie dziesięć parametrów, bardzo małe różnice A, mieszanie regionów oraz alpha ABL. Przy mieszaniu wagowym stosujemy równoważną postać (1-w)*base+w*override z jawnym przypadkiem w=1, by uniknąć przepełnienia odejmowania dla skończonych przeciwnych wartości.
+
+Stan powyższych korekt: przygotowywany kandydat źródłowy, bez lokalnego wykonania. Publikacja, testy GHA, managed FEM oraz kwalifikacja fizyczna są oddzielnymi bramkami i pozostają NOT VERIFIED do uzyskania ich dowodów.
+

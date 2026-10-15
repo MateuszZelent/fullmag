@@ -2968,9 +2968,9 @@ fn build_region_materials(
 }
 
 fn values_differ(values: &[f64], reference: f64) -> bool {
-    values
-        .iter()
-        .any(|value| (*value - reference).abs() > 1e-18)
+    // These parameters have different SI units; a shared absolute epsilon can
+    // erase an authored exchange profile. Collapse only actually equal values.
+    values.iter().any(|value| *value != reference)
 }
 
 fn axes_differ(values: &[[f64; 3]], reference: [f64; 3]) -> bool {
@@ -3120,6 +3120,14 @@ fn build_region_material_fields(
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
 ) -> Result<(fullmag_ir::MaterialIR, Option<Vec<[f64; 3]>>), PlanError> {
     let node_count = mesh.nodes.len();
+    for source_material in magnet_materials.values() {
+        source_material.validate_nodal_fields(mesh).map_err(|reason| PlanError {
+            reasons: vec![format!("material '{}': {}", source_material.name, reason)],
+        })?;
+    }
+    base_material.validate_nodal_fields(mesh).map_err(|reason| PlanError {
+        reasons: vec![format!("material '{}': {}", base_material.name, reason)],
+    })?;
     if node_count == 0 {
         return Ok((base_material.clone(), None));
     }
@@ -3169,50 +3177,56 @@ fn build_region_material_fields(
         let points: Vec<[f64; 3]> = node_indices.iter().map(|&idx| mesh.nodes[idx]).collect();
         let object_translation = crate::material::object_translation(problem, &segment.object_id);
 
-        let ms_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
-            problem,
-            &segment.object_id,
-            fullmag_ir::MaterialParameterNameIR::Ms,
-            region_material.saturation_magnetisation,
-            &points,
-            object_translation,
-            &sharp_conformal_ms_regions,
-        )
-        .map_err(|e| PlanError { reasons: vec![e] })?;
-
-        let aex_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
-            problem,
-            &segment.object_id,
-            fullmag_ir::MaterialParameterNameIR::Aex,
-            region_material.exchange_stiffness,
-            &points,
-            object_translation,
-            &sharp_conformal_aex_regions,
-        )
-        .map_err(|e| PlanError { reasons: vec![e] })?;
-
-        let alpha_resolved = crate::material::resolve_spatial_parameter(
-            problem,
-            &segment.object_id,
-            fullmag_ir::MaterialParameterNameIR::Alpha,
-            region_material.damping,
-            &points,
-            object_translation,
-        )
-        .map_err(|e| PlanError { reasons: vec![e] })?;
+        let resolve = |parameter, excluded_regions: &BTreeSet<String>| {
+            let (scalar, nodal): (f64, Option<&[f64]>) = match parameter {
+                fullmag_ir::MaterialParameterNameIR::Ms => (region_material.saturation_magnetisation, region_material.ms_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Aex => (region_material.exchange_stiffness, region_material.a_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Alpha => (region_material.damping, region_material.alpha_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Ku1 => (region_material.uniaxial_anisotropy.unwrap_or(0.0), region_material.ku_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Ku2 => (region_material.uniaxial_anisotropy_k2.unwrap_or(0.0), region_material.ku2_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Kc1 => (region_material.cubic_anisotropy_kc1.unwrap_or(0.0), region_material.kc1_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Kc2 => (region_material.cubic_anisotropy_kc2.unwrap_or(0.0), region_material.kc2_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Kc3 => (region_material.cubic_anisotropy_kc3.unwrap_or(0.0), region_material.kc3_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Dind => (region_material.interfacial_dmi.unwrap_or(0.0), region_material.dind_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::Dbulk => (region_material.bulk_dmi.unwrap_or(0.0), region_material.dbulk_field.as_deref()),
+                fullmag_ir::MaterialParameterNameIR::AnisotropyAxis => return Err(PlanError {
+                    reasons: vec!["anisotropy axis is a vector, not a scalar nodal material base".into()],
+                }),
+            };
+            // validate_nodal_fields has bound the full vector to this exact mesh;
+            // node_indices is the existing checked owner map into that mesh.
+            let base_values = node_indices.iter()
+                .map(|&index| nodal.map_or(scalar, |values| values[index]))
+                .collect::<Vec<_>>();
+            crate::material::resolve_spatial_parameter_with_base_values_excluding_regions(
+                problem, &segment.object_id, parameter, &base_values, &points,
+                object_translation, excluded_regions,
+            ).map_err(|reason| PlanError { reasons: vec![reason] })
+        };
+        let no_exclusions = BTreeSet::new();
+        let ms_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Ms, &sharp_conformal_ms_regions)?;
+        let aex_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Aex, &sharp_conformal_aex_regions)?;
+        let alpha_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Alpha, &no_exclusions)?;
+        let ku_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Ku1, &no_exclusions)?;
+        let ku2_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Ku2, &no_exclusions)?;
+        let kc1_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Kc1, &no_exclusions)?;
+        let kc2_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Kc2, &no_exclusions)?;
+        let kc3_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Kc3, &no_exclusions)?;
+        let dind_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Dind, &no_exclusions)?;
+        let dbulk_resolved = resolve(fullmag_ir::MaterialParameterNameIR::Dbulk, &no_exclusions)?;
 
         for (i, &index) in node_indices.iter().enumerate() {
             ms_values[index] = ms_resolved[i];
             a_values[index] = aex_resolved[i];
             alpha_values[index] = alpha_resolved[i];
-            ku_values[index] = region_material.uniaxial_anisotropy.unwrap_or(0.0);
-            ku2_values[index] = region_material.uniaxial_anisotropy_k2.unwrap_or(0.0);
+            ku_values[index] = ku_resolved[i];
+            ku2_values[index] = ku2_resolved[i];
             anisotropy_axis_values[index] = region_axis;
-            kc1_values[index] = region_material.cubic_anisotropy_kc1.unwrap_or(0.0);
-            kc2_values[index] = region_material.cubic_anisotropy_kc2.unwrap_or(0.0);
-            kc3_values[index] = region_material.cubic_anisotropy_kc3.unwrap_or(0.0);
-            dind_values[index] = region_material.interfacial_dmi.unwrap_or(0.0);
-            dbulk_values[index] = region_material.bulk_dmi.unwrap_or(0.0);
+            kc1_values[index] = kc1_resolved[i];
+            kc2_values[index] = kc2_resolved[i];
+            kc3_values[index] = kc3_resolved[i];
+            dind_values[index] = dind_resolved[i];
+            dbulk_values[index] = dbulk_resolved[i];
         }
     }
 
@@ -3250,6 +3264,16 @@ fn build_region_material_fields(
         values_differ(&dbulk_values, base_material.bulk_dmi.unwrap_or(0.0)).then_some(dbulk_values);
     let anisotropy_axis_field =
         axes_differ(&anisotropy_axis_values, base_axis).then_some(anisotropy_axis_values);
+    let has_nodal_values = [
+        &material.ms_field, &material.a_field, &material.alpha_field,
+        &material.ku_field, &material.ku2_field, &material.kc1_field,
+        &material.kc2_field, &material.kc3_field, &material.dind_field,
+        &material.dbulk_field,
+    ].iter().any(|values| values.is_some());
+    material.nodal_field_binding = has_nodal_values.then(|| fullmag_ir::MaterialNodalFieldBindingIR {
+        canonical_mesh_fingerprint: mesh.topology_fingerprint_v6(),
+        node_count,
+    });
     Ok((material, anisotropy_axis_field))
 }
 
@@ -3463,8 +3487,10 @@ fn build_conformal_region_element_fields(
 fn gather_fem_material_field_plans(
     problem: &ProblemIR,
     material: &fullmag_ir::MaterialIR,
-    node_count: usize,
-) -> Vec<fullmag_ir::MaterialFieldPlan> {
+    mesh: &fullmag_ir::MeshIR,
+    object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+) -> Result<Vec<fullmag_ir::MaterialFieldPlan>, PlanError> {
     let mut material_field_plans = Vec::new();
     let is_extended =
         problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Extended;
@@ -3474,6 +3500,18 @@ fn gather_fem_material_field_plans(
             &magnet.name,
             fullmag_ir::MaterialFieldLocationIR::Node,
         );
+        let mut owner_nodes = BTreeSet::new();
+        for segment in object_segments.iter().filter(|segment| {
+            plan_object_ids_match(&segment.object_id, &magnet.name)
+                || magnet.object_id.as_deref().is_some_and(|id| plan_object_ids_match(&segment.object_id, id))
+        }) {
+            owner_nodes.extend(segment_node_indices(mesh_parts, segment, mesh.nodes.len())?);
+        }
+        if !plans.is_empty() && owner_nodes.is_empty() {
+            return Err(PlanError { reasons: vec![format!(
+                "material field provenance for '{}' has no checked owner node map", magnet.name,
+            )] });
+        }
         for plan in &mut plans {
             if is_extended
                 && (plan.parameter == fullmag_ir::MaterialParameterNameIR::Ms
@@ -3540,18 +3578,38 @@ fn gather_fem_material_field_plans(
                 fullmag_ir::MaterialParameterNameIR::Alpha => {
                     (material.alpha_field.as_deref(), material.damping)
                 }
-                _ => (None, 0.0),
+                fullmag_ir::MaterialParameterNameIR::Ku1 => (material.ku_field.as_deref(), material.uniaxial_anisotropy.unwrap_or(0.0)),
+                fullmag_ir::MaterialParameterNameIR::Ku2 => (material.ku2_field.as_deref(), material.uniaxial_anisotropy_k2.unwrap_or(0.0)),
+                fullmag_ir::MaterialParameterNameIR::Kc1 => (material.kc1_field.as_deref(), material.cubic_anisotropy_kc1.unwrap_or(0.0)),
+                fullmag_ir::MaterialParameterNameIR::Kc2 => (material.kc2_field.as_deref(), material.cubic_anisotropy_kc2.unwrap_or(0.0)),
+                fullmag_ir::MaterialParameterNameIR::Kc3 => (material.kc3_field.as_deref(), material.cubic_anisotropy_kc3.unwrap_or(0.0)),
+                fullmag_ir::MaterialParameterNameIR::Dind => (material.dind_field.as_deref(), material.interfacial_dmi.unwrap_or(0.0)),
+                fullmag_ir::MaterialParameterNameIR::Dbulk => (material.dbulk_field.as_deref(), material.bulk_dmi.unwrap_or(0.0)),
+                fullmag_ir::MaterialParameterNameIR::AnisotropyAxis => (None, 0.0),
             };
-            let (sample_count, min, max, mean) = if let Some(values) = values {
-                let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-                let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let mean = values.iter().sum::<f64>() / values.len() as f64;
-                (values.len(), min, max, mean)
+            let sample_count = owner_nodes.len();
+            let (min, max, mean) = if let Some(values) = values {
+                let mut min = f64::INFINITY;
+                let mut max = f64::NEG_INFINITY;
+                let mut mean = 0.0;
+                for &index in &owner_nodes {
+                    let value = *values.get(index).ok_or_else(|| PlanError {
+                        reasons: vec!["material field provenance has an out-of-range owner index".into()],
+                    })?;
+                    min = min.min(value);
+                    max = max.max(value);
+                    mean += value / sample_count as f64;
+                }
+                (min, max, mean)
             } else {
-                (node_count, fallback, fallback, fallback)
+                (fallback, fallback, fallback)
             };
             plan.realization_method = Some(
-                if plan
+                if plan.source_kind == fullmag_ir::MaterialFieldSourceKind::Parent
+                    && plan.requires_mesh_revision
+                {
+                    "bound_nodal_values"
+                } else if plan
                     .warnings
                     .iter()
                     .any(|warning| warning.contains("projected approximation"))
@@ -3578,7 +3636,7 @@ fn gather_fem_material_field_plans(
         }
         material_field_plans.extend(plans);
     }
-    material_field_plans
+    Ok(material_field_plans)
 }
 
 pub(crate) fn plan_fem(
@@ -4843,7 +4901,7 @@ pub(crate) fn plan_fem(
         provenance_notes.push(note);
     }
     let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, n_nodes);
+        gather_fem_material_field_plans(problem, &fem_plan.material, &fem_plan.mesh, &fem_plan.object_segments, &fem_plan.mesh_parts)?;
     for field_plan in &material_field_plans {
         if let Some(statistics) = &field_plan.statistics {
             provenance_notes.push(format!(
@@ -5834,6 +5892,45 @@ pub(crate) fn plan_fem_eigen(
         &magnet_entries,
         &mut equilibrium_magnetization,
     )?;
+    let (material, anisotropy_axis_field) = build_region_material_fields(
+        problem, &material, &mesh, &object_segments,
+        &resolved_mesh_parts, &mesh_part_materials,
+    )?;
+    if floquet_airbox_dynamic_demag_cpu_path {
+        if let Some(interaction) = first_unsupported_floquet_airbox_local_interaction(
+            &material, interfacial_dmi, bulk_dmi, spin_wave_bc,
+        ) {
+            return Err(PlanError { reasons: vec![format!(
+                "fem_eigen.floquet_airbox_dynamic_demag_unsupported_local_interaction: '{}'; fallback=none",
+                interaction,
+            )] });
+        }
+    }
+    if anisotropy_axis_field.is_some() {
+        return Err(PlanError { reasons: vec![
+            "fem_eigen.nodal_anisotropy_axis_unsupported; fallback=none".into(),
+        ] });
+    }
+    let (ms_element_field, a_element_field) = build_conformal_region_element_fields(
+        problem, &material, &mesh, &object_segments, &mesh_part_materials,
+    )?;
+    if let Some(reason) = exclusive_coefficient_realization_error(
+        &material, &ms_element_field, &a_element_field,
+    ) {
+        return Err(PlanError { reasons: vec![reason] });
+    }
+    if ms_element_field.is_some() || a_element_field.is_some() {
+        return Err(PlanError { reasons: vec![
+            "fem_eigen.element_material_fields_unsupported; fallback=none".into(),
+        ] });
+    }
+    if bias_field_sweep.is_some()
+        && material.alpha_field.as_ref().is_some_and(|values| values.iter().any(|&value| value != 0.0))
+    {
+        return Err(PlanError { reasons: vec![
+            "eigenmodes.bias_field_sweep_requires_alpha_zero; fallback=none".into(),
+        ] });
+    }
     let domain_frame = problem_domain_frame(problem)
         .map(|frame| frame.with_mesh_bounds(mesh_bounds(&mesh)))
         .and_then(DomainFrameIR::finalized);
@@ -6007,7 +6104,7 @@ pub(crate) fn plan_fem_eigen(
         fem_plan.operator.kind, fem_plan.count, fem_plan.normalization, fem_plan.damping_policy
     );
     let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, fem_plan.mesh.nodes.len());
+        gather_fem_material_field_plans(problem, &fem_plan.material, &fem_plan.mesh, &fem_plan.object_segments, &fem_plan.mesh_parts)?;
     let mut provenance_notes = vec![
         if resolved_domain_mesh_asset.is_some() {
             "Bootstrap FEM eigen planner using study-level shared-domain mesh asset".to_string()

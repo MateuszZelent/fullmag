@@ -701,6 +701,7 @@ impl ProblemIR {
             }],
             object_regions: Vec::new(),
             materials: vec![MaterialIR {
+                nodal_field_binding: None,
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,
@@ -2063,6 +2064,13 @@ fn validate_material_parameter_number(
 
 fn validate_material_scalar_values(problem: &ProblemIR, errors: &mut Vec<String>) {
     for (index, material) in problem.materials.iter().enumerate() {
+        // Historical unbound arrays remain readable; each execution planner
+        // rejects those inputs before material use. Validate new typed bindings here.
+        if material.nodal_field_binding.is_some() {
+            if let Err(reason) = material.validate_nodal_field_shape() {
+                errors.push(format!("materials[{index}]: {reason}"));
+            }
+        }
         validate_material_parameter_number(
             &format!("materials[{index}].saturation_magnetisation"),
             MaterialParameterNameIR::Ms,
