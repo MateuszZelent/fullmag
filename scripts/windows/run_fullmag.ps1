@@ -1919,7 +1919,7 @@ if ($BuildMode -eq "false" -and $existingFrozenManifest -and $existingFrozenMani
   }
   $BuildSnapshot = Read-BuildSnapshot -RecordPath ([string]$existingFrozenManifest.build_source_snapshot.record_path)
   if ([string]$BuildSnapshot.inventory_sha256 -ne [string]$existingFrozenManifest.build_source_snapshot.inventory_sha256 -or
-      [string]$BuildSnapshot.backend_source_sha256 -ne [string]$existingFrozenManifest.build_source_snapshot.backend_source_sha256) {
+      [string]$BuildSnapshot.backend_source_sha256 -ne [string]$existingFrozenManifest.backend_source_sha256) {
     throw "Build manifest does not match its frozen sources"
   }
   $BuildSourceRoot = [string]$BuildSnapshot.source_root
