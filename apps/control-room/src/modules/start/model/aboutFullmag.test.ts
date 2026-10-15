@@ -22,7 +22,11 @@ const readme = readFileSync(
 ).split("\r\n").join("\n");
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 // Prose is compared without Markdown emphasis and code spans.
-const prose = flat(readme.replace(/[*`]/g, ""));
+const prose = flat(
+  readme
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*`]/g, ""),
+);
 
 describe("About page content", () => {
   it("states the tagline and overview as the README does", () => {
