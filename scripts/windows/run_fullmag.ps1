@@ -91,6 +91,9 @@ if ($AllBackendsRequested) {
 }
 $BrowserWorkspace = $Browser -and ($Backend -eq "fem" -or $AllBackendsRequested) -and $RunMode -eq "workspace"
 $BrowserApiIsolation = $BrowserWorkspace -and ($AllBackendsRequested -or $Backend -eq "fem")
+# Script-mode FEM needs the same private API ownership as the browser workspace,
+# but headless runs must retain their disabled API contract.
+$FemInteractiveApiIsolation = $RunMode -eq "interactive" -and $Backend -eq "fem"
 if ($Browser -and -not $BrowserWorkspace) {
   throw "-Browser is only supported for the managed native FEM workspace"
 }
@@ -2566,26 +2569,56 @@ if ($InitialMagnetizationState) {
 if ($Backend -ne "auto") {
   $cliArguments += @("--backend", $Backend)
 }
-if ($RunMode -eq "headless") {
-  $env:FULLMAG_API_PORT = "0"
-  $cliArguments += @("--headless", "--json")
-}
-else {
-  $cliArguments += @("--web-port", $WebPort.ToString())
-}
-
-Write-Host "Windows native Fullmag runtime"
-Write-Host "- binary: $FullmagExe"
-Write-Host "- script: $resolvedScript"
-Write-Host "- backend: $Backend"
-Write-Host "- device: $Device"
-Write-Host "- cargo target: $TargetRoot"
-Write-Host "- cache root: $CacheRoot"
-
-Push-Location $RepoRoot
+$previousScriptApiPortWasSet = Test-Path Env:FULLMAG_API_PORT
+$previousScriptApiPort = [Environment]::GetEnvironmentVariable("FULLMAG_API_PORT", "Process")
+$previousScriptRequireOwnedApiWasSet = Test-Path Env:FULLMAG_REQUIRE_OWN_API
+$previousScriptRequireOwnedApi = [Environment]::GetEnvironmentVariable("FULLMAG_REQUIRE_OWN_API", "Process")
 try {
-  Invoke-External $FullmagExe $cliArguments
+  if ($RunMode -eq "headless") {
+    # Headless script execution keeps the API disabled; do not opt it into
+    # the interactive owned-API contract.
+    $env:FULLMAG_API_PORT = "0"
+    $cliArguments += @("--headless", "--json")
+  }
+  else {
+    # An omitted option lets the CLI select a usable listener from its
+    # managed candidate list.  --web-port 0 is an explicit unusable port.
+    if ($WebPort -ne 0) {
+      $cliArguments += @("--web-port", $WebPort.ToString())
+    }
+    if ($FemInteractiveApiIsolation) {
+      $env:FULLMAG_API_PORT = "0"
+      $env:FULLMAG_REQUIRE_OWN_API = "1"
+    }
+  }
+
+  Write-Host "Windows native Fullmag runtime"
+  Write-Host "- binary: $FullmagExe"
+  Write-Host "- script: $resolvedScript"
+  Write-Host "- backend: $Backend"
+  Write-Host "- device: $Device"
+  Write-Host "- cargo target: $TargetRoot"
+  Write-Host "- cache root: $CacheRoot"
+
+  Push-Location $RepoRoot
+  try {
+    Invoke-External $FullmagExe $cliArguments
+  }
+  finally {
+    Pop-Location
+  }
 }
 finally {
-  Pop-Location
+  if ($previousScriptApiPortWasSet) {
+    [Environment]::SetEnvironmentVariable("FULLMAG_API_PORT", $previousScriptApiPort, "Process")
+  }
+  else {
+    Remove-Item Env:FULLMAG_API_PORT -ErrorAction SilentlyContinue
+  }
+  if ($previousScriptRequireOwnedApiWasSet) {
+    [Environment]::SetEnvironmentVariable("FULLMAG_REQUIRE_OWN_API", $previousScriptRequireOwnedApi, "Process")
+  }
+  else {
+    Remove-Item Env:FULLMAG_REQUIRE_OWN_API -ErrorAction SilentlyContinue
+  }
 }
