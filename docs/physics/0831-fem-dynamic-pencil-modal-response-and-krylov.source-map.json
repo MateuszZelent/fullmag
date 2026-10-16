@@ -4724,6 +4724,7 @@
       "id": "source-tracking-nodal-envelope-metric-contract",
       "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
       "symbol": "DOC-ANCHOR:tracking-nodal-envelope-metric",
+      "evidence_status": "planned_contract",
       "responsibility": "Future consumer must apply the nodal phase around the consistent mass; this is a contract only and is not implemented by Stage 2"
     }
   ],
