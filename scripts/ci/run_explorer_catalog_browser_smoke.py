@@ -109,6 +109,7 @@ def run_browser_proof(root: Path, browser_log: Path) -> int:
         **os.environ,
         "CONTROL_ROOM_URL": SERVER_URL,
         "CONTROL_ROOM_STUDY_AUTHORING_SMOKE_EXPLORER_CATALOG_ONLY": "1",
+        "CONTROL_ROOM_STUDY_AUTHORING_SMOKE_ORPHAN_PIN_BROWSER": "1",
     }
     command = [
         "pnpm",

@@ -21,11 +21,46 @@ const resultsOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_RESULTS_ONLY === "1";
 const explorerCatalogOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_EXPLORER_CATALOG_ONLY === "1";
+const orphanPinBrowserProof =
+  process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_ORPHAN_PIN_BROWSER === "1";
+if (orphanPinBrowserProof && !explorerCatalogOnly) {
+  throw new Error("The orphan-pin browser proof requires the Explorer catalog fixture.");
+}
 const catalogRunId = "study-authoring-smoke-run";
 const catalogSessionId = "study-authoring-smoke";
 const catalogSessionEpoch = "study-authoring-smoke-session-epoch";
 const catalogRequestScopeEpoch = "study-authoring-smoke-request-scope";
 const catalogCursorAfter500 = "catalog-after-500";
+// Mirrors the canonical mode-visualization owner tuple while pointing at a
+// dataset that this current-run fixture does not publish.
+const orphanPinDataRef = {
+  run_id: catalogRunId,
+  dataset_id: "unpublished-dispersion-dataset",
+  dataset_revision: "unpublished-dispersion-revision",
+  field_id: "m",
+  sample_id: "dispersion-sample-0000",
+  item_id: "dispersion-mode-0000",
+};
+const orphanPinOwnerKey = JSON.stringify([
+  "analysis.dispersion",
+  orphanPinDataRef.run_id,
+  orphanPinDataRef.dataset_id,
+  orphanPinDataRef.dataset_revision,
+  orphanPinDataRef.field_id,
+  orphanPinDataRef.sample_id,
+  orphanPinDataRef.item_id,
+]);
+const orphanPinDefinition = {
+  definition_id: `analysis.dispersion:mode-visualization:${encodeURIComponent(orphanPinOwnerKey)}`,
+  revision: 1,
+  module_id: "analysis.dispersion",
+  module_version: "0.1.0",
+  definition_schema: "analysis.dispersion.mode_visualization.v1",
+  node_kind: "analysis.dispersion.mode_visualization",
+  label: "Unavailable pinned dispersion mode",
+  data_ref: orphanPinDataRef,
+  settings: { placement: "beside" },
+};
 const MISSING_EXPLORER_FIXTURE = Symbol("missing-explorer-fixture");
 const workflowAntennaScreenshot =
   process.env.CONTROL_ROOM_STUDY_WORKFLOW_ANTENNA_SCREENSHOT ?? null;
@@ -53,6 +88,12 @@ if (!playwright?.chromium) {
 }
 
 let sceneRevision = 1;
+let persistedPostprocessingDefinitions = orphanPinBrowserProof
+  ? [orphanPinDefinition]
+  : [];
+let orphanPinDefinitionDeleted = false;
+const orphanPinDefinitionReads = [];
+const orphanPinDefinitionDeletes = [];
 const transactions = [];
 const scriptSyncs = [];
 const fixtureRequests = [];
@@ -898,6 +939,26 @@ await page.route("**/v2/**", async (route) => {
   }
 
   if (
+    orphanPinBrowserProof &&
+    request.method() === "GET" &&
+    pathname === "/v2/sessions/current/analysis/postprocessing/definitions"
+  ) {
+    const response = {
+      count: persistedPostprocessingDefinitions.length,
+      definitions: [...persistedPostprocessingDefinitions],
+      scene_revision: sceneRevision,
+    };
+    orphanPinDefinitionReads.push({
+      definitionIds: response.definitions.map((definition) => definition.definition_id),
+      removalApplied: orphanPinDefinitionDeleted,
+      sceneRevision: response.scene_revision,
+      sessionScopeKey: request.headers()["x-fullmag-session-scope"] ?? null,
+    });
+    await fulfillJson(route, response);
+    return;
+  }
+
+  if (
     request.method() === "GET" &&
     pathname.includes("/v2/sessions/current/data/fields/") &&
     pathname.endsWith("/samples/vector")
@@ -979,6 +1040,81 @@ await page.route("**/v2/**", async (route) => {
     return;
   }
 
+  const orphanPinDefinitionPathPrefix =
+    "/v2/sessions/current/analysis/postprocessing/definitions/";
+  if (
+    orphanPinBrowserProof &&
+    request.method() === "DELETE" &&
+    pathname.startsWith(orphanPinDefinitionPathPrefix)
+  ) {
+    const encodedDefinitionId = pathname.slice(orphanPinDefinitionPathPrefix.length);
+    let definitionId = encodedDefinitionId;
+    try {
+      definitionId = decodeURIComponent(encodedDefinitionId);
+    } catch {
+      // Preserve the literal request path in diagnostics if URL decoding fails.
+    }
+    let body = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      // Record malformed/missing JSON as a failed contract assertion below.
+    }
+    const deleteRecord = {
+      body,
+      definitionId,
+      method: request.method(),
+      pathname,
+      sessionScopeKey: request.headers()["x-fullmag-session-scope"] ?? null,
+      sceneRevisionBeforeDelete: sceneRevision,
+    };
+    orphanPinDefinitionDeletes.push(deleteRecord);
+    const violations = [];
+    if (definitionId !== orphanPinDefinition.definition_id) {
+      violations.push("DELETE path did not identify the seeded mode definition");
+    }
+    if (body?.expected_scene_revision !== sceneRevision) {
+      violations.push("DELETE body did not carry the current expected_scene_revision");
+    }
+    const expectedSessionScopeKey =
+      `session=${encodeURIComponent(catalogSessionId)}` +
+      `&epoch=${encodeURIComponent(catalogSessionEpoch)}` +
+      `&request_scope_epoch=${encodeURIComponent(catalogRequestScopeEpoch)}`;
+    if (deleteRecord.sessionScopeKey !== expectedSessionScopeKey) {
+      violations.push("DELETE omitted or changed the active session-scope fence");
+    }
+    if (
+      !persistedPostprocessingDefinitions.some(
+        (definition) => definition.definition_id === orphanPinDefinition.definition_id,
+      )
+    ) {
+      violations.push("DELETE targeted a definition that was not in the persisted fixture resource");
+    }
+    if (orphanPinDefinitionDeletes.length !== 1) {
+      violations.push("The UI issued more than one DELETE for the seeded mode definition");
+    }
+    if (violations.length > 0) {
+      errors.push(
+        `Orphan-pin DELETE contract failed: ${JSON.stringify({ deleteRecord, violations })}`,
+      );
+      await fulfillJson(route, { error: violations.join("; ") }, 409);
+      return;
+    }
+
+    persistedPostprocessingDefinitions = persistedPostprocessingDefinitions.filter(
+      (definition) => definition.definition_id !== orphanPinDefinition.definition_id,
+    );
+    sceneRevision += 1;
+    scene.revision = sceneRevision;
+    orphanPinDefinitionDeleted = true;
+    await fulfillJson(route, {
+      count: persistedPostprocessingDefinitions.length,
+      definitions: [...persistedPostprocessingDefinitions],
+      scene_revision: sceneRevision,
+    });
+    return;
+  }
+
   if (request.method() !== "GET") {
     await fulfillJson(route, { ok: true, revision: sceneRevision });
     return;
@@ -1037,6 +1173,9 @@ try {
   await assertStatusBarFallbackReadback();
   if (explorerCatalogOnly) {
     await verifyCompleteAnalysisResultDatasetCatalogBrowser();
+    if (orphanPinBrowserProof) {
+      await verifyOrphanModeDefinitionUnpinBrowser();
+    }
   } else if (resultsOnly) {
     await verifyFrequencyDomainDrivenResults();
   } else {
@@ -2367,6 +2506,254 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
         ".",
     );
   }
+}
+
+async function verifyOrphanModeDefinitionUnpinBrowser() {
+  const currentRunRequestSeen = fixtureRequests.includes(
+    "GET /v2/sessions/current/simulation/runs/current",
+  );
+  if (!currentRunRequestSeen) {
+    throw new Error("The orphan-pin browser proof did not use the current-run resource path.");
+  }
+  const resultsRootId = `results:run:${encodeURIComponent(catalogRunId)}`;
+  const orphanGroupId =
+    `${resultsRootId}:pinned-orphans:${encodeURIComponent("analysis.dispersion")}`;
+  const orphanPinNodeId =
+    `${orphanGroupId}:${encodeURIComponent(orphanPinDefinition.definition_id)}`;
+  const hysteresisRootId = `${resultsRootId}:hysteresis`;
+  const dispersionFamilyId = `${resultsRootId}:k-resolved`;
+  const resonanceFamilyId = `${resultsRootId}:resonance`;
+  const expectedSessionScopeKey =
+    `session=${encodeURIComponent(catalogSessionId)}` +
+    `&epoch=${encodeURIComponent(catalogSessionEpoch)}` +
+    `&request_scope_epoch=${encodeURIComponent(catalogRequestScopeEpoch)}`;
+  const refreshedPages = datasetCatalogRequests.filter(
+    (request) => request.generation === 1,
+  );
+  assertCatalogPagePair(refreshedPages, 502, "pre-unpin StageExecution catalog");
+
+  // The preceding proof leaves the 502-row family expanded and scrolled down.
+  // Collapse it through the UI before inspecting sibling rows in the virtual tree.
+  await page.locator(".fm-explorer-tree").evaluate((tree) => { tree.scrollTop = 0; });
+  await expandExplorerNode(resultsRootId);
+  const hysteresisRoot = page.locator(`[data-node-id="${hysteresisRootId}"]`);
+  await hysteresisRoot.waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await hysteresisRoot.getAttribute("aria-expanded")) === "true") {
+    await hysteresisRoot.dblclick();
+    await page.waitForFunction((nodeId) =>
+      Array.from(document.querySelectorAll(".fm-explorer [data-node-id]")).some(
+        (node) => node.getAttribute("data-node-id") === nodeId &&
+          node.getAttribute("aria-expanded") === "false",
+      ), hysteresisRootId, { timeout: timeoutMs });
+  }
+  const dispersionFamilyCountBefore = await page
+    .locator(`.fm-explorer .fm-explorer-tree [data-node-id="${dispersionFamilyId}"]`)
+    .count();
+  const resonanceFamilyCountBefore = await page
+    .locator(`.fm-explorer .fm-explorer-tree [data-node-id="${resonanceFamilyId}"]`)
+    .count();
+  if (dispersionFamilyCountBefore !== 0) {
+    throw new Error(
+      `The current run exposed a phantom Dispersion family for an unpublished owner: ${JSON.stringify({
+        dispersionFamilyId,
+        dispersionFamilyCountBefore,
+      })}`,
+    );
+  }
+
+  await scrollExplorerTreeToEnd(orphanGroupId);
+  const groupRow = page.locator(
+    `.fm-explorer .fm-explorer-tree [data-node-id="${orphanGroupId}"]`,
+  );
+  await readExplorerTreeRowLabel(
+    groupRow,
+    orphanGroupId,
+    "Pinned visualizations · Dispersion",
+    "run-level orphan pin group",
+  );
+  const resultRootDepth = await page
+    .locator(`.fm-explorer .fm-explorer-tree [data-node-id="${resultsRootId}"]`)
+    .evaluate((row) => row.style.getPropertyValue("--fm-tree-depth"));
+  const orphanGroupDepth = await groupRow.evaluate((row) =>
+    row.style.getPropertyValue("--fm-tree-depth"),
+  );
+  if (resultRootDepth !== "0" || orphanGroupDepth !== "1") {
+    throw new Error(
+      `The unavailable pin group was not rendered directly under the current run: ${JSON.stringify({
+        resultRootDepth,
+        orphanGroupDepth,
+      })}`,
+    );
+  }
+  await expandExplorerNode(orphanGroupId);
+  const pinRow = page.locator(
+    `.fm-explorer .fm-explorer-tree [data-node-id="${orphanPinNodeId}"]`,
+  );
+  await readExplorerTreeRowLabel(
+    pinRow,
+    orphanPinNodeId,
+    orphanPinDefinition.label,
+    "unavailable run-level pin",
+  );
+  const orphanPinDepth = await pinRow.evaluate((row) =>
+    row.style.getPropertyValue("--fm-tree-depth"),
+  );
+  if (orphanPinDepth !== "2") {
+    throw new Error(
+      `The unavailable mode pin was not nested under the run-level orphan group: ${orphanPinDepth}`,
+    );
+  }
+  const pinStatus = await pinRow.locator(".fm-explorer-tree-row__status").textContent();
+  const pinBadge = await pinRow.locator(".fm-explorer-tree-row__badge").textContent();
+  if (pinStatus?.trim() !== "unavailable" || pinBadge?.trim() !== "not published") {
+    throw new Error(
+      `The orphan pin did not expose its unavailable state and badge: ${JSON.stringify({
+        pinStatus,
+        pinBadge,
+      })}`,
+    );
+  }
+  if (
+    !orphanPinDefinitionReads.some(
+      (read) =>
+        !read.removalApplied &&
+        read.definitionIds.includes(orphanPinDefinition.definition_id),
+    )
+  ) {
+    throw new Error(
+      `The initial typed definitions resource did not contain the seeded persisted pin: ${JSON.stringify(orphanPinDefinitionReads)}.`,
+    );
+  }
+
+  await pinRow.click({ button: "right" });
+  const removePinMenuItem = page.getByRole("menuitem", {
+    name: "Remove pinned visualization",
+    exact: true,
+  });
+  await removePinMenuItem.waitFor({ state: "visible", timeout: timeoutMs });
+  await removePinMenuItem.click();
+
+  const deleteDeadline = Date.now() + timeoutMs;
+  while (orphanPinDefinitionDeletes.length === 0 && Date.now() < deleteDeadline) {
+    await page.waitForTimeout(25);
+  }
+  if (orphanPinDefinitionDeletes.length !== 1) {
+    throw new Error(
+      `The existing Unpin context command did not issue exactly one typed DELETE: ${JSON.stringify({
+        fixtureRequests: fixtureRequests.filter((request) => request.startsWith("DELETE ")),
+        orphanPinDefinitionDeletes,
+      })}`,
+    );
+  }
+  const deleteRecord = orphanPinDefinitionDeletes[0];
+  if (
+    deleteRecord.method !== "DELETE" ||
+    deleteRecord.definitionId !== orphanPinDefinition.definition_id ||
+    deleteRecord.body?.expected_scene_revision !== deleteRecord.sceneRevisionBeforeDelete ||
+    deleteRecord.sessionScopeKey !== expectedSessionScopeKey
+  ) {
+    throw new Error(
+      `The existing Unpin command did not preserve definition, scene-revision, and session fences: ${JSON.stringify({
+        expectedSessionScopeKey,
+        deleteRecord,
+      })}`,
+    );
+  }
+
+  const readbackDeadline = Date.now() + timeoutMs;
+  let removalReadback = orphanPinDefinitionReads.find(
+    (read) =>
+      read.removalApplied &&
+      read.sceneRevision === deleteRecord.sceneRevisionBeforeDelete + 1 &&
+      read.definitionIds.length === 0,
+  );
+  while (!removalReadback && Date.now() < readbackDeadline) {
+    await page.waitForTimeout(25);
+    removalReadback = orphanPinDefinitionReads.find(
+      (read) =>
+        read.removalApplied &&
+        read.sceneRevision === deleteRecord.sceneRevisionBeforeDelete + 1 &&
+        read.definitionIds.length === 0,
+    );
+  }
+  if (!removalReadback) {
+    throw new Error(
+      `The typed postprocessing-definitions resource did not read back the committed removal: ${JSON.stringify({
+        deleteRecord,
+        reads: orphanPinDefinitionReads,
+      })}`,
+    );
+  }
+  if (removalReadback.sessionScopeKey !== expectedSessionScopeKey) {
+    throw new Error(
+      `The post-delete resource readback lost its session-scope fence: ${JSON.stringify(removalReadback)}`,
+    );
+  }
+
+  await pinRow.waitFor({ state: "detached", timeout: timeoutMs });
+  await groupRow.waitFor({ state: "detached", timeout: timeoutMs });
+  const resultsRoot = page.locator(
+    `.fm-explorer .fm-explorer-tree [data-node-id="${resultsRootId}"]`,
+  );
+  await resultsRoot.waitFor({ state: "visible", timeout: timeoutMs });
+  const dispersionFamilyCountAfter = await page
+    .locator(`[data-node-id="${dispersionFamilyId}"]`)
+    .count();
+  const resonanceFamilyCountAfter = await page
+    .locator(`[data-node-id="${resonanceFamilyId}"]`)
+    .count();
+  if (
+    dispersionFamilyCountAfter !== 0 ||
+    resonanceFamilyCountAfter !== resonanceFamilyCountBefore
+  ) {
+    throw new Error(
+      `Unpin changed family publication instead of only removing the orphan definition: ${JSON.stringify({
+        dispersionFamilyCountAfter,
+        resonanceFamilyCountAfter,
+        resonanceFamilyCountBefore,
+      })}`,
+    );
+  }
+
+  await expandExplorerNode(resultsRootId);
+  await expandExplorerNode(hysteresisRootId);
+  const retainedDatasetNodeId = `${hysteresisRootId}:catalog-dataset-0501`;
+  await scrollExplorerTreeToEnd(retainedDatasetNodeId);
+  const retainedDatasetRow = page.locator(
+    `.fm-explorer .fm-explorer-tree [data-node-id="${retainedDatasetNodeId}"]`,
+  );
+  await readExplorerTreeRowLabel(
+    retainedDatasetRow,
+    retainedDatasetNodeId,
+    "Catalog dataset 0501 after StageExecution",
+    "retained second-page result after unpin",
+  );
+  assertCatalogPagePair(refreshedPages, 502, "post-unpin retained catalog pagination");
+
+  console.log(
+    "[orphan-pin-fixture-proof] " +
+      JSON.stringify({
+        fixtureBackendOnly: true,
+        currentRunId: catalogRunId,
+        currentRunRequestSeen,
+        seededDefinitionId: orphanPinDefinition.definition_id,
+        dispersionOwnerFamilyPublished: false,
+        unrelatedResonanceFamilyCountPreserved: resonanceFamilyCountAfter,
+        initialState: { status: pinStatus?.trim(), badge: pinBadge?.trim() },
+        unpinRequest: deleteRecord,
+        definitionsReadback: {
+          count: removalReadback.definitionIds.length,
+          sceneRevision: removalReadback.sceneRevision,
+        },
+        retainedSecondPageResult: retainedDatasetNodeId,
+        retainedCatalogPages: refreshedPages.map((request) => ({
+          cursor: request.cursor,
+          itemCount: request.itemCount,
+          totalCount: request.totalCount,
+        })),
+        qualification: "fixture-backed browser UI only; no backend persistence or scientific qualification",
+      }),
+  );
 }
 
 async function readExplorerTreeRowLabel(row, expectedNodeId, expectedLabel, context) {
