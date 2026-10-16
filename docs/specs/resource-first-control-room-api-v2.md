@@ -95,6 +95,10 @@ The API is organized by platform concepts, not by frontend screens:
 
 The default frontend base path is `/v2/sessions/current`.
 
+### Principal and deployment boundary (ADR 0060)
+
+The current-session API and x-fullmag-session-scope protect one session context against stale requests; the header is not principal authentication or authorization. Until authenticated principal, private deployment scope, and per-resource authorization are implemented, this API must remain confined to a private single-principal deployment. Do not expose it as a shared multi-user service or infer identity from RunSpec or session scope.
+
 ### Status kompilacji backendu developerskiego (P8-53)
 
 Transport kontrolowanego zastosowania wersji obejmuje

@@ -103,6 +103,21 @@ unknown z zachowanym PID i lease, bez automatycznego przejęcia. Częściowo
 opublikowane generacje są odczytywane także po błędzie drugiego publishera.
 Ready preparation jest niezależne od slotu zajętego przez odzyskiwany task.
 
+## Granica ownera runtime w R2 (2026-10-16)
+
+RuntimeServiceOwner i natywna blokada jednego SessionStore odpowiadają za
+cykl życia lokalnego procesu oraz jego schedulerów. Nie są uwierzytelnieniem
+principal, ACL ani ownerem allocation providera MicroLab. Owner store nie może
+przyjmować zadań z innego prywatnego deploymentu. Jeden deployment może
+koordynować wiele projektów i niezależnych runów tego samego principalu, ale
+każdy run/task/attempt zachowuje własny scope i allocation.
+
+Dla lokalnych współdzielonych zasobów fizycznych bilans między store'ami
+pozostaje osobnym obowiązkiem HostResourceLedger (ADR 0052). W HPC granicę
+wykonania wyznacza allocation ID i generation wydane przez MicroLab; scheduler
+i użytkownik nie są identyfikowani przez SessionStore ani nagłówek session
+scope (ADR 0060).
+
 ## Authoring i dołączenie usługi — P8-37
 
 Otwarcie okna wymaga zgodnego API i jego UUID; przy jawnej konfiguracji

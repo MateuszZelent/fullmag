@@ -257,9 +257,9 @@ Obietnica pracy po zamknięciu całego okna jest dostępna dopiero po bramce MT-
 
 ### MT-0 — inwentaryzacja, ADR i kontrakty
 
-**Właściciel:** architektura/API. **Zależność:** niniejszy audyt i reconciliation równoległych zmian.
+**Właściciel:** architektura/API. **Zależność:** kontrakt H0 Principal/Deployment/ExecutionScope oraz reconciliation równoległych zmian.
 
-R2: przed zamrożeniem interfejsów przyjąć H0/H1 z uzupełnienia HPC: Principal/Deployment/ExecutionScope, authority resources oraz provider contract. Pierwszy desktop może mieć jeden scope, ale nie może zakodować fizycznego hosta jako globalnej granicy ownera.
+R2: H0 musi poprzedzać MT-1/2 i każde wieloprojektowe API: ustala zaufane źródło principalu, granicę prywatnego deploymentu, resource authority oraz fencing scope. H1 (provider i allocation envelope) jest wymagany przed admission współbieżnych workerów. Pierwszy desktop może mieć jeden scope, ale nie może zakodować fizycznego hosta jako globalnej granicy authority.
 
 Pliki: nowy ADR o wielu dokumentach i scoped sessions, `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/session-run-api-v1.md`, frontend `01/02/04/05`, istniejący plan P7 i compute execution. Backend masterplan aktualizować wyłącznie w zakresie rzeczywiście zmienionych ownerów runtime.
 
@@ -269,7 +269,7 @@ Zadania: zatwierdzić słownik; inventory `current`, globalnych writerów, scope
 
 ### MT-1 — rejestr dokumentów i sesji po stronie aplikacji
 
-**Właściciel:** application/session/API. **Zależność:** MT-0.
+**Właściciel:** application/session/API. **Zależność:** MT-0 i przyjęta granica authority/scope H0.
 
 Pliki: `crates/fullmag-application/src/project.rs`, `repository.rs`, `file_repository.rs`; `crates/fullmag-api/src/types.rs`, `main.rs`, `router_v2/handlers/sessions/`, `router_v2/handlers/persistence/`; `crates/fullmag-session/src/store.rs`. W razie potrzeby nowe małe moduły registry/scoped contexts w istniejących warstwach.
 
@@ -279,7 +279,7 @@ Zastąpić pojedynczy mutable kontekst jawnie adresowanymi rekordami. Create/Ope
 
 ### MT-2 — jawny scope transportu, komend i danych
 
-**Właściciel:** API + facade/resource runtime. **Zależność:** MT-1.
+**Właściciel:** API + facade/resource runtime. **Zależność:** MT-1 i H0. Każdy resource/command/event musi być powiązany z principalem, prywatnym deploymentem i jawnym scope; session-scope sam nie uwierzytelnia.
 
 Pliki: `crates/fullmag-api/src/router_v2/`, `schemas/`, `openapi_v2.rs`; generowane `apps/control-room/src/kernel/api/generated/`; `ControlRoomApi.ts`, `apiPaths.ts`, `apiTypes.ts`; `kernel/resources/ResourceInvalidationController.ts` i pozostałe resource owners, `kernel/realtime/`, `kernel/commands/`, `kernel/api/binaryDecodeScheduler.ts`.
 
@@ -315,7 +315,7 @@ New/Open dodaje kartę; dedup istniejącego pliku; globalny Start; Close i Jobs 
 
 Pliki: `crates/fullmag-api/src/runtime_service_main.rs`, `accepted_scheduler_main.rs`, `accepted_fem_preparation_scheduler_main.rs`, `accepted_study_supervisor.rs`; `fullmag-runtime-control/src/scheduler.rs`, `claim.rs`, `local_resources.rs`; `fullmag-session/src/runtime_service.rs`, `store.rs`; worker adapters według E3.
 
-Nie implementować drugi raz E2/E3. Dodać wersjonowane service caps i ledger/politykę własnego przydziału, sumowanie preparation+solve+live allocations, fairness między projektami, thread/UUID enforcement i receipt. W HPC envelope pochodzi od Slurma i ogranicza agenta; E2 nie może rezerwować zasobów obcych alokacji. Zwiększenie max concurrency następuje tylko dla zadeklarowanych obsługiwanych lane'ów. Niewdrożona lane/polityka pozostaje unsupported lub queued.
+Nie implementować drugi raz E2/E3. Dodać wersjonowane service caps i ledger/politykę własnego przydziału, sumowanie preparation+solve+live allocations, fairness między projektami, thread/UUID enforcement i receipt. W HPC envelope pochodzi od MicroLab i ogranicza agenta; Slurm działa wyłącznie za brokerem. E2 nie może rezerwować zasobów obcych alokacji. Zwiększenie max concurrency następuje tylko dla zadeklarowanych obsługiwanych lane'ów. Niewdrożona lane/polityka pozostaje unsupported lub queued.
 
 **Odbiór:** rzeczywiste dwa runy CPU z rozdzielonym budżetem; CPU+GPU; dwa GPU na różnych UUID; dwa runy na jednym UUID kolejkują; Cancel A nie zatrzymuje B; crash/OOM A nie niszczy katalogu B; brak release przed potwierdzeniem zakończenia A.
 
@@ -353,7 +353,8 @@ Rollback wyłącza tworzenie nowych contextów/nowe admission. Zachowuje wszystk
 
 ```mermaid
 flowchart LR
-  MT0[MT-0 kontrakty] --> MT1[MT-1 registry]
+  H0[H0 principal/deployment authority] --> MT0[MT-0 kontrakty]
+  MT0 --> MT1[MT-1 registry]
   MT1 --> MT2[MT-2 scoped API]
   MT2 --> MT3[MT-3 state isolation]
   MT3 --> MT4[MT-4 karty i renderer]
@@ -383,7 +384,7 @@ W tym audycie wszystkie poniższe bramki runtime/browser są **NOT VERIFIED**.
 | T-07 | 2 runy na jednym GPU / niedostatek RAM | Queued/blocked z powodem, bez fallbacku i bez podwójnej alokacji |
 | T-08 | Cancel/worker crash/OOM A przy działającym B | B działa; A typed terminal lub reconciling; brak przejęcia niezwolnionego lease; CAE-66 |
 | T-09 | UI zamknięte, API restart, utracony heartbeat ownera | Żywe RunId potwierdzone po attach albo prawdziwy interrupted/reconciling; brak duplicate spawn; FINAL-16 |
-| T-10 | Wiele runtime store'ów na tym samym hoście | W obrębie wspólnego przydziału jeden ledger wyklucza podwójny przydział; osobne Slurm allocations/user namespaces zachowują własne ograniczenia i nie przejmują obcego ownera |
+| T-10 | Wiele runtime store'ów na tym samym hoście | W obrębie wspólnego przydziału jeden ledger wyklucza podwójny przydział; osobne MicroLab allocations i namespaces zachowują własne ograniczenia i nie przejmują obcego ownera |
 | T-11 | Identyczne output paths, równoległy cleanup/crash | Rozłączne wyniki/tmp, zachowane receipts i integrity hashing; żadnego nadpisania/cudzego cleanup |
 | T-12 | Zapis/Save As/restore dirty dokumentu i braki plików | Revision conflict/durability; brak fikcyjnego saved i automatycznego nowego runu |
 | T-13 | Historyczny dataset B podczas live A | Pinned source/kamera B stabilne; CAE-43 |

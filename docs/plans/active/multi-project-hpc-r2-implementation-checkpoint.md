@@ -58,3 +58,13 @@ Następny krok po walidacji źródeł: przegląd kontraktu przez właścicieli M
 - `openapi-typescript 7.13.0` i generator klienta zakończyły się sukcesem przy użyciu istniejącej instalacji z głównego checkoutu, zapisując tylko artefakty worktree. Lokalny package typecheck pozostaje `NOT RUN`, bo worktree nie ma `node_modules`; bez instalowania zależności.
 - Ten slice nie dodaje MicroLab HTTP/token vault, target catalog, identity authority, API auth/scope, multi-document registry, kart UI, input transfer, sweeps ani runtime HPC. Te warstwy, testy jednostkowe, browser/runtime i kwalifikacja naukowa pozostają `NOT VERIFIED`.
 - API hygiene, git diff --check oraz scoped rustfmt check zmienionych źródeł: **passed**. Pełny rustfmt check nadal wykazuje wyłącznie istniejące różnice kolejności eksportów/importów w crates/fullmag-application/src/lib.rs i crates/fullmag-runtime-control/src/study_tests.rs, obecne już w bazowym HEAD. Testy jednostkowe i package typecheck pozostają **NOT RUN** zgodnie z ograniczeniami repo i brakiem node_modules w worktree.
+
+## H0 documentation alignment — 16.10.2026
+
+- Ujednolicono HPC v1, compute-resource spec, ADR 0049/0052 i API v2 z ADR 0060: sesja UI i session-scope nie są tożsamością ani auth; prywatny deployment może zawierać wiele projektów, a Run/Task/Attempt pozostają odrębne.
+- Rozdzielono lokalny bilans fizycznego hosta od allocation envelope wydanego przez MicroLab. Fullmag nie rezerwuje hosta HPC poza envelope ani nie łączy się bezpośrednio ze Slurm.
+- Dodano H0 przed P7-B/MT-1/2; E6 pozostaje zależne od H0–H3 i akceptacji kontraktu przez właścicieli MicroLab. ADR 0035/0051 pozostają późniejszymi pracami H2/H5.
+- To jest wyłącznie wyrównanie dokumentów. Źródła nadal nie ustanawiają uwierzytelnionego principalu ani autoryzacji per resource; MicroLab API, runtime, transfer, UI tabs, sweeps, klaster i kwalifikacja naukowa pozostają niezaimplementowane lub NOT VERIFIED.
+- Kontrole tekstu: 30+2+7 dokładnych dopasowań przed zapisem; skan trailing whitespace PASS dla dziewięciu dokumentów, nowe linki H0 PASS (9 targetów), kontrola starych sformułowań PASS. Testów i buildów nie uruchamiano.
+- Worktree: codex/microlab-fullmag-r2-20261016, HEAD a2d0786e267cb6123952e70a294db398d411ac9c. Główny checkout pozostał read-only na master/f9179caf0a0681bdc92c2a87a308be21e9903919.
+- Stan przed commitem: 10 śledzonych dokumentów zmienionych, bez plików nieśledzonych; po zatwierdzonym odczycie worktree `git diff --check` przechodzi. Zwykły sandbox nie może wykonać Git status/diff poza workspace; zatwierdzona kontrola została wykonana. Ten fragment jest gotowy do zapisu na branchu; PR #185 jeszcze go nie zawiera.

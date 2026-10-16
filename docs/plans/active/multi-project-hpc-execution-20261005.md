@@ -19,7 +19,7 @@ Rekomenduję modułowy control plane Fullmaga oraz providerów wykonania, z zach
 
 Te tryby używają tego samego Study DAG, RunSpec, CaseId/TaskId/AttemptId, typed artifact refs, provenance i danych wynikowych. API, autorstwo dokumentu i planowanie zależności nie muszą być oddzielnymi mikroserwisami. Proces solvera pozostaje izolowany; odrębny fizyczny „orchestrator node” nie jest obowiązkowym elementem instalacji.
 
-To rozwija istniejący [HPC Cluster Execution v1](../../specs/hpc-cluster-execution-v1.md): zachowujemy external-dispatch/headless, a zintegrowany Fullmag provider komunikuje się wyłącznie z MicroLab. Slurm jest pierwszym schedulerem za brokerem; Fullmag nie wywołuje `sbatch`, `squeue`, `sacct` ani `slurmrestd`. Starsze sformułowanie „one session” należy pogodzić w H0 z wieloma dokumentami, zachowując jeden model semantyczny, a nie jeden singleton procesu.
+To rozwija istniejący [HPC Cluster Execution v1](../../specs/hpc-cluster-execution-v1.md): zachowujemy external-dispatch/headless, a zintegrowany Fullmag provider komunikuje się wyłącznie z MicroLab. Slurm jest pierwszym schedulerem za brokerem; Fullmag nie wywołuje `sbatch`, `squeue`, `sacct` ani `slurmrestd`. H0 wyrównuje starsze sformułowanie „one session” z prywatnym deploymentem i wieloma project contexts; zachowujemy jeden model semantyczny, a nie singleton procesu.
 
 **Dla przykładu użytkownika właściwy przepływ to:** jedna relaksacja → zatwierdzony niezmienny stan równowagi → wiele niezależnych eigensolve cases czytających ten sam stan → agregacja i śledzenie modów. Nie kopiujemy żywego obiektu solvera ani jego wskaźników GPU między procesami.
 
@@ -278,11 +278,11 @@ Brak connectivity nie oznacza końca obliczeń. Widok pokazuje osobno status pro
 
 ### 7.3 Retry, preemption i koordynator
 
-- Intent i fingerprint zapisuje się **przed** submit; provider job ref dopina się po ACK. Unknown outcome nie powoduje natychmiastowego drugiego `sbatch`.
-- Adapter utrwala unikalny submission correlation ID i rekoncyliuje z danymi providera dostępnymi dla tego principal. Nazwa joba nie jest wystarczającym fencing. Jeśli ośrodek nie pozwala jednoznacznie odnaleźć wyniku submitu, stan pozostaje submission_unknown do jawnego reconciliation.
-- Slurm requeue uruchamia skrypt ponownie; należy mapować jego generację do nowego uzgodnionego attempt/ownership epoch. Stary worker/output nie może zostać zaakceptowany przez nową generację. [Slurm sbatch](https://slurm.schedmd.com/sbatch.html).
+- Przed żądaniem allocation Fullmag utrwala immutable intent/fingerprint i correlation ID. Utracony ACK daje submission_unknown; Fullmag uzgadnia ten sam intent z MicroLab i nie wysyła duplikatu allocation request. Broker mapuje intent do swojego jobu.
+- Kontrakt MicroLab musi zapewniać idempotentne uzgadnianie w namespace principalu i stabilny allocation reference. Nazwa joba nie jest wystarczającym fencing. Jeśli broker nie potrafi jednoznacznie odnaleźć wyniku żądania, stan pozostaje submission_unknown do jawnego reconciliation.
+- MicroLab może raportować requeue/preemption Slurma; Fullmag wiąże potwierdzone zastąpienie allocation z nowym fenced attempt i odrzuca output starej generacji. Legalne resume/retry zależy od zgodnego inputu i potwierdzenia brokera.
 - Exactly-once commit wyniku osiąga się przez fingerprint/attempt fencing/idempotent publication. Nie obiecywać exactly-once fizycznego compute przy partition/awarii.
-- Brak heartbeat nie uprawnia do ponownej alokacji sprzętu. Provider query/terminal state i cleanup/exit receipts wyznaczają recovery. Canceled w API jest żądaniem, dopóki Slurm i worker lifecycle nie potwierdzą właściwego zakończenia.
+- Brak heartbeat nie uprawnia do ponownej alokacji sprzętu. Reconciliation MicroLab, terminalny stan allocation i Fullmag worker exit receipts wyznaczają recovery. Canceled w API pozostaje żądaniem do potwierdzenia przez brokera i lifecycle workera.
 - Preemption/walltime signal pozwala checkpointować wyłącznie obsługiwany stan. Checkpoint compatibility określa runtime; brak supportu oznacza interrupted/retry od legalnego inputu, nie „resume” od losowego output file.
 - Pierwszy coordinator ma jednego aktywnego leadera, trwały journal i restart recovery. HA z kilkoma writerami wymaga transakcyjnego backendu/consensus i fencing, nie dwóch kopii procesu nad tym samym folderem. Nie jest blokadą pierwszego batch/array zakresu.
 
@@ -329,7 +329,7 @@ Kolejność: `H0 → H1/H2 → H3 → H4/H5 → H7`; H6 może dojść później 
 
 **Pierwszy release:** lokalne karty, poprawna izolacja contextów, scoped control plane, private per-principal deployment i provider MicroLab (Slurm za brokerem), immutable state fan-out dla obsługiwanych eigensolve cases, wynik częściowy, recovery i właściwe zasoby. Jeden deployment może koordynować wiele kart i tasków tego principalu; każde Task/Attempt zachowuje osobne allocation, scratch/tmp, output i receipt. Współdzielony multi-user Fullmag API nie należy do pierwszego release. Zob. [ADR 0060](../../adr/0060-principal-scoped-deployments-and-multi-project-execution.md). Może początkowo ograniczać liczbę aktywnych cases lub obsługiwane lane'y, ale ograniczenia muszą być jawne.
 
-Zachować basic external-dispatch/headless z [HPC v1](../../specs/hpc-cluster-execution-v1.md); zintegrowany provider Fullmaga rozmawia z MicroLab, a nie ze schedulerem klastra. W H0 uzgodnić ten starszy dokument, [compute execution §10](../../specs/compute-resource-execution-v1.md#10-wiele-hostów-i-scheduler-zewnętrzny), ADR 0049/0052 oraz P7-C. Nie tworzyć równoległego, bezpośredniego adaptera Slurma.
+Zachować basic external-dispatch/headless z [HPC v1](../../specs/hpc-cluster-execution-v1.md). H0 uzgadnia granice tego dokumentu z [compute execution §10](../../specs/compute-resource-execution-v1.md#10-wiele-hostów-i-scheduler-zewnętrzny), ADR 0049/0052 i P7-C; bieżące uzgodnienia zapisano w §11.1. Nie tworzyć direct Slurm adaptera.
 
 **Następne rozszerzenia:** adaptive pool, długotrwały worker reuse, site/team service, HA control plane, inne schedulery. MPI/distributed pojedynczy solve pozostaje oddzielnym E7 z podziałem operatorów, communicatorami, kolektywami i kwalifikacją numeryczną; nie wynika z obecności PETSc/SLEPc ani kilku worker nodes.
 
@@ -343,8 +343,8 @@ W tym audycie nie uruchamiano żadnego joba HPC. Kompilowanie testów jednostkow
 | HPC-02 | Trzy joby jednego usera z tego samego checkoutu/binary | Oddzielne allocation/attempt/log/tmp/output; brak kolizji portów/ownerów |
 | HPC-03 | Trzy workers w jednym allocation | Suma suballocations w envelope, kontrola CPU/RAM/GPU i agent overhead |
 | HPC-04 | GPU host ordinal różny od step ordinal | Zgodny UUID/MIG i native execution receipt; zachowane maski |
-| HPC-05 | Lost sbatch ACK i opóźnione accounting | Submission_unknown i reconciliation tego samego intentu, bez duplicate joba |
-| HPC-06 | Slurm requeue/preemption/node loss | Nowy fenced attempt, odrzucenie starego outputu, legalne resume lub retry |
+| HPC-05 | Utracony ACK żądania allocation do MicroLab i opóźnione potwierdzenie brokera | Submission_unknown po stronie Fullmag i reconciliation tego samego intentu przez MicroLab, bez duplicate allocation/job |
+| HPC-06 | MicroLab raportuje Slurm requeue/preemption/node loss | Nowy fenced attempt, odrzucenie starego outputu, legalne resume lub retry |
 | HPC-07 | Zamknięte UI/control plane offline | Ukończone outputs w trwałym outboxie, idempotent import i prawdziwy status po reconnect |
 | HPC-08 | N eigen cases z jednego equilibrium bundle | Ten sam input ref, własne mutable buffers, zgodna nauka i niezależne outcomes |
 | HPC-09 | Zmienione pole/material/mesh lub uszkodzony state | Brak niewłaściwego reuse; wymagany transfer/relaxation lub explicit rejection |
@@ -372,20 +372,22 @@ Audyt objął trzy niezależne zakresy: izolacja/owner/resources HPC, typed stat
 
 Zweryfikowano aktualne dokumentacje pierwotne Slurma i COMSOL, wskazane przy twierdzeniach. Odniesienie do komercyjnego solvera dotyczy modelu workflow; nie przenosi jego wyników wydajności, fizyki ani licencjonowania na Fullmaga. Nie ma pomiaru pozwalającego już dziś wybrać allocation pool zamiast arrays dla wszystkich workloadów.
 
-Ten dokument oraz skorygowany audyt kart są planem R2, nie zatwierdzonym nowym ADR ani zmianą istniejącego API. H0 ma zaktualizować właściwe kontrakty po uzgodnieniu implementacyjnych szczegółów. W bieżącym etapie nie wykonywano zadań klastra, testów kompilowanych, zmian uprawnień, restartów procesów ani commitów. Kontrole dokumentu obejmują istnienie lokalnych odsyłaczy/pełnych ścieżek źródeł i spójność etapów/scenariuszy.
+Ten dokument pozostaje planem R2, a ADR 0060 jest zaakceptowaną granicą principal/deployment. H0 wyrównał wskazane tu kontrakty dokumentacyjne, ale nie jest zakończony w źródłach: obecne API nadal nie ustanawia uwierzytelnionego principalu ani autoryzacji per resource. Kontrakt MicroLab pozostaje propozycją do akceptacji przez jego właścicieli. Nie wykonywano zadań klastra, kompilowanych testów ani kwalifikacji runtime; źródłowy, browser i scientific proof pozostają osobnymi bramkami.
 
-### 11.1 Mapa kontraktów wymagających aktualizacji w H0
+### 11.1 Mapa H0 i późniejszych właścicieli kontraktów
 
-| Dokument / właściciel | Wymagana zmiana |
+| Dokument / właściciel | Uzgodnienie H0 i pozostała granica |
 |---|---|
-| [HPC Cluster Execution v1](../../specs/hpc-cluster-execution-v1.md) | Zachować external-dispatch-first; zaktualizować stare singleton/session-first sformułowania, opisać optional integrated provider i allocation scope |
-| [Compute resources §5 i §10](../../specs/compute-resource-execution-v1.md) | Ograniczyć host-ledger do właściwej authority, wprowadzić allocation identity/envelope i niepowielanie zasobów |
-| [ADR 0049](../../adr/0049-native-runtime-owner-control.md) | Rozdzielić deployment coordinator od per-allocation execution owner; bez mnożenia ownerów tego samego local store |
-| [ADR 0052](../../adr/0052-compute-resource-placement-and-parallel-sweeps.md) | Doprecyzować granicę local vs scheduler-owned przydziałów, bez drugiej kolejki compute |
-| [ADR 0035](../../adr/0035-typed-study-artifact-manifest-and-worker-boundary.md) | Zdefiniować portable worker input/output, dependency pins, remote staging i idempotent import |
-| [ADR 0051](../../adr/0051-project-output-storage.md) | Scope/attempt root i site artifact provider; zachować jedną OutputStorage i zakaz cudzego cleanup |
-| [P7/P8 plan](refactor_runtime/final/03-plan-refaktoryzacji.md) | Powiązać MT-0/2 i P7-C z H0/H1; Slurm już jest uzgodnionym zakresem projektowym tej analizy |
-| [E1–E6 plan](compute-execution-20261004/README.md) | Reuse profile/materializer/admission, H3 jako pierwszy provider E6, H4 jako konkretna specjalizacja case DAG E5 |
+| [ADR 0060](../../adr/0060-principal-scoped-deployments-and-multi-project-execution.md) | Zaakceptowana granica private per-principal deployment; źródło prawdy dla authority i zakazu identity/credential w RunSpec. Nie dowodzi gotowego API auth ani kwalifikacji. |
+| [HPC Cluster Execution v1](../../specs/hpc-cluster-execution-v1.md) | Ten H0 follow-up usuwa singleton/session-first; opisuje wiele project contexts, niezależne Run/Task/Attempt i MicroLab jako jedyny zintegrowany endpoint HPC. |
+| [Compute resources §5 i §10](../../specs/compute-resource-execution-v1.md) | Ten H0 follow-up rozdziela lokalny bilans fizycznego hosta od broker allocation envelope; implementacja admission i enforcement pozostaje otwarta. |
+| [ADR 0049](../../adr/0049-native-runtime-owner-control.md) | Ten H0 follow-up oddziela ownera lokalnego SessionStore od principal auth, deployment authority i ownera provider allocation; runtime proof pozostaje otwarty. |
+| [ADR 0052](../../adr/0052-compute-resource-placement-and-parallel-sweeps.md) | Ten H0 follow-up ogranicza HostResourceLedger do lokalnego bilansu zasobów i wyklucza podwójną rezerwację przydziału MicroLab. |
+| [API v2](../../specs/resource-first-control-room-api-v2.md) i [plan kart](multi-project-tabs-20261005.md) | Ten H0 follow-up określa session-scope jako fencing, nie auth; MT-1/2 i wieloprojektowe API zależą od zaufanej granicy principal/deployment. Implementacja auth pozostaje otwarta. |
+| [P7/P8 plan](refactor_runtime/final/03-plan-refaktoryzacji.md) | H0 poprzedza P7-B/MT-1/2; provider P7-C zależy od H0/H1/H2 i akceptacji H3 broker contract. |
+| [E1–E6 plan](compute-execution-20261004/README.md) | E6 używa MicroLab jako pierwszego providera Fullmaga, ze Slurmem za brokerem; pozostaje zablokowane do H0–H3. |
+| [ADR 0035](../../adr/0035-typed-study-artifact-manifest-and-worker-boundary.md) | Dalsza praca H2: portable worker inputs/outputs, dependency pins, remote staging i idempotent import; nie blokuje wyrównania dokumentacyjnego H0. |
+| [ADR 0051](../../adr/0051-project-output-storage.md) | Dalsza praca H5: scope/attempt output roots, artifact provider i cleanup; nie blokuje wyrównania dokumentacyjnego H0. |
 
 Przed zmianą naukowej semantyki identity/transfer lub poszerzeniem supported interactions należy uzupełnić właściwą istniejącą notę fizyczną i jej mapę źródeł; nie opisywać tych rozszerzeń wyłącznie w dokumencie schedulera.
 

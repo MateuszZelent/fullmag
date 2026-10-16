@@ -38,12 +38,12 @@ The user still thinks in terms of:
 
 - one Python script,
 - one `fullmag` launcher,
-- one session,
-- one run,
-- one control room,
+- multiple project/document contexts within one private deployment,
+- independent Run/Task/Attempt lifecycles,
+- one product UI with separately scoped project views,
 - one artifact/provenance model.
 
-What changes is the execution target and dispatch path.
+A Control Room session is a view/attachment context, not an authenticated principal or provider allocation. A shared multi-user API requires authenticated principals and resource authorization under ADR 0060. What changes is the execution target and dispatch path.
 
 The canonical HPC path is now **external-dispatch-first**:
 
@@ -163,13 +163,13 @@ These must become provenance fields, not hidden log trivia.
 
 ## 6. Session model on HPC
 
-Local and remote execution must share the same session-first model.
+Local and remote execution share the canonical Run/Task/Attempt lifecycle. A Control Room session attaches to a private Fullmag deployment; it is not an HPC allocation or authenticated principal. Every remote task/attempt binds server-side to the exact broker allocation generation. Headless external dispatch remains valid without a Control Room session.
 
 However, HPC may require more detailed lifecycle states.
 
 ### 6.1 Additional canonical remote states
 
-Remote-capable session states may extend the existing model with:
+Remote-capable run/attempt states may extend the existing execution model with:
 
 - `staging_input`
 - `submitting`
@@ -194,9 +194,9 @@ In the external-dispatch-first model, a node-local Fullmag task may begin direct
 
 without Fullmag ever owning `queued` or `submitting`.
 
-### 6.2 Remote identity fields
+### 6.2 Remote execution provenance
 
-Remote sessions should additionally track:
+Remote runs/attempts may additionally track:
 
 - `target_id`
 - `scheduler`
