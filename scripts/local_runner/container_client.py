@@ -19,10 +19,12 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -152,6 +154,49 @@ _CONTAINER_ID_OUTPUT_RE = re.compile(r"[0-9a-f]{12,64}\Z")
 
 class ContainerClientError(RuntimeError):
     """A container configuration, identity, or host API contract failed."""
+
+
+@contextmanager
+def _container_lifecycle_lock(lock_path: Path, operation: str) -> Iterator[None]:
+    """Map lock acquisition/release failures without relabeling body errors."""
+
+    manager = file_lock(
+        lock_path,
+        f"local runner container {operation}",
+        blocking=True,
+    )
+    try:
+        manager.__enter__()
+    except StorageError as error:
+        raise ContainerClientError("Local runner container lifecycle is busy") from error
+    except OSError as error:
+        raise ContainerClientError(
+            "Local runner container lifecycle lock acquisition is unavailable"
+        ) from error
+
+    try:
+        yield
+    except BaseException as body_error:
+        try:
+            suppressed = manager.__exit__(*sys.exc_info())
+        except Exception as release_error:
+            if release_error is body_error:
+                raise
+            raise ContainerClientError(
+                "Local runner container operation and lock release both failed"
+            ) from body_error
+        if suppressed:
+            return
+        raise
+    else:
+        try:
+            manager.__exit__(None, None, None)
+        except StorageError as error:
+            raise ContainerClientError("Local runner container lifecycle is busy") from error
+        except OSError as error:
+            raise ContainerClientError(
+                "Local runner container lifecycle lock release is unavailable"
+            ) from error
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -714,50 +759,45 @@ def status(
 
     operator = _owner(owner)
     _, _, lock_path = _config_paths(layout)
-    try:
-        with file_lock(lock_path, "local runner container status", blocking=True):
-            storage, secret_path, public, _ = _load_config(layout, operator)
-            docker = _selected_docker_call(docker_call, call)
-            identifier = _find_container(docker)
-            if identifier is None:
-                metadata = _metadata_without_container(public)
-                activation = _profile_activation(
-                    public,
-                    None,
-                    unavailable_reason="No coordinator container is present to report its runtime profile list.",
-                )
-                return _with_profile_activation(metadata, public, activation)
-
-            metadata = _attest(
-                _inspect_container(docker, identifier),
-                storage=storage,
-                secret_path=secret_path,
-                public=public,
-                operator=operator,
+    with _container_lifecycle_lock(lock_path, "status"):
+        storage, secret_path, public, _ = _load_config(layout, operator)
+        docker = _selected_docker_call(docker_call, call)
+        identifier = _find_container(docker)
+        if identifier is None:
+            metadata = _metadata_without_container(public)
+            activation = _profile_activation(
+                public,
+                None,
+                unavailable_reason="No coordinator container is present to report its runtime profile list.",
             )
-            if not metadata["running"]:
-                activation = _profile_activation(
-                    public,
-                    None,
-                    unavailable_reason="Coordinator container is stopped; its runtime profile list is unverified.",
-                )
-                return _with_profile_activation(metadata, public, activation)
+            return _with_profile_activation(metadata, public, activation)
 
-            try:
-                health = request(layout, operator, "GET", "/health")
-                activation = _profile_activation(public, health)
-            except ContainerClientError as error:
-                health = {"ok": False, "error": str(error)}
-                activation = _profile_activation(
-                    public,
-                    None,
-                    unavailable_reason=f"Authenticated coordinator health request failed: {error}",
-                )
-            return _with_profile_activation(metadata, public, activation, health=health)
-    except StorageError as error:
-        raise ContainerClientError("Local runner container lifecycle is busy") from error
-    except OSError as error:
-        raise ContainerClientError("Local runner container lifecycle lock is unavailable") from error
+        metadata = _attest(
+            _inspect_container(docker, identifier),
+            storage=storage,
+            secret_path=secret_path,
+            public=public,
+            operator=operator,
+        )
+        if not metadata["running"]:
+            activation = _profile_activation(
+                public,
+                None,
+                unavailable_reason="Coordinator container is stopped; its runtime profile list is unverified.",
+            )
+            return _with_profile_activation(metadata, public, activation)
+
+        try:
+            health = request(layout, operator, "GET", "/health")
+            activation = _profile_activation(public, health)
+        except ContainerClientError as error:
+            health = {"ok": False, "error": str(error)}
+            activation = _profile_activation(
+                public,
+                None,
+                unavailable_reason=f"Authenticated coordinator health request failed: {error}",
+            )
+        return _with_profile_activation(metadata, public, activation, health=health)
 
 
 def _start_unlocked(
@@ -857,13 +897,8 @@ def start(
 
     _owner(owner)
     _, _, lock_path = _config_paths(layout)
-    try:
-        with file_lock(lock_path, "local runner container start", blocking=True):
-            return _start_unlocked(layout, owner, docker_call=docker_call, call=call)
-    except StorageError as error:
-        raise ContainerClientError("Local runner container lifecycle is busy") from error
-    except OSError as error:
-        raise ContainerClientError("Local runner container lifecycle lock is unavailable") from error
+    with _container_lifecycle_lock(lock_path, "start"):
+        return _start_unlocked(layout, owner, docker_call=docker_call, call=call)
 
 
 def _request_path(path: str) -> str:
@@ -1174,20 +1209,15 @@ def replace(
     _owner(owner)
     _image_id(image_id)
     _, _, lock_path = _config_paths(layout)
-    try:
-        with file_lock(lock_path, "local runner container replacement", blocking=True):
-            return _replace_unlocked(
-                layout,
-                image_id,
-                owner,
-                abandon_readonly_preview=abandon_readonly_preview,
-                docker_call=docker_call,
-                call=call,
-            )
-    except StorageError as error:
-        raise ContainerClientError("Local runner container lifecycle is busy") from error
-    except OSError as error:
-        raise ContainerClientError("Local runner container lifecycle lock is unavailable") from error
+    with _container_lifecycle_lock(lock_path, "replacement"):
+        return _replace_unlocked(
+            layout,
+            image_id,
+            owner,
+            abandon_readonly_preview=abandon_readonly_preview,
+            docker_call=docker_call,
+            call=call,
+        )
 
 
 install = configure

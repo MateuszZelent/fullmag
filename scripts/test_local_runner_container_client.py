@@ -1,3 +1,4 @@
+import importlib.util
 import io
 import json
 from contextlib import contextmanager
@@ -9,6 +10,16 @@ import unittest
 from unittest.mock import patch
 
 from local_runner import container_client
+
+
+_WRAPPER_SPEC = importlib.util.spec_from_file_location(
+    "managed_modal_wrapper_diagnostics_test",
+    Path(__file__).parent / "ci" / "run_managed_modal_wrapper.py",
+)
+if _WRAPPER_SPEC is None or _WRAPPER_SPEC.loader is None:
+    raise RuntimeError("Could not load managed modal wrapper diagnostics for tests")
+managed_modal_wrapper = importlib.util.module_from_spec(_WRAPPER_SPEC)
+_WRAPPER_SPEC.loader.exec_module(managed_modal_wrapper)
 
 
 IMAGE = "sha256:" + "a" * 64
@@ -119,6 +130,25 @@ class FakeHTTPResponse:
 
     def read(self, limit=-1):
         return self.body if limit < 0 else self.body[:limit]
+
+
+class LifecycleLockProbe:
+    def __init__(self, *, enter_error=None, exit_error=None):
+        self.enter_error = enter_error
+        self.exit_error = exit_error
+        self.events = []
+
+    def __enter__(self):
+        self.events.append(("enter", None, None))
+        if self.enter_error is not None:
+            raise self.enter_error
+        return self
+
+    def __exit__(self, exc_type, error, _traceback):
+        self.events.append(("exit", exc_type, error))
+        if self.exit_error is not None:
+            raise self.exit_error
+        return False
 
 
 class ContainerClientTests(unittest.TestCase):
@@ -318,6 +348,94 @@ class ContainerClientTests(unittest.TestCase):
             [(self.storage / "locks" / "local-runner-container.lock", "local runner container start", True)],
             entered,
         )
+
+    def test_start_classifies_only_lock_acquisition_oserror_as_lock_unavailable(self):
+        self.configure()
+        lock_error = OSError("lock file open failed")
+        lock = LifecycleLockProbe(enter_error=lock_error)
+        with patch.object(container_client, "file_lock", return_value=lock):
+            with patch.object(container_client, "_start_unlocked") as start_unlocked:
+                with self.assertRaisesRegex(
+                    container_client.ContainerClientError, "lock acquisition is unavailable"
+                ) as raised:
+                    container_client.start(self.layout, "alice")
+        start_unlocked.assert_not_called()
+        self.assertIs(raised.exception.__cause__, lock_error)
+        self.assertEqual(["enter"], [event[0] for event in lock.events])
+
+    def test_start_propagates_body_oserror_and_releases_lock(self):
+        self.configure()
+        body_error = OSError("coordinator start failed")
+        lock = LifecycleLockProbe()
+        with patch.object(container_client, "file_lock", return_value=lock):
+            with patch.object(container_client, "_start_unlocked", side_effect=body_error):
+                with self.assertRaises(OSError) as raised:
+                    container_client.start(self.layout, "alice")
+        self.assertIs(raised.exception, body_error)
+        self.assertEqual(["enter", "exit"], [event[0] for event in lock.events])
+        self.assertIs(lock.events[-1][2], body_error)
+
+    def test_start_reports_lock_release_oserror_with_original_cause(self):
+        self.configure()
+        release_error = OSError("lock unlock failed")
+        lock = LifecycleLockProbe(exit_error=release_error)
+        with patch.object(container_client, "file_lock", return_value=lock):
+            with patch.object(container_client, "_start_unlocked", return_value={"running": True}):
+                with self.assertRaisesRegex(
+                    container_client.ContainerClientError, "lock release is unavailable"
+                ) as raised:
+                    container_client.start(self.layout, "alice")
+        self.assertIs(raised.exception.__cause__, release_error)
+        self.assertEqual(["enter", "exit"], [event[0] for event in lock.events])
+
+    def test_start_preserves_body_and_release_errors_in_exception_chain(self):
+        self.configure()
+        body_error = OSError("coordinator start failed")
+        release_error = OSError("lock unlock failed")
+        lock = LifecycleLockProbe(exit_error=release_error)
+        with patch.object(container_client, "file_lock", return_value=lock):
+            with patch.object(container_client, "_start_unlocked", side_effect=body_error):
+                with self.assertRaisesRegex(
+                    container_client.ContainerClientError, "operation and lock release both failed"
+                ) as raised:
+                    container_client.start(self.layout, "alice")
+        self.assertIs(raised.exception.__cause__, body_error)
+        self.assertIs(raised.exception.__context__, release_error)
+        self.assertEqual(["enter", "exit"], [event[0] for event in lock.events])
+
+    def test_status_propagates_body_oserror_and_releases_lock(self):
+        body_error = OSError("coordinator status failed")
+        lock = LifecycleLockProbe()
+        with patch.object(container_client, "file_lock", return_value=lock):
+            with patch.object(container_client, "_load_config", side_effect=body_error):
+                with self.assertRaises(OSError) as raised:
+                    container_client.status(self.layout, "alice")
+        self.assertIs(raised.exception, body_error)
+        self.assertEqual(["enter", "exit"], [event[0] for event in lock.events])
+        self.assertIs(lock.events[-1][2], body_error)
+
+    def test_status_does_not_relabel_body_storage_error_as_lock_busy(self):
+        body_error = container_client.StorageError("status storage read failed")
+        lock = LifecycleLockProbe()
+        with patch.object(container_client, "file_lock", return_value=lock):
+            with patch.object(container_client, "_load_config", side_effect=body_error):
+                with self.assertRaises(container_client.StorageError) as raised:
+                    container_client.status(self.layout, "alice")
+        self.assertIs(raised.exception, body_error)
+        self.assertEqual(["enter", "exit"], [event[0] for event in lock.events])
+        self.assertIs(lock.events[-1][2], body_error)
+
+    def test_start_preserves_storage_busy_error_from_lock_acquisition(self):
+        self.configure()
+        busy_error = container_client.StorageError("Storage is busy: local runner container start")
+        lock = LifecycleLockProbe(enter_error=busy_error)
+        with patch.object(container_client, "file_lock", return_value=lock):
+            with self.assertRaisesRegex(
+                container_client.ContainerClientError, "lifecycle is busy"
+            ) as raised:
+                container_client.start(self.layout, "alice")
+        self.assertIs(raised.exception.__cause__, busy_error)
+        self.assertEqual(["enter"], [event[0] for event in lock.events])
 
     def test_replace_requires_quiescent_health_before_stop(self):
         # Older coordinators discarded the service return value and called
@@ -815,6 +933,39 @@ class ContainerClientTests(unittest.TestCase):
             container_client.request(self.layout, "alice", "PUT", "/health")
         with self.assertRaises(container_client.ContainerClientError):
             container_client.request(self.layout, "alice", "GET", "/jobs/../secret")
+
+
+class ManagedWrapperDiagnosticsTests(unittest.TestCase):
+    def test_exception_diagnostics_are_bounded_redacted_and_cycle_safe(self):
+        errors = [RuntimeError("Bearer top-secret"), OSError(13, "password=secret-1")]
+        errors.extend(RuntimeError(f"password=secret-{index}") for index in range(2, 6))
+        for current, following in zip(errors, errors[1:]):
+            current.__cause__ = following
+        errors[-1].__context__ = errors[0]
+        errors[1].winerror = 5
+
+        try:
+            raise errors[0]
+        except RuntimeError as error:
+            details = managed_modal_wrapper._exception_diagnostics(error)
+
+        self.assertEqual(4, len(details["causes"]))
+        self.assertLessEqual(len(details["frames"]), 8)
+        self.assertEqual(13, details["causes"][0]["errno"])
+        self.assertEqual(5, details["causes"][0]["winerror"])
+        serialized = json.dumps({"message": managed_modal_wrapper._redact(str(errors[0])), **details})
+        self.assertNotIn("top-secret", serialized)
+        self.assertNotIn("secret-", serialized)
+        for frame in details["frames"]:
+            self.assertEqual({"filename", "function", "line"}, set(frame))
+            self.assertIsInstance(frame["line"], int)
+
+        cycle_root = RuntimeError("cycle-root")
+        cycle_child = RuntimeError("cycle-child")
+        cycle_root.__cause__ = cycle_child
+        cycle_child.__context__ = cycle_root
+        cycle_details = managed_modal_wrapper._exception_diagnostics(cycle_root)
+        self.assertEqual(1, len(cycle_details["causes"]))
 
 
 if __name__ == "__main__":

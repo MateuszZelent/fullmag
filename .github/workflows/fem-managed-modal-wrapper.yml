@@ -23,6 +23,7 @@ on:
       - scripts/local_runner/container_main.py
       - scripts/local_runner/unix_docker.py
       - scripts/local_runner/build_executor.py
+      - scripts/test_local_runner_container_client.py
       - scripts/local_runner/Dockerfile.build
       - scripts/local_runner/Dockerfile.coordinator
       - scripts/tests/local_runner/test_container_main.py
@@ -42,6 +43,7 @@ on:
       - scripts/local_runner/container_main.py
       - scripts/local_runner/unix_docker.py
       - scripts/local_runner/build_executor.py
+      - scripts/test_local_runner_container_client.py
       - scripts/local_runner/Dockerfile.build
       - scripts/local_runner/Dockerfile.coordinator
       - scripts/tests/local_runner/test_container_main.py
@@ -65,6 +67,8 @@ jobs:
           python-version: '3.11'
       - name: Verify host coordinator and POSIX storage mapping
         run: python3 -B -m unittest discover -s scripts/tests/local_runner -p test_container_main.py -v
+      - name: Verify coordinator lifecycle lock error boundaries
+        run: python3 -B -m unittest discover -s scripts -p test_local_runner_container_client.py -v
       - name: Verify managed receipt and CPU Release cache attestation
         run: python3 -B -m unittest discover -s scripts -p test_local_runner_build_executor.py -v
       - name: Verify the production Unix Docker adapter contract

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from typing import Any
 
 
@@ -76,6 +77,71 @@ def _redact(message: str) -> str:
         message,
     )
     return message[:1200]
+
+
+def _numeric_exception_attribute(error: BaseException, name: str) -> int | None:
+    try:
+        value = getattr(error, name, None)
+    except Exception:
+        return None
+    return value if type(value) is int else None
+
+
+def _exception_diagnostics(error: BaseException) -> dict[str, Any]:
+    """Return bounded, redacted exception context without locals or source lines."""
+
+    causes: list[dict[str, Any]] = []
+    frames: list[dict[str, Any]] = []
+    seen = {id(error)}
+    pending: list[tuple[BaseException, str]] = []
+
+    def enqueue_links(current: BaseException) -> None:
+        cause = current.__cause__
+        context = current.__context__
+        if cause is not None:
+            pending.append((cause, "cause"))
+        if context is not None and context is not cause:
+            pending.append((context, "context"))
+
+    def append_frames(current: BaseException) -> None:
+        if len(frames) >= 8:
+            return
+        try:
+            extracted = traceback.extract_tb(current.__traceback__, limit=8)
+        except Exception:
+            return
+        for frame in extracted:
+            if len(frames) >= 8:
+                break
+            frames.append({
+                "filename": _redact(Path(frame.filename).name),
+                "function": _redact(frame.name),
+                "line": frame.lineno,
+            })
+
+    append_frames(error)
+    enqueue_links(error)
+    while pending and len(causes) < 4:
+        current, relation = pending.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        causes.append({
+            "relation": relation,
+            "error_type": type(current).__name__,
+            "message": _redact(str(current)),
+            "errno": _numeric_exception_attribute(current, "errno"),
+            "winerror": _numeric_exception_attribute(current, "winerror"),
+        })
+        append_frames(current)
+        enqueue_links(current)
+
+    return {
+        "errno": _numeric_exception_attribute(error, "errno"),
+        "winerror": _numeric_exception_attribute(error, "winerror"),
+        "causes": causes,
+        "frames": frames,
+    }
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -571,11 +637,15 @@ def run(repo_arg: str) -> int:
         image_ids = _build_images(repo, run_tag, environment, unix_docker.docker, deadline, evidence)
         _write_json(evidence / "image-ids.json", image_ids)
 
-        phase = "coordinator-configure-start"
+        phase = "coordinator-configure"
         config_path = Path(layout["storage_root"]) / "index" / "local-runner-container.json"
         _require(not config_path.exists(), "A coordinator configuration already exists in this fresh storage root; refusing implicit reuse.")
         container_client.configure(layout, image_ids["coordinator"], owner=owner, enable_slepc_modal=True)
+
+        phase = "coordinator-start"
         container_client.start(layout, owner=owner, call=unix_docker.docker)
+
+        phase = "coordinator-status"
         status = container_client.status(layout, owner=owner, call=unix_docker.docker)
         _require(status.get("running") is True and status.get("image_id") == image_ids["coordinator"], "Started coordinator identity is not attested.")
         activation = status.get("profile_activation")
@@ -636,6 +706,7 @@ def run(repo_arg: str) -> int:
             "retry_submitted": False,
             "qualification": "NOT VERIFIED",
         }
+        failure.update(_exception_diagnostics(error))
         if evidence is not None:
             try:
                 _write_json(evidence / "failure.json", failure)
