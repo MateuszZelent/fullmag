@@ -21,6 +21,7 @@ if (!reportDirectory || !isAbsolute(reportDirectory)) {
 
 const reportRoot = resolve(reportDirectory);
 const reportPath = resolve(reportRoot, "study-adaptive-authoring.json");
+const LEGAL_EIGEN_K_PATH = "G:0,0,0; X:1e7,0,0; G:0,0,0 | samples=2,2";
 
 async function loadPlaywright() {
   try {
@@ -236,6 +237,7 @@ async function fulfillJson(route, body, status = 200) {
 function makeFixture(stage) {
   return {
     scene: makeScene(stage, 1),
+    conflictNextTransaction: false,
     requests: [],
     mutations: [],
     sceneReadRevisions: [],
@@ -360,6 +362,15 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
     }
     if (method === "POST" && path === TRANSACTIONS_PATH) {
       fixture.mutations.push(clone(body));
+      if (fixture.conflictNextTransaction) {
+        fixture.conflictNextTransaction = false;
+        const revision = fixture.scene.revision + 1;
+        fixture.scene = {
+          ...fixture.scene,
+          revision,
+          scene_revision: revision,
+        };
+      }
       if (
         !body ||
         body.kind !== "merge_patch" ||
@@ -520,6 +531,342 @@ async function waitForRealtimeSocket(scenario) {
   }
 }
 
+async function publishSceneThroughRealtime(scenario, nextScene) {
+  const revision = nextScene.revision;
+  const freshSceneResponsePromise = scenario.page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      new URL(response.url()).pathname === SCENE_PATH &&
+      scenario.fixture.sceneReadRevisions.includes(revision),
+    { timeout: 30_000 },
+  );
+
+  scenario.fixture.scene = clone(nextScene);
+  const socket = await waitForRealtimeSocket(scenario);
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: { request_scope_epoch: REQUEST_SCOPE_EPOCH },
+    run_id: null,
+    seq: 1,
+    session_id: SESSION_ID,
+    type: "hello",
+  }));
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: {
+      changes: [
+        {
+          recommended_fetch: SCENE_PATH,
+          resource: "model",
+          resource_id: "scene",
+          revision,
+        },
+      ],
+    },
+    run_id: null,
+    seq: 2,
+    session_id: SESSION_ID,
+    type: "resource.batch_changed",
+  }));
+
+  const response = await freshSceneResponsePromise;
+  assert.equal(response.status(), 200);
+  return response.json();
+}
+
+async function prepareCombinedAdaptiveDraft(scenario) {
+  const toolbar = scenario.inspector.getByTestId("study-stage-authoring-toolbar");
+  await toolbar.getByRole("button", { name: "Relax", exact: true }).click();
+  await toolbar.getByRole("button", {
+    name: "Modal eigenmodes",
+    exact: true,
+  }).click();
+
+  const editors = scenario.inspector.locator(".fm-study-stage-editor");
+  await scenario.page.waitForFunction(
+    () => document.querySelectorAll(".fm-study-stage-editor").length === 2,
+    undefined,
+    { timeout: 15_000 },
+  );
+  const relaxEditor = editors.nth(0);
+  const eigenEditor = editors.nth(1);
+  assert.match(await relaxEditor.innerText(), /Stage 1:\s*Relax/);
+  assert.match(await eigenEditor.innerText(), /Stage 2:\s*Eigenmodes/);
+
+  await eigenEditor.getByRole("combobox", { name: "Operator", exact: true })
+    .selectOption("full_2x2");
+  await eigenEditor.getByLabel("Mode count", { exact: true }).fill("3");
+  await eigenEditor.getByRole("combobox", { name: "Target", exact: true })
+    .selectOption("frequency_window");
+  await eigenEditor.getByLabel("Frequency min").fill("1.5e9");
+  await eigenEditor.getByLabel("Frequency max").fill("2.5e9");
+  await eigenEditor.getByLabel("k path", { exact: true }).fill(LEGAL_EIGEN_K_PATH);
+
+  const { mode, maxCpu } = await prepareAdaptiveDraft(scenario);
+  const validation = scenario.page.locator(".fm-inspector-validation-list li");
+  assert.equal(
+    await validation.count(),
+    0,
+    "The combined Relax + Eigenmodes CPU adaptive draft must be legal: " +
+      (await visibleValidationText(scenario.page)).join(" | "),
+  );
+  const apply = scenario.page.getByRole("button", {
+    name: "Apply",
+    exact: true,
+  });
+  assert.equal(await apply.isEnabled(), true);
+  return { apply, editors, eigenEditor, maxCpu, mode };
+}
+
+async function captureCombinedApplyFailure(scenario, error) {
+  const caseSlug = String(scenario.id).replace(/[^A-Za-z0-9_-]/g, "-");
+  const stem = `study-adaptive-${caseSlug}-failure-${Date.now()}`;
+  const serializedError = error instanceof Error
+    ? { name: error.name, message: error.message, stack: error.stack ?? null }
+    : { name: typeof error, message: String(error), stack: null };
+  const visible = {};
+  try {
+    visible.validation = await visibleValidationText(scenario.page);
+  } catch (captureError) {
+    visible.validation_capture_error = captureError instanceof Error
+      ? captureError.message
+      : String(captureError);
+  }
+  try {
+    visible.inspector_text = await scenario.inspector.innerText();
+  } catch (captureError) {
+    visible.inspector_text_capture_error = captureError instanceof Error
+      ? captureError.message
+      : String(captureError);
+  }
+
+  try {
+    await writeFile(
+      resolve(reportRoot, `${stem}.json`),
+      JSON.stringify({
+        case_id: scenario.id,
+        error: serializedError,
+        fixture: {
+          requests: scenario.fixture.requests,
+          mutations: scenario.fixture.mutations,
+          current_scene: scenario.fixture.scene,
+        },
+        visible,
+      }, null, 2) + "\n",
+      { encoding: "utf8", flag: "wx" },
+    );
+  } catch {
+    // Preserve the original browser assertion if diagnostic JSON cannot be written.
+  }
+
+  try {
+    await scenario.page.screenshot({
+      path: resolve(reportRoot, `${stem}.png`),
+      fullPage: true,
+    });
+  } catch {
+    // Screenshot capture is best-effort and must not replace the original failure.
+  }
+}
+
+function assertCombinedAdaptiveTransaction(transaction, baseRevision) {
+  assert.equal(transaction.kind, "merge_patch");
+  assert.equal(transaction.base_revision, baseRevision);
+  const study = transaction.merge_patch.study;
+  assert.equal(study.parallel_execution.mode, "adaptive");
+  assert.equal(study.parallel_execution.max_cpu_percent, 73);
+  assert.equal(study.requested_device, "cpu");
+  assert.deepEqual(study.stages.map((stage) => stage.kind), ["relax", "eigenmodes"]);
+  const eigen = study.stages[1];
+  assert.equal(eigen.eigen_count, 3);
+  assert.equal(eigen.eigen_operator, "full_2x2");
+  assert.equal(eigen.eigen_target, "frequency_window");
+  assert.equal(eigen.eigen_frequency_min, 1.5e9);
+  assert.equal(eigen.eigen_frequency_max, 2.5e9);
+  assert.equal(eigen.eigen_k_path, LEGAL_EIGEN_K_PATH);
+}
+
+async function runCombinedApplyRealtimeCase(browser) {
+  const scenario = await openStudyInspector(browser, {
+    id: "combined-apply-realtime-frequency-response",
+    stage: null,
+    realtime: true,
+  });
+  try {
+    assert.equal(scenario.fixture.scene.revision, 1);
+    assert.deepEqual(scenario.fixture.scene.study.stages, []);
+    const panelHandle = await scenario.inspector.elementHandle();
+    const { apply, editors, eigenEditor, maxCpu, mode } =
+      await prepareCombinedAdaptiveDraft(scenario);
+
+    await new Promise((resolveReady) => setTimeout(resolveReady, 150));
+    const freshScene = await publishSceneThroughRealtime(
+      scenario,
+      makeScene(
+        { kind: "frequency_response", stage_id: "stage-frequency-response" },
+        2,
+      ),
+    );
+    assert.equal(freshScene.revision, 2);
+    assert.equal(freshScene.study.stages[0].kind, "frequency_response");
+    assert.equal(await mode.inputValue(), "adaptive");
+    assert.equal(await maxCpu.inputValue(), "73");
+    assert.equal(await editors.count(), 2);
+    assert.match(await editors.nth(0).innerText(), /Stage 1:\s*Relax/);
+    assert.match(await editors.nth(1).innerText(), /Stage 2:\s*Eigenmodes/);
+    assert.equal(
+      await eigenEditor.getByLabel("k path", { exact: true }).inputValue(),
+      LEGAL_EIGEN_K_PATH,
+    );
+    assert.equal(await scenario.page.locator(".fm-inspector-validation-list li").count(), 0);
+    assert.equal(await apply.isEnabled(), true);
+    assert.equal(
+      await scenario.page.evaluate(
+        (panel) => panel.isConnected && document.querySelector(".fm-inspector") === panel,
+        panelHandle,
+      ),
+      true,
+      "Realtime scene refresh replaced the mounted Study Inspector.",
+    );
+
+    const responsePromise = scenario.page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === TRANSACTIONS_PATH,
+      { timeout: 30_000 },
+    );
+    await apply.click();
+    const response = await responsePromise;
+    assert.equal(response.status(), 200);
+    const transaction = scenario.fixture.mutations[0];
+    assertCombinedAdaptiveTransaction(transaction, 2);
+    assert.equal(scenario.fixture.scene.revision, 3);
+    const ack = await response.json();
+    assert.equal(ack.scene_revision, 3);
+    assert.deepEqual(
+      ack.committed_scene.study.stages.map((stage) => stage.kind),
+      ["relax", "eigenmodes"],
+    );
+    assert.equal(ack.committed_scene.study.parallel_execution.mode, "adaptive");
+    assert.equal(ack.committed_scene.study.requested_device, "cpu");
+    await scenario.page.getByText(
+      "Committed global study settings and 2 study stages.",
+      { exact: true },
+    ).waitFor({ state: "visible", timeout: 15_000 });
+    assert.equal(await apply.isDisabled(), true);
+    assert.equal(scenario.fixture.mutations.length, 1);
+    assert.equal(
+      scenario.fixture.requests.filter(
+        (request) => request.method === "POST" && request.path === TRANSACTIONS_PATH,
+      ).length,
+      1,
+    );
+    assert.deepEqual(scenario.fixture.unknownMutations, []);
+    assert.deepEqual(scenario.pageErrors, []);
+
+    return {
+      canonical_before_apply: "frequency_response",
+      canonical_revision_before_apply: freshScene.revision,
+      base_revision: transaction.base_revision,
+      mutation_count: scenario.fixture.mutations.length,
+      stage_kinds: transaction.merge_patch.study.stages.map((stage) => stage.kind),
+      parallel_mode: transaction.merge_patch.study.parallel_execution.mode,
+      requested_device: transaction.merge_patch.study.requested_device,
+      response_status: response.status(),
+      ack_revision: ack.scene_revision,
+      drafts_preserved_through_realtime: true,
+    };
+  } catch (error) {
+    try {
+      await captureCombinedApplyFailure(scenario, error);
+    } catch {
+      // Keep the original assertion/network failure as the case result.
+    }
+    throw error;
+  } finally {
+    await scenario.context.close();
+  }
+}
+
+async function runCombinedApplyConflictCase(browser) {
+  const scenario = await openStudyInspector(browser, {
+    id: "combined-apply-one-shot-conflict",
+    stage: null,
+  });
+  try {
+    const { apply, editors, eigenEditor, maxCpu, mode } =
+      await prepareCombinedAdaptiveDraft(scenario);
+    const freshSceneResponsePromise = scenario.page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname === SCENE_PATH &&
+        scenario.fixture.sceneReadRevisions.includes(2),
+      { timeout: 30_000 },
+    );
+    scenario.fixture.conflictNextTransaction = true;
+    const responsePromise = scenario.page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === TRANSACTIONS_PATH,
+      { timeout: 30_000 },
+    );
+    await apply.click();
+    const response = await responsePromise;
+    assert.equal(response.status(), 409);
+    const freshSceneResponse = await freshSceneResponsePromise;
+    assert.equal(freshSceneResponse.status(), 200);
+    const freshScene = await freshSceneResponse.json();
+    assert.equal(freshScene.revision, 2);
+    assert.deepEqual(freshScene.study.stages, []);
+    await scenario.page.getByText(
+      "Scene revision conflict. Refetched the canonical scene; both Study drafts were preserved for review and retry.",
+      { exact: true },
+    ).waitFor({ state: "visible", timeout: 15_000 });
+
+    assert.equal(scenario.fixture.mutations.length, 1);
+    assert.equal(
+      scenario.fixture.requests.filter(
+        (request) => request.method === "POST" && request.path === TRANSACTIONS_PATH,
+      ).length,
+      1,
+    );
+    assertCombinedAdaptiveTransaction(scenario.fixture.mutations[0], 1);
+    assert.equal(await mode.inputValue(), "adaptive");
+    assert.equal(await maxCpu.inputValue(), "73");
+    assert.equal(await editors.count(), 2);
+    assert.match(await editors.nth(0).innerText(), /Stage 1:\s*Relax/);
+    assert.match(await editors.nth(1).innerText(), /Stage 2:\s*Eigenmodes/);
+    assert.equal(
+      await eigenEditor.getByLabel("k path", { exact: true }).inputValue(),
+      LEGAL_EIGEN_K_PATH,
+    );
+    assert.equal(await apply.isEnabled(), true);
+    assert.equal(await scenario.page.locator(".fm-inspector-validation-list li").count(), 0);
+    assert.equal(scenario.fixture.scene.revision, 2);
+    assert.deepEqual(scenario.fixture.unknownMutations, []);
+    assert.deepEqual(scenario.pageErrors, []);
+
+    return {
+      attempted_base_revision: scenario.fixture.mutations[0].base_revision,
+      attempted_post_count: 1,
+      response_status: response.status(),
+      canonical_revision_after_conflict: freshScene.revision,
+      drafts_preserved: true,
+      apply_enabled_after_conflict: true,
+      conflict_feedback_visible: true,
+    };
+  } catch (error) {
+    try {
+      await captureCombinedApplyFailure(scenario, error);
+    } catch {
+      // Keep the original assertion/network failure as the case result.
+    }
+    throw error;
+  } finally {
+    await scenario.context.close();
+  }
+}
+
 async function runRejectedCase(browser, testCase) {
   const scenario = await openStudyInspector(browser, {
     id: testCase.id,
@@ -651,48 +998,10 @@ async function runStaleSceneCase(browser) {
     );
 
     await new Promise((resolveReady) => setTimeout(resolveReady, 150));
-    const freshSceneResponsePromise = scenario.page.waitForResponse(
-      (response) =>
-        response.request().method() === "GET" &&
-        new URL(response.url()).pathname === SCENE_PATH &&
-        scenario.fixture.sceneReadRevisions.includes(2),
-      { timeout: 30_000 },
+    const freshScene = await publishSceneThroughRealtime(
+      scenario,
+      makeScene({ kind: "run", stage_id: "stage-run" }, 2),
     );
-
-    scenario.fixture.scene = makeScene(
-      { kind: "run", stage_id: "stage-run" },
-      2,
-    );
-    const socket = await waitForRealtimeSocket(scenario);
-    socket.send(JSON.stringify({
-      contract_version: "1.0.0",
-      payload: { request_scope_epoch: REQUEST_SCOPE_EPOCH },
-      run_id: null,
-      seq: 1,
-      session_id: SESSION_ID,
-      type: "hello",
-    }));
-    socket.send(JSON.stringify({
-      contract_version: "1.0.0",
-      payload: {
-        changes: [
-          {
-            recommended_fetch: SCENE_PATH,
-            resource: "model",
-            resource_id: "scene",
-            revision: 2,
-          },
-        ],
-      },
-      run_id: null,
-      seq: 2,
-      session_id: SESSION_ID,
-      type: "resource.batch_changed",
-    }));
-
-    const freshSceneResponse = await freshSceneResponsePromise;
-    assert.equal(freshSceneResponse.status(), 200);
-    const freshScene = await freshSceneResponse.json();
     assert.equal(freshScene.revision, 2);
     assert.equal(freshScene.study.stages[0].kind, "run");
 
@@ -822,12 +1131,16 @@ async function main() {
       legal.push(await runLegalSaveCase(browser, testCase));
     }
     const stale = await runStaleSceneCase(browser);
+    const combinedApply = await runCombinedApplyRealtimeCase(browser);
+    const combinedApplyConflict = await runCombinedApplyConflictCase(browser);
     const report = {
       schema: "fullmag_study_adaptive_authoring_browser_v1",
       fixture_only: true,
       route: "/workspace",
       rejected,
       legal,
+      combined_apply: combinedApply,
+      combined_apply_409: combinedApplyConflict,
       stale_scene: stale,
       execution: "hosted-browser-required",
     };
