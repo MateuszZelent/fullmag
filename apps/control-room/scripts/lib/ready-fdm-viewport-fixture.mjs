@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 
 export const FIELD_GRID = [24, 16, 2];
+const FDM_GRID_ORIGIN = [-6e-7, -4e-7, -1e-7];
+const FDM_GRID_SPACING = [1.25e-8, 1.25e-8, 5e-8];
+const FDM_GRID_FINGERPRINT = "0".repeat(64);
+const FDM_REGION_MEMBERSHIP_BUFFER_PATH =
+  "/v2/sessions/current/data/fdm-region-membership";
+const FDM_READY_OBJECT_ID = "fdm-ready-box";
+const FDM_READY_REGION_ID = `${FDM_READY_OBJECT_ID}:core`;
 export const FDM_PARTIAL_LAYER_ID = "layer:partial";
 export const FDM_DENSE_LAYER_ID = "layer:dense";
 export const FDM_MULTILAYER_LAYOUT_REVISION = 7;
@@ -39,6 +46,7 @@ const EXACT_FIXTURE_PATHS = new Set([
   "/v2/sessions/current/visualization/mode-compositions/active",
   "/v2/sessions/current/data/domain/meta",
   "/v2/sessions/current/data/domain/fdm-multilayer-layout",
+  FDM_REGION_MEMBERSHIP_BUFFER_PATH,
   "/v2/sessions/current/data/fdm-region-memberships",
   "/v2/sessions/current/data/quantities",
   "/v2/sessions/current/data/scalars",
@@ -67,20 +75,42 @@ const EXACT_FIXTURE_PATHS = new Set([
 
 export function createFdmFixture({ trackFieldResponses = false } = {}) {
   const visualizationState = fdmVisualizationStateFixture();
+  const sceneRevision = 1;
+  const readyObject = fdmReadySceneObject();
+  visualizationState.overrides = [
+    {
+      display: {
+        surface: { visible: true },
+        vectors: { visible: true },
+      },
+      scope: "object",
+      scope_id: FDM_READY_OBJECT_ID,
+    },
+  ];
   const fixture = {
     fieldRevision: 1,
     fieldVectorResponses: [],
     clientAcks: [],
     clientAckRevision: 0,
-    sceneRevision: 0,
+    sceneRevision,
     hasExecutionPlan: false,
-    hasPersistedRegionMembershipDescriptor: false,
+    hasPersistedRegionMembershipDescriptor: true,
     hasStageExecution: false,
     multilayerEnabled: false,
     patchCount: 0,
     status: null,
     trackFieldResponses,
     visualizationState,
+    scene: {
+      objects: [readyObject],
+      revision: sceneRevision,
+      schema_version: 2,
+    },
+    regions: fdmRegionListFixture(sceneRevision),
+    universe: fdmUniverseFixture(sceneRevision),
+    manifest: fdmSharedDomainManifestFixture(sceneRevision),
+    fdmMembership: fdmRegionMembershipDescriptorFixture(),
+    fdmMembershipBinary: makeFdmRegionMembershipBuffer(),
   };
   fixture.status = fdmStatusFixture(fixture);
   return fixture;
@@ -279,15 +309,7 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         request.method() === "GET" &&
         path === "/v2/sessions/current/model/regions"
       ) {
-        await fulfillJson(route, {
-          scene_revision: fixture.sceneRevision,
-          geometry_realization_revision: fixture.sceneRevision,
-          region_topology_revision: fixture.sceneRevision,
-          region_membership_revision: fixture.sceneRevision,
-          region_coefficients_revision: fixture.sceneRevision,
-          region_initial_state_revision: fixture.sceneRevision,
-          regions: [],
-        });
+        await fulfillJson(route, fixture.regions);
         return;
       }
       if (
@@ -418,13 +440,53 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         request.method() === "GET" &&
         path === "/v2/sessions/current/data/fdm-region-memberships"
       ) {
-        if (
+        if (fixture.multilayerEnabled) {
+          if (fixture.status.run === null && !fixture.hasExecutionPlan) {
+            await fulfillEmpty(route, 204);
+          } else {
+            await route.fallback();
+          }
+        } else if (
           fixture.status.domain.discretization === "fdm" &&
           fixture.status.run === null &&
           !fixture.hasExecutionPlan &&
           !fixture.hasPersistedRegionMembershipDescriptor
         ) {
           await fulfillEmpty(route, 204);
+        } else if (fixture.hasPersistedRegionMembershipDescriptor) {
+          await fulfillJson(route, fixture.fdmMembership);
+        } else {
+          await route.fallback();
+        }
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === FDM_REGION_MEMBERSHIP_BUFFER_PATH
+      ) {
+        if (fixture.multilayerEnabled) {
+          await route.fallback();
+        } else if (fixture.hasPersistedRegionMembershipDescriptor) {
+          const etag = `"fdm-region-membership-r${fixture.fdmMembership.region_membership_revision}"`;
+          const headers = {
+            etag,
+            "x-fullmag-domain-generation-id": fixture.fdmMembership.domain_generation_id,
+            "x-fullmag-grid-fingerprint": fixture.fdmMembership.grid_fingerprint,
+            "x-fullmag-region-membership-revision": String(
+              fixture.fdmMembership.region_membership_revision,
+            ),
+          };
+          if (request.headers()["if-none-match"] === etag) {
+            await fulfillEmpty(route, 304, headers);
+          } else {
+            await fulfillBinary(route, fixture.fdmMembershipBinary, 200, headers);
+          }
+        } else if (
+          fixture.status.domain.discretization === "fdm" &&
+          fixture.status.run === null &&
+          !fixture.hasExecutionPlan
+        ) {
+          await fulfillEmpty(route, 404);
         } else {
           await route.fallback();
         }
@@ -561,25 +623,14 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         request.method() === "GET" &&
         path === "/v2/sessions/current/model/scene"
       ) {
-        await fulfillJson(route, {
-          objects: [],
-          revision: fixture.sceneRevision,
-          schema_version: 1,
-        });
+        await fulfillJson(route, fixture.scene);
         return;
       }
       if (
         request.method() === "GET" &&
         path === "/v2/sessions/current/model/universe"
       ) {
-        await fulfillJson(route, {
-          mesh_dirty: false,
-          object_bounds_max: [6e-7, 4e-7, 1e-7],
-          object_bounds_min: [-6e-7, -4e-7, -1e-7],
-          scene_revision: 0,
-          study_universe_mesh: null,
-          universe: null,
-        });
+        await fulfillJson(route, fixture.universe);
         return;
       }
       if (
@@ -587,7 +638,7 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         path ===
           "/v2/sessions/current/meshing/meshes/shared-domain/manifest"
       ) {
-        await fulfillEmpty(route, 204);
+        await fulfillJson(route, fixture.manifest);
         return;
       }
 
@@ -701,7 +752,8 @@ function fixtureHeaders(extra = {}) {
     "access-control-allow-headers": "*",
     "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
     "access-control-allow-origin": "*",
-    "access-control-expose-headers": "x-api-contract-version,etag,x-request-id",
+    "access-control-expose-headers":
+      "x-api-contract-version,etag,x-request-id,x-fullmag-domain-generation-id,x-fullmag-grid-fingerprint,x-fullmag-region-membership-revision",
     "x-api-contract-version": "1.0.0",
     ...extra,
   };
@@ -767,9 +819,9 @@ function fdmStatusFixture(fixture) {
       field_revision: fixture.fieldRevision,
       fields_revision: fixture.fieldRevision,
       mesh_build_revision: 0,
-      mesh_revision: 0,
+      mesh_revision: 1,
       scalars_revision: 0,
-      scene_revision: 0,
+      scene_revision: fixture.sceneRevision,
       slice_revision: 0,
       stages_revision: 0,
       topology_revision: 0,
@@ -792,22 +844,173 @@ function fdmStatusFixture(fixture) {
   };
 }
 
-function fdmDomainMetaFixture() {
+function fdmGridBounds() {
   return {
-    bounds: {
-      max: [6e-7, 4e-7, 1e-7],
-      min: [-6e-7, -4e-7, -1e-7],
+    max: FDM_GRID_ORIGIN.map(
+      (origin, axis) => origin + FIELD_GRID[axis] * FDM_GRID_SPACING[axis],
+    ),
+    min: [...FDM_GRID_ORIGIN],
+  };
+}
+
+function fdmReadySceneObject() {
+  const bounds = fdmGridBounds();
+  const size = FIELD_GRID.map((count, axis) => count * FDM_GRID_SPACING[axis]);
+  const center = bounds.min.map((minimum, axis) => minimum + size[axis] / 2);
+  return {
+    geometry: { geometry_params: { size }, kind: "box" },
+    id: FDM_READY_OBJECT_ID,
+    regions: [
+      {
+        enabled: true,
+        frame: "object",
+        name: "Core",
+        region_id: FDM_READY_REGION_ID,
+        shape: { center: [0, 0, 0], kind: "box", size },
+      },
+    ],
+    transform: { translation: center },
+    visible: true,
+  };
+}
+
+function fdmRegionListFixture(sceneRevision) {
+  const bounds = fdmGridBounds();
+  return {
+    geometry_realization_revision: sceneRevision,
+    region_membership_revision: 1,
+    region_topology_revision: sceneRevision,
+    region_coefficients_revision: sceneRevision,
+    region_initial_state_revision: sceneRevision,
+    regions: [
+      {
+        bounds_max: bounds.max,
+        bounds_min: bounds.min,
+        enabled: true,
+        frame: "object",
+        interaction_refs: [],
+        material_ref: "fixture-material",
+        mesh_part_ids: [],
+        name: "Core",
+        owner_object_id: FDM_READY_OBJECT_ID,
+        region_id: FDM_READY_REGION_ID,
+        source: "authored_object_region",
+        source_body_ids: [],
+        source_object_ids: [FDM_READY_OBJECT_ID],
+      },
+    ],
+    scene_revision: sceneRevision,
+  };
+}
+
+function fdmUniverseFixture(sceneRevision) {
+  const bounds = fdmGridBounds();
+  return {
+    mesh_dirty: false,
+    object_bounds_max: bounds.max,
+    object_bounds_min: bounds.min,
+    scene_revision: sceneRevision,
+    study_universe_mesh: null,
+    universe: null,
+  };
+}
+
+function fdmSharedDomainManifestFixture(sceneRevision) {
+  return {
+    generation_id: "1",
+    mesh_parts: [],
+    regions: [],
+    revision: 1,
+    source_scene_revision: sceneRevision,
+    topology_fingerprint: "0".repeat(64),
+  };
+}
+
+function fdmRegionMembershipDescriptorFixture() {
+  const regionLegend = [
+    {
+      numeric_id: 1,
+      object_id: FDM_READY_OBJECT_ID,
+      priority: 0,
+      region_id: FDM_READY_REGION_ID,
     },
+  ];
+  const canonicalLegend = regionLegend.map(
+    ({ numeric_id, object_id, region_id, priority }) => ({
+      numeric_id,
+      object_id,
+      region_id,
+      priority,
+    }),
+  );
+  const bounds = fdmGridBounds();
+  const cellCount = FIELD_GRID[0] * FIELD_GRID[1] * FIELD_GRID[2];
+  return {
+    binary_path: FDM_REGION_MEMBERSHIP_BUFFER_PATH,
+    cell_count: cellCount,
+    cell_m: [...FDM_GRID_SPACING],
+    counts: [...FIELD_GRID],
+    domain_generation_id: "1",
+    encoding: "FMRM:u32_membership_le",
+    freshness: "current",
+    grid_fingerprint: FDM_GRID_FINGERPRINT,
+    magnetic_support: {
+      active_cell_count: cellCount,
+      active_unassigned_cell_count: 0,
+      bounds_max_m: bounds.max,
+      bounds_min_m: bounds.min,
+      grid_fingerprint: FDM_GRID_FINGERPRINT,
+      inactive_cell_count: 0,
+      semantic_role: "magnetic-support",
+    },
+    mesh_revision: 1,
+    object_ids: [FDM_READY_OBJECT_ID],
+    origin_m: [...FDM_GRID_ORIGIN],
+    region_legend: regionLegend,
+    region_legend_fingerprint: createHash("sha256")
+      .update(JSON.stringify(canonicalLegend))
+      .digest("hex"),
+    region_membership_revision: 1,
+    schema_version: "fdm_region_membership.v2",
+  };
+}
+
+function makeFdmRegionMembershipBuffer() {
+  const [nx, ny, nz] = FIELD_GRID;
+  const cellCount = nx * ny * nz;
+  const buffer = new ArrayBuffer(64 + cellCount * Uint32Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMRM"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 2);
+  view.setUint32(8, nx, true);
+  view.setUint32(12, ny, true);
+  view.setUint32(16, nz, true);
+  view.setUint32(20, cellCount, true);
+  view.setUint32(24, 1, true);
+  writeHexBytes(view, 28, FDM_GRID_FINGERPRINT);
+  for (let cellIndex = 0; cellIndex < cellCount; cellIndex += 1) {
+    view.setUint32(64 + cellIndex * Uint32Array.BYTES_PER_ELEMENT, 1, true);
+  }
+  return buffer;
+}
+
+function fdmDomainMetaFixture() {
+  const bounds = fdmGridBounds();
+  return {
+    bounds,
     coordinate_system: "cartesian",
     counts: { cells: FIELD_GRID[0] * FIELD_GRID[1] * FIELD_GRID[2] },
     dimension: 3,
     discretization: "fdm",
     domain_id: "fdm-memory-churn-domain",
-    generation_id: 1,
+    generation_id: "1",
     grid: {
-      origin: [-6e-7, -4e-7, -1e-7],
+      origin: [...FDM_GRID_ORIGIN],
       shape: FIELD_GRID,
-      spacing: [1.25e-8, 1.25e-8, 5e-8],
+      spacing: [...FDM_GRID_SPACING],
     },
     units: { length: "m" },
   };
@@ -943,14 +1146,14 @@ function fdmModelReadinessFixture(fixture) {
       label: "Domain policy",
       target_resource: "meshing/policies/universe",
       reason:
-        "Automatic bounds will be derived after geometry is added. You can configure manual dimensions now or later.",
+        "The FDM domain bounds follow the current realized grid.",
     },
     {
       id: "geometry",
-      state: "blocked",
+      state: "complete",
       label: "Geometry",
       target_resource: "model/scene",
-      reason: "Add at least one magnetic object.",
+      reason: "A magnetic object is present.",
     },
     {
       id: "material",
@@ -1325,34 +1528,47 @@ function fdmFieldCatalogFixture(fixture) {
   return {
     domain_generation_id: "1",
     revision,
-    quantities: FIELD_QUANTITIES.map((quantityId) => ({
-      available: true,
-      components: 3,
-      domain_generation_id: "1",
-      field_revision: revision,
-      kind: "vector",
-      label: quantityId,
-      location: "cell",
-      materialization_wall_time_ns: 0,
-      materialized_at_unix_ms: 0,
-      quantity_id: quantityId,
-      source_revision: revision,
-      source_step: 0,
-      stale_by_steps: 0,
-      state: "complete",
-      unit: "A/m",
-    })),
+    quantities: FIELD_QUANTITIES.map((quantityId) => {
+      const magneticOnly = quantityId === "m" || quantityId === "H_ex";
+      return {
+        available: true,
+        components: 3,
+        domain: magneticOnly ? "magnetic_only" : "full_domain",
+        domain_generation_id: "1",
+        field_revision: revision,
+        kind: "vector",
+        label: quantityId,
+        location: "cell",
+        materialization_wall_time_ns: 0,
+        materialized_at_unix_ms: 0,
+        quantity_id: quantityId,
+        source_revision: revision,
+        source_step: 0,
+        spatial: true,
+        stale_by_steps: 0,
+        state: "complete",
+        ui_exposed: true,
+        unit: quantityId === "m" ? "1" : "A/m",
+      };
+    }),
   };
 }
 
 function fdmVisualizationStateFixture() {
+  const bounds = fdmGridBounds();
+  const cameraTarget = bounds.min.map(
+    (minimum, axis) => (minimum + bounds.max[axis]) / 2,
+  );
+  const cameraOffset = [1.4e-6, 1.0e-6, 8e-7];
   return {
     active_quantity_id: "m",
     auto_contrast: true,
     camera: {
-      position: [1.4e-6, 1.0e-6, 8e-7],
+      position: cameraTarget.map(
+        (coordinate, axis) => coordinate + cameraOffset[axis],
+      ),
       projection: "perspective",
-      target: [0, 0, 0],
+      target: cameraTarget,
       up: [0, 0, 1],
     },
     clip: {

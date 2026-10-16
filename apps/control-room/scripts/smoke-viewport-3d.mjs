@@ -672,15 +672,24 @@ async function verifyVisibleViewportCompanionLifecycle(page) {
     }
   };
   const clickRealOpenCommand = async () => {
-    await page.getByRole("tab", { name: "View" }).first().click();
-    const openCommand = page.locator(
-      '[data-action-id="ribbon.analysis.show-chart-and-field"]',
+    // The ribbon action belongs to a selected analysis result's contextual
+    // tab. This fixture owns a live FDM field, so use the same registered
+    // workspace command through the visible palette without fabricating a result.
+    await page.locator(".fm-header__search").click();
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.waitFor({ state: "visible", timeout: 15_000 });
+    await palette.getByPlaceholder("Search commands").fill(
+      "Show analysis chart and 3D field side by side",
     );
+    const openCommand = palette.getByRole("option", {
+      name: /Show analysis chart and 3D field side by side/,
+    });
     await openCommand.waitFor({ state: "visible", timeout: 15_000 });
-    if (!(await openCommand.isEnabled())) {
-      throw new Error("The real chart-and-3D companion ribbon command is disabled.");
+    if ((await openCommand.getAttribute("aria-disabled")) === "true") {
+      throw new Error("The real chart-and-3D companion command is disabled.");
     }
     await openCommand.click();
+    await palette.waitFor({ state: "hidden", timeout: 15_000 });
   };
 
   await page.evaluate(() => {

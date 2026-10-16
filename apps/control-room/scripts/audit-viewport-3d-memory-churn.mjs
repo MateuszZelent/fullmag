@@ -94,7 +94,7 @@ const auditedRequests = [];
 // Failed transport URLs are distinct evidence from the viewport's canonical
 // resource keys; retain the URL Playwright actually requested for fixture review.
 const requestFailureDiagnostics = [];
-const fixture = createFdmFixture();
+const fixture = createFdmFixture({ trackFieldResponses: true });
 let auditActive = false;
 let auditPhase = "bootstrap";
 
@@ -185,14 +185,30 @@ try {
     await withTimeout(
       setGlobalQuantity(page, fixture, fixtureRequests, quantity, {
         allowExistingFieldRequest: true,
-        // The production-like no-session fixture may already have the selected
-        // field in its browser resource cache during bootstrap.
-        requireFieldRequest: false,
+        // Bootstrap may have loaded this quantity already, but an empty field
+        // cache must never count as a successful warmed-cache audit.
+        requireFieldRequest: true,
       }),
       QUANTITY_SWITCH_TIMEOUT_MS,
       `Timed out warming viewport quantity ${quantity}.`,
     );
   }
+  await waitForCondition(
+    () => WARM_QUANTITIES.every((quantityId) =>
+      fixture.fieldVectorResponses.some((response) =>
+        response.quantityId === quantityId &&
+        response.status === 200 &&
+        /^[a-f0-9]{64}$/.test(response.payloadHash ?? ""),
+      ),
+    ),
+    15_000,
+    "Quantity warmup did not receive every canonical binary field payload.",
+  );
+  const warmedFieldPayloads = WARM_QUANTITIES.map((quantityId) =>
+    fixture.fieldVectorResponses.find((response) =>
+      response.quantityId === quantityId && response.status === 200,
+    ),
+  );
   await page.waitForTimeout(500);
 
   auditLog("reading baseline diagnostics");
@@ -422,6 +438,7 @@ try {
     fidelity,
     topologyRequests,
     url,
+    warmedFieldPayloads,
   });
 
   console.log(
