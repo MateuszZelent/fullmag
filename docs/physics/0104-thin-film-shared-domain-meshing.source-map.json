@@ -260,7 +260,7 @@
       "id": "box-body-only-exact-layer-generator",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "generate_swept_tetrahedral_box_body_only_mesh",
-      "responsibility": "Generates Box-only Tet4/tri3 exact Z layers, checks planes and strict geometry, and recertifies periodic mappings in SI.",
+      "responsibility": "Generates Box-only exact-Z Tet4/tri3 by subdividing a transient prism6/quad4 extrusion without adding nodes; checks layers, strict geometry, and SI periodic face certification.",
       "evidence_status": "source_implemented_runtime_not_verified"
     },
     {
@@ -274,14 +274,14 @@
       "id": "box-body-only-pipeline-report",
       "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
       "symbol": "_build_mesh_operation_statuses",
-      "responsibility": "Reports body-only Box layers with a distinct build mode and actual-method label, separate from airbox layered GEO.",
+      "responsibility": "Reports body-only exact layers and the transient prism6-to-tet4 subdivision through an explicit layer_mesh_mode, separate from airbox layered GEO.",
       "evidence_status": "source_implemented_runtime_not_verified"
     },
     {
       "id": "box-body-only-gmsh-regression",
       "path": "scripts/test_box_body_only_thin_film_mesh.py",
       "symbol": "test_body_only_box_thin_film_realizes_exact_tet4_layers",
-      "responsibility": "Real-Gmsh regression for nonperiodic and X/Y-periodic Box-only exact layers, Tet4/tri3, positive volume, and SI certificate.",
+      "responsibility": "Real-Gmsh regression for nonperiodic and X/Y-periodic Box-only exact layers, Tet4/tri3, positive volume, and accepted SI node/face certificate after prism subdivision.",
       "evidence_status": "existing_github_actions_regression_pending"
     },
     {
@@ -290,6 +290,13 @@
       "symbol": "test_public_mesh_pipeline_reports_body_only_owner_fields_without_airbox",
       "responsibility": "Exercises public shared-domain realization with accepted full-depth owner fields and requires truthful body-only reporting.",
       "evidence_status": "existing_github_actions_regression_pending"
+    },
+    {
+      "id": "box-body-only-periodic-prism-subdivision",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_tetrahedra.py",
+      "symbol": "subdivide_layered_prisms",
+      "responsibility": "Converts vertical prism6/quad4 layers into conforming tet4/tri3 without adding nodes; coordinate-ranked columns give translated periodic faces the same diagonals and each tet positive orientation.",
+      "evidence_status": "source_implemented_runtime_not_verified"
     }
   ],
   "public_api": {

@@ -170,7 +170,7 @@ def test_public_mesh_pipeline_reports_body_only_owner_fields_without_airbox() ->
     assert thin_film.details["resolved_sweep_direction"] == "z"
     assert thin_film.details["airbox_present"] is False
     assert thin_film.details["body_only_domain"] is True
-    assert thin_film.details["layer_mesh_mode"] == "geo_extruded_triangular_source_tet4"
+    assert thin_film.details["layer_mesh_mode"] == "geo_extruded_triangular_prism6_subdivided_tet4"
     assert thin_film.details["layer_planes_realized"] is True
     assert thin_film.details["resolved_layer_partitions"] == _LAYERS
     owner_fields = [

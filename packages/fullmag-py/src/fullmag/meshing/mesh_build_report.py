@@ -749,7 +749,7 @@ def _build_mesh_operation_statuses(
                                     "verified" if layer_planes_realized else "pending"
                                 ),
                                 "layer_mesh_mode": (
-                                    "geo_extruded_triangular_source_tet4"
+                                    "geo_extruded_triangular_prism6_subdivided_tet4"
                                     if exact_body_only_layers
                                     else "unstructured_tetrahedra_per_layer_volume"
                                 ),

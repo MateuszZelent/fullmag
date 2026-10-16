@@ -2440,7 +2440,7 @@ def generate_swept_tetrahedral_box_body_only_mesh(
         )
     if order != 1 or distribution != DISTRIBUTION_FIXED or recombine:
         raise ValueError(
-            "body-only tetrahedral Box requires P1 fixed non-recombined layers"
+            "body-only tetrahedral Box requires P1 fixed Tet4 output"
         )
     if options.through_thickness_distribution not in (None, DISTRIBUTION_FIXED):
         raise ValueError("body-only tetrahedral Box requires fixed layer spacing")
@@ -2568,6 +2568,9 @@ def generate_swept_tetrahedral_box_body_only_mesh(
                 )
         gmsh.model.mesh.generate(2)
 
+        # Recombine only the intermediate GEO extrusion. The shared layered
+        # converter below produces the required final Tet4/tri3 mesh and
+        # uses translation-invariant diagonals on periodic side faces.
         extruded = gmsh.model.geo.extrude(
             [(2, source_surface)],
             0.0,
@@ -2575,7 +2578,7 @@ def generate_swept_tetrahedral_box_body_only_mesh(
             sz_scaled,
             numElements=[1] * n_layers,
             heights=cumulative_heights,
-            recombine=False,
+            recombine=True,
         )
         gmsh.model.geo.synchronize()
         body_volumes = [
@@ -2649,6 +2652,8 @@ def generate_swept_tetrahedral_box_body_only_mesh(
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, options)
         _reapply_periodic_surface_mappings(gmsh, periodic_pair_specs)
+        from ._gmsh_layered_tetrahedra import subdivide_layered_prisms
+        subdivide_layered_prisms(gmsh)
         quality, _per_domain_quality = (
             _extract_quality_metrics(gmsh, options)
             if options.compute_quality
