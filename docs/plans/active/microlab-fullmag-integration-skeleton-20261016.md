@@ -18,7 +18,7 @@ System ma bezpiecznie obsłużyć dwóch różnych użytkowników oraz wiele ró
 - Jeden durable idempotent intent odpowiada jednej alokacji na TaskId/AttemptId w pierwszym brokerowym zakresie. Timeout wymaga reconciliation po tym samym intent, a nie nowego create.
 - V1 przenosi opaque, versioned artifact manifests z SHA-256. Fullmag jest właścicielem formatu HDF5/Zarr/pozostałych danych; broker ich nie konwertuje.
 - Wspólny stan sweepu jest immutable i read-only. Każdy case ma własny task/attempt, mutable runtime, scratch, output i receipt. Broker pool/arrays mogą być późniejszą optymalizacją.
-- Historia execution_scope_identity.v1 zostaje niezmieniona; broker wymaga osobnej wersji scope/fingerprint i jawnej migracji.
+- Bieżącymi kontraktami źródłowymi są `run_spec.v1`/`run_spec.v2` i `run_intent.v1`. Audyt repozytorium nie wykazał `execution_scope_identity.v1` ani historycznego `authority=slurm`; nie należy przedstawiać ich jako istniejącej historii kompatybilności. Brokerowy scope/fingerprint trzeba wprowadzić jawnie po decyzjach H0, zachowując odczyt obecnych RunSpec i RunIntent.
 
 ## Etapy i odbiór
 

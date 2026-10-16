@@ -32,7 +32,7 @@ V1 przyjmuje jedną alokację brokera na jeden Fullmag TaskId i AttemptId. Wiele
 | Connection grant | Krótko ważne capability do konkretnego allocation, generation, task/attempt, audience i zestawu operacji. Nie jest tokenem użytkownika. |
 | Transfer grant | Odrębne krótkotrwałe capability do jednego transferu i kierunku. Nie daje prawa do odczytu innych danych principalu. |
 
-Nowy kontrakt brokera wymaga nowej wersji i fingerprintu Fullmag execution scope. Nie wolno reinterpretować historycznego execution_scope_identity.v1, zmieniać authority=slurm na MicroLab ani dopisywać nieznanego principalu do starych rekordów.
+Bieżąca granica kompatybilności Fullmaga to `run_spec.v1`/`run_spec.v2` oraz `run_intent.v1`. Audyt źródeł nie wykazał zaimplementowanego `execution_scope_identity.v1` ani historycznego pola `authority=slurm`; nie należy opisywać ich jako istniejącego kontraktu. Powiązanie z brokerem musi zostać wprowadzone jako jawny, wersjonowany scope/fingerprint po decyzjach H0, z zachowaniem odczytu istniejących RunSpec i RunIntent.
 
 ## 3. Uwierzytelnienie i granica zaufania
 

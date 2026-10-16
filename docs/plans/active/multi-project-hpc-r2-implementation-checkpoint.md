@@ -30,3 +30,10 @@ Kod nie implementuje endpointu MicroLab, HTTP klienta, login/token vault, broker
 - Stary dirty worktree C:/git/fullmag/worktrees/multi-project-hpc-r2-20261005 pozostaje zachowany; jego szerokie WIP nie zostało kopiowane ani resetowane.
 
 Następny krok po walidacji źródeł: przegląd kontraktu przez właścicieli MicroLab i zatwierdzenie versioned OpenAPI/auth/lifecycle/transfer semantyki. Dopiero potem można wejść w S1/S2. Nie zgadywać endpointów na podstawie nieopublikowanych plików development.
+
+## Kontynuacja audytu H0 — 16.10.2026
+
+- Ponowny przegląd źródeł wykazał, że rzeczywiste schematy Fullmaga to `run_spec.v1`/`run_spec.v2` i `run_intent.v1` (`crates/fullmag-application/src/run_spec.rs:16-18`, `crates/fullmag-session/src/types.rs:232`). Nie znaleziono implementacji `execution_scope_identity.v1` ani historycznego `authority=slurm`.
+- Usunięto z propozycji brokera i planu S0 twierdzenie, że te dwa symbole opisują istniejącą historię kompatybilności. Przyszły scope brokera ma być jawnym, wersjonowanym kontraktem po decyzjach H0; istniejące RunSpec/RunIntent zachowują odczyt.
+- `git diff --check` dla tej korekty dokumentacyjnej: zaliczone. Unit tests pozostają nieuruchamiane zgodnie z zakazem repozytorium.
+- HEAD worktree przy rozpoczęciu korekty: `bc665c997844aa747a212819571eec889bacabe4`; główny checkout nadal `master` na `f9179caf0a0681bdc92c2a87a308be21e9903919`. PR #185 oczekuje na CI/review, więc integracja na `master` jeszcze nie nastąpiła.
