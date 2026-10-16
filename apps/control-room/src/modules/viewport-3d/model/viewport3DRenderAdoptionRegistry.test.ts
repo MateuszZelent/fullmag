@@ -430,7 +430,6 @@ describe("viewport3DRenderAdoptionRegistry", () => {
     })).toBeNull();
 
     registry.clearAdoption("object-surface", {
-      byteLength: 96,
       carrierId: "fdm-domain",
       fieldBufferId: "full-field-buffer",
       kind: "surface",
