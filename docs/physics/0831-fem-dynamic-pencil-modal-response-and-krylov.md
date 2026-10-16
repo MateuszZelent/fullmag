@@ -181,6 +181,7 @@ normalization.
 | $\mathcal P(\mathbf k)$ | Exact solver mapping from reduced modal coordinates to the full nodal Cartesian phasor, including its actual PBC prolongation | $1$ |
 | $D_+(\mathbf k)$ | Diagonal nodal phase map with entries $\exp(+\mathrm{i}\mathbf k\cdot\mathbf r_i)$ on each Cartesian component | $1$ |
 | $\mathcal M_{\mathrm{track,full}}$ | Full-node Cartesian mass $M_T^{\mathrm{track}}\otimes I_3$ in canonical node order | $\mathrm{m^3}$ |
+| $\mathbf u_{\mathrm{env}}$ | Full-node Cartesian envelope after applying the positive-k nodal phase convention | $1$ |
 | $\eta_M$ | normalized absolute overlap in the geometric tangent-mass metric | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$, $\delta\mathbf h$ | static effective field and RF field phasor | $\mathrm{A\,m^{-1}}$ |
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
@@ -2757,7 +2758,8 @@ równowagi pozostają wymaganiami przed zaliczeniem S06/S07.
 | `source-native-p1-tracking-mass-provider` | `backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp` | `assemble_consistent_p1_tracking_mass` | Internal full physical-vertex scalar P1 geometric CSR over explicit magnetic attributes; the Stage 2 C ABI reuses this assembly without routing it into tracking |
 | `test-native-p1-tracking-mass-provider` | `backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp` | `main` | Real-MFEM analytic Tet4/Wedge6 at 1 m and 1 nm, mixed magnetic/air full-map and degenerate-Tet4 cases; GHA execution pending |
 | `source-native-p1-tracking-mass-snapshot` | `backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp` | `fullmag_fem_tracking_mass_snapshot_create_v1` | Private versioned C ABI imports the exact typed mesh and element mask, builds an immutable owned CSR handle, and binds geometry, mask, map, CSR and compiled source-snapshot digests |
-| `source-native-p1-tracking-mass-snapshot-rust` | `crates/fullmag-runner/src/native_fem/tracking_mass.rs` | `TrackingMassSnapshot::from_mesh` | Safe Rust owner over the private sys ABI; validates metadata, checked buffer sizes, full CSR and canonical map, and releases the native handle on Drop |
+| `source-native-p1-tracking-mass-snapshot-stub` | `backends/fem/src/frequency_domain/tracking_mass_snapshot_stub.cpp` | `fullmag_fem_tracking_mass_snapshot_create_v1` | No-MFEM build exports the same private ABI, clears the output handle, and returns explicit unavailable status without a fabricated snapshot |
+| `source-native-p1-tracking-mass-snapshot-rust` | `crates/fullmag-runner/src/native_fem/tracking_mass.rs` | `from_mesh` | Safe Rust owner over the private sys ABI; validates metadata, checked buffer sizes, full CSR and canonical map, and releases the native handle on Drop |
 | `test-native-p1-tracking-mass-snapshot` | `backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp` | `main` | Real DSO marker-one/air-zero mapping and Tet4/Prism6 C ABI round trips, source digest binding, all-or-nothing identity/generation/capacity checks, teardown and no-stack unavailable/null-handle ABI; GHA execution pending |
 | `test-native-p1-tracking-mass-snapshot-rust` | `crates/fullmag-runner/src/native_fem/tracking_mass.rs` | `tracking_mass_snapshot_ffi_matches_packed_mesh_identity` | Typed MeshIR/PackedNativeMesh round trip through the compiled FEM DSO; verifies physical rows, canonical order, CSR and source-snapshot identity; GHA execution pending |
 | `source-native-p1-tracking-mass-snapshot-attestation` | `scripts/ci/run_fem_positive_mass_contract.py` | `_execute_contract` | Positive-mass profile passes one captured source-snapshot SHA to the DSO and Rust build, runs both ABI tests, and records loader/SHA attestation; runtime execution pending |
@@ -2818,35 +2820,35 @@ każdej ścieżce. SHA źródłowego snapshotu jest wbudowany w DSO i porównywa
 z `fullmag-build-info`; GHA ma dodatkowo sprawdzić dokładny plik DSO,
 loader path i SHA biblioteki przed oraz po testach.
 
-<!-- DOC-ANCHOR:tracking-nodal-envelope-metric -->
+(tracking-nodal-envelope-metric)=
 #### Granica PBC dla nodalnego envelope
 
 Istniejący adapter zachowuje znak `exp(+i k·r)` przy nodalnym odfazowaniu.
 Przyszły Stage 3 musi pozostawić tę diagonalną operację po stronie właściwego
 phasora, nie przestawiając jej przez pełną consistent masę. Dla dokładnego
-mapowania solvera \(\mathcal P(\mathbf k)\) z wektora zredukowanego \(q\)
+mapowania solvera $\mathcal P(\mathbf k)$ z wektora zredukowanego $q$
 na pełny nodalny Cartesian phasor, niech
-\(D_+(\mathbf k)=\operatorname{diag}_{i,\alpha}
-\exp(+\mathrm{i}\mathbf k\cdot\mathbf r_i)\) i
-\(\mathcal M_{\mathrm{track,full}}=
-M_T^{\mathrm{track}}\otimes I_3\). Metryka porównywanego nodalnego
+$D_+(\mathbf k)=\operatorname{diag}_{i,\alpha}
+\exp(+\mathrm{i}\mathbf k\cdot\mathbf r_i)$ i
+$\mathcal M_{\mathrm{track,full}}=
+M_T^{\mathrm{track}}\otimes I_3$. Metryka porównywanego nodalnego
 envelope to
 
 ```{math}
 :label: eq-tracking-nodal-envelope-metric
-\mathbf u=D_+(\mathbf k)\mathcal P(\mathbf k)q,\qquad
-\mathbf u^\mathsf H\mathcal M_{\mathrm{track,full}}\mathbf u
+\mathbf u_{\mathrm{env}}=D_+(\mathbf k)\mathcal P(\mathbf k)q,\qquad
+\mathbf u_{\mathrm{env}}^\mathsf H\mathcal M_{\mathrm{track,full}}\mathbf u_{\mathrm{env}}
 =q^\mathsf H\mathcal P(\mathbf k)^\mathsf H
 D_+(\mathbf k)^\mathsf H\mathcal M_{\mathrm{track,full}}
 D_+(\mathbf k)\mathcal P(\mathbf k)q.
 ```
 
-Równość \(q^\mathsf H\mathcal P^\mathsf H
-\mathcal M_{\mathrm{track,full}}\mathcal Pq\) byłaby na ogół inna,
+Równość $q^\mathsf H\mathcal P^\mathsf H
+\mathcal M_{\mathrm{track,full}}\mathcal Pq$ byłaby na ogół inna,
 bo consistent mass ma składniki pozadiagonalne. P1 interpolacja nodalnie
 odfazowanych wartości nie jest dokładną ciągłą transformacją
-\(\exp(+\mathrm{i}\mathbf k\cdot\mathbf r)\) interpolowanego pola.
-Stage 2 eksportuje surową macierz geometryczną, bez \(\mathbf k\), PBC
+$\exp(+\mathrm{i}\mathbf k\cdot\mathbf r)$ interpolowanego pola.
+Stage 2 eksportuje surową macierz geometryczną, bez $\mathbf k$, PBC
 reduction i fazowej transformacji; zachowuje dotychczasowy artefakt/parser v1.
 Przyszły v2 sidecar powstanie raz na sweep i jego digest będzie wiązać każdy
 rekord modu. Ta architektura nie jest jeszcze zintegrowana ani zweryfikowana.

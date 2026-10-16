@@ -2186,26 +2186,26 @@
     },
     {
       "id": "tracking_nodal_envelope",
-      "latex": "$\\mathbf u$",
+      "latex": "$\\mathbf u_{\\mathrm{env}}$",
       "meaning": "Full-node Cartesian envelope after applying the positive-k nodal phase convention",
       "si_unit": "$1$"
     },
     {
       "id": "tracking_prolongation",
       "latex": "$\\mathcal P(\\mathbf k)$",
-      "meaning": "Maps reduced periodic modal coefficients to the full nodal Cartesian phasor",
+      "meaning": "Exact solver mapping from reduced modal coordinates to the full nodal Cartesian phasor, including its actual PBC prolongation",
       "si_unit": "$1$"
     },
     {
       "id": "tracking_phase_diagonal",
       "latex": "$D_+(\\mathbf k)$",
-      "meaning": "Diagonal positive Bloch phase on full physical nodes",
+      "meaning": "Diagonal nodal phase map with entries $\\exp(+\\mathrm{i}\\mathbf k\\cdot\\mathbf r_i)$ on each Cartesian component",
       "si_unit": "$1$"
     },
     {
       "id": "tracking_vector_mass",
       "latex": "$\\mathcal M_{\\mathrm{track,full}}$",
-      "meaning": "Full Cartesian tracking mass formed as scalar geometric mass tensor identity",
+      "meaning": "Full-node Cartesian mass $M_T^{\\mathrm{track}}\\otimes I_3$ in canonical node order",
       "si_unit": "$\\mathrm{m^3}$"
     }
   ],
@@ -4699,7 +4699,7 @@
     {
       "id": "source-native-p1-tracking-mass-snapshot-rust",
       "path": "crates/fullmag-runner/src/native_fem/tracking_mass.rs",
-      "symbol": "TrackingMassSnapshot::from_mesh",
+      "symbol": "from_mesh",
       "responsibility": "Safe Rust owner over the private sys ABI; validates metadata, checked buffer sizes, full CSR and canonical map, and releases the native handle on Drop; runtime execution pending"
     },
     {
