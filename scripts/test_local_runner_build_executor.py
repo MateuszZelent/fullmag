@@ -599,10 +599,11 @@ class BuildExecutorTests(unittest.TestCase):
                 },
                 "build": {
                     "options": [
-                        "-DFULLMAG_ENABLE_CUDA=ON",
-                        "-DFULLMAG_ENABLE_FEM_GPU=OFF",
-                        "-DFULLMAG_USE_MFEM_STACK=ON",
-                        "-DFULLMAG_FEM_WITH_SLEPC=ON",
+                        "-DCMAKE_BUILD_TYPE:STRING=Release",
+                        "-DFULLMAG_ENABLE_CUDA:BOOL=OFF",
+                        "-DFULLMAG_ENABLE_FEM_GPU:BOOL=OFF",
+                        "-DFULLMAG_USE_MFEM_STACK:BOOL=ON",
+                        "-DFULLMAG_FEM_WITH_SLEPC:BOOL=ON",
                     ],
                     "modal_target": "fem_poisson_airbox_modal_eigen_slepc_contract",
                     "floquet_targets": list(
@@ -636,10 +637,11 @@ class BuildExecutorTests(unittest.TestCase):
                     "cmake": {
                         "status": "pass",
                         "options": {
-                            "FULLMAG_ENABLE_CUDA": {"value": "ON"},
-                            "FULLMAG_ENABLE_FEM_GPU": {"value": "OFF"},
-                            "FULLMAG_USE_MFEM_STACK": {"value": "ON"},
-                            "FULLMAG_FEM_WITH_SLEPC": {"value": "ON"},
+                            "CMAKE_BUILD_TYPE": {"type": "STRING", "value": "Release"},
+                            "FULLMAG_ENABLE_CUDA": {"type": "BOOL", "value": "OFF"},
+                            "FULLMAG_ENABLE_FEM_GPU": {"type": "BOOL", "value": "OFF"},
+                            "FULLMAG_USE_MFEM_STACK": {"type": "BOOL", "value": "ON"},
+                            "FULLMAG_FEM_WITH_SLEPC": {"type": "BOOL", "value": "ON"},
                         },
                     },
                     "runtime": {
@@ -747,6 +749,88 @@ class BuildExecutorTests(unittest.TestCase):
                 {"image_digest": image},
             )
             self.assertEqual(validated["state"], "succeeded")
+
+            receipt_path = root / "build-receipt.json"
+            result_entry = next(
+                entry for entry in receipt["artifacts"]
+                if entry["path"] == "contracts/slepc-modal/result.json"
+            )
+
+            def reject_option_variant(label, mutate, message):
+                candidate = json.loads(json.dumps(result))
+                mutate(candidate)
+                result_path.write_text(json.dumps(candidate), encoding="utf-8")
+                changed = result_path.read_bytes()
+                result_entry.update(
+                    size=len(changed),
+                    sha256=hashlib.sha256(changed).hexdigest(),
+                )
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                with self.subTest(cmake_profile_variant=label):
+                    with self.assertRaisesRegex(ValueError, message):
+                        executor.validate_build_receipt(root, job, {"image_digest": image})
+
+            reject_option_variant(
+                "CUDA enabled in producer options",
+                lambda value: value["build"]["options"].__setitem__(
+                    value["build"]["options"].index("-DFULLMAG_ENABLE_CUDA:BOOL=OFF"),
+                    "-DFULLMAG_ENABLE_CUDA:BOOL=ON",
+                ),
+                "CMake options do not prove CPU/SLEPc mode",
+            )
+            reject_option_variant(
+                "build type missing from producer options",
+                lambda value: value["build"]["options"].remove(
+                    "-DCMAKE_BUILD_TYPE:STRING=Release"
+                ),
+                "CMake options do not prove CPU/SLEPc mode",
+            )
+            reject_option_variant(
+                "build type has the wrong CMake type",
+                lambda value: value["build"]["options"].__setitem__(
+                    value["build"]["options"].index("-DCMAKE_BUILD_TYPE:STRING=Release"),
+                    "-DCMAKE_BUILD_TYPE:BOOL=Release",
+                ),
+                "CMake options do not prove CPU/SLEPc mode",
+            )
+            reject_option_variant(
+                "build type missing from cache attestation",
+                lambda value: value["attestation"]["cmake"]["options"].pop("CMAKE_BUILD_TYPE"),
+                "CMake attestation options mismatch",
+            )
+            reject_option_variant(
+                "build type has the wrong cache value",
+                lambda value: value["attestation"]["cmake"]["options"]["CMAKE_BUILD_TYPE"].update(
+                    value="Debug"
+                ),
+                "CMake attestation options mismatch",
+            )
+            reject_option_variant(
+                "build type has the wrong cache type",
+                lambda value: value["attestation"]["cmake"]["options"]["CMAKE_BUILD_TYPE"].update(
+                    type="BOOL"
+                ),
+                "CMake attestation options mismatch",
+            )
+            reject_option_variant(
+                "cache contradicts producer options",
+                lambda value: value["attestation"]["cmake"]["options"]["FULLMAG_ENABLE_CUDA"].update(
+                    value="ON"
+                ),
+                "CMake attestation options mismatch",
+            )
+
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            result_entry.update(
+                size=len(result_bytes),
+                sha256=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            self.assertEqual(
+                executor.validate_build_receipt(root, job, {"image_digest": image})["state"],
+                "succeeded",
+            )
 
             # The modal producer requires the headless package, not web/index.html.
             required_output_path = (

@@ -1012,10 +1012,11 @@ def validate_build_receipt(artifacts, job, journal):
                     raise ValueError('SLEPc shared-domain target mismatch')
                 options = build.get('options')
                 required_options = {
-                    '-DFULLMAG_ENABLE_CUDA=ON',
-                    '-DFULLMAG_ENABLE_FEM_GPU=OFF',
-                    '-DFULLMAG_USE_MFEM_STACK=ON',
-                    '-DFULLMAG_FEM_WITH_SLEPC=ON',
+                    '-DCMAKE_BUILD_TYPE:STRING=Release',
+                    '-DFULLMAG_ENABLE_CUDA:BOOL=OFF',
+                    '-DFULLMAG_ENABLE_FEM_GPU:BOOL=OFF',
+                    '-DFULLMAG_USE_MFEM_STACK:BOOL=ON',
+                    '-DFULLMAG_FEM_WITH_SLEPC:BOOL=ON',
                 }
                 if not isinstance(options, list) or not required_options.issubset(options):
                     raise ValueError('SLEPc modal CMake options do not prove CPU/SLEPc mode')
@@ -1045,12 +1046,14 @@ def validate_build_receipt(artifacts, job, journal):
                 cache_options = cmake.get('options')
                 if not isinstance(cache_options, dict) or any(
                     not isinstance(cache_options.get(name), dict)
-                    or str(cache_options[name].get('value', '')).upper() != value
-                    for name, value in {
-                        'FULLMAG_ENABLE_CUDA': 'ON',
-                        'FULLMAG_ENABLE_FEM_GPU': 'OFF',
-                        'FULLMAG_USE_MFEM_STACK': 'ON',
-                        'FULLMAG_FEM_WITH_SLEPC': 'ON',
+                    or cache_options[name].get('type') != value_type
+                    or cache_options[name].get('value') != value
+                    for name, (value_type, value) in {
+                        'CMAKE_BUILD_TYPE': ('STRING', 'Release'),
+                        'FULLMAG_ENABLE_CUDA': ('BOOL', 'OFF'),
+                        'FULLMAG_ENABLE_FEM_GPU': ('BOOL', 'OFF'),
+                        'FULLMAG_USE_MFEM_STACK': ('BOOL', 'ON'),
+                        'FULLMAG_FEM_WITH_SLEPC': ('BOOL', 'ON'),
                     }.items()
                 ):
                     raise ValueError('SLEPc modal CMake attestation options mismatch')
