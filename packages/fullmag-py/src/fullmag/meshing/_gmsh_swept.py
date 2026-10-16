@@ -2648,6 +2648,7 @@ def generate_swept_tetrahedral_box_body_only_mesh(
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, options)
+        _reapply_periodic_surface_mappings(gmsh, periodic_pair_specs)
         quality, _per_domain_quality = (
             _extract_quality_metrics(gmsh, options)
             if options.compute_quality
