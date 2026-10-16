@@ -4711,12 +4711,15 @@ async function installInspectorFixtureApi(page, fixture) {
       total_steps: 1,
     });
     if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
-    if (/^\/v2\/sessions\/current\/analysis\/results\/runs\/[^/]+\/datasets$/.test(path)) {
+    const analysisResultDatasetsMatch =
+      /^\/v2\/sessions\/current\/analysis\/results\/runs\/([^/]+)\/datasets$/.exec(path);
+    if (analysisResultDatasetsMatch) {
+      const requestedRunId = decodeURIComponent(analysisResultDatasetsMatch[1]);
       return fulfillJson(route, {
         items: [],
         next_cursor: null,
         revision: "inspector-fixture",
-        run_id: path.split("/")[6],
+        run_id: requestedRunId,
         schema_version: "analysis-result-index.v1",
         status: "ready",
         total_count: 0,

@@ -969,6 +969,17 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       disableRealtime: true,
       controlRoomApiBase: configuredApiBase,
     };
+    window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ = true;
+    window.__FULLMAG_CHART_DIAGNOSTICS__ = {
+      activeInstances: 0,
+      createdInstances: 0,
+      disposedInstances: 0,
+      modelBuilds: 0,
+      plannedPoints: 0,
+      renderedPoints: 0,
+      resizeCalls: 0,
+      setOptionCalls: 0,
+    };
   }, { apiBase: baseUrl });
   page.on("console", (message) => {
     if (message.type() !== "error") return;
@@ -1428,6 +1439,22 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
           text: (row.textContent ?? "").slice(0, 256),
         })),
       );
+      const chartState = await page.evaluate(() => {
+        const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+        const readOption = diagnostics?.readRenderedOption;
+        const option = typeof readOption === "function" ? readOption() : null;
+        const series = Array.isArray(option?.series) ? option.series : [];
+        return {
+          enabled: window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ === true,
+          readerAvailable: typeof readOption === "function",
+          seriesCount: series.length,
+          series: series.slice(0, 50).map((entry) => ({
+            id: entry?.id ?? null,
+            name: entry?.name ?? null,
+            pointCount: Array.isArray(entry?.data) ? entry.data.length : null,
+          })),
+        };
+      });
       writeFileSync(
         path.join(acceptanceDirectory, "analysis-reference-import-failure.json"),
         JSON.stringify({
@@ -1435,6 +1462,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
           error: String(error.message ?? error).slice(0, 2048),
           errors: errors.slice(-20).map((message) => String(message).slice(0, 1024)),
           resourceRequests: resourceRequests.slice(-100),
+          chartState,
           treeRows,
         }, null, 2) + "\n",
       );
