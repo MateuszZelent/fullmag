@@ -1297,6 +1297,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     invalidate,
     preparedInstances,
     recordSurfaceAdoption,
+    carrierId,
     surfaceMaterial,
     fieldBufferId,
     sessionIdentity,
