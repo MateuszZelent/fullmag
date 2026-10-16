@@ -4418,7 +4418,7 @@ describe("orphan saved analysis pins", () => {
       datasetRevision: "dataset-r7",
       fieldId: "m",
       id: "published-mode",
-      kind: "analysis.dispersion.mode_visualization",
+      kind: "results.dispersion.modal.mode_at_k",
       label: "Published mode",
       modeId: "saved-mode",
       parentId: familyId,
