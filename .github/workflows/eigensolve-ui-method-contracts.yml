@@ -50,6 +50,8 @@ on:
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
       - 'apps/control-room/src/kernel/resources/inactiveViewportResourcePolicy*'
+      - 'apps/control-room/src/kernel/layout/ViewportTabHost*'
+      - 'apps/control-room/src/shared/ui/Resizable*'
       - 'apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge*'
       - 'apps/control-room/src/kernel/realtime/RealtimeClient*'
       - 'apps/control-room/src/kernel/KernelProvider.tsx'
@@ -135,6 +137,8 @@ on:
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
       - 'apps/control-room/src/kernel/resources/inactiveViewportResourcePolicy*'
+      - 'apps/control-room/src/kernel/layout/ViewportTabHost*'
+      - 'apps/control-room/src/shared/ui/Resizable*'
       - 'apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge*'
       - 'apps/control-room/src/kernel/realtime/RealtimeClient*'
       - 'apps/control-room/src/kernel/KernelProvider.tsx'
@@ -248,6 +252,10 @@ jobs:
           src/kernel/resources/studyRuntimeResources.provider.test.tsx
           src/kernel/resources/frequencyDomainResourceKeys.test.ts
           src/kernel/resources/analysisResultCatalogPagination.test.ts
+          src/kernel/layout/ViewportTabHost.test.tsx
+          src/kernel/layout/ViewportTabHost.dom.test.tsx
+          src/shared/ui/Resizable.test.ts
+          src/shared/ui/Resizable.dom.test.tsx
           src/kernel/resources/inactiveViewportResourcePolicy.test.ts
           src/kernel/realtime/RealtimeInvalidationBridge.test.ts
           src/kernel/realtime/RealtimeClient.test.ts

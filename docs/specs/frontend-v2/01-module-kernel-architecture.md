@@ -51,7 +51,18 @@ Slots are stable mount points owned by the kernel:
 
 Slots are not feature flags. A disabled module means its manifest is not registered or its capability gate fails; the slot remains valid.
 
-When multiple modules are eligible for `viewport-main`, the kernel renders them through a tab host. Only the active center-surface module is mounted. Inactive center surfaces must not be retained through hidden DOM panels, CSS-only hiding, cached React subtrees, or Radix `forceMount`. This is a lifecycle contract: switching away from `viewport-3d` releases its WebGL context, resource subscriptions, timers, render buffers, and client-ack effects.
+When multiple modules are eligible for `viewport-main`, the kernel renders
+them through a tab host. The active center-surface module and an explicitly
+selected, visible companion are mounted; all other center surfaces remain
+unmounted. A visible companion is part of the current viewport, not a hidden
+inactive tab, so its existing module instance survives role or split-placement
+changes. Closing the companion unmounts it, and unopened modules remain
+unloaded. Tabs outside the visible active/companion set must not be retained
+through hidden DOM panels, CSS-only hiding, cached React subtrees, or Radix
+`forceMount`. Switching away from `viewport-3d` releases its WebGL context,
+resource subscriptions, timers, render buffers, and client-ack effects only
+when it is neither active nor the visible companion; while visible in either
+role, its WebGL resources and viewport subscriptions remain active.
 
 Chart ownership is intentionally split. `live-charts` is the **Live Charts**
 center module for active-run time series. `analysis-plots` is the **Analysis**

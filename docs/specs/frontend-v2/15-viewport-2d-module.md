@@ -20,14 +20,22 @@ must be recovered from git history, not treated as current architecture.
 
 ## 1. Lifecycle Contract
 
-All heavy center surfaces mount through the `viewport-main` tab host. Only the
-active tab is mounted. Switching away from `viewport-3d` must unmount the 3D
-module instead of hiding it, which releases its R3F canvas, render loop,
-observers, and viewport-local resource subscriptions.
+All heavy center surfaces mount through the `viewport-main` tab host. The
+active center surface and an explicitly selected, visible companion are
+mounted; every other center tab remains unmounted. A visible companion is part
+of the current viewport, so its existing module instance survives primary/companion role and split-placement changes. Closing the companion unmounts it,
+and unopened modules outside the visible set remain unloaded.
 
-Inactive tabs may keep lightweight manifest metadata and command definitions in
-the module registry, but they must not keep renderer instances, WebGL contexts,
-object URLs, animation frames, or viewport-specific resource hooks alive.
+Switching away from `viewport-3d` unmounts it only when it is neither active nor
+the visible companion. While mounted in either role, the 3D module keeps its
+canvas and viewport-local resources active. When it leaves the visible
+surfaces, unmounting releases its R3F canvas, render loop, observers, and
+viewport-local resource subscriptions.
+
+Tabs outside the visible active/companion set may keep lightweight manifest
+metadata and command definitions in the module registry, but they must not
+keep renderer instances, WebGL contexts, object URLs, animation frames, or
+viewport-specific resource hooks alive.
 
 ## 2. Mesh-quality cross-section compatibility resource
 
@@ -183,7 +191,9 @@ folds or overlaps remain visible degraded diagnostics.
 
 Required tests:
 
-- center tab host renders all tab triggers but mounts only one active module;
+- center tab host renders all triggers and mounts the active surface plus only
+  an explicit visible companion; closing unmounts it and unopened modules stay
+  unloaded;
 - stale persisted active tab ids repair to a registered module;
 - committing an authored monitor draft updates canonical model/script and switches
   `activeViewportMainModuleId` to `field-map`;
@@ -193,8 +203,9 @@ Required tests:
   and resource hooks, preserves ETag/query identity, and handles empty masks;
 - the field-map renderer is created once, remains idle without changed
   revisions or controls, resizes by observer, and is disposed on tab switch;
-- switching between `viewport-3d`, `field-map`, and `analysis-plots` mounts only
-  the active heavy surface and keeps memory growth bounded;
+- opening/closing a companion and swapping visible modules' primary/companion
+  roles or split placement preserves their mounted instances; other center
+  surfaces stay unmounted and memory growth remains bounded;
 - browser smoke confirms one-click/shortcut opening, scalar/slab/surface images,
   PNG export resources, and no removed live 2D or static cross-section center module;
 - manufactured FDM/FEM tests prove plane, slab, depth, surface, vector-basis,

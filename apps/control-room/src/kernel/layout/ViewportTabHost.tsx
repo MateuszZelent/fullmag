@@ -54,6 +54,21 @@ export function ViewportTabHost() {
     );
   }
 
+  const viewportPanels = [
+    { manifest: activeModule, role: "primary" as const },
+    ...(companionModule && companion
+      ? [{ manifest: companionModule, role: "companion" as const }]
+      : []),
+  ];
+  const splitPlacement =
+    companionModule && companion ? companion.placement : null;
+  const splitSeparatorKey = companionModule && companion
+    ? `viewport-main-split:${encodeURIComponent(activeModule.id)}:${encodeURIComponent(companionModule.id)}:${companion.placement}`
+    : null;
+  const autoSaveId = `fullmag.viewport-main.v2.${splitPlacement ?? "single"}.${viewportPanels
+    .map(({ manifest, role }) => `${role}-${encodeURIComponent(manifest.id)}`)
+    .join(".")}`;
+
   return (
     <section
       className="fm-slot fm-viewport-tabs"
@@ -91,45 +106,39 @@ export function ViewportTabHost() {
             </Button>
           ) : null}
         </div>
+
         <div className="fm-viewport-tabs__surface">
-          {companionModule && companion ? (
-            // Each module keeps a single mounted instance; the split only
-            // places the companion (e.g. the 3D viewport) next to the active one.
-            <ResizablePanelGroup
-              autoSaveId={`fullmag.viewport-main.split.${companion.placement}`}
-              direction={companion.placement === "below" ? "vertical" : "horizontal"}
-              panelCount={2}
-            >
-              <ResizablePanel defaultSize={50} id={`viewport-main:${activeModule.id}`} minSize={25}>
+          <ResizablePanelGroup
+            autoSaveId={autoSaveId}
+            direction={splitPlacement === "below" ? "vertical" : "horizontal"}
+            panelCount={viewportPanels.length}
+          >
+            {viewportPanels.flatMap(({ manifest, role }, index) => [
+              <ResizablePanel
+                key={manifest.id}
+                defaultSize={viewportPanels.length === 1 ? 100 : 50}
+                id={`viewport-main:${manifest.id}:${role}`}
+                minSize={25}
+              >
                 <MountedModule
-                  key={activeModule.id}
+                  key={manifest.id}
                   kernel={kernel}
-                  manifest={activeModule}
+                  manifest={manifest}
                   slotId="viewport-main"
                 />
-              </ResizablePanel>
-              <ResizableHandle
-                className={companion.placement === "below"
-                  ? "fm-resize-handle--horizontal"
-                  : "fm-resize-handle--vertical"}
-              />
-              <ResizablePanel defaultSize={50} id={`viewport-main:${companionModule.id}`} minSize={25}>
-                <MountedModule
-                  key={companionModule.id}
-                  kernel={kernel}
-                  manifest={companionModule}
-                  slotId="viewport-main"
-                />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          ) : (
-            <MountedModule
-              key={activeModule.id}
-              kernel={kernel}
-              manifest={activeModule}
-              slotId="viewport-main"
-            />
-          )}
+              </ResizablePanel>,
+              ...(index === 0 && splitSeparatorKey
+                ? [
+                    <ResizableHandle
+                      key={splitSeparatorKey}
+                      className={splitPlacement === "below"
+                        ? "fm-resize-handle--horizontal"
+                        : "fm-resize-handle--vertical"}
+                    />,
+                  ]
+                : []),
+            ])}
+          </ResizablePanelGroup>
         </div>
       </Tabs>
     </section>

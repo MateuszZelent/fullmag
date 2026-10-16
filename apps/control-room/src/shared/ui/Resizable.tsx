@@ -106,16 +106,21 @@ export function ResizablePanelGroup({
   ...props
 }: ResizablePanelGroupProps) {
   const groupRef = useRef<GroupImperativeHandle | null>(null);
-  const canPersistLayoutRef = useRef(!autoSaveId);
+  const readyStorageIdentityRef = useRef<{
+    autoSaveId: string | undefined;
+    panelCount: number | undefined;
+  } | null>(null);
 
   useEffect(() => {
+    readyStorageIdentityRef.current = null;
+    const storageIdentity = { autoSaveId, panelCount };
+
     if (!autoSaveId) {
-      canPersistLayoutRef.current = true;
+      readyStorageIdentityRef.current = storageIdentity;
       return;
     }
 
     const storedLayout = readStoredPanelLayout(autoSaveId, panelCount);
-    canPersistLayoutRef.current = true;
 
     if (storedLayout) {
       try {
@@ -124,14 +129,22 @@ export function ResizablePanelGroup({
         try {
           window.localStorage.removeItem(autoSaveId);
         } catch {
-          return;
+          // Keep storage access failures isolated from layout persistence.
         }
       }
     }
+
+    readyStorageIdentityRef.current = storageIdentity;
   }, [autoSaveId, panelCount]);
 
   function handleLayoutChanged(layout: Layout): void {
-    if (autoSaveId && canPersistLayoutRef.current) {
+    const readyStorageIdentity = readyStorageIdentityRef.current;
+    const isReadyForCurrentStorage =
+      readyStorageIdentity !== null &&
+      readyStorageIdentity.autoSaveId === autoSaveId &&
+      readyStorageIdentity.panelCount === panelCount;
+
+    if (autoSaveId && isReadyForCurrentStorage) {
       try {
         window.localStorage.setItem(autoSaveId, JSON.stringify(layout));
       } catch {
