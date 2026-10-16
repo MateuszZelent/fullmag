@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -14519,9 +14520,14 @@ class RegionMeshPolicyTests(unittest.TestCase):
         except ImportError:
             self.skipTest("gmsh not available")
 
+        ring_hole_radius_m = 8e-9
         geometry = fm.Difference(
             base=fm.Box(40e-9, 40e-9, 10e-9, name="scoped_ring_box"),
-            tool=fm.Cylinder(radius=8e-9, height=10e-9, name="scoped_ring_hole"),
+            tool=fm.Cylinder(
+                radius=ring_hole_radius_m,
+                height=10e-9,
+                name="scoped_ring_hole",
+            ),
             name="scoped_ring",
         )
         mesh_workflow = {
@@ -14923,11 +14929,54 @@ class RegionMeshPolicyTests(unittest.TestCase):
         )
         body_median = median_tet_edge_length(body_mask & roi_cells)
         air_median = median_tet_edge_length((~body_mask) & roi_cells)
+        # Diagnostic only: keep the aggregate masks and medians above unchanged.
+        try:
+            roi_centroids = np.mean(xyz, axis=1)
+            roi_radii = np.hypot(roi_centroids[:, 0], roi_centroids[:, 1])
+            hole_air_roi = (
+                (~body_mask) & roi_cells & (roi_radii < ring_hole_radius_m)
+            )
+            exterior_air_roi = (~body_mask) & roi_cells & (~hole_air_roi)
+            body_roi = body_mask & roi_cells
+
+            def edge_sample_summary(mask: np.ndarray) -> dict[str, object]:
+                tetrahedron_count = int(np.count_nonzero(mask))
+                return {
+                    "tetrahedron_count": tetrahedron_count,
+                    "edge_sample_count": tetrahedron_count * 6,
+                    "median_edge_length_m": (
+                        median_tet_edge_length(mask) if tetrahedron_count else None
+                    ),
+                }
+
+            edge_diagnostics: dict[str, object] = {
+                "classification": (
+                    "same existing ROI; body by element marker; hole air when "
+                    "cell-centroid XY radius is below the fixture cylinder radius "
+                    f"{ring_hole_radius_m:.17g} m; remaining air is "
+                    "exterior/above-body air"
+                ),
+                "roi_centroid_abs_bounds_m": [16e-9, 16e-9, 18e-9],
+                "hole_radius_m": ring_hole_radius_m,
+                "aggregate_body": edge_sample_summary(body_roi),
+                "aggregate_air": edge_sample_summary((~body_mask) & roi_cells),
+                "hole_air": edge_sample_summary(hole_air_roi),
+                "exterior_air": edge_sample_summary(exterior_air_roi),
+            }
+            edge_diagnostic_message = (
+                "ring ROI edge-sample diagnostics: "
+                + json.dumps(edge_diagnostics, sort_keys=True, separators=(",", ":"))
+            )
+        except Exception as error:  # Diagnostics must not change test behavior.
+            edge_diagnostic_message = (
+                "ring ROI edge-sample diagnostics unavailable: "
+                f"{type(error).__name__}: {error}"
+            )
         # The body floor is 8 nm over a 2 nm interface target; the air retains
         # its independent 2 nm target in the same spatial region.
-        self.assertGreater(body_median, 4e-9)
-        self.assertLess(body_median, 16e-9)
-        self.assertLess(air_median, body_median)
+        self.assertGreater(body_median, 4e-9, edge_diagnostic_message)
+        self.assertLess(body_median, 16e-9, edge_diagnostic_message)
+        self.assertLess(air_median, body_median, edge_diagnostic_message)
         periodic_pair_ids = {"x_faces", "y_faces"}
         periodic_node_pairs = [
             pair
@@ -15057,6 +15106,115 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 )
             )
 
+        ring_half_extent_m = 20e-9
+        ring_hole_radius_m = 8e-9
+        ring_body_height_m = 10e-9
+
+        def xy_set_evidence(
+            nodes: np.ndarray,
+            node_ids: np.ndarray,
+        ) -> dict[str, object]:
+            unique_node_ids = np.unique(np.asarray(node_ids, dtype=np.int64))
+            projected_xy = np.unique(
+                np.round(nodes[unique_node_ids, :2], 17),
+                axis=0,
+            )
+            digest_bytes = np.ascontiguousarray(projected_xy, dtype="<f8").tobytes()
+            return {
+                "node_count": int(len(unique_node_ids)),
+                "projected_xy_count": int(len(projected_xy)),
+                "projected_xy_sha256": hashlib.sha256(digest_bytes).hexdigest(),
+                "projected_xy_m": projected_xy.tolist(),
+            }
+
+        def mesh_precedence_evidence(
+            mesh: MeshData,
+            markers: list[dict[str, object]],
+            geometry: Geometry,
+            *,
+            has_ring_planform: bool,
+        ) -> dict[str, object]:
+            nodes = np.asarray(mesh.nodes, dtype=np.float64)
+            cells = np.asarray(mesh.elements, dtype=np.int32)
+            element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+            marker = next(
+                int(entry["marker"])
+                for entry in markers
+                if entry.get("geometry_name") == geometry.geometry_name
+            )
+            body_node_ids = np.unique(cells[element_markers == marker].reshape(-1))
+            tolerance = 64.0 * np.finfo(float).eps * max(
+                float(np.max(np.abs(nodes))), 8e-9
+            )
+            source_z_m = float(np.min(nodes[:, 2]))
+            source_plane_node_ids = np.flatnonzero(
+                np.abs(nodes[:, 2] - source_z_m) <= tolerance
+            )
+            source_plane: dict[str, object] = {
+                "selection": "all nodes at measured global minimum Z",
+                "measured_outer_z_m": source_z_m,
+                "coordinate_tolerance_m": tolerance,
+                "all_source_plane_nodes": xy_set_evidence(
+                    nodes, source_plane_node_ids
+                ),
+            }
+            if has_ring_planform:
+                source_xy = nodes[source_plane_node_ids, :2]
+                in_outer_rectangle = (
+                    (source_xy[:, 0] >= -ring_half_extent_m - tolerance)
+                    & (source_xy[:, 0] <= ring_half_extent_m + tolerance)
+                    & (source_xy[:, 1] >= -ring_half_extent_m - tolerance)
+                    & (source_xy[:, 1] <= ring_half_extent_m + tolerance)
+                )
+                radius = np.hypot(source_xy[:, 0], source_xy[:, 1])
+                annulus = in_outer_rectangle & (radius > ring_hole_radius_m + tolerance)
+                hole = in_outer_rectangle & (radius < ring_hole_radius_m - tolerance)
+                hole_boundary = in_outer_rectangle & (
+                    np.abs(radius - ring_hole_radius_m) <= tolerance
+                )
+                source_plane["ring_planform"] = {
+                    "outer_half_extent_m": ring_half_extent_m,
+                    "hole_radius_m": ring_hole_radius_m,
+                    "outer_rectangle_including_hole": xy_set_evidence(
+                        nodes, source_plane_node_ids[in_outer_rectangle]
+                    ),
+                    "material_annulus": xy_set_evidence(
+                        nodes, source_plane_node_ids[annulus]
+                    ),
+                    "hole_interior": xy_set_evidence(
+                        nodes, source_plane_node_ids[hole]
+                    ),
+                    "hole_boundary": xy_set_evidence(
+                        nodes, source_plane_node_ids[hole_boundary]
+                    ),
+                    "outside_outer_rectangle": xy_set_evidence(
+                        nodes, source_plane_node_ids[~in_outer_rectangle]
+                    ),
+                }
+            else:
+                source_plane["ring_planform"] = "not applicable: no cylindrical hole"
+
+            body_z = nodes[body_node_ids, 2]
+            body_z_min_m = float(np.min(body_z))
+            body_z_max_m = float(np.max(body_z))
+            lower_cap = body_node_ids[np.abs(body_z - body_z_min_m) <= tolerance]
+            upper_cap = body_node_ids[np.abs(body_z - body_z_max_m) <= tolerance]
+            cap_node_ids = np.union1d(lower_cap, upper_cap)
+            interior = body_node_ids[~np.isin(body_node_ids, cap_node_ids)]
+            return {
+                "status": "available",
+                "source_outer_z_plane": source_plane,
+                "body_xy_sets": {
+                    "measured_cap_z_bounds_m": [body_z_min_m, body_z_max_m],
+                    "lower_cap_plane": xy_set_evidence(nodes, lower_cap),
+                    "upper_cap_plane": xy_set_evidence(nodes, upper_cap),
+                    "interior_excluding_both_cap_planes": xy_set_evidence(
+                        nodes, interior
+                    ),
+                    "all_body_nodes": xy_set_evidence(nodes, body_node_ids),
+                },
+            }
+
         def realize(
             geometry: Geometry,
             *,
@@ -15065,7 +15223,11 @@ class RegionMeshPolicyTests(unittest.TestCase):
             owner_hmax: float | None = None,
             owner_constant_hmax: float | None = None,
             localized_hmax: float | None = None,
-        ) -> tuple[set[tuple[float, float]], SharedDomainBuildReport]:
+        ) -> tuple[
+            set[tuple[float, float]],
+            SharedDomainBuildReport,
+            dict[str, object],
+        ]:
             size_fields: list[dict[str, object]] = []
             if owner_constant_hmax is not None:
                 size_fields.append(
@@ -15120,15 +15282,34 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 },
                 mesh_workflow=mesh_workflow,
             )
-            return body_xy(mesh, markers, geometry), report
+            try:
+                evidence = mesh_precedence_evidence(
+                    mesh,
+                    markers,
+                    geometry,
+                    has_ring_planform=(
+                        geometry.geometry_name == "owner_target_ring"
+                    ),
+                )
+            except Exception as error:  # Diagnostics must not change test behavior.
+                evidence = {
+                    "status": "unavailable",
+                    "reason": f"{type(error).__name__}: {error}",
+                }
+            return body_xy(mesh, markers, geometry), report, evidence
 
         geometries = (
             fm.Box(40e-9, 40e-9, 10e-9, name="owner_target_box"),
             fm.Difference(
-                base=fm.Box(40e-9, 40e-9, 10e-9, name="owner_target_ring_box"),
+                base=fm.Box(
+                    2 * ring_half_extent_m,
+                    2 * ring_half_extent_m,
+                    ring_body_height_m,
+                    name="owner_target_ring_box",
+                ),
                 tool=fm.Cylinder(
-                    radius=8e-9,
-                    height=10e-9,
+                    radius=ring_hole_radius_m,
+                    height=ring_body_height_m,
                     name="owner_target_ring_hole",
                 ),
                 name="owner_target_ring",
@@ -15136,48 +15317,78 @@ class RegionMeshPolicyTests(unittest.TestCase):
         )
         for geometry in geometries:
             with self.subTest(geometry=geometry.geometry_name):
-                baseline_xy, baseline_report = realize(
+                baseline_xy, baseline_report, baseline_evidence = realize(
                     geometry,
                     hint_hmax=20e-9,
                     owner_hmax=20e-9,
                     airbox_hmax=30e-9,
                 )
-                resolved_xy, resolved_report = realize(
+                resolved_xy, resolved_report, resolved_evidence = realize(
                     geometry,
                     hint_hmax=10e-9,
                     owner_hmax=20e-9,
                     airbox_hmax=30e-9,
                 )
-                far_air_xy, far_air_report = realize(
+                far_air_xy, far_air_report, far_air_evidence = realize(
                     geometry,
                     hint_hmax=10e-9,
                     owner_hmax=20e-9,
                     airbox_hmax=50e-9,
                 )
-                manual_owner_xy, manual_owner_report = realize(
+                manual_owner_xy, manual_owner_report, manual_owner_evidence = realize(
                     geometry,
                     hint_hmax=10e-9,
                     owner_constant_hmax=20e-9,
                     airbox_hmax=50e-9,
                 )
 
+                precedence_diagnostic = {
+                    "baseline_hint20_owner20_air30": baseline_evidence,
+                    "owner_hint10_owner20_air30": resolved_evidence,
+                    "owner_hint10_owner20_air50": far_air_evidence,
+                    "manual_owner_constant20_hint10_air50": manual_owner_evidence,
+                }
+                try:
+                    precedence_diagnostic_message = (
+                        "mesh body-precedence coordinate diagnostics: "
+                        + json.dumps(
+                            precedence_diagnostic,
+                            allow_nan=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    )
+                except Exception as error:  # Diagnostics must not change test behavior.
+                    precedence_diagnostic_message = (
+                        "mesh body-precedence coordinate diagnostics unavailable: "
+                        f"{type(error).__name__}: {error}"
+                    )
+
                 for report in (baseline_report, resolved_report, far_air_report):
                     self.assertAlmostEqual(
                         report.effective_per_object_targets[geometry.geometry_name].hmax,
                         20e-9,
+                        msg=precedence_diagnostic_message,
                     )
                 self.assertAlmostEqual(
                     manual_owner_report.effective_per_object_targets[
                         geometry.geometry_name
                     ].hmax,
                     10e-9,
+                    msg=precedence_diagnostic_message,
                 )
-                self.assertEqual(resolved_xy, baseline_xy)
-                self.assertEqual(far_air_xy, resolved_xy)
-                self.assertEqual(manual_owner_xy, far_air_xy)
+                self.assertEqual(
+                    resolved_xy, baseline_xy, msg=precedence_diagnostic_message
+                )
+                self.assertEqual(
+                    far_air_xy, resolved_xy, msg=precedence_diagnostic_message
+                )
+                self.assertEqual(
+                    manual_owner_xy, far_air_xy, msg=precedence_diagnostic_message
+                )
 
                 if isinstance(geometry, fm.Box):
-                    localized_xy, localized_report = realize(
+                    localized_xy, localized_report, _localized_evidence = realize(
                         geometry,
                         hint_hmax=10e-9,
                         owner_hmax=20e-9,
@@ -15187,8 +15398,11 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     self.assertIn(
                         "ComponentRestrictedBox",
                         localized_report.used_size_field_kinds,
+                        msg=precedence_diagnostic_message,
                     )
-                    self.assertEqual(localized_xy, far_air_xy)
+                    self.assertEqual(
+                        localized_xy, far_air_xy, msg=precedence_diagnostic_message
+                    )
 
     def test_scoped_layer_plane_report_waits_for_postmesh_proof(self) -> None:
         geometry = fm.Box(120e-9, 80e-9, 20e-9, name="thin_box")
