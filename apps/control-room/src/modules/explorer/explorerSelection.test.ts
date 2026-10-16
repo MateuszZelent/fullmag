@@ -29,6 +29,7 @@ import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidati
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
+import { analysisSurfaceForSelectionKind } from "@/kernel/analysis-modules/analysisSurfaceRouting";
 import { ObjectMoveToolController } from "@/kernel/authoring/ObjectMoveToolController";
 import { ObjectEditSessionController } from "@/kernel/authoring/object-edit/ObjectEditSessionController";
 import type { KernelApi } from "@/kernel/types";
@@ -44,6 +45,7 @@ import {
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 import { resolveVisualizationDebugTarget } from "@/modules/inspector/panels/visualization-debug/VisualizationDebugPanelModel";
+import { resolveInspectorPanel } from "@/modules/inspector/inspectorRegistry";
 import { viewportSelectionForFdmTarget } from "@/modules/viewport-3d/viewport3dSelection";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
@@ -1714,6 +1716,71 @@ describe("selectExplorerNode", () => {
         type: "analysis-result",
       },
     });
+  });
+
+  it.each([
+    "time_domain_spectrum",
+    "dynamic_structure_factor",
+  ] as const)(
+    "routes the %s dataset through its canonical Time-domain selection",
+    (studyProduct) => {
+      const kernel = makeKernel();
+      const node: ExplorerNode = {
+        analysisModuleId: "analysis.time-domain",
+        analysisRunId: "historical-run-4",
+        analysisStageId: "stage-time-domain-9",
+        datasetId: `catalog:${studyProduct}`,
+        datasetRevision: "dataset-r17",
+        id: `results:historical-run-4:dynamics:dataset:${studyProduct}`,
+        kind: "analysis.time-domain.overview",
+        label: studyProduct,
+        parentId: "results:historical-run-4:dynamics",
+        studyProduct,
+      };
+      selectExplorerNode(kernel, node, "explorer");
+      const selection = kernel.selection.get();
+
+      expect(selection).toMatchObject({
+        kind: "analysis.time-domain.overview",
+        nodeId: node.id,
+        ref: {
+          datasetId: `catalog:${studyProduct}`,
+          datasetRevision: "dataset-r17",
+          focus: "dataset",
+          kind: "analysis.result",
+          runId: "historical-run-4",
+          stageId: "stage-time-domain-9",
+          type: "analysis-result",
+        },
+      });
+      expect(resolveInspectorPanel(selection)).toMatchObject({ id: "analysis-result" });
+      expect(analysisSurfaceForSelectionKind(selection.kind)).toBe("dynamics");
+    },
+  );
+
+  it("fails closed for incomplete or unsupported Time-domain catalog identity", () => {
+    const node: ExplorerNode = {
+      analysisModuleId: "analysis.time-domain",
+      analysisRunId: "run-7",
+      analysisStageId: "stage-7",
+      datasetId: "dataset-7",
+      datasetRevision: "dataset-r7",
+      id: "results:run-7:dynamics:dataset-7",
+      kind: "analysis.time-domain.overview",
+      label: "Time-domain result",
+      parentId: "results:run-7:dynamics",
+      studyProduct: "time_domain_spectrum",
+    };
+
+    for (const incomplete of [
+      { ...node, analysisRunId: " " },
+      { ...node, analysisStageId: "" },
+      { ...node, datasetId: "" },
+      { ...node, datasetRevision: " " },
+      { ...node, studyProduct: "hysteresis_loop" },
+    ]) {
+      expect(selectionRefFromNode(incomplete)).toBeNull();
+    }
   });
 
   it("selects postprocessing identity and freshness without copying catalog payload", () => {

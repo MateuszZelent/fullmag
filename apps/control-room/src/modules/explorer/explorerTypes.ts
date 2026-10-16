@@ -198,6 +198,7 @@ export type ExplorerNodeKind =
   | "results.observation_frames.root"
   | "results.pinned_visualizations.root"
   | "analysis.dispersion.reference"
+  | "analysis.time-domain.overview"
   | "results.observation_frame"
   | "results.analysis_views.root"
   | "results.analysis_views.definition"

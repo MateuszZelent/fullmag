@@ -18,6 +18,10 @@ import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import type { ExplorerNode } from "./explorerTypes";
 
+function catalogIdentityString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 type StudyStageSelectionKind = Extract<
   SelectionRef,
   { type: "study-stage" }
@@ -194,6 +198,31 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       stateDigest: frame.accepted_state_ref.id.state_digest,
       type: "observation-frame",
     };
+  }
+
+  if (node.kind === "analysis.time-domain.overview") {
+    const runId = catalogIdentityString(node.analysisRunId);
+    const stageId = catalogIdentityString(node.analysisStageId);
+    const datasetId = catalogIdentityString(node.datasetId);
+    const datasetRevision = catalogIdentityString(node.datasetRevision);
+    if (
+      (node.studyProduct !== "time_domain_spectrum" &&
+        node.studyProduct !== "dynamic_structure_factor") ||
+      !runId ||
+      !stageId ||
+      !datasetId ||
+      !datasetRevision
+    ) {
+      return null;
+    }
+    return analysisResultSelectionRef({
+      datasetId,
+      datasetRevision,
+      focus: "dataset",
+      runId,
+      stageId,
+      nodeId: node.id,
+    });
   }
 
   if (node.kind === "results.hysteresis.dataset") {

@@ -1010,11 +1010,175 @@ export function withPinnedAnalysisDefinitions(
   }));
 }
 
+const TIME_DOMAIN_ANALYSIS_MODULE_ID: AnalysisModuleId = "analysis.time-domain";
+const TIME_DOMAIN_OVERVIEW_KIND: ExplorerNodeKind = "analysis.time-domain.overview";
+
+function catalogIdentityString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function isTimeDomainProductKind(
+  value: AnalysisResultDatasetSummaryResource["product_kind"],
+): boolean {
+  return value === "time_domain_spectrum" || value === "dynamic_structure_factor";
+}
+
+function timeDomainCatalogDatasetsForRun(
+  datasets: readonly AnalysisResultDatasetSummaryResource[],
+  runId: unknown,
+): AnalysisResultDatasetSummaryResource[] {
+  const expectedRunId = catalogIdentityString(runId);
+  if (!expectedRunId) return [];
+
+  const byDatasetId = new Map<
+    string,
+    {
+      dataset: AnalysisResultDatasetSummaryResource;
+      productKind: AnalysisResultDatasetSummaryResource["product_kind"];
+      revision: string;
+      stageId: string;
+    } | null
+  >();
+  for (const dataset of datasets) {
+    if (
+      catalogIdentityString(dataset.run_id) !== expectedRunId ||
+      !isTimeDomainProductKind(dataset.product_kind)
+    ) {
+      continue;
+    }
+    const datasetId = catalogIdentityString(dataset.dataset_id);
+    if (!datasetId) continue;
+    const stageId = catalogIdentityString(dataset.stage_id);
+    const revision = catalogIdentityString(dataset.dataset_revision);
+    if (byDatasetId.has(datasetId)) {
+      const previous = byDatasetId.get(datasetId);
+      if (
+        previous &&
+        (!stageId ||
+          !revision ||
+          previous.stageId !== stageId ||
+          previous.revision !== revision ||
+          previous.productKind !== dataset.product_kind)
+      ) {
+        byDatasetId.set(datasetId, null);
+      }
+      continue;
+    }
+    byDatasetId.set(
+      datasetId,
+      stageId && revision
+        ? { dataset, productKind: dataset.product_kind, revision, stageId }
+        : null,
+    );
+  }
+
+  return [...byDatasetId.values()]
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .map((entry) => entry.dataset)
+    .sort((left, right) => left.dataset_id.localeCompare(right.dataset_id));
+}
+
+function isTimeDomainCatalogNode(candidate: ExplorerNode): boolean {
+  return (
+    candidate.kind === TIME_DOMAIN_OVERVIEW_KIND &&
+    candidate.analysisModuleId === TIME_DOMAIN_ANALYSIS_MODULE_ID
+  );
+}
+
+function sameTimeDomainCatalogNode(left: ExplorerNode, right: ExplorerNode): boolean {
+  return (
+    left.id === right.id &&
+    left.kind === right.kind &&
+    left.label === right.label &&
+    left.parentId === right.parentId &&
+    left.analysisModuleId === right.analysisModuleId &&
+    left.analysisRunId === right.analysisRunId &&
+    left.analysisStageId === right.analysisStageId &&
+    left.datasetId === right.datasetId &&
+    left.datasetRevision === right.datasetRevision &&
+    left.studyProduct === right.studyProduct &&
+    left.badge === right.badge &&
+    left.icon === right.icon
+  );
+}
+
+function dynamicsFamilyWithCatalogDatasets(
+  resultsRoot: ExplorerNode,
+  existingFamily: ExplorerNode | undefined,
+  datasets: readonly AnalysisResultDatasetSummaryResource[],
+): ExplorerNode | null {
+  const familyId = existingFamily?.id ?? `${resultsRoot.id}:dynamics`;
+  const existingChildren = existingFamily?.children ?? [];
+  const existingCatalogNodes = existingChildren.filter(isTimeDomainCatalogNode);
+  const existingByDatasetId = new Map<string, ExplorerNode>();
+  for (const candidate of existingCatalogNodes) {
+    const datasetId = catalogIdentityString(candidate.datasetId);
+    if (datasetId && !existingByDatasetId.has(datasetId)) {
+      existingByDatasetId.set(datasetId, candidate);
+    }
+  }
+
+  const catalogChildren = datasets.map((dataset) => {
+    const next = node(
+      `${familyId}:dataset:${key(dataset.dataset_id)}`,
+      TIME_DOMAIN_OVERVIEW_KIND,
+      nonEmptyString(dataset.title) ??
+        (dataset.product_kind === "time_domain_spectrum"
+          ? "Time-domain spectrum"
+          : "Dynamic structure factor"),
+      familyId,
+      {
+        analysisModuleId: TIME_DOMAIN_ANALYSIS_MODULE_ID,
+        analysisRunId: dataset.run_id,
+        analysisStageId: dataset.stage_id,
+        badge: dataset.stage_id,
+        datasetId: dataset.dataset_id,
+        datasetRevision: dataset.dataset_revision,
+        icon: "activity",
+        studyProduct: dataset.product_kind,
+      },
+    );
+    const current = existingByDatasetId.get(dataset.dataset_id);
+    return current && sameTimeDomainCatalogNode(current, next) ? current : next;
+  });
+  const siblingChildren = existingChildren.filter(
+    (candidate) => !isTimeDomainCatalogNode(candidate),
+  );
+  const children = [...siblingChildren, ...catalogChildren];
+  if (children.length === 0) return null;
+  if (!existingFamily) {
+    return node(familyId, "results.dynamics.root", "Dynamics", resultsRoot.id, {
+      analysisModuleId: TIME_DOMAIN_ANALYSIS_MODULE_ID,
+      analysisRunId: resultsRoot.analysisRunId,
+      children,
+      icon: "activity",
+    });
+  }
+
+  const childrenUnchanged =
+    children.length === existingChildren.length &&
+    children.every((child, index) => child === existingChildren[index]);
+  const moduleUnchanged =
+    datasets.length === 0 ||
+    existingFamily.analysisModuleId === TIME_DOMAIN_ANALYSIS_MODULE_ID;
+  if (childrenUnchanged && moduleUnchanged) return existingFamily;
+  return {
+    ...existingFamily,
+    ...(datasets.length > 0
+      ? {
+          analysisModuleId: TIME_DOMAIN_ANALYSIS_MODULE_ID,
+          availability: "available" as const,
+        }
+      : {}),
+    children,
+  };
+}
+
 /** Keeps an analysis family only when it has published children, tagged with its owning module. */
 /**
  * Families published only through the typed results catalog (plan stage 8):
- * hysteresis loops, and a Comparison family once the run has more than one
- * dataset or a saved reference to compare against.
+ * Time-domain products, hysteresis loops, and a Comparison family once the run
+ * has more than one dataset or a saved reference to compare against.
  */
 export function withCatalogAnalysisFamilies(
   tree: readonly ExplorerNode[],
@@ -1123,26 +1287,60 @@ export function withCatalogAnalysisFamilies(
     }
 
     const originalChildren = resultsRoot.children ?? [];
+    const existingDynamics = originalChildren.find(
+      (child) => child.kind === "results.dynamics.root",
+    );
+    const timeDomainDatasets = timeDomainCatalogDatasetsForRun(
+      datasets,
+      resultsRoot.analysisRunId,
+    );
+    const dynamics = dynamicsFamilyWithCatalogDatasets(
+      resultsRoot,
+      existingDynamics,
+      timeDomainDatasets,
+    );
     const comparisonIndex = existingComparison
       ? originalChildren.findIndex((child) => child.id === existingComparison.id)
       : -1;
-    const children = originalChildren.map((child, index) =>
-      index === comparisonIndex && comparison ? comparison : child,
-    );
+    const dynamicsIndex = existingDynamics
+      ? originalChildren.findIndex((child) => child.id === existingDynamics.id)
+      : -1;
+    const children = originalChildren.flatMap((child, index) => {
+      if (index === comparisonIndex) return comparison ? [comparison] : [];
+      if (index === dynamicsIndex) return dynamics ? [dynamics] : [];
+      return [child];
+    });
+    if (!existingDynamics && dynamics) children.unshift(dynamics);
     if (!existingComparison && comparison) children.push(comparison);
     children.push(...families);
 
-    const rootChanged = families.length > 0 || comparison !== (existingComparison ?? null);
-    const augmentedRoot = !rootChanged
-      ? resultsRoot
-      : {
-          ...resultsRoot,
-          availability: "available" as const,
-          executionState: "completed" as const,
-          resourceState: resultsRoot.resourceState === "error" ? "error" as const : "ready" as const,
-          status: resultsRoot.status === "failed" ? "failed" as const : "ready" as const,
-          children,
-        };
+    const rootChanged =
+      families.length > 0 ||
+      comparison !== (existingComparison ?? null) ||
+      dynamics !== (existingDynamics ?? null);
+    const rootDataAvailabilityChanged =
+      timeDomainDatasets.length > 0 &&
+      (resultsRoot.availability !== "available" ||
+        resultsRoot.resourceState === "idle" ||
+        resultsRoot.status === "unavailable");
+    const augmentedRoot =
+      !rootChanged && !rootDataAvailabilityChanged
+        ? resultsRoot
+        : {
+            ...resultsRoot,
+            ...(rootChanged ? { children } : {}),
+            ...(timeDomainDatasets.length > 0
+              ? {
+                  availability: "available" as const,
+                  ...(resultsRoot.resourceState === "idle"
+                    ? { resourceState: "ready" as const }
+                    : {}),
+                  ...(resultsRoot.status === "unavailable"
+                    ? { status: "ready" as const }
+                    : {}),
+                }
+              : {}),
+          };
     return withCatalogDatasetIdentity(augmentedRoot, runDatasets);
   });
 }

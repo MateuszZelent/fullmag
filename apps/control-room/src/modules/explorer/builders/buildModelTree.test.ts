@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  AnalysisResultDatasetSummaryResource,
   CurrentRunResource,
   DomainMetaResource,
   FdmMultilayerLayoutResource,
@@ -8,6 +9,7 @@ import type {
   FrozenSpinsCollectionResource,
   FrequencyDomainManifestResource,
   HysteresisExecutionTreeResource,
+  PostprocessingDefinition,
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
@@ -37,6 +39,7 @@ import {
 } from "./buildModelTree";
 import { createExplorerNode } from "./explorerNodeContract";
 import { frozenSpinsSelectorOwner } from "./objectExplorerNodes";
+import { withCatalogAnalysisFamilies } from "./resultsExplorerNodes";
 import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithStageExecution,
@@ -4237,5 +4240,400 @@ describe("buildModelTree", () => {
       parentId: "model:definitions:frozen-spins",
       badge: "unscoped",
     });
+  });
+});
+
+function catalogDataset(
+  runId: string,
+  stageId: string,
+  datasetId: string,
+  datasetRevision: string,
+  productKind: AnalysisResultDatasetSummaryResource["product_kind"],
+): AnalysisResultDatasetSummaryResource {
+  return {
+    dataset_id: datasetId,
+    dataset_revision: datasetRevision,
+    item_count: 0,
+    manifest_resource_key: `manifest:${datasetId}`,
+    product_kind: productKind,
+    run_id: runId,
+    sample_count: 1,
+    stage_id: stageId,
+    status: {
+      completeness: "complete",
+      execution: "published",
+      qualification: "legacy",
+      resource: "complete",
+    },
+    title: productKind,
+  };
+}
+
+function dispersionReference(runId: string): PostprocessingDefinition {
+  return {
+    definition_id: "reference-csv",
+    revision: 0,
+    module_id: "analysis.dispersion",
+    module_version: "0.1.0",
+    definition_schema: "analysis.dispersion.reference.v1",
+    node_kind: "analysis.dispersion.reference",
+    label: "Imported dispersion reference",
+    data_ref: {
+      run_id: runId,
+      dataset_id: "external-reference",
+      dataset_revision: "csv-r1",
+    },
+    settings: {
+      file_name: "reference.csv",
+      points: [[0, 1], [1, 2]],
+      source: "imported_table",
+      source_units: { frequency: "GHz", path: "rad/um" },
+    },
+  };
+}
+
+describe("time-domain catalog Results family", () => {
+  it("publishes both standalone products in Dynamics without observation frames", () => {
+    const runId = "run-time-domain";
+    const datasets = [
+      catalogDataset(
+        runId,
+        "stage-spectrum",
+        "catalog:spectrum",
+        "dataset-r3",
+        "time_domain_spectrum",
+      ),
+      catalogDataset(
+        runId,
+        "stage-dsf",
+        "catalog:dsf",
+        "dataset-r8",
+        "dynamic_structure_factor",
+      ),
+    ] satisfies AnalysisResultDatasetSummaryResource[];
+    const withoutCatalog = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        currentRun: currentRun(runId, 23),
+      }),
+    );
+    const flattened = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        analysisDatasets: datasets,
+        currentRun: currentRun(runId, 23),
+      }),
+    );
+
+    const dynamics = flattened.filter((node) => node.kind === "results.dynamics.root");
+    const resultsRootBeforeCatalog = withoutCatalog.find(
+      (node) => node.kind === "results.root",
+    );
+    const resultsRoot = flattened.find((node) => node.kind === "results.root");
+    const products = flattened.filter(
+      (node) => node.kind === "analysis.time-domain.overview",
+    );
+    expect(resultsRootBeforeCatalog).toMatchObject({
+      availability: "unavailable",
+      executionState: "not_started",
+      resourceState: "idle",
+      status: "unavailable",
+    });
+    expect(resultsRoot).toMatchObject({
+      availability: "available",
+      executionState: "not_started",
+      resourceState: "ready",
+      status: "ready",
+    });
+    expect(dynamics).toHaveLength(1);
+    expect(dynamics[0]).toMatchObject({
+      analysisModuleId: "analysis.time-domain",
+      analysisRunId: runId,
+      label: "Dynamics",
+    });
+    expect(products).toHaveLength(2);
+    expect(products).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          analysisModuleId: "analysis.time-domain",
+          analysisRunId: runId,
+          analysisStageId: "stage-spectrum",
+          datasetId: "catalog:spectrum",
+          datasetRevision: "dataset-r3",
+          studyProduct: "time_domain_spectrum",
+        }),
+        expect.objectContaining({
+          analysisModuleId: "analysis.time-domain",
+          analysisRunId: runId,
+          analysisStageId: "stage-dsf",
+          datasetId: "catalog:dsf",
+          datasetRevision: "dataset-r8",
+          studyProduct: "dynamic_structure_factor",
+        }),
+      ]),
+    );
+    expect(
+      flattened.some((node) => node.kind === "results.observation_frames.root"),
+    ).toBe(false);
+  });
+
+  it("exposes catalog-only data without changing the Results execution lifecycle", () => {
+    const runId = "run-time-domain-live";
+    const dataset = catalogDataset(
+      runId,
+      "stage-spectrum",
+      "catalog:spectrum",
+      "dataset-r3",
+      "time_domain_spectrum",
+    );
+    const initial: ExplorerNode = {
+      analysisRunId: runId,
+      availability: "unavailable",
+      executionState: "running",
+      id: `results:run:${runId}`,
+      kind: "results.root",
+      label: "Results",
+      parentId: null,
+      resourceState: "idle",
+      status: "unavailable",
+      children: [],
+    };
+
+    const [once] = withCatalogAnalysisFamilies([initial], [dataset]);
+    const [twice] = withCatalogAnalysisFamilies([once!], [dataset]);
+    const dynamics = twice?.children?.find(
+      (node) => node.kind === "results.dynamics.root",
+    );
+    const catalogProducts = dynamics?.children?.filter(
+      (node) => node.kind === "analysis.time-domain.overview",
+    );
+    const observationFrames = dynamics?.children?.filter(
+      (node) => node.kind === "results.observation_frames.root",
+    );
+
+    expect(twice).toMatchObject({
+      availability: "available",
+      executionState: "running",
+      resourceState: "ready",
+      status: "ready",
+    });
+    expect(twice).toBe(once);
+    expect(catalogProducts).toHaveLength(1);
+    expect(observationFrames).toHaveLength(0);
+  });
+
+  it("keeps Results root resource errors visible when catalog data is present", () => {
+    const runId = "run-time-domain-error";
+    const initial: ExplorerNode = {
+      analysisRunId: runId,
+      availability: "unavailable",
+      executionState: "failed",
+      id: `results:run:${runId}`,
+      kind: "results.root",
+      label: "Results",
+      parentId: null,
+      resourceState: "error",
+      status: "failed",
+      children: [],
+    };
+    const dataset = catalogDataset(
+      runId,
+      "stage-spectrum",
+      "catalog:spectrum",
+      "dataset-r3",
+      "time_domain_spectrum",
+    );
+
+    const [augmented] = withCatalogAnalysisFamilies([initial], [dataset]);
+
+    expect(augmented).toMatchObject({
+      availability: "available",
+      executionState: "failed",
+      resourceState: "error",
+      status: "failed",
+    });
+  });
+
+  it("keeps catalog identity exact and fails closed for foreign or incomplete rows", () => {
+    const runId = "run-time-domain";
+    const flattened = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        analysisDatasets: [
+          catalogDataset(
+            "run-foreign",
+            "stage-foreign",
+            "catalog:foreign",
+            "dataset-r1",
+            "time_domain_spectrum",
+          ),
+          catalogDataset(
+            runId,
+            "",
+            "catalog:missing-stage",
+            "dataset-r2",
+            "dynamic_structure_factor",
+          ),
+        ],
+        currentRun: currentRun(runId, 41),
+      }),
+    );
+
+    expect(
+      flattened.some((node) => node.kind === "results.dynamics.root"),
+    ).toBe(false);
+    expect(
+      flattened.some((node) => node.kind === "analysis.time-domain.overview"),
+    ).toBe(false);
+  });
+
+  it("coexists with snapshots and preserves siblings and existing result families on repeat", () => {
+    const runId = "run-time-domain";
+    const resultsId = `results:run:${runId}`;
+    const dynamicsId = `${resultsId}:dynamics`;
+    const comparisonId = `${resultsId}:comparison`;
+    const datasets = [
+      catalogDataset(
+        runId,
+        "stage-spectrum",
+        "catalog:spectrum",
+        "dataset-r3",
+        "time_domain_spectrum",
+      ),
+      catalogDataset(
+        runId,
+        "stage-dsf",
+        "catalog:dsf",
+        "dataset-r8",
+        "dynamic_structure_factor",
+      ),
+      catalogDataset(
+        runId,
+        "stage-hysteresis",
+        "catalog:hysteresis",
+        "dataset-r4",
+        "hysteresis_loop",
+      ),
+    ];
+    const reference = dispersionReference(runId);
+    const initial: ExplorerNode = {
+      analysisRunId: runId,
+      availability: "available",
+      executionState: "completed",
+      id: resultsId,
+      kind: "results.root",
+      label: "Results",
+      parentId: null,
+      resourceState: "ready",
+      status: "ready",
+      children: [
+        {
+          analysisRunId: runId,
+          availability: "available",
+          children: [
+            {
+              id: `${dynamicsId}:observation-frames`,
+              kind: "results.observation_frames.root",
+              label: "State snapshots",
+              parentId: dynamicsId,
+              children: [],
+            },
+            {
+              analysisModuleId: "analysis.time-domain",
+              analysisPinnedGroup: true,
+              analysisRunId: runId,
+              id: `${dynamicsId}:pinned`,
+              kind: "results.pinned_visualizations.root",
+              label: "Pinned visualizations",
+              parentId: dynamicsId,
+            },
+          ],
+          id: dynamicsId,
+          kind: "results.dynamics.root",
+          label: "Dynamics",
+          parentId: resultsId,
+          executionState: "running",
+        },
+        {
+          analysisRunId: runId,
+          children: [
+            {
+              analysisRunId: runId,
+              analysisStageId: "stage-hysteresis",
+              datasetId: "catalog:hysteresis",
+              datasetRevision: "dataset-r4",
+              id: `${resultsId}:hysteresis:existing-dataset`,
+              kind: "results.hysteresis.dataset",
+              label: "Existing loop",
+              parentId: `${resultsId}:hysteresis`,
+              studyProduct: "hysteresis_loop",
+            },
+          ],
+          id: `${resultsId}:hysteresis`,
+          kind: "results.hysteresis.root",
+          label: "Hysteresis",
+          parentId: resultsId,
+        },
+        {
+          children: [
+            {
+              id: `${comparisonId}:exports`,
+              kind: "results.frequency_domain.exports",
+              label: "Existing exports",
+              parentId: comparisonId,
+            },
+            {
+              analysisRunId: runId,
+              analysisStageId: "external-reference",
+              definitionId: reference.definition_id,
+              id: `${comparisonId}:reference:${reference.definition_id}`,
+              kind: "analysis.dispersion.reference",
+              label: reference.label,
+              parentId: comparisonId,
+            },
+          ],
+          id: comparisonId,
+          kind: "results.frequency_domain.comparison",
+          label: "Comparison",
+          parentId: resultsId,
+        },
+      ],
+    };
+
+    const [once] = withCatalogAnalysisFamilies([initial], datasets, [reference]);
+    const [twice] = withCatalogAnalysisFamilies([once!], datasets, [reference]);
+    const dynamicsFamilies = twice?.children?.filter(
+      (node) => node.kind === "results.dynamics.root",
+    ) ?? [];
+    const dynamics = dynamicsFamilies[0];
+    const children = dynamics?.children ?? [];
+
+    expect(dynamicsFamilies).toHaveLength(1);
+    expect(dynamics?.executionState).toBe("running");
+    expect(
+      children.filter((node) => node.kind === "analysis.time-domain.overview"),
+    ).toHaveLength(2);
+    expect(children.map((node) => node.kind)).toEqual(
+      expect.arrayContaining([
+        "results.observation_frames.root",
+        "results.pinned_visualizations.root",
+        "analysis.time-domain.overview",
+      ]),
+    );
+    expect(
+      twice?.children?.filter((node) => node.kind === "results.hysteresis.root"),
+    ).toHaveLength(1);
+    expect(
+      twice?.children?.find((node) => node.kind === "results.hysteresis.root")?.children,
+    ).toHaveLength(1);
+    const comparison = twice?.children?.find(
+      (node) => node.kind === "results.frequency_domain.comparison",
+    );
+    expect(comparison?.children?.map((node) => node.kind)).toEqual(
+      expect.arrayContaining([
+        "results.frequency_domain.exports",
+        "analysis.dispersion.reference",
+      ]),
+    );
+    expect(
+      comparison?.children?.filter((node) => node.kind === "analysis.dispersion.reference"),
+    ).toHaveLength(1);
   });
 });

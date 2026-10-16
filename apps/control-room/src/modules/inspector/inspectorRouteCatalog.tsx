@@ -1515,7 +1515,11 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "analysis-result",
     title: "Analysis result",
-    selectionKinds: ["analysis.result", "results.hysteresis.dataset"],
+    selectionKinds: [
+      "analysis.result",
+      "results.hysteresis.dataset",
+      "analysis.time-domain.overview",
+    ],
     component: AnalysisResultInspectorPanel,
   },
   {
