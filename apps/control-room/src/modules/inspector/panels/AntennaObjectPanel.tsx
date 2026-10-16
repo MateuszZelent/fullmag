@@ -120,15 +120,18 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     : sceneRevision(scene.data?.revision);
   const canCommit =
     scene.status === "ready" && baseRevision !== null && model.mode !== "missing";
-  const draft: AntennaObjectDraft =
-    draftState.key === draftKey
-      ? {
-          ...baselineDraft,
-          ...Object.fromEntries(
-            draftState.dirtyKeys.map((key) => [key, draftState.draft[key]]),
-          ),
-        }
-      : baselineDraft;
+  const draft = useMemo<AntennaObjectDraft>(
+    () =>
+      draftState.key === draftKey
+        ? {
+            ...baselineDraft,
+            ...Object.fromEntries(
+              draftState.dirtyKeys.map((key) => [key, draftState.draft[key]]),
+            ),
+          }
+        : baselineDraft,
+    [baselineDraft, draftKey, draftState],
+  );
   const locallyConflictingKeys =
     draftState.key === draftKey
       ? draftState.dirtyKeys.filter(

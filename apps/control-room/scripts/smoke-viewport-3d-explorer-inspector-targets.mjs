@@ -761,9 +761,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     }
 
     await assertHealthyCanvas(page, "nonempty FEM B field revision adopted");
-    let bPixelDelta;
     try {
-      bPixelDelta = await waitForViewportPixelDelta(
+      await waitForViewportPixelDelta(
         page,
         bBeforePixels,
         "nonempty FEM part B updated field color",

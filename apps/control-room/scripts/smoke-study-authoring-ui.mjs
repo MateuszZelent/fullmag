@@ -2079,9 +2079,8 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   ) {
     await page.waitForTimeout(50);
   }
-  let realtimeConnection;
   try {
-    realtimeConnection = requireActiveRealtimeConnection("initial catalog verification");
+    requireActiveRealtimeConnection("initial catalog verification");
   } catch (error) {
     throw new Error(
       `Production realtime client did not expose an exactly paired browser socket. HTTP catalog pages: ${JSON.stringify(initialPages)}. Fixture requests: ${JSON.stringify(summarizeFixtureRequests())}. ` +
