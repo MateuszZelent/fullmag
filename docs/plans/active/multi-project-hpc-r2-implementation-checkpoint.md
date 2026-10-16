@@ -1,6 +1,7 @@
 # Checkpoint implementacji R2 — HPC przez MicroLab
 
 Data: 16.10.2026. Branch: codex/microlab-fullmag-r2-20261016. Baza: f9179caf0a0681bdc92c2a87a308be21e9903919 (master w chwili utworzenia worktree).
+Commit implementacji i kontraktu: 18ffe83bcf8078278f88ed4bccb14f64a1355f8d.
 
 ## Uzgodniona granica
 
