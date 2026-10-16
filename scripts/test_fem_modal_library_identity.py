@@ -4,7 +4,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import subprocess
-from fem_modal_library_identity import capture, identity, loader_resolution, require_equal, resolve_runtime_library, verify_unchanged
+from fem_modal_library_identity import (
+    capture,
+    identity,
+    loader_resolution,
+    require_equal,
+    resolve_runtime_library,
+    validate_cmake_cache,
+    verify_unchanged,
+)
 
 class LibraryIdentityTests(unittest.TestCase):
     def test_same_size_mismatch_is_rejected(self):
@@ -78,5 +86,73 @@ class LibraryIdentityTests(unittest.TestCase):
             root=Path(directory); manifest=root/'path.txt'; manifest.write_text('/one\n/two\n')
             with self.assertRaisesRegex(ValueError,'exactly one library path'):
                 capture(manifest,root,[])
+
+    def _write_cmake_cache(self, path, overrides=None, missing=()):
+        options = {
+            "CMAKE_BUILD_TYPE": ("STRING", "Release"),
+            "FULLMAG_ENABLE_CUDA": ("BOOL", "OFF"),
+            "FULLMAG_ENABLE_FEM_GPU": ("BOOL", "OFF"),
+            "FULLMAG_USE_MFEM_STACK": ("BOOL", "ON"),
+            "FULLMAG_FEM_WITH_SLEPC": ("BOOL", "ON"),
+        }
+        options.update(overrides or {})
+        lines = [
+            f"{name}:{value_type}={value}"
+            for name, (value_type, value) in options.items()
+            if name not in missing
+        ]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def test_cpu_release_cmake_cache_is_attested_with_read_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = self._write_cmake_cache(Path(directory) / "CMakeCache.txt")
+            observed = validate_cmake_cache(cache)
+            self.assertEqual(
+                observed["schema"], "fullmag.fem.slepc_modal.cmake_attestation.v1"
+            )
+            self.assertEqual(observed["status"], "pass")
+            self.assertEqual(
+                observed["options"],
+                {
+                    "CMAKE_BUILD_TYPE": {"type": "STRING", "value": "Release"},
+                    "FULLMAG_ENABLE_CUDA": {"type": "BOOL", "value": "OFF"},
+                    "FULLMAG_ENABLE_FEM_GPU": {"type": "BOOL", "value": "OFF"},
+                    "FULLMAG_USE_MFEM_STACK": {"type": "BOOL", "value": "ON"},
+                    "FULLMAG_FEM_WITH_SLEPC": {"type": "BOOL", "value": "ON"},
+                },
+            )
+
+    def test_missing_cmake_identity_options_are_rejected(self):
+        required = (
+            "CMAKE_BUILD_TYPE",
+            "FULLMAG_ENABLE_CUDA",
+            "FULLMAG_ENABLE_FEM_GPU",
+            "FULLMAG_USE_MFEM_STACK",
+            "FULLMAG_FEM_WITH_SLEPC",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "CMakeCache.txt"
+            for missing in required:
+                with self.subTest(missing=missing):
+                    self._write_cmake_cache(cache, missing=(missing,))
+                    with self.assertRaisesRegex(ValueError, "missing required options"):
+                        validate_cmake_cache(cache)
+
+    def test_wrong_release_type_or_gpu_configuration_is_rejected(self):
+        cases = {
+            "debug build": {"CMAKE_BUILD_TYPE": ("STRING", "Debug")},
+            "wrong build type cache kind": {"CMAKE_BUILD_TYPE": ("BOOL", "Release")},
+            "CUDA enabled": {"FULLMAG_ENABLE_CUDA": ("BOOL", "ON")},
+            "FEM GPU enabled": {"FULLMAG_ENABLE_FEM_GPU": ("BOOL", "ON")},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "CMakeCache.txt"
+            for label, overrides in cases.items():
+                with self.subTest(case=label):
+                    self._write_cmake_cache(cache, overrides=overrides)
+                    with self.assertRaisesRegex(ValueError, "does not match the CPU/SLEPc Release profile"):
+                        validate_cmake_cache(cache)
+
 
 if __name__=='__main__': unittest.main()

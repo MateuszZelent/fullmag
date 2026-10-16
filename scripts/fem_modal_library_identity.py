@@ -9,6 +9,61 @@ from pathlib import Path
 import re
 import subprocess
 
+CMAKE_CACHE_EXPECTED_OPTIONS = {
+    "CMAKE_BUILD_TYPE": ("STRING", "Release"),
+    "FULLMAG_ENABLE_CUDA": ("BOOL", "OFF"),
+    "FULLMAG_ENABLE_FEM_GPU": ("BOOL", "OFF"),
+    "FULLMAG_USE_MFEM_STACK": ("BOOL", "ON"),
+    "FULLMAG_FEM_WITH_SLEPC": ("BOOL", "ON"),
+}
+
+
+def validate_cmake_cache(cache_path: Path) -> dict:
+    """Read and attest the exact CPU/SLEPc Release CMake configuration."""
+    if cache_path.is_symlink() or not cache_path.is_file():
+        raise ValueError(f"CMake cache is missing or not a regular file: {cache_path}")
+    try:
+        lines = cache_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        raise ValueError(f"cannot read CMake cache: {cache_path}") from error
+
+    observed = {}
+    for line in lines:
+        if not line or line.startswith("//") or line.startswith("#") or ":" not in line or "=" not in line:
+            continue
+        name, remainder = line.split(":", 1)
+        value_type, value = remainder.split("=", 1)
+        if name not in CMAKE_CACHE_EXPECTED_OPTIONS:
+            continue
+        if name in observed:
+            raise ValueError(f"duplicate required CMake cache option: {name}")
+        observed[name] = {"type": value_type, "value": value}
+
+    missing = sorted(set(CMAKE_CACHE_EXPECTED_OPTIONS) - set(observed))
+    if missing:
+        raise ValueError("CMake cache is missing required options: " + ", ".join(missing))
+
+    wrong = []
+    for name, (expected_type, expected_value) in CMAKE_CACHE_EXPECTED_OPTIONS.items():
+        actual = observed[name]
+        if actual["type"] != expected_type or actual["value"] != expected_value:
+            wrong.append(
+                f"{name}={actual['type']}:{actual['value']} "
+                f"(expected {expected_type}:{expected_value})"
+            )
+    if wrong:
+        raise ValueError(
+            "CMake cache does not match the CPU/SLEPc Release profile: "
+            + ", ".join(wrong)
+        )
+
+    return {
+        "schema": "fullmag.fem.slepc_modal.cmake_attestation.v1",
+        "status": "pass",
+        "cache_path": str(cache_path),
+        "options": observed,
+    }
+
 
 def identity(path: Path) -> dict:
     resolved = path.resolve(strict=True)

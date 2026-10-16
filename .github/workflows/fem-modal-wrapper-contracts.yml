@@ -1,0 +1,34 @@
+name: FEM modal wrapper source contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'scripts/run_fem_cpu_slepc_modal_contract.sh'
+      - 'scripts/fem_modal_library_identity.py'
+      - 'scripts/test_fem_modal_library_identity.py'
+      - '.github/workflows/fem-modal-wrapper-contracts.yml'
+  pull_request:
+    paths:
+      - 'scripts/run_fem_cpu_slepc_modal_contract.sh'
+      - 'scripts/fem_modal_library_identity.py'
+      - 'scripts/test_fem_modal_library_identity.py'
+      - '.github/workflows/fem-modal-wrapper-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  wrapper-source-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Check modal wrapper shell syntax
+        run: bash -n scripts/run_fem_cpu_slepc_modal_contract.sh
+      - name: Verify fail-closed CMake profile and library identity contracts
+        run: python -B -m unittest discover -s scripts -p test_fem_modal_library_identity.py -v

@@ -92,6 +92,19 @@ dependency = load(os.environ.get("DEPENDENCY_ATTESTATION", ""))
 resolution = load(os.environ.get("RESOLUTION_ATTESTATION", ""))
 junit = load(os.environ.get("JUNIT_ATTESTATION", ""))
 library_identity = load(os.environ.get("LIBRARY_IDENTITY", ""))
+cmake_options = cmake.get("options", {})
+if not isinstance(cmake_options, dict):
+    cmake_options = {}
+build_options = [
+    "-D{}:{}={}".format(name, option["type"], option["value"])
+    for name, option in cmake_options.items()
+    if isinstance(option, dict)
+    and isinstance(option.get("type"), str)
+    and isinstance(option.get("value"), str)
+]
+build_options.append(
+    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256=" + os.environ["SOURCE_SNAPSHOT"]
+)
 status = os.environ["STATUS"]
 resolved = {
     "backend": None,
@@ -122,13 +135,7 @@ payload = {
     "resolved": resolved,
     "build": {
         "directory": os.environ["BUILD_DIR"],
-        "options": [
-            "-DFULLMAG_ENABLE_CUDA=ON",
-            "-DFULLMAG_ENABLE_FEM_GPU=OFF",
-            "-DFULLMAG_USE_MFEM_STACK=ON",
-            "-DFULLMAG_FEM_WITH_SLEPC=ON",
-            "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256=" + os.environ["SOURCE_SNAPSHOT"],
-        ],
+        "options": build_options,
         "modal_target": "fem_poisson_airbox_modal_eigen_slepc_contract",
         "modal_cabi_target": "fem_modal_eigen_contract",
         "shared_domain_target": "fem_poisson_airbox_shared_domain_contract",
@@ -179,54 +186,29 @@ path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="
 trap write_result EXIT
 
 cmake -S native -B "$build_dir" \
-  -DFULLMAG_ENABLE_CUDA=ON \
-  -DFULLMAG_ENABLE_FEM_GPU=OFF \
-  -DFULLMAG_USE_MFEM_STACK=ON \
-  -DFULLMAG_FEM_WITH_SLEPC=ON \
+  -DCMAKE_BUILD_TYPE:STRING=Release \
+  -DFULLMAG_ENABLE_CUDA:BOOL=OFF \
+  -DFULLMAG_ENABLE_FEM_GPU:BOOL=OFF \
+  -DFULLMAG_USE_MFEM_STACK:BOOL=ON \
+  -DFULLMAG_FEM_WITH_SLEPC:BOOL=ON \
   -DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_SOURCE_SNAPSHOT_SHA256:?managed source snapshot required}" \
   2>&1 | tee "$report_dir/configure.log"
 
-CMAKE_ATTESTATION="$cmake_attestation" python3 - "$build_dir/CMakeCache.txt" <<'PY'
+python3 - "$build_dir/CMakeCache.txt" "$cmake_attestation" <<'PY'
 import json
-import os
 from pathlib import Path
 import sys
 
-cache_path = Path(sys.argv[1])
-if not cache_path.is_file() or cache_path.is_symlink():
-    raise SystemExit(f"CMake configure did not publish a regular cache: {cache_path}")
-expected = {
-    "FULLMAG_ENABLE_CUDA": "ON",
-    "FULLMAG_ENABLE_FEM_GPU": "OFF",
-    "FULLMAG_USE_MFEM_STACK": "ON",
-    "FULLMAG_FEM_WITH_SLEPC": "ON",
-}
-observed = {}
-for line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
-    if not line or line.startswith("//") or line.startswith("#") or ":" not in line or "=" not in line:
-        continue
-    name, remainder = line.split(":", 1)
-    value_type, value = remainder.split("=", 1)
-    if name in expected:
-        observed[name] = {"type": value_type, "value": value}
-missing = sorted(set(expected) - set(observed))
-if missing:
-    raise SystemExit("CMake cache is missing required options: " + ", ".join(missing))
-wrong = [name for name, value in expected.items() if observed[name]["value"].upper() != value]
-if wrong:
-    details = ", ".join(f"{name}={observed[name]['value']}" for name in wrong)
-    raise SystemExit("CMake resolved options do not match the CPU/SLEPc contract: " + details)
-output = {
-    "schema": "fullmag.fem.slepc_modal.cmake_attestation.v1",
-    "status": "pass",
-    "cache_path": str(cache_path),
-    "options": observed,
-}
-Path(os.environ["CMAKE_ATTESTATION"]).write_text(
-    json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+sys.path.insert(0, str(Path.cwd() / "scripts"))
+from fem_modal_library_identity import validate_cmake_cache
+
+cache_path, output_path = map(Path, sys.argv[1:])
+attestation = validate_cmake_cache(cache_path)
+output_path.write_text(
+    json.dumps(attestation, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
 )
 PY
-
 CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-1}" \
   cmake --build "$build_dir" --target "${targets[@]}" \
   2>&1 | tee "$report_dir/build.log"
