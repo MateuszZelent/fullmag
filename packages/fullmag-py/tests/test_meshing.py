@@ -14537,7 +14537,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(thin_film.actual_method, "geo_layer_partitioned_tetrahedral")
         self.assertTrue(thin_film.details["layer_planes_realized"])
         self.assertEqual(thin_film.details["layer_plane_verification"], "verified")
-        self.assertEqual(thin_film.details["requested_layer_partitions"], 3)
+        self.assertEqual(thin_film.details["through_thickness_elements"], 3)
         self.assertEqual(thin_film.details["resolved_layer_partitions"], 3)
         floor_records = [
             entry
