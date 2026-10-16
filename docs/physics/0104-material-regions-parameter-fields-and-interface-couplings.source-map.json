@@ -712,6 +712,27 @@
       "symbol": "_render_material_nodal_assignments",
       "responsibility": "Canonical script preserves all ten arrays and mesh binding; no runtime claim.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "body-xy-owner-source-field-selector",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_owner_wide_body_seed_fields",
+      "responsibility": "Selects exact-owner whole-volume material upper and lower fields for eligible exact-layer BODY_XY source faces; partial-Z and other restricted fields remain on the 3D path.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "body-xy-owner-source-mesh",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_apply_owner_wide_body_seed_mesh_options",
+      "responsibility": "Applies the filtered material-field projection to the pre-extrusion source face while forwarding other MeshOptions unchanged; Gmsh runtime behavior remains separately qualified.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "body-xy-owner-source-regressions",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_owner_wide_body_seed_field_selection_excludes_regions_and_other_owners; test_owner_wide_body_seed_options_preserve_authored_mesh_controls; test_exact_layer_body_target_precedence_survives_air_and_local_fields",
+      "responsibility": "Locks owner-only source-field eligibility, preservation of normal authored controls, and the public exact-layer BODY_XY density precedence assertions.",
+      "evidence_status": "implemented"
     }
   ],
   "public_api": {

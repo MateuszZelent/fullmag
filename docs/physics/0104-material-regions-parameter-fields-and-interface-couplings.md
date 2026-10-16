@@ -919,6 +919,41 @@ FDM materializuje maski i pola na komórkach. FEM materializuje conformal domain
 markers albo jawnie raportowaną projekcję. Region mesh-only pozostaje polem
 rozmiaru i nie tworzy niezależnych stopni swobody magnetyzacji.
 
+(material-regions-body-xy-source-face-sizing)=
+#### Exact-layer BODY_XY source-face sizing
+
+For the exact-layer Box and canonical Ring route whose airbox has the same X/Y
+footprint as the magnetic body, the 2D source plane has the same X/Y projection
+as the body planform, although it is located at the outer-air Z plane. The Box
+footprint covers the body planform; for a Ring, the annulus and its hole are
+separate faces. Before extrusion, only the material-field projection is
+restricted: it may use the resolved owner `hmax`, owner-matched
+`ComponentVolumeConstant` upper targets, and owner-matched whole-volume
+`ComponentVolumeLowerBound` targets. Upper targets compose with `Min`, lower
+targets with `Max`, and the two stacks combine with `Max`. A field is eligible
+only when its `GeometryName` exactly matches the body geometry. Global airbox
+size fields and fields owned by other geometries must not be projected onto
+this source plane. This filter does not discard ordinary authored
+`MeshOptions`: the existing source-mesh application still receives controls
+such as `algorithm_2d`, `hmin`, curvature/narrow-region settings, and
+boundary-layer settings. Their effective Gmsh behavior on this exact source
+route remains subject to the normal runtime and mesh-quality checks.
+
+This source projection is intentionally narrower than the final 3D field
+registration. `ComponentRegionLowerBound`, including partial-Z owner regions,
+and other spatially restricted fields remain on the existing 3D volume-field
+path; projecting them to a 2D face would extend their constraint through every
+extruded Z interval and outside their authored ROI. Their BODY_XY density and
+ROI behavior remain **NOT VERIFIED**. This change does not claim independent
+airbox XY grading: a conforming 3D mesh shares the source triangulation at the
+body/air interface. It preserves the existing Z-plane list, exact-layer count,
+PBC mapping and recertification, `hmin`, and mesh-quality assertions. The
+existing `test_exact_layer_body_target_precedence_survives_air_and_local_fields`
+remains the public density regression. The selector guard is
+`test_owner_wide_body_seed_field_selection_excludes_regions_and_other_owners`;
+the ring route regression also checks the filtered source options and retained
+`hmin`. Source inspection alone does not qualify Gmsh runtime behavior.
+
 (material-regions-round-trip-and-failure-semantics)=
 ### 4.6 Round-trip and failure semantics
 
@@ -1052,6 +1087,7 @@ must include:
 | ProblemIR | `crates/fullmag-ir/src/model.rs` | `RegionMeshPolicyIR` | typowane cztery pola polityki |
 | Walidacja IR | `crates/fullmag-ir/src/lib.rs` | `validate_region_mesh_policy` | skończoność, dodatniość i order |
 | Meshing | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | regionowe pola rozmiaru |
+| Exact-layer BODY_XY source mesh | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_apply_owner_wide_body_seed_mesh_options` | tylko owner-wide upper/lower na dokładnym wspólnym planformie; bez projekcji partial-Z |
 | Python fields | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterField` | public authored field constructors |
 | Python vocabulary | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterField` | accepted parameter-field owner |
 | Python couplings | `packages/fullmag-py/src/fullmag/model/couplings.py` | `class CouplingRegistry` | explicit exchange/RKKY authoring |

@@ -237,6 +237,54 @@ def _has_component_scoped_size_fields(options: MeshOptions) -> bool:
     )
 
 
+def _owner_wide_body_seed_fields(
+    options: MeshOptions,
+    *,
+    geometry_name: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Select only exact-owner whole-volume sizing fields for a BODY_XY seed."""
+
+    def is_exact_owner_field(config: object, kind: str) -> bool:
+        if not isinstance(config, dict) or config.get("kind") != kind:
+            return False
+        params = config.get("params")
+        return (
+            isinstance(params, dict)
+            and params.get("GeometryName") == geometry_name
+        )
+
+    upper_fields = [
+        config
+        for config in options.size_fields
+        if is_exact_owner_field(config, "ComponentVolumeConstant")
+    ]
+    lower_fields = [
+        config
+        for config in options.lower_bound_fields
+        if is_exact_owner_field(config, "ComponentVolumeLowerBound")
+    ]
+    return upper_fields, lower_fields
+
+
+def _owner_wide_body_seed_options(
+    options: MeshOptions,
+    *,
+    geometry_name: str,
+) -> MeshOptions | None:
+    """Filter material fields while preserving every other source-mesh option."""
+    upper_fields, lower_fields = _owner_wide_body_seed_fields(
+        options,
+        geometry_name=geometry_name,
+    )
+    if not upper_fields and not lower_fields:
+        return None
+    return _dc_replace(
+        options,
+        size_fields=upper_fields,
+        lower_bound_fields=lower_fields,
+    )
+
+
 def _supports_scoped_layer_partitioned_box(
     geometry: Geometry,
     *,
@@ -405,11 +453,23 @@ def _apply_mixed_source_face_mesh_options(
     order: int,
     opts: MeshOptions,
     hscale: float,
+    include_source_hmax_as_upper: bool = False,
 ) -> int:
     """Apply canonical film sizing only to the pre-extrusion source face."""
     source_field_ids: list[int] = []
     generic_fields: list[dict[str, Any]] = []
     geometry_names: set[str] = set()
+    if include_source_hmax_as_upper:
+        source_default = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(
+            source_default, "SurfacesList", [source_surface]
+        )
+        gmsh.model.mesh.field.setNumber(source_default, "VIn", hmax_scaled)
+        gmsh.model.mesh.field.setNumber(
+            source_default, "VOut", 1.0e22 * hscale
+        )
+        gmsh.model.mesh.field.setNumber(source_default, "IncludeBoundary", 1)
+        source_field_ids.append(int(source_default))
     for config in opts.size_fields:
         params = config.get("params") if isinstance(config, dict) else None
         if not isinstance(params, dict):
@@ -492,6 +552,34 @@ def _apply_mixed_source_face_mesh_options(
     gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", [source_surface])
     gmsh.model.mesh.field.setAsBackgroundMesh(restricted)
     return int(restricted)
+
+
+def _apply_owner_wide_body_seed_mesh_options(
+    gmsh: Any,
+    *,
+    source_surface: int,
+    geometry_name: str,
+    hmax_scaled: float,
+    order: int,
+    opts: MeshOptions,
+    hscale: float,
+) -> int | None:
+    """Mesh BODY_XY using exact-owner material fields and ordinary mesh options."""
+    owner_seed_options = _owner_wide_body_seed_options(
+        opts,
+        geometry_name=geometry_name,
+    )
+    if owner_seed_options is None:
+        return None
+    return _apply_mixed_source_face_mesh_options(
+        gmsh,
+        source_surface=source_surface,
+        hmax_scaled=hmax_scaled,
+        order=order,
+        opts=owner_seed_options,
+        hscale=hscale,
+        include_source_hmax_as_upper=True,
+    )
 
 
 def _reapply_periodic_surface_mappings(
@@ -2933,6 +3021,19 @@ def _generate_coincident_ring_airbox_mesh(
                 if options.hmin is not None:
                     gmsh.option.setNumber("Mesh.CharacteristicLengthMin", options.hmin * SCALE)
             gmsh.model.mesh.generate(2)
+        else:
+            owner_seed_field = _apply_owner_wide_body_seed_mesh_options(
+                gmsh,
+                source_surface=annulus_surface,
+                geometry_name=geometry.geometry_name,
+                hmax_scaled=source_hmax_scaled,
+                order=order,
+                opts=options,
+                hscale=SCALE,
+            )
+            if owner_seed_field is not None:
+                source_fields.append(owner_seed_field)
+                gmsh.model.mesh.generate(2)
 
         annulus_volumes: list[int] = []
         hole_volumes: list[int] = []

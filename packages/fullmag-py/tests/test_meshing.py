@@ -14423,6 +14423,96 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertIsNone(box_status.reason)
         self.assertEqual(box_status.details["resolved_sweep_direction"], "z")
 
+    def test_owner_wide_body_seed_field_selection_excludes_regions_and_other_owners(
+        self,
+    ) -> None:
+        owner_upper = {
+            "kind": "ComponentVolumeConstant",
+            "params": {"GeometryName": "body", "VIn": 10e-9, "VOut": 20e-9},
+        }
+        other_owner_upper = {
+            "kind": "ComponentVolumeConstant",
+            "params": {"GeometryName": "airbox", "VIn": 30e-9, "VOut": 40e-9},
+        }
+        non_owner_upper = {
+            "kind": "ComponentRestrictedBox",
+            "params": {"GeometryName": "body", "VIn": 2e-9},
+        }
+        owner_lower = {
+            "kind": "ComponentVolumeLowerBound",
+            "params": {"GeometryName": "body", "MinimumElementSize": 8e-9},
+        }
+        owner_region_lower = {
+            "kind": "ComponentRegionLowerBound",
+            "params": {"GeometryName": "body", "MinimumElementSize": 3e-9},
+        }
+        options = SimpleNamespace(
+            size_fields=[owner_upper, other_owner_upper, non_owner_upper],
+            lower_bound_fields=[owner_lower, owner_region_lower],
+        )
+
+        upper_fields, lower_fields = gmsh_swept._owner_wide_body_seed_fields(
+            options,
+            geometry_name="body",
+        )
+
+        self.assertEqual(upper_fields, [owner_upper])
+        self.assertEqual(lower_fields, [owner_lower])
+
+    def test_owner_wide_body_seed_options_preserve_authored_mesh_controls(self) -> None:
+        owner_upper = {
+            "kind": "ComponentVolumeConstant",
+            "params": {"GeometryName": "body", "VIn": 10e-9, "VOut": 20e-9},
+        }
+        other_owner_upper = {
+            "kind": "ComponentVolumeConstant",
+            "params": {"GeometryName": "airbox", "VIn": 30e-9, "VOut": 40e-9},
+        }
+        owner_lower = {
+            "kind": "ComponentVolumeLowerBound",
+            "params": {"GeometryName": "body", "MinimumElementSize": 8e-9},
+        }
+        options = MeshOptions(
+            algorithm_2d=6,
+            hmin=2e-9,
+            size_from_curvature=4,
+            curvature_factor=1.3,
+            narrow_regions=3,
+            narrow_region_resolution=1.5,
+            size_fields=[owner_upper, other_owner_upper],
+            lower_bound_fields=[owner_lower],
+            boundary_layer_count=2,
+            boundary_layer_thickness=1e-9,
+            boundary_layer_stretching=1.3,
+            boundary_layer_target_surface_tags=[5],
+            boundary_layer_target_curve_tags=[7],
+        )
+
+        seed_options = gmsh_swept._owner_wide_body_seed_options(
+            options,
+            geometry_name="body",
+        )
+
+        self.assertIsNotNone(seed_options)
+        assert seed_options is not None
+        self.assertEqual(seed_options.size_fields, [owner_upper])
+        self.assertEqual(seed_options.lower_bound_fields, [owner_lower])
+        for name in (
+            "algorithm_2d",
+            "hmin",
+            "size_from_curvature",
+            "curvature_factor",
+            "narrow_regions",
+            "narrow_region_resolution",
+            "boundary_layer_count",
+            "boundary_layer_thickness",
+            "boundary_layer_stretching",
+            "boundary_layer_target_surface_tags",
+            "boundary_layer_target_curve_tags",
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(getattr(seed_options, name), getattr(options, name))
+
     def test_scoped_exact_ring_lower_bound_uses_layer_route_and_report(self) -> None:
         try:
             import gmsh  # noqa: F401
@@ -14512,10 +14602,20 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     study_universe=study_universe,
                     mesh_workflow=mesh_workflow,
                 )
-        # The exact-cell route's starting face belongs to the airbox, so the
-        # owner floor is applied after per-layer volumes exist, never projected
-        # onto air merely to change a shared source triangulation.
-        source_face.assert_not_called()
+        # The coincident X/Y source plane uses the exact owner-wide policies
+        # only. The generic spatial Box field remains on the final 3D route.
+        source_face.assert_called_once()
+        source_options = source_face.call_args.kwargs["opts"]
+        self.assertEqual(
+            [field["kind"] for field in source_options.size_fields],
+            ["ComponentVolumeConstant"],
+        )
+        self.assertEqual(
+            [field["kind"] for field in source_options.lower_bound_fields],
+            ["ComponentVolumeLowerBound"],
+        )
+        self.assertTrue(source_face.call_args.kwargs["include_source_hmax_as_upper"])
+        self.assertEqual(source_options.hmin, 2e-9)
         self.assertEqual(len(converter_observations), 1)
         (
             (before_volumes, before_surfaces),
