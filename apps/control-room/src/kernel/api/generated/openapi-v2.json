@@ -9041,6 +9041,62 @@
         },
         "type": "object"
       },
+      "ExecutionTargetReferenceSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "provider": {
+                "enum": [
+                  "local"
+                ],
+                "type": "string"
+              },
+              "schema_version": {
+                "$ref": "#/components/schemas/ExecutionTargetSchemaVersion"
+              }
+            },
+            "required": [
+              "schema_version",
+              "provider"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "profile_id": {
+                "type": "string"
+              },
+              "profile_revision": {
+                "format": "int64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "provider": {
+                "enum": [
+                  "microlab"
+                ],
+                "type": "string"
+              },
+              "schema_version": {
+                "$ref": "#/components/schemas/ExecutionTargetSchemaVersion"
+              }
+            },
+            "required": [
+              "schema_version",
+              "profile_id",
+              "profile_revision",
+              "provider"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ExecutionTargetSchemaVersion": {
+        "enum": [
+          "execution_target.v1"
+        ],
+        "type": "string"
+      },
       "ExistingOutputSchema": {
         "enum": [
           "timestamp",
@@ -29418,12 +29474,8 @@
             "type": "integer"
           },
           "run_authoring": {
-            "additionalProperties": {},
-            "description": "Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,\ndependencies, scheduling_priority, requested_execution and execution_target.\nOmitted execution_target defaults to local for pre-v3 clients. A selected\nprovider/profile is pinned into run_spec.v3; it is not principal identity\nor a credential.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
+            "$ref": "#/components/schemas/RunIntentAuthoringSchema",
+            "description": "Structured RunIntentAuthoring input; invalid fields are rejected with 400."
           },
           "study_plan": {
             "additionalProperties": {},
@@ -31346,6 +31398,23 @@
         ],
         "type": "string"
       },
+      "RequestedBackendSchema": {
+        "enum": [
+          "auto",
+          "fdm",
+          "fem",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "RequestedDeviceSchema": {
+        "enum": [
+          "auto",
+          "cpu",
+          "gpu"
+        ],
+        "type": "string"
+      },
       "RequestedExecutionPreviewSchema": {
         "properties": {
           "backend": {
@@ -31370,6 +31439,80 @@
           "precision",
           "mode",
           "resources"
+        ],
+        "type": "object"
+      },
+      "RequestedExecutionSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/RequestedBackendSchema"
+          },
+          "device": {
+            "$ref": "#/components/schemas/RequestedDeviceSchema"
+          },
+          "minimum_resources": {
+            "$ref": "#/components/schemas/RequestedResourceBudgetSchema"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/RequestedModeSchema"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/RequestedPrecisionSchema"
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "RequestedModeSchema": {
+        "enum": [
+          "strict",
+          "extended",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "RequestedPrecisionSchema": {
+        "enum": [
+          "single",
+          "double"
+        ],
+        "type": "string"
+      },
+      "RequestedResourceBudgetSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cpu_millis": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_millis",
+          "memory_bytes",
+          "gpu_memory_bytes",
+          "storage_bytes"
         ],
         "type": "object"
       },
@@ -31816,6 +31959,149 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RunDependencySchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "authored_initial_state"
+                ],
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reference",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "artifact_id": {
+                "type": "string"
+              },
+              "content_sha256": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "pinned_artifact"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "content_sha256",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "case_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "step_output"
+                ],
+                "type": "string"
+              },
+              "port": {
+                "type": "string"
+              },
+              "step_id": {
+                "type": "string"
+              },
+              "study_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "study_id",
+              "step_id",
+              "port",
+              "case_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "explicit_continuation"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RunIntentAuthoringSchema": {
+        "additionalProperties": false,
+        "description": "OpenAPI schema matching the canonical RunIntentAuthoring JSON shape. The\nhandler performs semantic validation and reports invalid fields as 400.",
+        "properties": {
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/RunDependencySchema"
+            },
+            "type": "array"
+          },
+          "execution_target": {
+            "$ref": "#/components/schemas/ExecutionTargetReferenceSchema",
+            "description": "Omission defaults to `local` for compatibility with pre-v3 clients.\nA MicroLab target pins a configured profile, never principal or secret."
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "parameters": {},
+          "requested_execution": {
+            "$ref": "#/components/schemas/RequestedExecutionSchema"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scheduling_priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "seeds": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "run_id",
+          "idempotency_key",
+          "parameters",
+          "seeds",
+          "dependencies",
+          "scheduling_priority",
+          "requested_execution"
+        ],
         "type": "object"
       },
       "RunOutput": {

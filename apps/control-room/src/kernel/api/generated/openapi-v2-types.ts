@@ -7074,6 +7074,20 @@ export interface components {
             integrator?: string | null;
             tolerance?: string | null;
         };
+        ExecutionTargetReferenceSchema: {
+            /** @enum {string} */
+            provider: "local";
+            schema_version: components["schemas"]["ExecutionTargetSchemaVersion"];
+        } | {
+            profile_id: string;
+            /** Format: int64 */
+            profile_revision: number;
+            /** @enum {string} */
+            provider: "microlab";
+            schema_version: components["schemas"]["ExecutionTargetSchemaVersion"];
+        };
+        /** @enum {string} */
+        ExecutionTargetSchemaVersion: "execution_target.v1";
         /** @enum {string} */
         ExistingOutputSchema: "timestamp" | "error";
         FdmCommonTransformLayoutResource: {
@@ -12235,16 +12249,8 @@ export interface components {
              * @description Revision of the exact archived definition observed by the author.
              */
             expected_revision: number;
-            /**
-             * @description Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,
-             *     dependencies, scheduling_priority, requested_execution and execution_target.
-             *     Omitted execution_target defaults to local for pre-v3 clients. A selected
-             *     provider/profile is pinned into run_spec.v3; it is not principal identity
-             *     or a credential.
-             */
-            run_authoring: {
-                [key: string]: unknown;
-            };
+            /** @description Structured RunIntentAuthoring input; invalid fields are rejected with 400. */
+            run_authoring: components["schemas"]["RunIntentAuthoringSchema"];
             study_plan: {
                 [key: string]: unknown;
             };
@@ -12742,12 +12748,37 @@ export interface components {
         };
         /** @enum {string} */
         RelaxationAlgorithm: "llg_overdamped" | "projected_gradient_bb" | "nonlinear_cg" | "tangent_plane_implicit";
+        /** @enum {string} */
+        RequestedBackendSchema: "auto" | "fdm" | "fem" | "hybrid";
+        /** @enum {string} */
+        RequestedDeviceSchema: "auto" | "cpu" | "gpu";
         RequestedExecutionPreviewSchema: {
             backend: components["schemas"]["ExecutionBackendSchema"];
             device: components["schemas"]["ExecutionDeviceSchema"];
             mode: components["schemas"]["ExecutionModeSchema"];
             precision: components["schemas"]["ExecutionPrecisionSchema"];
             resources: components["schemas"]["ComputeResourcesPreviewSchema"];
+        };
+        RequestedExecutionSchema: {
+            backend: components["schemas"]["RequestedBackendSchema"];
+            device: components["schemas"]["RequestedDeviceSchema"];
+            minimum_resources?: components["schemas"]["RequestedResourceBudgetSchema"];
+            mode: components["schemas"]["RequestedModeSchema"];
+            precision: components["schemas"]["RequestedPrecisionSchema"];
+        };
+        /** @enum {string} */
+        RequestedModeSchema: "strict" | "extended" | "hybrid";
+        /** @enum {string} */
+        RequestedPrecisionSchema: "single" | "double";
+        RequestedResourceBudgetSchema: {
+            /** Format: int64 */
+            cpu_millis: number;
+            /** Format: int64 */
+            gpu_memory_bytes: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            storage_bytes: number;
         };
         /**
          * @description `RequestedThreads` is an untagged union of the string `"auto"` and a
@@ -12872,6 +12903,48 @@ export interface components {
             n_elements?: number | null;
             /** Format: int64 */
             n_nodes?: number | null;
+        };
+        RunDependencySchema: {
+            /** @enum {string} */
+            kind: "authored_initial_state";
+            reference: string;
+        } | {
+            artifact_id: string;
+            content_sha256: string;
+            /** @enum {string} */
+            kind: "pinned_artifact";
+        } | {
+            case_id: string;
+            /** @enum {string} */
+            kind: "step_output";
+            port: string;
+            step_id: string;
+            study_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "explicit_continuation";
+            run_id: string;
+        };
+        /**
+         * @description OpenAPI schema matching the canonical RunIntentAuthoring JSON shape. The
+         *     handler performs semantic validation and reports invalid fields as 400.
+         */
+        RunIntentAuthoringSchema: {
+            dependencies: components["schemas"]["RunDependencySchema"][];
+            /**
+             * @description Omission defaults to `local` for compatibility with pre-v3 clients.
+             *     A MicroLab target pins a configured profile, never principal or secret.
+             */
+            execution_target?: components["schemas"]["ExecutionTargetReferenceSchema"];
+            idempotency_key: string;
+            parameters: unknown;
+            requested_execution: components["schemas"]["RequestedExecutionSchema"];
+            run_id: string;
+            /** Format: int32 */
+            scheduling_priority: number;
+            seeds: {
+                [key: string]: number;
+            };
         };
         /** @description One output the run produced, relative to the results folder. */
         RunOutput: {

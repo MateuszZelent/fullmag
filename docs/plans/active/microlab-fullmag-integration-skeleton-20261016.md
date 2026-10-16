@@ -13,6 +13,7 @@ System ma bezpiecznie obsłużyć dwóch różnych użytkowników oraz wiele ró
 ## Decyzje przyjęte
 
 - MicroLab jest jedyną granicą połączenia Fullmaga z HPC; Slurm jest pierwszym schedulerem za brokerem.
+- Lokalne API Fullmaga uwierzytelnia principal przez IPC chronione ACL systemu operacyjnego. Proces serwera, loopback/TCP ani request fields nie identyfikują klienta; browser i CLI wymagają zaufanego per-user adaptera powiązanego z IPC. Dokładne transporty OS i mechanizm bridge pozostają do zaprojektowania oraz zweryfikowania.
 - Broker principal i przyznane envelope pochodzą z uwierzytelnionej odpowiedzi MicroLab, nie z request body, nazwy konta, hostname ani scheduler job ID.
 - Token MicroLab pozostaje po stronie klienta Fullmaga w magazynie poświadczeń OS. Agent, worker, Python, solver, logi i URL nigdy go nie otrzymują.
 - Jeden durable idempotent intent odpowiada jednej alokacji na TaskId/AttemptId w pierwszym brokerowym zakresie. Timeout wymaga reconciliation po tym samym intent, a nie nowego create.

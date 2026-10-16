@@ -152,10 +152,12 @@ zmieniać klucza ani tworzyć zastępczego magazynu w ramach takiego ponowienia.
 
 Przygotowanie tożsamości przed Submit:
 `POST /v2/persistence/projects/{project_id}/run-intent` przyjmuje dokładne
-archiwum `.fms`, `expected_revision`, jawne `RunIntentAuthoring`, skompilowany
-StudyPlan/katalog oraz wiązania asset ID→ścieżka. Zwraca kanoniczny RunIntent
-i fingerprint specyfikacji. Klucz idempotencji nie jest częścią tego
-fingerprintu; oba jawne identyfikatory są zachowane, nie generowane przez API.
+archiwum `.fms`, `expected_revision`, jawne `RunIntentAuthoring` o kształcie
+opisanym typowo w OpenAPI, skompilowany StudyPlan/katalog oraz wiązania asset
+ID→ścieżka. `execution_target` może być pominięty dla zgodności; brak oznacza
+`local`. Zwraca kanoniczny RunIntent i fingerprint specyfikacji. Klucz
+idempotencji nie jest częścią fingerprintu; oba jawne identyfikatory są
+zachowane, nie generowane przez API.
 Rewizja jest porównywana wyłącznie z dostarczonym archiwum, nie z najnowszą
 sceną, aktywną sesją ani stanem projektu na dysku. Nieznane pola authoring,
 brak assetu, niespójny Study i konflikt żądanego wykonania powodują odmowę.
@@ -167,9 +169,10 @@ uruchamia meshing/solvera i nie wykonuje admission ani rozpoznania hosta.
 Nie poświadcza istnienia opublikowanego profilu. Submit musi otrzymać ten sam
 zestaw wejść i ponownie sprawdza kontrakty oraz opublikowane wersje profili.
 Sukces przygotowania nie oznacza przyjęcia runu ani naukowej kwalifikacji.
-Stan wdrożenia 2026-10-11: handler/router/OpenAPI zapisane źródłowo; build,
-regeneracja typowanego klienta, integracja UI i prepare→Submit runtime
-pozostają **NOT VERIFIED**.
+Stan weryfikacji 2026-10-16: kontrola źródeł API i generowanie OpenAPI
+przechodzą; typy klienta są wygenerowane. Pełny build aplikacji, package
+typecheck, integracja UI i prepare→Submit runtime pozostają **NOT VERIFIED**.
+Sama typowana definicja nie oznacza, że Control Room wywołuje ten endpoint.
 
 Produkcyjny konsument CLI przygotowania jest podłączony źródłowo przez
 `fullmag prepare-run-json authored.json --project-id <id> --api-url <origin>`.

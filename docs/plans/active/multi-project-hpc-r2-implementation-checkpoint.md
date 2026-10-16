@@ -68,3 +68,18 @@ Następny krok po walidacji źródeł: przegląd kontraktu przez właścicieli M
 - Kontrole tekstu: 30+2+7 dokładnych dopasowań przed zapisem; skan trailing whitespace PASS dla dziewięciu dokumentów, nowe linki H0 PASS (9 targetów), kontrola starych sformułowań PASS. Testów i buildów nie uruchamiano.
 - Worktree: codex/microlab-fullmag-r2-20261016, HEAD a2d0786e267cb6123952e70a294db398d411ac9c. Główny checkout pozostał read-only na master/f9179caf0a0681bdc92c2a87a308be21e9903919.
 - Stan przed commitem: 10 śledzonych dokumentów zmienionych, bez plików nieśledzonych; po zatwierdzonym odczycie worktree `git diff --check` przechodzi. Zwykły sandbox nie może wykonać Git status/diff poza workspace; zatwierdzona kontrola została wykonana. Ten fragment jest gotowy do zapisu na branchu; PR #185 jeszcze go nie zawiera.
+
+## H0 OpenAPI authoring shape — 16.10.2026
+
+- `ProjectRunIntentRequest.run_authoring` otrzymał strukturalny widok OpenAPI odpowiadający polom kanonicznego RunIntentAuthoring: identyfikatory, parametry, seeds, dependencies, requested execution oraz opcjonalny execution target. Runtime zachowuje dotychczasowe mapowanie wejścia i walidację błędnych pól do 400.
+- Schemat targetu rozróżnia `local` i `microlab`; wariant MicroLab wymaga `profile_id` oraz dodatniego `profile_revision`. Nie dodano integracji UI ani endpointu brokera. Przegląd `apps/control-room/src` potwierdził, że Control Room nie wywołuje jeszcze route `run-intent`.
+- `just generate-api-openapi`: **PASS**, final receipt `windows-api-source-check/api-openapi-codegen/49f7ed15bb5f4e6599aef5e59af6cee0/receipt.json`, `source_changed_during_run=false`. `just check-api-source`: **PASS**, final receipt `windows-api-source-check/api-source-check/e9b0e1ad76ae45edbe07ae6f389ad28b/receipt.json`, `source_changed_during_run=false`.
+- Wygenerowano TypeScript przez przypięty `openapi-typescript 7.13.0` oraz repozytoryjny `generate-v2-client.mjs`; wejście i wyjścia wskazywały task worktree. `ProjectRunIntentRequest.run_authoring` jest typowane jako `RunIntentAuthoringSchema`, a `parameters` pozostaje `unknown` (dowolny JSON). Próba oficjalnej recepty `just generate-control-room-client` z katalogiem głównego checkoutu została odrzucona, bo nie jest on zarejestrowanym stagingiem; w bieżącym storage nie znaleziono istniejącego `frontend-sources/<stage_id>/workspace`. Nie instalowano zależności i nie zmieniano głównego checkoutu.
+- Package typecheck, testy jednostkowe, UI/runtime i MicroLab/HPC pozostają **NOT VERIFIED**; zakaz kompilowania testów jednostkowych zachowano. `git diff --check` przechodzi.
+- Stan przed commitem: task worktree na HEAD `fd96fdd017980e4998edfd6b6be01b845e62444c`; zmiany tego fragmentu są w working tree. Główny checkout pozostaje na `master`/`f9179caf0a0681bdc92c2a87a308be21e9903919`.
+
+## H0 lokalne uwierzytelnianie — 16.10.2026
+
+- Użytkownik wybrał IPC chronione ACL systemu operacyjnego jako granicę tożsamości dla lokalnego Fullmaga. Tożsamość klienta nie może pochodzić z konta procesu API, adresu loopback/TCP, `ProjectId`, headera ani RunSpec.
+- Browser i CLI muszą przejść przez zaufany, per-user adapter/bridge powiązany z IPC; lokalne HTTP/TCP nie może stanowić nieuwierzytelnionego obejścia. Ten wybór dotyczy wyłącznie lokalnego API; uwierzytelnienie HPC nadal pochodzi od MicroLab.
+- Dodano decyzję i bramki do ADR 0060 oraz planu R2. Konkretne transporty OS, peer-identity mapping i browser bootstrap nie zostały wybrane ani zaimplementowane. Wymagane są testy dwóch kont OS na jednym hoście i odmowy obejścia lokalnym TCP. Zaufanie do OS IPC nie jest runtime-verified.

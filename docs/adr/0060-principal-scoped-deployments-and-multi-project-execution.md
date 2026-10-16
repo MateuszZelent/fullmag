@@ -27,7 +27,11 @@ ale nigdy tożsamość principalu ani credential.
 
 1. **Granica tenantów:** pierwszy release używa prywatnego Fullmag deploymentu
    przypisanego do jednego principalu i jego SessionStore. Lokalny deployment
-   działa w granicy konta OS; deployment HPC jest przypisany server-side do
+   uwierzytelnia klienta przez lokalny IPC chroniony ACL systemu operacyjnego;
+   nie wyprowadza tożsamości klienta z konta procesu serwera ani z adresu
+   loopback/TCP. Przeglądarka i CLI muszą korzystać z zaufanego, per-user
+   adaptera/bridge powiązanego z tym IPC; HTTP nie może tworzyć alternatywnej,
+   nieuwierzytelnionej drogi. Deployment HPC jest przypisany server-side do
    principalu uwierzytelnionego przez MicroLab. Tożsamość pochodzi z zaufanej
    warstwy auth/OS, nigdy z ProjectId, nazwy, ścieżki, hostname, scheduler job
    ID, headera request scope ani treści RunSpec.
@@ -100,3 +104,10 @@ Szczegóły etapów: [R2 HPC](../plans/active/multi-project-hpc-execution-202610
 [multi-project tabs](../plans/active/multi-project-tabs-20261005.md),
 [compute resource execution](../specs/compute-resource-execution-v1.md),
 [MicroLab broker proposal](../specs/microlab-fullmag-broker-v1.md).
+
+Implementacja lokalnego IPC musi określić transport i weryfikację peer identity
+dla wspieranych OS-ów, bezpieczne powiązanie browser/CLI adaptera z principalem
+oraz odmowę dostępu z nieautoryzowanego konta. Testy muszą objąć dwa konta OS
+na jednym hoście i próbę obejścia IPC przez lokalne HTTP/TCP. Ta decyzja jest
+przyjęta; transporty i adapter nie są jeszcze zaimplementowane ani
+zweryfikowane.
