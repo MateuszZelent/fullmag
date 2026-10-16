@@ -1,8 +1,18 @@
 # Uwaga4207786265 — zakres poprawki mixed topology w trackingu modów
 
-Stan odczytany z GitHub: `ce53c62c4757879280a73216e494eeaf450ab361`, branch `codex/eigensolve-dispersion-plan-20260912`. Audyt źródłowy, bez testów i bez wykonania FEM. Uwaga nadal zasadna i niezaimplementowana. Dokument jest wewnętrznym planem korekty, nie nową notą fizyczną ani deklaracją wsparcia.
+Aktualizacja 16.10.2026: źródła `152ad2e1fe7830536bd195db73c396f9f6ac5121`, branch `codex/eigensolve-dispersion-plan-20260912`. Wcześniejszy audyt zależności legacy opierał się na `ce53c62c4757879280a73216e494eeaf450ab361`. Korekta zakresu: aktualny publiczny planner **odrzuca mixed Eigen przed wykonaniem solvera**. Legacy tracking pozostaje tetraedryczny; jego rozszerzenie jest przyszłym zadaniem, a nie dowiedzioną awarią obecnie legalnej mixed modal lane. Dokument nie rozszerza wsparcia FEM.
 
-## Co dokładnie jest nieprawidłowe
+## Aktualna bramka publicznego planowania
+
+`plan_fem_eigen` wywołuje `reject_unsupported_mixed_topology` przed utworzeniem `FemEigenPlanIR`. `validate_mixed_p1_execution_scope` odrzuca Eigen z `fem_mixed_p1_scope_rejected` i `unsupported_study`. Nie wynika to wyłącznie z dokumentacji: sprawdzono rzeczywistą ścieżkę plannera.
+
+Regresja `fem_eigen_public_planner_rejects_certified_mixed_mesh` z commita `152ad2e1` wywołuje publiczne `plan(&ir)` dla prawidłowego wejścia Eigen Single Γ oraz certyfikowanego zasobu Prism6/Quad4 i wymaga obu powodów odmowy. Zachowano dwa dotychczasowe testy helpera. [GitHub Actions 38894082903](https://github.com/MateuszZelent/fullmag/actions/runs/38894082903) zakończyło się **SUCCESS** dla dokładnego SHA; testy projektu wykonano wyłącznie w GHA. Test Γ nie jest dowodem uruchomienia mixed path, serial/adaptive pool ani solvera natywnego.
+
+Źródła: [fem.rs](https://github.com/MateuszZelent/fullmag/blob/152ad2e1fe7830536bd195db73c396f9f6ac5121/crates/fullmag-plan/src/fem.rs#L5854), [mesh.rs](https://github.com/MateuszZelent/fullmag/blob/152ad2e1fe7830536bd195db73c396f9f6ac5121/crates/fullmag-plan/src/mesh.rs#L1621), [publiczny regression check](https://github.com/MateuszZelent/fullmag/blob/152ad2e1fe7830536bd195db73c396f9f6ac5121/crates/fullmag-plan/src/tests.rs).
+
+Ręczne skonstruowanie lub przyjęcie `FemEigenPlanIR` poza publicznym plannerem nie jest dowodem legalności lane; sam native window enable nie stanowi niezależnej bramki topologii. Nie znosimy obecnych odmów ani nie zmieniamy historycznej metryki.
+
+## Zależność legacy, która blokuje przyszłe rozszerzenie
 
 [Komentarz](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786265) wskazuje `crates/fullmag-runner/src/fem/eigen_path.rs`, oryginalną linię3447. Bieżąca ścieżka pojedynczej próbki nadal wykonuje:
 
@@ -34,15 +44,15 @@ Referencje kodu: [eigen_path.rs](https://github.com/MateuszZelent/fullmag/blob/c
 
 Ogólna nota `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` zawiera ograniczenia frequency-domain/eigen w opisach zakresów poszczególnych mixed lanes. Nie wolno wywnioskować, że każdy wariant mixed obsługiwany przez relaksację jest legalny w każdym wariancie eigensolve. Przy wdrożeniu potrzebne jest dokładne powiązanie konkretnej legalnej lane z aktualną notą modalną/capability matrix; samo usunięcie błędu trackingu nie rozszerza możliwości solvera.
 
-## Kolejność wdrożenia
+## Kolejność ewentualnego przyszłego rozszerzenia mixed modal
 
 1. Wyodrębnić minimalny widok topologii trackingu: współrzędne, uporządkowany indeks węzłów magnetycznych, jawne elementy/facety tri3/quad4 i mapy periodyczne. Użyć istniejącego MeshIR i jego fingerprintu; nie generować zastępczego mesh ani zmieniać kolejności węzłów.
 2. Zachować historyczną tetra metrykę v1. Dodać jawny kontrakt dla mixed consistent mass, z rodzajem elementu, pochodzeniem wag i jednoznacznym powiązaniem z fizycznymi węzłami. Przed zmianą opracować odpowiednią notę/source-map i decyzję kontraktową. Nie zastępować consistent mass diagonalną normą ani nie udawać tetra metryki.
-3. Zdefiniować i sprawdzić poprawne całkowanie kształtów prism6 dla rzeczywistej mapy geometrycznej dopuszczonej przez lane. Porównać z natywną macierzą masową MFEM. Nie stosować wzoru dla afinicznego graniastosłupa do ogólnego zdeformowanego elementu bez dowodu jego zakresu.
+3. Zdefiniować natywny eksport geometrycznej consistent mass MFEM ograniczonej do domen magnetycznych, z pełną CSR oraz kanoniczną mapą węzłów fizycznych i tożsamością siatki. Z obecnego `volume_mass_form` zachowywane są tylko sumy wierszy jako masa skupiona; pełna macierz jest odrzucana. Nie utożsamiać go z `consistent_mass_matrix` ważoną Ms. Sam wybór podmacierzy węzłów fizycznych z macierzy całej domeny nie usuwa wkładu airboxu we wspólnych węzłach. Zachować kompletne cell markers; brak markerów nie jest dowodem zakresu magnetycznego. Całkowanie i operator należą do native MFEM, bez drugiego assemblera prism6 w Rust. Porównanie i testy muszą obejmować rzeczywistą mapę geometryczną dopuszczoną przez przyszłą lane.
 4. Przenieść redukcję i boundary-node selection na minimalny widok, zachowując dokładne fazy Floqueta, pary graniczne, pinned DOFs i indeksowanie fizycznego envelope'u. Zaktualizować ścieżki serial, adaptive pool, bias sweep oraz replay/recovery.
 5. Prześledzić pozostałe legacy topology consumers w wykonaniu pojedynczego k, w tym shared-domain mass/phase map i accepted equilibrium. Nie ogłaszać wsparcia całej lane po przejściu wyłącznie testu konstruktora trackingu.
 6. Wykonać regresje źródeł w GHA: tetra v1 roundtrip bez zmiany wyników; prism6 i mieszane tet4/prism6; quad4 boundary; zgodność indeksowania i faz; niepoprawny Jacobian/fingerprint/replay; serial/pool/bias bez legacy pre-solver failure. Następnie osobna bramka managed FEM z natywną macierzą masową i kilkoma k. Kwalifikacja fizyczna wymaga zgodności i zbieżności, nie tylko braku wyjątku.
 
 ## Stan
 
-Nie zastosowano obejścia przez split, diagonalną metrykę, pominięcie trackingu ani ukrycie błędu. Uwaga pozostaje `valid/unfixed`; powyższy zakres ma zapobiec pozornej poprawce jednej linii, która dopuściłaby błędne całkowanie modów. Runtime mixed eigen i naukowa kwalifikacja pozostają NOT VERIFIED.
+Obecna odmowa mixed Eigen jest `source_guarded_ci_verified`; uwagi 4207786265 i 4251262086 należy rozpatrywać z tym samym zakresem legalności. Nie zastosowano splitu, diagonalnej metryki ani pominięcia trackingu. Wcześniejsze określenie „aktualna legalna mixed k-path jest zepsuta” nie było poparte publicznym plannerem i zostało skorygowane. Rozszerzenie tracking v2 i mixed modal **nie jest zaimplementowane ani zakwalifikowane**. Runtime FEM/GPU i kwalifikacja naukowa pozostają NOT VERIFIED.
