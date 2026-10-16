@@ -1765,17 +1765,22 @@ def _mixed_shared_domain_case(
     *,
     axis: int = 2,
     layers: int = 1,
+    airbox_extra_z_m: float = 4.0e-6,
+    airbox_maximum_element_size_m: float = 1.2e-6,
 ) -> tuple[tuple[float, float, float], fm.meshing.AirboxOptions, MeshData]:
     body_size = [4.0e-6, 2.0e-6, 0.2e-6]
     body_size[axis], body_size[2] = body_size[2], body_size[axis]
-    airbox_size = tuple(value + 4.0e-6 for value in body_size)
+    airbox_size = tuple(
+        value + (airbox_extra_z_m if coordinate == 2 else 4.0e-6)
+        for coordinate, value in enumerate(body_size)
+    )
     airbox = fm.meshing.AirboxOptions(
         shape="bbox",
         size=airbox_size,
         center=(0.0, 0.0, 0.0),
         boundary_marker=99,
         minimum_element_size=0.4e-6,
-        maximum_element_size=1.2e-6,
+        maximum_element_size=airbox_maximum_element_size_m,
         grading_ratio=1.3,
         grading_mode="geometric",
     )
@@ -1861,6 +1866,76 @@ def test_shared_domain_box_prism_mesh_has_exact_requested_layer(layers: int) -> 
     }
     assert certificate.topology_fingerprint == mesh.topology_fingerprint_v3()
     assert certificate.fallbacks_triggered == ()
+
+
+def test_shared_domain_airbox_has_interior_z_nodes_and_exact_magnetic_layers() -> None:
+    pytest.importorskip("gmsh")
+    layers = 2
+    body_size, airbox, mesh = _mixed_shared_domain_case(
+        layers=layers,
+        airbox_extra_z_m=8.0e-6,
+        airbox_maximum_element_size_m=0.8e-6,
+    )
+
+    magnetic_node_ids = np.unique(
+        np.concatenate(
+            [
+                mesh.cell_node_ids(index)
+                for index, marker in enumerate(mesh.element_markers)
+                if int(marker) == 1
+            ]
+        )
+    )
+    magnetic_z = sorted(
+        float(value) for value in mesh.nodes[magnetic_node_ids, 2]
+    )
+    plane_tolerance = max(1.0e-15, 1.0e-8 * body_size[2])
+    magnetic_planes: list[float] = []
+    for coordinate in magnetic_z:
+        if (
+            not magnetic_planes
+            or abs(coordinate - magnetic_planes[-1]) > plane_tolerance
+        ):
+            magnetic_planes.append(coordinate)
+
+    expected_planes = np.linspace(
+        -0.5 * body_size[2], 0.5 * body_size[2], layers + 1
+    )
+    assert len(magnetic_planes) == layers + 1
+    assert magnetic_planes == pytest.approx(
+        expected_planes, rel=0.0, abs=plane_tolerance
+    )
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    assert certificate.requested_layer_count == layers
+    assert certificate.realized_layer_count == layers
+    assert certificate.magnetic_plane_coordinates_m == pytest.approx(
+        expected_planes, rel=0.0, abs=plane_tolerance
+    )
+
+    air_node_ids = np.unique(
+        np.concatenate(
+            [
+                mesh.cell_node_ids(index)
+                for index, marker in enumerate(mesh.element_markers)
+                if int(marker) == 0
+            ]
+        )
+    )
+    air_only_node_ids = np.setdiff1d(
+        air_node_ids, magnetic_node_ids, assume_unique=True
+    )
+    assert air_only_node_ids.size > 0
+    assert airbox.center is not None
+    assert airbox.size is not None
+    body_top_z = 0.5 * body_size[2]
+    airbox_top_z = airbox.center[2] + 0.5 * airbox.size[2]
+    air_boundary_tolerance = max(1.0e-15, 1.0e-8 * airbox.size[2])
+    air_only_z = mesh.nodes[air_only_node_ids, 2]
+    assert np.any(
+        (air_only_z > body_top_z + air_boundary_tolerance)
+        & (air_only_z < airbox_top_z - air_boundary_tolerance)
+    )
 
 
 @pytest.mark.parametrize("layers", [0, 4])

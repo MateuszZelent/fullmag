@@ -995,10 +995,15 @@ wewnątrz materiału.
 
 Weryfikacja musi osobno kontrolować magnetyczne płaszczyzny i warstwy,
 konforemność, air-only węzły Z, domeny i PBC oraz jakość/gęstość obu domen.
-Nie wystarcza usunięcie globalnej asercji Z z testu. Zmiana siatkowania
-powietrza wymaga ponownej kontroli zbieżności airboxu i siatki przed naukową
-kwalifikacją demag i dyspersji. Requested intent i rzeczywista trasa meshera
-muszą pozostać rozróżnialne w raporcie; ten zapis decyzji nie dowodzi wykonania.
+Skupiona regresja `test_shared_domain_airbox_has_interior_z_nodes_and_exact_magnetic_layers`
+ma sprawdzić dokładne płaszczyzny w komórkach magnetycznych oraz węzeł Z
+incydentny wyłącznie do komórek powietrznych, pomiędzy górną płaszczyzną
+magnetyku i zewnętrzną pokrywą airboxu. Jej wynik GHA/Gmsh pozostaje **NOT
+VERIFIED** do czasu wykonania. Nie wystarcza usunięcie globalnej asercji Z z
+testu. Zmiana siatkowania powietrza wymaga ponownej kontroli zbieżności
+airboxu i siatki przed naukową kwalifikacją demag i dyspersji. Requested intent
+i rzeczywista trasa meshera muszą pozostać rozróżnialne w raporcie; ten zapis
+decyzji ani sama regresja źródłowa nie dowodzą wykonania lub kwalifikacji.
 
 (material-regions-frozen-interface-incidence)=
 <!-- DOC-ANCHOR:material-regions-frozen-interface-incidence -->
