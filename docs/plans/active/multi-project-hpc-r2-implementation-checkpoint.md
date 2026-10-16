@@ -83,3 +83,4 @@ Następny krok po walidacji źródeł: przegląd kontraktu przez właścicieli M
 - Użytkownik wybrał IPC chronione ACL systemu operacyjnego jako granicę tożsamości dla lokalnego Fullmaga. Tożsamość klienta nie może pochodzić z konta procesu API, adresu loopback/TCP, `ProjectId`, headera ani RunSpec.
 - Browser i CLI muszą przejść przez zaufany, per-user adapter/bridge powiązany z IPC; lokalne HTTP/TCP nie może stanowić nieuwierzytelnionego obejścia. Ten wybór dotyczy wyłącznie lokalnego API; uwierzytelnienie HPC nadal pochodzi od MicroLab.
 - Dodano decyzję i bramki do ADR 0060 oraz planu R2. Konkretne transporty OS, peer-identity mapping i browser bootstrap nie zostały wybrane ani zaimplementowane. Wymagane są testy dwóch kont OS na jednym hoście i odmowy obejścia lokalnym TCP. Zaufanie do OS IPC nie jest runtime-verified.
+- Commit obejmujący schema slice i decyzję lokalnego IPC: `2172fd6d8899962715efae45918fe41d2d29e900`.
