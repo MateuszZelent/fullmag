@@ -40,6 +40,7 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts'
       - 'apps/control-room/scripts/typecheck-control-room.mjs'
       - 'apps/control-room/package.json'
+      - 'apps/control-room/scripts/run-eslint*'
       - 'pnpm-lock.yaml'
       - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
@@ -117,6 +118,7 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts'
       - 'apps/control-room/scripts/typecheck-control-room.mjs'
       - 'apps/control-room/package.json'
+      - 'apps/control-room/scripts/run-eslint*'
       - 'pnpm-lock.yaml'
       - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
@@ -190,6 +192,10 @@ jobs:
         run: >-
           python -B scripts/fullmag_storage.py run --profile linux-host --
           pnpm --dir "$FULLMAG_CI_FRONTEND_WORKSPACE_ROOT" install --frozen-lockfile
+      - name: Verify ESLint JavaScript compiler API compatibility
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir apps/control-room exec node --test scripts/run-eslint.test.mjs
       - name: Run signed modal observables and inspector contracts
         run: >-
           python -B scripts/fullmag_storage.py run --profile linux-host --

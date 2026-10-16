@@ -29,7 +29,7 @@
     "generate:api-v2-types": "node scripts/run-openapi-typescript.mjs src/kernel/api/generated/openapi-v2.json --output src/kernel/api/generated/openapi-v2-types.ts",
     "generate:openapi-v2": "node scripts/generate-openapi-v2.mjs",
     "start": "next start",
-    "lint": "eslint . --max-warnings=0",
+    "lint": "node scripts/run-eslint.mjs . --max-warnings=0",
     "smoke:airbox-field-routing": "node scripts/smoke-airbox-field-routing.mjs",
     "smoke:fdm-multilayer-webgl-matrix": "node scripts/smoke-fdm-multilayer-webgl-matrix.mjs",
     "smoke:fdm-terminal-webgl-gate": "node scripts/smoke-fdm-terminal-webgl-gate.mjs",
