@@ -22,6 +22,18 @@ function postprocessingRef(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
+function analysisReferenceRef(overrides: Record<string, unknown> = {}) {
+  return {
+    definitionId: "reference:definition-1",
+    kind: "analysis.dispersion.reference",
+    nodeId: "results:run:run-7:comparison:reference-1",
+    runId: "run-7",
+    stageId: "stage-3",
+    type: "analysis-reference",
+    ...overrides,
+  } as never;
+}
+
 describe("postprocessing selection identity", () => {
   it("changes equality when the owner catalog revision changes", () => {
     const first = postprocessingRef();
@@ -44,5 +56,21 @@ describe("postprocessing selection identity", () => {
     expect(selectionRefEquals(first, postprocessingRef({ ownerReadiness: "unavailable", freshness }))).toBe(
       ownerReadiness === "unavailable",
     );
+  });
+});
+
+describe("imported reference selection identity", () => {
+  it("compares definition, run, stage, and node as an independent identity", () => {
+    const first = analysisReferenceRef();
+    expect(selectionRefEquals(first, analysisReferenceRef())).toBe(true);
+    for (const changed of [
+      { definitionId: "reference:definition-2" },
+      { runId: "run-8" },
+      { stageId: "stage-4" },
+      { nodeId: "results:run:run-7:comparison:reference-2" },
+    ]) {
+      expect(selectionRefEquals(first, analysisReferenceRef(changed))).toBe(false);
+    }
+    expect(selectionRefEquals(first, postprocessingRef())).toBe(false);
   });
 });

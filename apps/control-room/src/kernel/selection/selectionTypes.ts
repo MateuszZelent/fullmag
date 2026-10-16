@@ -303,6 +303,14 @@ export type SelectionRef =
       type: "analysis-pinned-group";
     }
   | {
+      definitionId: string;
+      kind: "analysis.dispersion.reference";
+      nodeId: string;
+      runId: string;
+      stageId: string;
+      type: "analysis-reference";
+    }
+  | {
       constraintId: string;
       kind: "object.frozen-spins";
       nodeId: string;
@@ -919,6 +927,15 @@ export function selectionRefEquals(
         left.moduleId === right.moduleId &&
         left.nodeId === right.nodeId &&
         left.runId === right.runId
+      );
+    case "analysis-reference":
+      return (
+        right.type === "analysis-reference" &&
+        left.definitionId === right.definitionId &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.runId === right.runId &&
+        left.stageId === right.stageId
       );
     case "analysis-result":
       return (

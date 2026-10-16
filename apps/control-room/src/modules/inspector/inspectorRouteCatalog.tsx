@@ -8,6 +8,7 @@ import {
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
 import { PinnedVisualizationsInspectorPanel } from "./panels/analysis-results/PinnedVisualizationsInspectorPanel";
+import { ImportedDispersionReferenceInspectorPanel } from "./panels/analysis-results/ImportedDispersionReferenceInspectorPanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
@@ -693,6 +694,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Pinned Visualizations",
     selectionKinds: ["results.pinned_visualizations.root"],
     component: PinnedVisualizationsInspectorPanel,
+  },
+  {
+    id: "imported-dispersion-reference",
+    title: "Imported Dispersion Reference",
+    selectionKinds: ["analysis.dispersion.reference"],
+    component: ImportedDispersionReferenceInspectorPanel,
   },
   {
     id: "observation-frame",

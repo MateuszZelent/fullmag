@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { AnalysisResultDatasetSummaryResource } from "@/kernel/api/apiTypes";
+import type {
+  AnalysisResultDatasetSummaryResource,
+  PostprocessingDefinition,
+} from "@/kernel/api/apiTypes";
 import { analysisSurfaceForSelectionKind } from "@/kernel/analysis-modules/analysisSurfaceRouting";
 
 import { selectionRefFromNode } from "../explorerSelection";
@@ -35,6 +38,33 @@ function dataset(
     stage_id: stageId,
     status: { completeness: "complete", execution: "published", qualification: "legacy", resource: "complete" },
     title: "Hysteresis loop",
+  };
+}
+
+function reference(
+  definitionId: string,
+  runId = "run:1",
+  stageId = "stage-reference",
+): PostprocessingDefinition {
+  return {
+    definition_id: definitionId,
+    revision: 0,
+    module_id: "analysis.dispersion",
+    module_version: "0.1.0",
+    definition_schema: "analysis.dispersion.reference.v1",
+    node_kind: "analysis.dispersion.reference",
+    label: `Reference ${definitionId}`,
+    data_ref: {
+      run_id: runId,
+      dataset_id: stageId,
+      dataset_revision: "artifact-r1",
+    },
+    settings: {
+      file_name: `${definitionId}.csv`,
+      points: [[0, 1], [1, 2]],
+      source: "imported_table",
+      source_units: { frequency: "GHz", path: "rad/um" },
+    },
   };
 }
 
@@ -295,5 +325,69 @@ describe("catalog analysis families", () => {
   it("ignores datasets of other runs", () => {
     const other = { ...dataset("hysteresis_loop", "stage-001"), run_id: "run:2" };
     expect(withCatalogAnalysisFamilies([root], [other])[0]).toBe(root);
+  });
+
+  it("adds separately addressable run-scoped references to an existing Comparison and remains idempotent", () => {
+    const sibling: ExplorerNode = {
+      id: "legacy-comparison-child",
+      kind: "results.dispersion.root",
+      label: "Published dispersion",
+      parentId: "results:root:comparison",
+    };
+    const comparison: ExplorerNode = {
+      id: "results:root:comparison",
+      kind: "results.frequency_domain.comparison",
+      label: "Comparison",
+      parentId: "results:root",
+      children: [sibling],
+    };
+    const referenceA = reference("definition:a", "run:1", "stage-a");
+    const referenceB = reference("definition:b", "run:1", "stage-b");
+    const otherRun = reference("definition:other-run", "run:2", "stage-foreign");
+
+    const [first] = withCatalogAnalysisFamilies(
+      [{ ...root, children: [comparison] }],
+      [],
+      [referenceA, referenceB, otherRun, referenceA],
+    );
+    const firstComparison = first?.children?.find(
+      (child) => child.kind === "results.frequency_domain.comparison",
+    );
+    const firstReferences = firstComparison?.children?.filter(
+      (child) => child.kind === "analysis.dispersion.reference",
+    ) ?? [];
+
+    expect(firstComparison?.children?.[0]).toBe(sibling);
+    expect(firstReferences).toHaveLength(2);
+    expect(new Set(firstReferences.map((child) => child.id)).size).toBe(2);
+    expect(firstReferences.map((child) => child.definitionId)).toEqual([
+      "definition:a",
+      "definition:b",
+    ]);
+    expect(firstReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({ analysisRunId: "run:1", analysisStageId: "stage-a" }),
+      expect.objectContaining({ analysisRunId: "run:1", analysisStageId: "stage-b" }),
+    ]));
+    for (const referenceNode of firstReferences) {
+      expect(referenceNode).not.toHaveProperty("datasetId");
+      expect(selectionRefFromNode(referenceNode)).toMatchObject({
+        definitionId: referenceNode.definitionId,
+        kind: "analysis.dispersion.reference",
+        runId: "run:1",
+        type: "analysis-reference",
+      });
+      expect(analysisSurfaceForSelectionKind(referenceNode.kind)).toBe("dispersion");
+    }
+
+    const [repeated] = withCatalogAnalysisFamilies([first!], [], [referenceA, referenceB, otherRun]);
+    const repeatedComparison = repeated?.children?.find(
+      (child) => child.kind === "results.frequency_domain.comparison",
+    );
+    const repeatedReferences = repeatedComparison?.children?.filter(
+      (child) => child.kind === "analysis.dispersion.reference",
+    ) ?? [];
+    expect(repeatedComparison?.children?.[0]?.id).toBe(sibling.id);
+    expect(repeatedReferences.map((child) => child.id)).toEqual(firstReferences.map((child) => child.id));
+    expect(repeatedReferences).toHaveLength(2);
   });
 });

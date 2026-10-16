@@ -17,6 +17,7 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/FrequencyDomainCharts*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors*'
       - 'apps/control-room/src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/ImportedDispersionReferenceInspectorPanel*'
       - 'apps/control-room/src/modules/ribbon/RibbonModule*'
       - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
@@ -77,6 +78,7 @@ on:
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
       - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
+      - 'apps/control-room/src/modules/inspector/inspectorRouteCoverage.test.ts'
       - 'apps/control-room/src/modules/inspector/inspectorRegistry*'
       - '.github/workflows/eigensolve-ui-method-contracts.yml'
       - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
@@ -95,6 +97,7 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/FrequencyDomainCharts*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors*'
       - 'apps/control-room/src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/ImportedDispersionReferenceInspectorPanel*'
       - 'apps/control-room/src/modules/ribbon/RibbonModule*'
       - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
@@ -155,6 +158,7 @@ on:
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
       - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
+      - 'apps/control-room/src/modules/inspector/inspectorRouteCoverage.test.ts'
       - 'apps/control-room/src/modules/inspector/inspectorRegistry*'
       - '.github/workflows/eigensolve-ui-method-contracts.yml'
       - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
@@ -213,6 +217,7 @@ jobs:
           src/modules/inspector/panels/FrequencyDomainCharts.test.tsx
           src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.selection.test.tsx
           src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel.test.tsx
+          src/modules/inspector/panels/analysis-results/ImportedDispersionReferenceInspectorPanel.dom.test.tsx
           src/modules/ribbon/RibbonModule.contextualTab.test.ts
           src/modules/ribbon/RibbonModule.layout.test.tsx
           src/modules/ribbon/ribbonCommands.test.ts
@@ -259,8 +264,10 @@ jobs:
           src/modules/explorer/builders/resultsExplorerNodes.test.ts
           src/modules/explorer/explorerSelection.test.ts
           src/kernel/selection/selectionTypes.modeVisualization.test.ts
+          src/kernel/selection/selectionTypes.postprocessing.test.ts
           src/kernel/analysis-modules/analysisSurfaceRouting.test.ts
           src/modules/inspector/inspectorRegistry.test.tsx
+          src/modules/inspector/inspectorRouteCoverage.test.ts
       - name: Check module architecture
         if: always()
         run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm --dir apps/control-room check:architecture-hygiene

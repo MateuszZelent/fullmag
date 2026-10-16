@@ -1880,4 +1880,35 @@ describe("selectExplorerNode", () => {
 
     expect(currentNode).toBeNull();
   });
+
+  it("selects an imported dispersion reference by its definition identity and clears it when removed", () => {
+    const referenceNode: ExplorerNode = {
+      id: "results:run:run-7:comparison:reference:reference-1",
+      kind: "analysis.dispersion.reference",
+      label: "Imported dispersion reference",
+      parentId: "results:run:run-7:comparison",
+      analysisRunId: "run-7",
+      analysisStageId: "stage-3",
+      definitionId: "reference:definition-1",
+    };
+    const expectedRef = {
+      definitionId: "reference:definition-1",
+      kind: "analysis.dispersion.reference",
+      nodeId: referenceNode.id,
+      runId: "run-7",
+      stageId: "stage-3",
+      type: "analysis-reference",
+    };
+    expect(selectionRefFromNode(referenceNode)).toEqual(expectedRef);
+
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, referenceNode, "explorer");
+    expect(kernel.selection.get().ref).toEqual(expectedRef);
+    expect(resolveCurrentExplorerSelectionNode(
+      [],
+      referenceNode.id,
+      kernel.selection.get().ref,
+    )).toBeNull();
+    expect(selectionRefFromNode({ ...referenceNode, definitionId: undefined })).toBeNull();
+  });
 });

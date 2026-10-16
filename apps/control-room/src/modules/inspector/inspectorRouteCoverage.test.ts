@@ -684,6 +684,11 @@ describe("inspector route coverage", () => {
   });
 });
 
+it("routes imported dispersion references to their dedicated Inspector", () => {
+  const route = resolveInspectorRoute("analysis.dispersion.reference");
+  expect(route?.id).toBe("imported-dispersion-reference");
+});
+
 
 describe("semantic Inspector routing through actual Explorer selection", () => {
   it("keeps the unassigned overview and part detail distinct without changing the carrier ref", () => {

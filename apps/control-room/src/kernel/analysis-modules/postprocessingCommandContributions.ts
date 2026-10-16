@@ -17,6 +17,7 @@ import type {
 import type { PublishedModeVisualizationSelectionRef } from "./postprocessingDefinitions";
 
 import {
+  IMPORTED_REFERENCE_SCHEMA,
   importedReferenceDefinition,
   modeVisualizationAnalysisResultSelection,
   modeVisualizationDefinitionFromAnalysisResult,
@@ -31,6 +32,7 @@ import {
 export const PIN_MODE_VISUALIZATION_COMMAND = "analysis.postprocessing.pin-mode-visualization";
 export const UNPIN_POSTPROCESSING_DEFINITION_COMMAND = "analysis.postprocessing.unpin-definition";
 export const IMPORT_DISPERSION_REFERENCE_COMMAND = "analysis.postprocessing.import-dispersion-reference";
+export const REMOVE_DISPERSION_REFERENCE_COMMAND = "analysis.postprocessing.remove-dispersion-reference";
 
 export interface ImportDispersionReferenceInput {
   fileName: string;
@@ -394,6 +396,92 @@ async function unpinDefinition(context: CommandContext): Promise<CommandResult> 
   return { message: "Pinned visualization removed.", status: "completed" };
 }
 
+interface RemoveDispersionReferenceInput {
+  definitionId: string;
+}
+
+function asRemoveDispersionReferenceInput(input: unknown): RemoveDispersionReferenceInput | null {
+  if (!input || typeof input !== "object") return null;
+  const definitionId = (input as { definitionId?: unknown }).definitionId;
+  return typeof definitionId === "string" && definitionId.trim().length > 0
+    ? { definitionId }
+    : null;
+}
+
+function selectedDispersionReference(context: CommandContext) {
+  const input = asRemoveDispersionReferenceInput(context.input);
+  const selection = context.selection?.get();
+  const ref = selection?.ref;
+  if (
+    !input ||
+    selection?.kind !== "analysis.dispersion.reference" ||
+    !selection.nodeId ||
+    ref?.type !== "analysis-reference" ||
+    ref.kind !== "analysis.dispersion.reference" ||
+    selection.nodeId !== ref.nodeId ||
+    ref.definitionId !== input.definitionId ||
+    !ref.runId.trim() ||
+    !ref.stageId.trim()
+  ) {
+    return null;
+  }
+  return { definitionId: input.definitionId, runId: ref.runId, stageId: ref.stageId };
+}
+
+function removeDispersionReferenceDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "Control Room API is not available.";
+  return selectedDispersionReference(context)
+    ? null
+    : "Select an imported dispersion reference to remove.";
+}
+
+async function removeDispersionReference(context: CommandContext): Promise<CommandResult> {
+  const selected = selectedDispersionReference(context);
+  if (!context.api || !selected) {
+    return { message: "Select an imported dispersion reference to remove.", status: "failed" };
+  }
+  const obsoleteBeforeRead = obsoleteSessionResult(context);
+  if (obsoleteBeforeRead) return obsoleteBeforeRead;
+  const options = context.sessionScopeKey ? { sessionScopeKey: context.sessionScopeKey } : undefined;
+  const definitions = context.api.analysis.postprocessing.definitions;
+  try {
+    const current = await definitions.list(options);
+    const obsoleteAfterRead = obsoleteSessionResult(context);
+    if (obsoleteAfterRead) return obsoleteAfterRead;
+    const definition = current.definitions.find(
+      (candidate) => candidate.definition_id === selected.definitionId,
+    );
+    if (
+      !definition ||
+      definition.module_id !== "analysis.dispersion" ||
+      definition.node_kind !== "analysis.dispersion.reference" ||
+      definition.definition_schema !== IMPORTED_REFERENCE_SCHEMA ||
+      definition.data_ref.run_id !== selected.runId ||
+      definition.data_ref.dataset_id !== selected.stageId
+    ) {
+      return {
+        message: "The selected dispersion reference is missing or no longer matches its owner.",
+        status: "failed",
+      };
+    }
+    const removed = await definitions.remove(selected.definitionId, {
+      expected_scene_revision: current.scene_revision,
+    }, options);
+    const obsoleteAfterWrite = obsoleteSessionResult(context);
+    if (obsoleteAfterWrite) return obsoleteAfterWrite;
+    context.authoringHistory?.clear();
+    invalidatePostprocessingDefinitionMutation(context, removed.scene_revision);
+    return { message: `Reference ${definition.label} removed.`, status: "completed" };
+  } catch (error) {
+    const obsolete = obsoleteSessionResult(context);
+    if (obsolete) return obsolete;
+    const detail = error instanceof Error && error.message.length > 0
+      ? error.message
+      : "Unknown error.";
+    return { message: `Dispersion reference removal failed: ${detail}`, status: "failed" };
+  }
+}
+
 /** Persistent user-created Results nodes (ADR 0054, spec 32 §8). */
 export const POSTPROCESSING_DEFINITION_COMMANDS: CommandContribution[] = [
   {
@@ -430,5 +518,15 @@ export const POSTPROCESSING_DEFINITION_COMMANDS: CommandContribution[] = [
           ? null
           : "Choose a pinned visualization to remove.",
     run: unpinDefinition,
+  },
+  {
+    id: REMOVE_DISPERSION_REFERENCE_COMMAND,
+    title: "Remove dispersion reference",
+    category: "analysis",
+    group: "analysis.postprocessing",
+    scope: "selection",
+    isEnabled: (context) => removeDispersionReferenceDisabledReason(context) === null,
+    disabledReason: removeDispersionReferenceDisabledReason,
+    run: removeDispersionReference,
   },
 ];

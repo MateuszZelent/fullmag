@@ -21,6 +21,7 @@ import {
   IMPORT_DISPERSION_REFERENCE_COMMAND,
   PIN_MODE_VISUALIZATION_COMMAND,
   POSTPROCESSING_DEFINITION_COMMANDS,
+  REMOVE_DISPERSION_REFERENCE_COMMAND,
   UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
 } from "./postprocessingCommandContributions";
 
@@ -829,14 +830,60 @@ const scopedCommands = [
   IMPORT_DISPERSION_REFERENCE_COMMAND,
   PIN_MODE_VISUALIZATION_COMMAND,
   UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
+  REMOVE_DISPERSION_REFERENCE_COMMAND,
 ];
+
+function savedReferenceDefinition(overrides: Record<string, unknown> = {}) {
+  return {
+    definition_id: "reference-1",
+    revision: 1,
+    module_id: "analysis.dispersion",
+    module_version: "0.1.0",
+    definition_schema: "analysis.dispersion.reference.v1",
+    node_kind: "analysis.dispersion.reference",
+    label: "Imported reference",
+    data_ref: {
+      run_id: "run-1",
+      dataset_id: "stage-reference-1",
+      dataset_revision: "artifact-r1",
+    },
+    settings: {
+      file_name: "reference.csv",
+      points: [[0, 1], [1, 2]],
+      source_units: { frequency: "GHz", path: "rad/um" },
+    },
+    ...overrides,
+  };
+}
+
+function referenceSelection() {
+  return {
+    kind: "analysis.dispersion.reference",
+    label: "Imported reference",
+    nodeId: "reference-node-1",
+    ref: {
+      definitionId: "reference-1",
+      kind: "analysis.dispersion.reference",
+      nodeId: "reference-node-1",
+      runId: "run-1",
+      stageId: "stage-reference-1",
+      type: "analysis-reference",
+    },
+  };
+}
 
 function scopedCommandFixture(commandId: string) {
   let current = true;
-  const list = vi.fn().mockResolvedValue({ definitions: [], scene_revision: 11 });
+  const list = vi.fn().mockResolvedValue({
+    definitions: commandId === REMOVE_DISPERSION_REFERENCE_COMMAND
+      ? [savedReferenceDefinition()]
+      : [],
+    scene_revision: 11,
+  });
   const results = legacyResultsApi();
   const mutation = vi.fn().mockResolvedValue(
-    commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND
+    commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND ||
+      commandId === REMOVE_DISPERSION_REFERENCE_COMMAND
       ? { scene_revision: 13 }
       : { definition: { label: "Reference" }, scene_revision: 12 },
   );
@@ -848,11 +895,14 @@ function scopedCommandFixture(commandId: string) {
         postprocessing: { definitions: { list, create: mutation, remove: mutation } },
       },
     },
-    input: commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND
-      ? { definitionId: "pin-1" }
+    input: commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND ||
+      commandId === REMOVE_DISPERSION_REFERENCE_COMMAND
+      ? { definitionId: commandId === REMOVE_DISPERSION_REFERENCE_COMMAND ? "reference-1" : "pin-1" }
       : { fileName: "reference.csv", label: "Reference", points: [[0, 1], [1, 2]],
           sourceUnits: { frequency: "GHz", path: "rad/um" } },
-    selection: { get: modeSelection },
+    selection: {
+      get: commandId === REMOVE_DISPERSION_REFERENCE_COMMAND ? referenceSelection : modeSelection,
+    },
     resources: { invalidate },
     sessionScopeKey: "session=owner&epoch=captured&request_scope_epoch=request",
     isCurrentSessionScope: () => current,
@@ -894,6 +944,12 @@ describe.each(scopedCommands)("postprocessing command session scope: %s", (comma
     expect(fixture.list).toHaveBeenCalledExactlyOnceWith(options);
     if (commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND) {
       expect(fixture.mutation).toHaveBeenCalledExactlyOnceWith("pin-1", { expected_scene_revision: 11 }, options);
+    } else if (commandId === REMOVE_DISPERSION_REFERENCE_COMMAND) {
+      expect(fixture.mutation).toHaveBeenCalledExactlyOnceWith(
+        "reference-1",
+        { expected_scene_revision: 11 },
+        options,
+      );
     } else {
       expect(fixture.mutation).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ expected_scene_revision: 11 }), options,
@@ -927,7 +983,10 @@ describe.each(scopedCommands)("postprocessing command session scope: %s", (comma
       );
     }
     const acknowledgedSceneRevision =
-      commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND ? 13 : 12;
+      commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND ||
+        commandId === REMOVE_DISPERSION_REFERENCE_COMMAND
+        ? 13
+        : 12;
     expectSceneRevisionInvalidations(
       fixture.invalidate.mock.calls,
       acknowledgedSceneRevision,
@@ -1056,7 +1115,10 @@ describe.each(scopedCommands)("postprocessing mutation history invalidation: %s"
     expect(history.canRedo()).toBe(false);
     expect(history.getGeneration()).toBe(generation + 1);
     const acknowledgedSceneRevision =
-      commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND ? 13 : 12;
+      commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND ||
+        commandId === REMOVE_DISPERSION_REFERENCE_COMMAND
+        ? 13
+        : 12;
     expectSceneRevisionInvalidations(
       fixture.invalidate.mock.calls,
       acknowledgedSceneRevision,
@@ -1111,4 +1173,93 @@ it("does not clear authoring history for an already pinned mode", async () => {
   expect(fixture.create).not.toHaveBeenCalled();
   expect(history.canUndo()).toBe(true);
   expect(fixture.invalidate).not.toHaveBeenCalled();
+});
+
+describe("remove imported dispersion reference", () => {
+  it("fails closed when the selected identity differs from the requested definition", async () => {
+    const fixture = scopedCommandFixture(REMOVE_DISPERSION_REFERENCE_COMMAND);
+    fixture.context.input = { definitionId: "reference:foreign" };
+
+    const result = await fixture.command.run(fixture.context as never);
+
+    expect(result.status).toBe("failed");
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["module", { module_id: "analysis.hysteresis" }],
+    ["kind", { node_kind: "analysis.dispersion.mode_visualization" }],
+    ["schema", { definition_schema: "analysis.dispersion.reference.v2" }],
+    ["run", { data_ref: { ...savedReferenceDefinition().data_ref, run_id: "run-foreign" } }],
+    ["stage", { data_ref: { ...savedReferenceDefinition().data_ref, dataset_id: "stage-foreign" } }],
+  ] as const)("does not remove a definition with a mismatched %s owner", async (_name, overrides) => {
+    const fixture = scopedCommandFixture(REMOVE_DISPERSION_REFERENCE_COMMAND);
+    fixture.list.mockResolvedValueOnce({
+      definitions: [{ ...savedReferenceDefinition(), ...overrides }],
+      scene_revision: 11,
+    });
+
+    const result = await fixture.command.run(fixture.context as never);
+
+    expect(result.status).toBe("failed");
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("does not mutate or invalidate when the current definition is missing", async () => {
+    const fixture = scopedCommandFixture(REMOVE_DISPERSION_REFERENCE_COMMAND);
+    fixture.list.mockResolvedValueOnce({ definitions: [], scene_revision: 11 });
+
+    const result = await fixture.command.run(fixture.context as never);
+
+    expect(result.status).toBe("failed");
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("does not remove a reference when its session expires during the definition read", async () => {
+    const fixture = scopedCommandFixture(REMOVE_DISPERSION_REFERENCE_COMMAND);
+    const readStarted = deferred<void>();
+    const readResult = deferred<{
+      definitions: ReturnType<typeof savedReferenceDefinition>[];
+      scene_revision: number;
+    }>();
+    fixture.list.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return readResult.promise;
+    });
+
+    const pending = fixture.command.run(fixture.context as never);
+    await readStarted.promise;
+    fixture.expire();
+    readResult.resolve({ definitions: [savedReferenceDefinition()], scene_revision: 11 });
+
+    expect((await pending).status).toBe("cancelled");
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("reports a revision conflict without clearing history or targeting another definition", async () => {
+    const fixture = scopedCommandFixture(REMOVE_DISPERSION_REFERENCE_COMMAND);
+    const history = seededAuthoringHistory();
+    const generation = history.getGeneration();
+    fixture.mutation.mockRejectedValueOnce(new Error("409 scene revision conflict"));
+
+    const result = await fixture.command.run({
+      ...fixture.context,
+      authoringHistory: history,
+    } as never);
+
+    expect(result).toMatchObject({ status: "failed", message: expect.stringContaining("409") });
+    expect(fixture.mutation).toHaveBeenCalledExactlyOnceWith(
+      "reference-1",
+      { expected_scene_revision: 11 },
+      { sessionScopeKey: fixture.context.sessionScopeKey },
+    );
+    expect(history.canUndo()).toBe(true);
+    expect(history.getGeneration()).toBe(generation);
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
 });

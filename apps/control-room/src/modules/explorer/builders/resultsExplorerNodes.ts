@@ -4,6 +4,7 @@ import {
   UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
 } from "@/kernel/analysis-modules/postprocessingCommandContributions";
 import {
+  IMPORTED_REFERENCE_SCHEMA,
   modeVisualizationBaseOwnerKey,
   type ModeVisualizationOwnerIdentity,
 } from "@/kernel/analysis-modules/postprocessingDefinitions";
@@ -1048,24 +1049,91 @@ export function withCatalogAnalysisFamilies(
         ),
       );
     }
-    const references = definitions.filter(
-      (definition) =>
+    const referencesById = new Map<
+      string,
+      { definition: AnalysisPostprocessingDefinition; stageId: string }
+    >();
+    for (const definition of definitions) {
+      const stageId = definition.data_ref.dataset_id;
+      if (
+        definition.module_id === "analysis.dispersion" &&
+        definition.definition_schema === IMPORTED_REFERENCE_SCHEMA &&
         definition.node_kind === "analysis.dispersion.reference" &&
-        definition.data_ref.run_id === resultsRoot.analysisRunId,
-    );
-    if (
-      (runDatasets.length > 1 || references.length > 0) &&
-      !existingKinds.has("results.frequency_domain.comparison")
-    ) {
-      families.push(
-        node(`${resultsRoot.id}:comparison`, "results.frequency_domain.comparison", "Comparison", resultsRoot.id, {
-          analysisRunId: resultsRoot.analysisRunId,
-          badge: `${runDatasets.length + references.length} sources`,
-          icon: "activity",
-        }),
-      );
+        definition.data_ref.run_id === resultsRoot.analysisRunId &&
+        typeof stageId === "string" &&
+        definition.definition_id.trim().length > 0 &&
+        stageId.trim().length > 0
+      ) {
+        referencesById.set(definition.definition_id, { definition, stageId });
+      }
     }
-    const augmentedRoot = families.length === 0
+    const references = [...referencesById.values()];
+    const existingComparison = (resultsRoot.children ?? []).find(
+      (child) => child.kind === "results.frequency_domain.comparison",
+    );
+    let comparison: ExplorerNode | null = null;
+    if (existingComparison || runDatasets.length > 1 || references.length > 0) {
+      const comparisonId = existingComparison?.id ?? `${resultsRoot.id}:comparison`;
+      const referenceChildren = references.map(({ definition, stageId }) =>
+        withAnalysisModule(
+          node(
+            `${comparisonId}:reference:${key(definition.definition_id)}`,
+            "analysis.dispersion.reference",
+            definition.label,
+            comparisonId,
+            {
+              analysisRunId: definition.data_ref.run_id,
+              analysisStageId: stageId,
+              definitionId: definition.definition_id,
+              icon: "file",
+            },
+          ),
+          "analysis.dispersion",
+        ),
+      );
+      const existingSiblings = (existingComparison?.children ?? []).filter(
+        (child) => child.kind !== "analysis.dispersion.reference",
+      );
+      const sourceCount = runDatasets.length + references.length;
+      const badge = sourceCount > 0
+        ? `${sourceCount} sources`
+        : existingComparison?.badge;
+      const nextChildren = [...existingSiblings, ...referenceChildren];
+      if (existingComparison) {
+        const childrenUnchanged =
+          nextChildren.length === (existingComparison.children ?? []).length &&
+          nextChildren.every((child, index) => child === existingComparison.children?.[index]);
+        comparison = childrenUnchanged && badge === existingComparison.badge
+          ? existingComparison
+          : { ...existingComparison, badge, children: nextChildren };
+      } else {
+        comparison = node(
+          comparisonId,
+          "results.frequency_domain.comparison",
+          "Comparison",
+          resultsRoot.id,
+          {
+            analysisRunId: resultsRoot.analysisRunId,
+            badge,
+            children: nextChildren,
+            icon: "activity",
+          },
+        );
+      }
+    }
+
+    const originalChildren = resultsRoot.children ?? [];
+    const comparisonIndex = existingComparison
+      ? originalChildren.findIndex((child) => child.id === existingComparison.id)
+      : -1;
+    const children = originalChildren.map((child, index) =>
+      index === comparisonIndex && comparison ? comparison : child,
+    );
+    if (!existingComparison && comparison) children.push(comparison);
+    children.push(...families);
+
+    const rootChanged = families.length > 0 || comparison !== (existingComparison ?? null);
+    const augmentedRoot = !rootChanged
       ? resultsRoot
       : {
           ...resultsRoot,
@@ -1073,7 +1141,7 @@ export function withCatalogAnalysisFamilies(
           executionState: "completed" as const,
           resourceState: resultsRoot.resourceState === "error" ? "error" as const : "ready" as const,
           status: resultsRoot.status === "failed" ? "failed" as const : "ready" as const,
-          children: [...(resultsRoot.children ?? []), ...families],
+          children,
         };
     return withCatalogDatasetIdentity(augmentedRoot, runDatasets);
   });

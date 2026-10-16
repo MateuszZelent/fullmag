@@ -165,6 +165,20 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (node.kind === "analysis.dispersion.reference") {
+    if (!node.definitionId || !node.analysisRunId || !node.analysisStageId) {
+      return null;
+    }
+    return {
+      definitionId: node.definitionId,
+      kind: "analysis.dispersion.reference",
+      nodeId: node.id,
+      runId: node.analysisRunId,
+      stageId: node.analysisStageId,
+      type: "analysis-reference",
+    };
+  }
+
   if (node.kind === "results.observation_frame" && node.observationFrame) {
     const frame = node.observationFrame;
     return {

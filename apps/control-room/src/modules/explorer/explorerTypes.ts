@@ -197,6 +197,7 @@ export type ExplorerNodeKind =
   | "results.hysteresis.dataset"
   | "results.observation_frames.root"
   | "results.pinned_visualizations.root"
+  | "analysis.dispersion.reference"
   | "results.observation_frame"
   | "results.analysis_views.root"
   | "results.analysis_views.definition"
@@ -328,6 +329,8 @@ export interface ExplorerNode {
   analysisModuleId?: AnalysisModuleId;
   /** Marks the root row for a published analysis module's pinned visualizations. */
   analysisPinnedGroup?: boolean;
+  /** Immutable postprocessing definition identity for imported references. */
+  readonly definitionId?: string;
   normalization?: string;
   observationFrame?: ObservationFrameResource;
   badge?: string;
