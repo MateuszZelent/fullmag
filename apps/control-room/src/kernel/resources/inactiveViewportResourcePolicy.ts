@@ -6,6 +6,7 @@ import {
   DATA_PLANAR_FIELD_META_PATH,
 } from "@/kernel/api/apiPaths";
 import type { LayoutController } from "@/kernel/layout/LayoutController";
+import type { LayoutState } from "@/kernel/layout/layoutTypes";
 import { sharedResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceKey } from "@/kernel/resources/resourceTypes";
 
@@ -62,8 +63,12 @@ export function createViewport3DInactiveResourcePauseController({
   let releasePause: (() => void) | null = null;
   let releasePlanarPause: (() => void) | null = null;
 
-  const sync = (activeViewportMainModuleId: string): void => {
-    const shouldPause = activeViewportMainModuleId !== VIEWPORT_3D_MODULE_ID;
+  const sync = (state: LayoutState): void => {
+    const isVisible = (moduleId: string): boolean =>
+      state.activeViewportMainModuleId === moduleId ||
+      state.viewportCompanion?.moduleId === moduleId;
+
+    const shouldPause = !isVisible(VIEWPORT_3D_MODULE_ID);
     if (shouldPause && !releasePause) {
       releasePause = runtimeStore.beginPauseMatching(
         isViewport3DExclusiveResourceKey,
@@ -73,8 +78,7 @@ export function createViewport3DInactiveResourcePauseController({
       releasePause = null;
     }
 
-    const shouldPausePlanar =
-      activeViewportMainModuleId !== FIELD_MAP_MODULE_ID;
+    const shouldPausePlanar = !isVisible(FIELD_MAP_MODULE_ID);
     if (shouldPausePlanar && !releasePlanarPause) {
       releasePlanarPause = runtimeStore.beginPauseMatching((resourceKey) =>
         isPlanarFieldResourceKey(resourceKey),
@@ -85,10 +89,8 @@ export function createViewport3DInactiveResourcePauseController({
     }
   };
 
-  sync(layout.get().activeViewportMainModuleId);
-  const unsubscribe = layout.subscribe((state) =>
-    sync(state.activeViewportMainModuleId),
-  );
+  sync(layout.get());
+  const unsubscribe = layout.subscribe(sync);
 
   return () => {
     unsubscribe();

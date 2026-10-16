@@ -19,6 +19,32 @@ import {
   isViewport3DExclusiveResourceKey,
 } from "./inactiveViewportResourcePolicy";
 
+const PLANAR_MONITOR_RESOURCE_KEY = DATA_PLANAR_FIELD_META_PATH
+  .replace("{quantity_id}", "m")
+  .replace("{monitor_id}", "monitor-1");
+
+interface PauseLease {
+  isViewport3D: boolean;
+  isPlanar: boolean;
+  release: () => void;
+}
+
+function createPauseRuntimeMock() {
+  const leases: PauseLease[] = [];
+  const runtimeStore = {
+    beginPauseMatching: vi.fn((predicate: (resourceKey: string) => boolean) => {
+      const release = vi.fn();
+      leases.push({
+        isViewport3D: predicate(DATA_DOMAIN_TOPOLOGY_PATH),
+        isPlanar: predicate(PLANAR_MONITOR_RESOURCE_KEY),
+        release,
+      });
+      return release;
+    }),
+  };
+  return { runtimeStore, leases };
+}
+
 describe("inactiveViewportResourcePolicy", () => {
   it("classifies only viewport-3d exclusive resources for inactive-tab pause", () => {
     expect(
@@ -150,5 +176,145 @@ describe("inactiveViewportResourcePolicy", () => {
     dispose();
 
     expect(releasePause).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps 3D resources live for an initial chart with a 3D companion", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    layout.replace({
+      ...layout.get(),
+      activeViewportMainModuleId: "analysis-plots",
+      viewportCompanion: {
+        moduleId: "viewport-3d",
+        placement: "beside",
+      },
+    });
+    const { runtimeStore, leases } = createPauseRuntimeMock();
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(1);
+    expect(leases).toHaveLength(1);
+    expect(leases[0]?.isViewport3D).toBe(false);
+    expect(leases[0]?.isPlanar).toBe(true);
+    dispose();
+  });
+
+  it("releases and reacquires only the 3D pause when its companion appears", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    layout.setActiveViewportMainModule("analysis-plots");
+    const { runtimeStore, leases } = createPauseRuntimeMock();
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+    const initial3DLease = leases.find((lease) => lease.isViewport3D);
+    const planarLease = leases.find((lease) => lease.isPlanar);
+    expect(initial3DLease).toBeDefined();
+    expect(planarLease).toBeDefined();
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
+
+    layout.setViewportCompanion({
+      moduleId: "viewport-3d",
+      placement: "beside",
+    });
+
+    expect(initial3DLease?.release).toHaveBeenCalledTimes(1);
+    expect(planarLease?.release).not.toHaveBeenCalled();
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
+
+    layout.setViewportCompanion(null);
+
+    const threeDLeases = leases.filter((lease) => lease.isViewport3D);
+    const replacement3DLease = threeDLeases[threeDLeases.length - 1];
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(3);
+    expect(replacement3DLease).toBeDefined();
+    expect(planarLease?.release).not.toHaveBeenCalled();
+
+    dispose();
+    expect(initial3DLease?.release).toHaveBeenCalledTimes(1);
+    expect(replacement3DLease?.release).toHaveBeenCalledTimes(1);
+    expect(planarLease?.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps planar resources live for a field-map companion and for both visible modules", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    layout.setActiveViewportMainModule("analysis-plots");
+    const { runtimeStore, leases } = createPauseRuntimeMock();
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+    const initial3DLease = leases.find((lease) => lease.isViewport3D);
+    const initialPlanarLease = leases.find((lease) => lease.isPlanar);
+    expect(initial3DLease).toBeDefined();
+    expect(initialPlanarLease).toBeDefined();
+
+    layout.setViewportCompanion({
+      moduleId: "field-map",
+      placement: "beside",
+    });
+
+    expect(initial3DLease?.release).not.toHaveBeenCalled();
+    expect(initialPlanarLease?.release).toHaveBeenCalledTimes(1);
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
+
+    layout.setViewportCompanion(null);
+
+    const planarLeases = leases.filter((lease) => lease.isPlanar);
+    const replacementPlanarLease = planarLeases[planarLeases.length - 1];
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(3);
+    expect(replacementPlanarLease).toBeDefined();
+    expect(initial3DLease?.release).not.toHaveBeenCalled();
+
+    layout.replace({
+      ...layout.get(),
+      activeViewportMainModuleId: "viewport-3d",
+      viewportCompanion: {
+        moduleId: "field-map",
+        placement: "beside",
+      },
+    });
+
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(3);
+    expect(initial3DLease?.release).toHaveBeenCalledTimes(1);
+    expect(replacementPlanarLease?.release).toHaveBeenCalledTimes(1);
+
+    dispose();
+  });
+
+  it("does not react to layout changes after disposal", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    layout.setActiveViewportMainModule("analysis-plots");
+    const { runtimeStore, leases } = createPauseRuntimeMock();
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+    const initialLeases = [...leases];
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
+
+    dispose();
+
+    layout.setViewportCompanion({
+      moduleId: "viewport-3d",
+      placement: "beside",
+    });
+    layout.setViewportCompanion(null);
+    layout.setActiveViewportMainModule("field-map");
+
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
+    expect(initialLeases).toHaveLength(2);
+    expect(initialLeases[0]?.release).toHaveBeenCalledTimes(1);
+    expect(initialLeases[1]?.release).toHaveBeenCalledTimes(1);
+
+    dispose();
+    expect(initialLeases[0]?.release).toHaveBeenCalledTimes(1);
+    expect(initialLeases[1]?.release).toHaveBeenCalledTimes(1);
   });
 });

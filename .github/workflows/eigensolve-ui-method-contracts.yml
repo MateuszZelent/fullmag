@@ -44,6 +44,7 @@ on:
       - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
+      - 'apps/control-room/src/kernel/resources/inactiveViewportResourcePolicy*'
       - 'apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge*'
       - 'apps/control-room/src/kernel/realtime/RealtimeClient*'
       - 'apps/control-room/src/kernel/KernelProvider.tsx'
@@ -117,6 +118,7 @@ on:
       - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
+      - 'apps/control-room/src/kernel/resources/inactiveViewportResourcePolicy*'
       - 'apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge*'
       - 'apps/control-room/src/kernel/realtime/RealtimeClient*'
       - 'apps/control-room/src/kernel/KernelProvider.tsx'
@@ -218,6 +220,7 @@ jobs:
           src/kernel/resources/studyRuntimeResources.provider.test.tsx
           src/kernel/resources/frequencyDomainResourceKeys.test.ts
           src/kernel/resources/analysisResultCatalogPagination.test.ts
+          src/kernel/resources/inactiveViewportResourcePolicy.test.ts
           src/kernel/realtime/RealtimeInvalidationBridge.test.ts
           src/kernel/realtime/RealtimeClient.test.ts
           src/kernel/visualization/ModeCompositionFieldLayerController.test.ts
