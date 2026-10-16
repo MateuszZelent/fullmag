@@ -6,7 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[2]
@@ -51,6 +51,61 @@ class LiveThread:
 
 
 class ContainerMainTests(unittest.TestCase):
+    def test_daemon_storage_root_preserves_windows_mapping_and_posix_identity(self):
+        self.assertEqual(
+            '/run/desktop/mnt/host/c/Users/Mateusz/fullmag/storage',
+            container_main.daemon_storage_root(r'C:\Users\Mateusz\fullmag\storage'),
+        )
+        self.assertEqual(
+            '/srv/fullmag/storage',
+            container_main.daemon_storage_root('/srv/fullmag/storage'),
+        )
+
+    def test_daemon_storage_root_rejects_noncanonical_or_unsafe_paths(self):
+        for path in (
+            '/',
+            'relative/storage',
+            '//server/storage',
+            '///server/storage',
+            '/srv/fullmag/../other',
+            '/srv//fullmag/storage',
+            '/srv/./fullmag/storage',
+            '/srv/fullmag/storage/',
+            '/srv/fullmag\\storage',
+            '/srv/fullmag,storage',
+            '/srv/fullmag\nstorage',
+            'C:\\fullmag\\..\\other',
+            '\\\\server\\share\\storage',
+        ):
+            with self.subTest(path=path):
+                with self.assertRaises(ValueError):
+                    container_main.daemon_storage_root(path)
+
+    def test_application_layout_uses_exact_posix_daemon_storage_root(self):
+        def container_path(value):
+            raw = str(value)
+            if raw == '/storage':
+                return self.root
+            if raw.startswith('/storage/'):
+                return self.root / raw[len('/storage/'):]
+            return Path(value)
+
+        with patch.object(container_main, 'Path', side_effect=container_path), \
+                patch.object(container_main, 'validate_path', side_effect=lambda path, *_args, **_kwargs: path), \
+                patch.object(container_main, 'JobQueue', return_value=Mock()), \
+                patch.object(ServicePaths, 'from_storage', return_value=Mock()), \
+                patch.object(container_main, 'ObservabilityHub', return_value=Mock()), \
+                patch.object(container_main, 'RetentionService', return_value=Mock()), \
+                patch.object(container_main, 'read_stop_request', return_value=None):
+            app = container_main.Application({
+                'allowed_profiles': ['fem-cpu-release'],
+                'operator': 'alice',
+                'host_storage_root': '/srv/fullmag/storage',
+            })
+
+        self.assertEqual('/srv/fullmag/storage', app.layout['host_storage_root'])
+        self.assertEqual('/srv/fullmag/storage', app.layout['daemon_storage_root'])
+
     def test_retention_plan_list_is_bound_to_the_retention_service(self):
         app = self.app()
         listed = {'items': [], 'total': 0}

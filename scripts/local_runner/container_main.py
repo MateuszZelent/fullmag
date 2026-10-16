@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import threading
 import time
@@ -119,6 +119,18 @@ def desktop_daemon_root(host_path):
     return '/run/desktop/mnt/host/' + value.drive[0].lower() + '/' + '/'.join(value.parts[1:])
 
 
+def daemon_storage_root(host_path):
+    if not isinstance(host_path, str) or not host_path or any(c in host_path for c in ',\r\n\0'):
+        raise ValueError('Expected a canonical local storage path')
+    if host_path.startswith('/'):
+        value = PurePosixPath(host_path)
+        if (not value.is_absolute() or host_path == '/' or host_path.startswith('//')
+                or '\\' in host_path or '..' in value.parts or value.as_posix() != host_path):
+            raise ValueError('Expected a canonical local POSIX storage path')
+        return host_path
+    return desktop_daemon_root(host_path)
+
+
 def submission_manifest(source, expected_digest):
     """Validate bounded metadata; the queue verifies all bytes before create."""
     path = validate_path(Path(source) / 'manifest.json', source)
@@ -148,7 +160,7 @@ class Application:
         self.owner = config['operator']
         self.layout = {'storage_root': '/storage', 'container_coordinator': True,
                        'host_storage_root': config['host_storage_root'],
-                       'daemon_storage_root': desktop_daemon_root(config['host_storage_root'])}
+                       'daemon_storage_root': daemon_storage_root(config['host_storage_root'])}
         for name in ('index', 'locks'):
             validate_path(self.storage / name, self.storage).mkdir(exist_ok=True)
         self.queue = JobQueue(validate_path(self.storage / 'index' / 'runner-jobs.sqlite', self.storage))

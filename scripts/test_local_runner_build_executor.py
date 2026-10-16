@@ -10,6 +10,121 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def test_posix_daemon_path_maps_mounts_to_the_exact_host_storage_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Path(directory).resolve()
+            relative = Path('runs') / 'wt' / ('c' * 32) / 'source'
+            self.assertEqual(
+                '/srv/fullmag/storage/' + relative.as_posix(),
+                executor.daemon_path(storage / relative, storage, '/srv/fullmag/storage'),
+            )
+
+    def test_execute_build_rewrites_all_mount_sources_to_bounded_posix_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Path(directory).resolve()
+            (storage / 'index').mkdir()
+            (storage / 'locks').mkdir()
+            worktree_id = 'wt'
+            capture_id = 'c' * 32
+            source = storage / 'runs' / worktree_id / capture_id / 'source'
+            source.mkdir(parents=True)
+            origin_repo = '/source/fullmag'
+            (storage / 'index' / (worktree_id + '.json')).write_text(json.dumps({
+                'repo_root': origin_repo,
+                'worktree_id': worktree_id,
+            }), encoding='utf-8')
+            job = {
+                'job_id': 'a' * 32,
+                'owner': 'alice',
+                'worktree_id': worktree_id,
+                'source_digest': 'b' * 64,
+                'profile': 'fem-cpu-release',
+                'operation': 'build',
+                'lease_token': 'lease-token',
+                'payload': {
+                    'capture_id': capture_id,
+                    'capsule_relative': f'runs/{worktree_id}/{capture_id}/source',
+                    'origin_repo': origin_repo,
+                    'native_source_identity': {},
+                },
+            }
+            queue = Mock()
+            queue.active.return_value = []
+            queue.next_queued.return_value = job
+            queue.claim.return_value = job
+            daemon_commands = []
+            pre_rewrite_mount_sources = []
+            image = 'sha256:' + 'd' * 64
+            original_build_command = executor.build_command
+
+            def build_command_with_sources(*args, **kwargs):
+                command = original_build_command(*args, **kwargs)
+                pre_rewrite_mount_sources.extend(
+                    command[index + 1].split('source=', 1)[1].split(',target=', 1)[0]
+                    for index, part in enumerate(command[:-1])
+                    if part == '--mount'
+                )
+                return command
+
+            def docker_call(argv):
+                if argv[:2] == ['image', 'inspect']:
+                    return json.dumps([{'Id': image, 'Config': {'Volumes': None}}])
+                if argv[0] == 'ps':
+                    return ''
+                if argv[0] == 'create':
+                    daemon_commands.append(argv)
+                    return 'ambiguous-create-result'
+                raise AssertionError('Unexpected daemon command: ' + repr(argv))
+
+            def create_cache_directory(path, _storage):
+                path.mkdir(parents=True, exist_ok=True)
+
+            with patch.object(executor, 'JobQueue', return_value=queue), \
+                    patch.object(executor, 'file_lock', return_value=nullcontext()), \
+                    patch.object(executor, 'build_lock', return_value=nullcontext()), \
+                    patch.object(executor.shutil, 'disk_usage', return_value=Mock(free=16 * 1024**3)), \
+                    patch.object(executor, 'configured_build', return_value={
+                        'image_digest': image,
+                        'cpus': 2,
+                        'memory_bytes': 8 * 1024**3,
+                    }), \
+                    patch.object(executor, 'verify_source', return_value={'repo_root': origin_repo}), \
+                    patch('local_runner.build_source.bind_identity'), \
+                    patch.object(executor, 'build_command', side_effect=build_command_with_sources), \
+                    patch.object(executor, 'prepare_cache_directory', side_effect=create_cache_directory), \
+                    patch.object(executor, 'prepare_worker_directory'):
+                with self.assertRaisesRegex(executor.CoordinatorError, 'Ambiguous create; lease retained'):
+                    executor.execute_build(
+                        {
+                            'storage_root': str(storage),
+                            'container_coordinator': True,
+                            'host_storage_root': '/srv/fullmag/storage',
+                            'daemon_storage_root': '/srv/fullmag/storage',
+                        },
+                        owner='alice',
+                        call=docker_call,
+                    )
+
+            self.assertEqual(1, len(daemon_commands))
+            command = daemon_commands[0]
+            self.assertEqual(8, command.count('--mount'))
+            mount_sources = []
+            for index, part in enumerate(command[:-1]):
+                if part == '--mount':
+                    mount = command[index + 1]
+                    self.assertTrue(mount.startswith('type=bind,source=/srv/fullmag/storage/'))
+                    source_value = mount.split('source=', 1)[1].split(',target=', 1)[0]
+                    relative_source = source_value.removeprefix('/srv/fullmag/storage/')
+                    self.assertNotIn('..', Path(relative_source).parts)
+                    mount_sources.append(source_value)
+            self.assertEqual(8, len(mount_sources))
+            self.assertEqual(8, len(set(mount_sources)))
+            expected_sources = [
+                '/srv/fullmag/storage/' + Path(value).relative_to(storage).as_posix()
+                for value in pre_rewrite_mount_sources
+            ]
+            self.assertEqual(expected_sources, mount_sources)
+
     def test_daemon_mount_identity_survives_json_and_host_platform(self):
         mounts = [{'Type': 'bind', 'Source': '/run/desktop/mnt/host/c/storage/run',
                    'Destination': '/workspace', 'RW': True}]
