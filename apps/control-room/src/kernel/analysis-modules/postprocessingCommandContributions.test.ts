@@ -890,11 +890,17 @@ describe.each(scopedCommands)("postprocessing command session scope: %s", (comma
         ...options,
         signal: expect.any(AbortSignal),
       });
-      expect(fixture.results.dataset).toHaveBeenCalledExactlyOnceWith(
-        "run-1",
-        "catalog:eigen-dispersion",
-        options,
-      );
+      // Both the initial manifest and the pre-mutation revision fence
+      // must retain the captured session scope.
+      expect(fixture.results.dataset).toHaveBeenCalledTimes(2);
+      for (const callNumber of [1, 2]) {
+        expect(fixture.results.dataset).toHaveBeenNthCalledWith(
+          callNumber,
+          "run-1",
+          "catalog:eigen-dispersion",
+          options,
+        );
+      }
       expect(fixture.results.item).toHaveBeenCalledExactlyOnceWith(
         "run-1",
         "catalog:eigen-dispersion",
@@ -946,8 +952,13 @@ describe.each(scopedCommands)("postprocessing command session scope: %s", (comma
   it("does not submit a mutation when the session changes during the read", async () => {
     const fixture = scopedCommandFixture(commandId);
     const read = deferred<{ definitions: []; scene_revision: number }>();
-    fixture.list.mockReturnValueOnce(read.promise);
+    const readStarted = deferred<void>();
+    fixture.list.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return read.promise;
+    });
     const result = fixture.command.run(fixture.context as never);
+    await readStarted.promise;
     expect(fixture.list).toHaveBeenCalledTimes(1);
     fixture.expire();
     read.resolve({ definitions: [], scene_revision: 11 });
