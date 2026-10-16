@@ -38,6 +38,7 @@ describe("FMR modal spectrum Results owner propagation", () => {
         label: "Selected spectrum",
         nodeId: "selected-spectrum",
         objectId: null,
+        moduleSource: "analysis.resonance",
         ref: {
           type: "frequency-domain",
           kind: "results.resonance.modal.spectrum",

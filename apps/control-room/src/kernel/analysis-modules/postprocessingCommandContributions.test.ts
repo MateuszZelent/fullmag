@@ -34,6 +34,8 @@ function modeSelection(includeCanonicalDatasetIdentity = true) {
       analysisRunId: "run-1",
       analysisStageId: "stage-1",
       artifactRevision: 7,
+      kind: "results.dispersion.modal.mode_at_k",
+      nodeId: "selected-mode",
       ...(includeCanonicalDatasetIdentity
         ? { datasetId: "catalog:eigen-dispersion", datasetRevision: "catalog-revision-7" }
         : {}),

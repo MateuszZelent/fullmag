@@ -100,6 +100,7 @@ function legacySelection(
       branchId: "branch-1",
       fieldId: "field-1",
       kind,
+      nodeId: "selected-mode",
       sampleId: "sample-1",
       type: "frequency-domain" as const,
       ...overrides,
@@ -283,12 +284,11 @@ describe("legacy frequency-domain mode selection bridge", () => {
       const results = loaders({
         itemPages: [itemPage("dataset-1", [item("foreign-owner", "eigen_mode", itemOverrides)])],
       });
-      const resolved = await resolveLegacyModeVisualizationSelection(
+      await expect(resolveLegacyModeVisualizationSelection(
         legacySelection(),
         signal(),
         results,
-      );
-      expect(resolved).toMatchObject({ ok: false });
+      )).rejects.toThrow("an item did not match the requested sample, branch, kind, or field filter");
     },
   );
 
@@ -298,8 +298,8 @@ describe("legacy frequency-domain mode selection bridge", () => {
         dataset_revision: "stale-revision",
       })],
     });
-    expect(await resolveLegacyModeVisualizationSelection(legacySelection(), signal(), results))
-      .toMatchObject({ ok: false, reason: expect.stringContaining("revision changed") });
+    await expect(resolveLegacyModeVisualizationSelection(legacySelection(), signal(), results))
+      .rejects.toThrow("revision changed");
   });
 
   it("reads to the terminal item page before resolving a field", async () => {
@@ -337,12 +337,11 @@ describe("legacy frequency-domain mode selection bridge", () => {
       total_count: 2,
     });
     const results = loaders({ itemPages: [first, second] });
-    const resolved = await resolveLegacyModeVisualizationSelection(
+    await expect(resolveLegacyModeVisualizationSelection(
       legacySelection(),
       signal(),
       results,
-    );
-    expect(resolved).toMatchObject({ ok: false, reason: expect.stringContaining("cursor repeated") });
+    )).rejects.toThrow("cursor repeated");
     expect(results.loadItemPage).toHaveBeenCalledTimes(2);
     expect(results.loadItemPage.mock.calls[1]?.[1]).toMatchObject({ cursor: "cursor-next" });
   });
@@ -351,7 +350,7 @@ describe("legacy frequency-domain mode selection bridge", () => {
     const results = loaders({
       itemPages: [itemPage("dataset-1", [item("item-1")], null, { cursor: "unexpected" })],
     });
-    expect(await resolveLegacyModeVisualizationSelection(legacySelection(), signal(), results))
-      .toMatchObject({ ok: false, reason: expect.stringContaining("response cursor") });
+    await expect(resolveLegacyModeVisualizationSelection(legacySelection(), signal(), results))
+      .rejects.toThrow("response cursor");
   });
 });
