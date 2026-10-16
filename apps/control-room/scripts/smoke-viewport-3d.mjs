@@ -1,6 +1,12 @@
 import { inflateSync } from "node:zlib";
 import path from "node:path";
 
+import {
+  createFdmFixture,
+  fdmDefaultFieldVectorResourceKey,
+  installFdmFixtureApi,
+  updateFdmFixtureFieldRevision,
+} from "./lib/ready-fdm-viewport-fixture.mjs";
 import { createSmokeMutationGuard } from "./lib/smoke-session-isolation.mjs";
 import {
   assertViewportOrbitPerformanceArtifactFile,
@@ -24,12 +30,17 @@ const apiBase =
   process.env.NEXT_PUBLIC_API_URL ??
   null;
 const allowMissingSession =
-  process.env.CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION === "1";
-const requireGeometryFlow =
-  !allowMissingSession && process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
-const cameraOnlySmoke = process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1";
+  process.env.CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION === "1" &&
+  process.env.CONTROL_ROOM_SMOKE_VISIBLE_VIEWPORT_COMPANION !== "1";
 const visibleViewportCompanionSmoke =
   process.env.CONTROL_ROOM_SMOKE_VISIBLE_VIEWPORT_COMPANION === "1";
+const requireGeometryFlow =
+  !allowMissingSession &&
+  !visibleViewportCompanionSmoke &&
+  process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
+const cameraOnlySmoke =
+  process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1" ||
+  visibleViewportCompanionSmoke;
 const hysteresisReplaySmoke =
   process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY === "1";
 const hysteresisReplayOnly =
@@ -122,6 +133,17 @@ const browser = await playwright.chromium.launch();
 const page = await browser.newPage({
   viewport: { height: 900, width: 1440 },
 });
+const readyViewportFixture = visibleViewportCompanionSmoke
+  ? createFdmFixture({ trackFieldResponses: true })
+  : null;
+const readyViewportFixtureRequests = [];
+if (readyViewportFixture) {
+  await installFdmFixtureApi(
+    page,
+    readyViewportFixture,
+    readyViewportFixtureRequests,
+  );
+}
 if (allowMissingSession) {
   await installMissingSessionFastFailRoutes(page);
 }
@@ -130,6 +152,7 @@ await installViewportPerformanceProbe(page);
 const errors = [];
 const sceneResponses = [];
 const fieldVectorRequests = [];
+const fieldVectorResponses = [];
 const realtimeMessages = [];
 const cameraGestureRequests = [];
 const activeInitialForbiddenResourceRequests = new Map();
@@ -201,18 +224,23 @@ async function installMissingSessionFastFailRoutes(page) {
 }
 
 await page.addInitScript(
-  ({ allowMissingSessionSmoke, baseUrl, enableAuditHooks }) => {
+  ({ allowMissingSessionSmoke, baseUrl, disableRealtime, enableAuditHooks }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
       ...(baseUrl ? { controlRoomApiBase: baseUrl } : {}),
       ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
+      ...(disableRealtime ? { disableRealtime: true } : {}),
       ...(enableAuditHooks ? { enableAuditHooks: true } : {}),
     };
   },
   {
     allowMissingSessionSmoke: allowMissingSession,
     baseUrl: apiBase,
-    enableAuditHooks: hysteresisReplaySmoke || planarToggleCycles > 0,
+    disableRealtime: visibleViewportCompanionSmoke,
+    enableAuditHooks:
+      hysteresisReplaySmoke ||
+      planarToggleCycles > 0 ||
+      visibleViewportCompanionSmoke,
   },
 );
 
@@ -272,6 +300,16 @@ page.on("websocket", (websocket) => {
 });
 page.on("response", (response) => {
   const status = response.status();
+  if (isFieldVectorSamplesPath(pathnameFromUrl(response.url()))) {
+    const request = response.request();
+    fieldVectorResponses.push({
+      etag: response.headers().etag ?? null,
+      ifNoneMatch: request.headers()["if-none-match"] ?? null,
+      method: request.method(),
+      status,
+      url: response.url(),
+    });
+  }
   if (!cameraOnlySmoke && isModelSceneUrl(response.url()) && status < 400) {
     const sequence = sceneResponseSequence;
     const timestamp = Date.now();
@@ -427,6 +465,14 @@ try {
   }
 } catch (error) {
   const evidence = await collectViewportStartupFailureEvidence(page, errors);
+  if (readyViewportFixture) {
+    evidence.readyViewportFixture = {
+      browserFieldResponses: fieldVectorResponses,
+      fieldRevision: readyViewportFixture.fieldRevision,
+      fieldVectorResponses: readyViewportFixture.fieldVectorResponses,
+      requests: readyViewportFixtureRequests,
+    };
+  }
   console.error(
     `Viewport 3D startup failure evidence: ${JSON.stringify(evidence)}`,
   );
@@ -667,6 +713,13 @@ async function verifyVisibleViewportCompanionLifecycle(page) {
   await assertSameCanvas("3D canvas after real companion open");
   assertSplitBounds(await readSplitLayout(), "beside", "visible chart and 3D companion");
   await assertCameraUnchanged(initialCamera, "opening the visible 3D companion");
+  const fieldRevisionProof = await verifyVisibleCompanionFieldRevision(
+    page,
+    initialCamera,
+  );
+  console.log(
+    `Visible companion FDM invalidation proof: ${JSON.stringify(fieldRevisionProof)}`,
+  );
 
   const companionBounds = await readCanvasClipBox(page);
   await assertCameraGestureDoesNotFetch(page, "visible companion wheel zoom", async () => {
@@ -792,8 +845,164 @@ async function verifyVisibleViewportCompanionLifecycle(page) {
     delete window.__FULLMAG_VISIBLE_COMPANION_CANVAS__;
   });
   console.log(
-    "Visible viewport companion browser smoke passed: real ribbon open/close, stable visible canvas across role and placement changes, horizontal/vertical keyboard resizing, unmount on close, and healthy reopened WebGL canvas.",
+    "Visible viewport companion browser smoke passed: real ribbon open/close, canonical FDM field revision invalidation with changed rendered pixels, stable visible canvas across role and placement changes, horizontal/vertical keyboard resizing, unmount on close, and healthy reopened WebGL canvas.",
   );
+}
+
+async function verifyVisibleCompanionFieldRevision(page, cameraBaseline) {
+  if (!readyViewportFixture) {
+    throw new Error(
+      "Visible companion field proof requires the ready FDM viewport fixture.",
+    );
+  }
+
+  const quantityPath = "/v2/sessions/current/data/fields/m/samples/vector";
+  const initialFixtureResponse = await waitForCondition(
+    "initial FDM m field payload",
+    () =>
+      readyViewportFixture.fieldVectorResponses.find(
+        (response) =>
+          response.quantityId === "m" &&
+          response.method === "GET" &&
+          response.fieldRevision === 1 &&
+          response.status === 200,
+      ) ?? null,
+  );
+  const initialBrowserResponse = await waitForCondition(
+    "initial browser FDM m field GET",
+    () =>
+      fieldVectorResponses.find(
+        (response) =>
+          response.method === "GET" &&
+          response.status === 200 &&
+          pathnameFromUrl(response.url) === quantityPath &&
+          new URL(response.url).searchParams.get("component") === "full" &&
+          new URL(response.url).searchParams.get("scope_kind") === "full",
+      ) ?? null,
+  );
+  if (!initialFixtureResponse.etag || !initialFixtureResponse.payloadHash) {
+    throw new Error(
+      `Initial FDM m payload lacks ETag or body hash: ${JSON.stringify(initialFixtureResponse)}.`,
+    );
+  }
+  if (initialBrowserResponse.etag !== initialFixtureResponse.etag) {
+    throw new Error(
+      `Initial browser FDM m response ETag differs from fixture: ${initialBrowserResponse.etag} vs ${initialFixtureResponse.etag}.`,
+    );
+  }
+
+  const before = await sampleCanvasComposite(page);
+  if (!before.nonBlank) {
+    throw new Error(
+      `Visible 3D companion is blank before the field revision change: ${before.variedPixels}/${before.sampledPixels} sampled pixels differ from background.`,
+    );
+  }
+
+  const fieldResponsesBefore = fieldVectorResponses.length;
+  updateFdmFixtureFieldRevision(readyViewportFixture, 2);
+  await page.evaluate(
+    ({ resourceKey, revision }) => {
+      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      if (typeof audit?.invalidateResource !== "function") {
+        throw new Error(
+          "Visible companion field proof requires the opt-in canonical resource invalidation hook.",
+        );
+      }
+      audit.invalidateResource(resourceKey, revision);
+    },
+    {
+      resourceKey: fdmDefaultFieldVectorResourceKey("m"),
+      revision: 2,
+    },
+  );
+
+  const updatedFixtureResponse = await waitForCondition(
+    "revalidated FDM m field payload",
+    () =>
+      readyViewportFixture.fieldVectorResponses.find(
+        (response) =>
+          response.quantityId === "m" &&
+          response.method === "GET" &&
+          response.fieldRevision === 2 &&
+          response.status === 200,
+      ) ?? null,
+  );
+  if (
+    updatedFixtureResponse.ifNoneMatch !== initialFixtureResponse.etag ||
+    updatedFixtureResponse.etag === initialFixtureResponse.etag ||
+    updatedFixtureResponse.payloadHash === initialFixtureResponse.payloadHash
+  ) {
+    throw new Error(
+      "Updated FDM m payload did not prove conditional revalidation with a new ETag and body: " +
+        JSON.stringify({ initialFixtureResponse, updatedFixtureResponse }),
+    );
+  }
+
+  const updatedBrowserResponse = await waitForCondition(
+    "browser receives revised FDM m field payload",
+    () =>
+      fieldVectorResponses
+        .slice(fieldResponsesBefore)
+        .find(
+          (response) =>
+            response.method === "GET" &&
+            response.status === 200 &&
+            pathnameFromUrl(response.url) === quantityPath &&
+            new URL(response.url).searchParams.get("component") === "full" &&
+            new URL(response.url).searchParams.get("scope_kind") === "full" &&
+            response.etag === updatedFixtureResponse.etag,
+        ) ?? null,
+  );
+  if (updatedBrowserResponse.ifNoneMatch !== initialFixtureResponse.etag) {
+    throw new Error(
+      `Revised browser GET did not carry the prior ETag: expected ${initialFixtureResponse.etag}, got ${updatedBrowserResponse.ifNoneMatch}.`,
+    );
+  }
+
+  const rendered = await waitForCondition(
+    "revised FDM field changes visible companion pixels",
+    async () => {
+      await waitForBrowserPaint(page);
+      const after = await sampleCanvasComposite(page);
+      const difference = canvasCompositeDifference(before, after);
+      if (after.nonBlank && difference.changed) {
+        return { after, difference };
+      }
+      throw new Error(
+        `Revised field has not changed the rendered canvas: ${JSON.stringify(difference)}.`,
+      );
+    },
+  );
+  await page.locator(VIEWPORT_3D_CANVAS_SELECTOR).evaluate((canvas) => {
+    if (canvas !== window.__FULLMAG_VISIBLE_COMPANION_CANVAS__) {
+      throw new Error("Canonical field invalidation replaced the visible 3D canvas.");
+    }
+  });
+  const finalWebGL = await assertFinalViewportWebGLState(
+    page,
+    "visible companion FDM field revision",
+  );
+  const cameraAfter = await readViewportCameraSignature(page);
+  if (cameraAfter !== cameraBaseline) {
+    throw new Error(
+      `Canonical field invalidation changed the 3D camera: ${cameraBaseline} -> ${cameraAfter}.`,
+    );
+  }
+
+  return {
+    cameraPreserved: true,
+    changedPixels: rendered.difference.changedPixels,
+    etagBefore: initialFixtureResponse.etag,
+    etagAfter: updatedFixtureResponse.etag,
+    fieldPayloadHashBefore: initialFixtureResponse.payloadHash,
+    fieldPayloadHashAfter: updatedFixtureResponse.payloadHash,
+    finalWebGL,
+    fixtureFieldRevision: readyViewportFixture.fieldRevision,
+    initialGetStatus: initialBrowserResponse.status,
+    updatedGetIfNoneMatch: updatedBrowserResponse.ifNoneMatch,
+    updatedGetStatus: updatedBrowserResponse.status,
+    visibleCanvasPreserved: true,
+  };
 }
 
 async function verifyPlanarViewportToggleLifecycle(page, cycles) {
@@ -3185,3 +3394,4 @@ function isAllowedOptionalActiveSessionResponse(responseUrl, status) {
     return false;
   }
 }
+
