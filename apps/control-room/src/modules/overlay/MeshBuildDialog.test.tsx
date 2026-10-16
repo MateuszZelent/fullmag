@@ -14,6 +14,7 @@ import {
 } from "./MeshBuildDialogRuntimeStatus";
 import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
 import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
+import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 
 describe("MeshBuildDialog", () => {
   it("re-renders when the resolved lane changes even if mesh revisions are stable", () => {
@@ -41,17 +42,29 @@ describe("MeshBuildDialog", () => {
 
   it("requires an explicit FEM lane before loading FEM mesh resources", () => {
     const fdm = activeLaneCapabilityFixture();
-    expect(resolveMeshBuildDialogLane({
+    const laneForActiveLane = (activeLane: typeof fdm | null) =>
+      resolveMeshBuildDialogLane(
+        resolveSessionAuthoringDiscretization({
+          capabilities: { active_lane: activeLane },
+        }),
+      );
+    const fem = {
       ...fdm,
+      authored: { ...fdm.authored!, backend: "fem", discretization: "fem" },
       resolved: { ...fdm.resolved!, backend: "fem", discretization: "fem" },
-    })).toBe("fem");
-    expect(resolveMeshBuildDialogLane(fdm)).toBe("fdm");
-    expect(resolveMeshBuildDialogLane({ ...fdm, resolved: null })).toBe("unknown");
-    expect(resolveMeshBuildDialogLane({
-      ...fdm,
-      source: { ...fdm.source, kind: "unavailable" },
-    })).toBe("unknown");
-    expect(resolveMeshBuildDialogLane(null)).toBe("unknown");
+    };
+
+    expect(laneForActiveLane(fem)).toBe("fem");
+    expect(laneForActiveLane(fdm)).toBe("fdm");
+    expect(laneForActiveLane({ ...fdm, resolved: null })).toBe("fdm");
+    expect(
+      laneForActiveLane({
+        ...fdm,
+        authored: { ...fdm.authored!, backend: "auto", discretization: "auto" },
+        resolved: fem.resolved,
+      }),
+    ).toBe("unknown");
+    expect(laneForActiveLane(null)).toBe("unknown");
 
     expect(shouldLoadMeshBuildDialogFemResources(false, "fem")).toBe(false);
     expect(shouldLoadMeshBuildDialogFemResources(true, "fem")).toBe(true);
