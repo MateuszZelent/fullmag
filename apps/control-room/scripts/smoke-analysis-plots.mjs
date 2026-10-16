@@ -2033,33 +2033,26 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
         String(disabledReason ?? "no disabled reason"));
     }
 
-    const postResponsePromise = page.waitForResponse((response) =>
+    const postResponseOutcomePromise = page.waitForResponse((response) =>
       response.request().method() === "POST" &&
       new URL(response.url()).pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH,
-    { timeout: timeoutMs });
-    const readbackResponsePromise = page.waitForResponse(async (response) => {
-      if (
-        response.request().method() !== "GET" ||
-        new URL(response.url()).pathname !== POSTPROCESSING_DEFINITIONS_FIXTURE_PATH ||
-        fixtureState.modePinState.createRequests.length !== 1
-      ) return false;
-      const payload = await response.json().catch(() => null);
-      return payload?.scene_revision === 1 &&
-        Array.isArray(payload?.definitions) &&
-        payload.definitions.length === 1;
-    }, { timeout: timeoutMs });
-
-    const [postResponse, readbackResponse] = await Promise.all([
-      postResponsePromise,
-      readbackResponsePromise,
-      pinCommand.click({ timeout: timeoutMs }),
-    ]);
-    if (postResponse.status() !== 200 || readbackResponse.status() !== 200) {
-      throw new Error("Canonical mode pin create/readback failed: POST " + postResponse.status() +
-        ", GET " + readbackResponse.status());
+    { timeout: timeoutMs }).then(
+      (response) => ({ error: null, response }),
+      (error) => ({ error, response: null }),
+    );
+    const clickOutcomePromise = pinCommand.click({ timeout: timeoutMs }).then(
+      () => ({ error: null }),
+      (error) => ({ error }),
+    );
+    const clickOutcome = await clickOutcomePromise;
+    if (clickOutcome.error) throw clickOutcome.error;
+    const postOutcome = await postResponseOutcomePromise;
+    if (postOutcome.error) throw postOutcome.error;
+    const postResponse = postOutcome.response;
+    if (postResponse.status() !== 200) {
+      throw new Error("Canonical mode pin create failed: POST " + postResponse.status());
     }
     const postPayload = await postResponse.json();
-    const readback = await readbackResponse.json();
     const createRequests = fixtureState.modePinState.createRequests;
     const postRequests = resourceRequests.filter((request) =>
       request.method === "POST" &&
@@ -2100,22 +2093,6 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
     ) {
       throw new Error("The mode pin POST did not use the exact current-session scope fence.");
     }
-    const savedDefinition = readback.definitions[0];
-    const expectedLabel = definition.label;
-    if (
-      !expectedLabel ||
-      savedDefinition?.definition_id !== definition.definition_id ||
-      savedDefinition?.module_id !== definition.module_id ||
-      savedDefinition?.definition_schema !== definition.definition_schema ||
-      savedDefinition?.data_ref?.run_id !== fixture.runId ||
-      savedDefinition?.data_ref?.dataset_id !== fixture.datasetId ||
-      savedDefinition?.data_ref?.dataset_revision !== fixture.datasetRevision ||
-      readback.scene_revision !== postPayload.scene_revision ||
-      fixtureState.modePinState.sceneRevision !== readback.scene_revision
-    ) {
-      throw new Error("The definition collection readback did not preserve the committed pin owner.");
-    }
-
     const resultReads = fixtureState.modePinState.resultResourceReads;
     const requiredResultPathnames = [
       fixture.catalogPath,
@@ -2162,9 +2139,24 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
       .filter({ hasText: /^Results$/ })
       .first();
     await resultsTab.waitFor({ state: "visible", timeout: timeoutMs });
-    if (await resultsTab.getAttribute("aria-selected") !== "true") {
-      await resultsTab.click({ timeout: timeoutMs });
+    if (await resultsTab.getAttribute("aria-selected") === "true") {
+      throw new Error("The canonical pin fixture must activate Results after the create POST.");
     }
+    const readbackOutcomePromise = page.waitForResponse(async (response) => {
+      if (
+        response.request().method() !== "GET" ||
+        new URL(response.url()).pathname !== POSTPROCESSING_DEFINITIONS_FIXTURE_PATH ||
+        fixtureState.modePinState.createRequests.length !== 1
+      ) return false;
+      const payload = await response.json().catch(() => null);
+      return payload?.scene_revision === 1 &&
+        Array.isArray(payload?.definitions) &&
+        payload.definitions.length === 1;
+    }, { timeout: timeoutMs }).then(
+      (response) => ({ error: null, response }),
+      (error) => ({ error, response: null }),
+    );
+    await resultsTab.click({ timeout: timeoutMs });
     const resultsRootId = "results:run:" + fixture.runId;
     const resonanceFamilyId = resultsRootId + ":resonance";
     const pinnedGroupId = resonanceFamilyId + ":pinned";
@@ -2185,6 +2177,28 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
     }
     await expandResultsNode(resultsRootId);
     await expandResultsNode(resonanceFamilyId);
+    const readbackOutcome = await readbackOutcomePromise;
+    if (readbackOutcome.error) throw readbackOutcome.error;
+    const readbackResponse = readbackOutcome.response;
+    if (readbackResponse.status() !== 200) {
+      throw new Error("Canonical mode pin collection readback failed: GET " + readbackResponse.status());
+    }
+    const readback = await readbackResponse.json();
+    const savedDefinition = readback.definitions[0];
+    const expectedLabel = definition.label;
+    if (
+      !expectedLabel ||
+      savedDefinition?.definition_id !== definition.definition_id ||
+      savedDefinition?.module_id !== definition.module_id ||
+      savedDefinition?.definition_schema !== definition.definition_schema ||
+      savedDefinition?.data_ref?.run_id !== fixture.runId ||
+      savedDefinition?.data_ref?.dataset_id !== fixture.datasetId ||
+      savedDefinition?.data_ref?.dataset_revision !== fixture.datasetRevision ||
+      readback.scene_revision !== postPayload.scene_revision ||
+      fixtureState.modePinState.sceneRevision !== readback.scene_revision
+    ) {
+      throw new Error("The definition collection readback did not preserve the committed pin owner.");
+    }
     const familyRow = page.locator(
       ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + resonanceFamilyId + "\"]",
     );
