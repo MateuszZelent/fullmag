@@ -669,13 +669,19 @@ runtime oraz immutable inputy; API użytkownika nie uruchamia arbitralnego
 SSH/shell z formularza. Transfer CAS weryfikuje digest, ma resume i osobny
 status staging. Ścieżka Windows klienta nie staje się ścieżką scratch Linuksa.
 
-Adapter np. Slurm/HPC otrzymuje jeden konkretny przydział zewnętrzny i
-publikuje ograniczone nim zasoby. Fullmag nie rezerwuje całego hosta obok
-tego przydziału. Provider job ID wiąże się z admission/attempt; utrata ACK
-powoduje lookup tego samego joba. Requeue zewnętrzny jest nowym uzgodnionym
-attemptem, nie równoległą drugą próbą. Polityka CPU/GPU/RAM jest przecięciem
-limitu klastra, operatora i requestu. Pierwsza integracja wielowęzłowa powinna
-przenosić niezależne cases; pojedynczy distributed solve ma dodatkową §11.
+W Fullmag adapterem HPC jest MicroLab broker, który tworzy/uzgadnia konkretny
+przydział VM i publikuje skuteczne, ograniczone nim zasoby. Slurm jest pierwszym
+schedulerem wyłącznie za MicroLab. Fullmag nie uruchamia sbatch/squeue/sacct,
+SSH ani slurmrestd, nie łączy się z login node i nie przechowuje scheduler
+credentials. Fullmag nie rezerwuje całego hosta obok alokacji brokera.
+Provider allocation ID wiąże się z idempotent intent, Task/Attempt i
+generation; utrata ACK uzgadnia ten sam intent, nigdy nie tworzy w ciemno
+drugiego joba. Requeue/zastąpienie VM jest nowym fenced attemptem, nie
+równoległą drugą próbą. Polityka CPU/GPU/RAM jest przecięciem limitu
+przyznanego przez MicroLab, polityki operatora i requestu. Pierwsza integracja
+wielowęzłowa powinna przenosić niezależne cases; pojedynczy distributed solve
+ma dodatkową §11. Pełny identity/scope contract opisuje [ADR 0060](../adr/0060-principal-scoped-deployments-and-multi-project-execution.md);
+API MicroLab pozostaje propozycją wymagającą akceptacji właścicieli brokera.
 
 ## 11. Jeden solve na wielu GPU/CPU — pełny kontrakt docelowy
 

@@ -37,3 +37,12 @@ Następny krok po walidacji źródeł: przegląd kontraktu przez właścicieli M
 - Usunięto z propozycji brokera i planu S0 twierdzenie, że te dwa symbole opisują istniejącą historię kompatybilności. Przyszły scope brokera ma być jawnym, wersjonowanym kontraktem po decyzjach H0; istniejące RunSpec/RunIntent zachowują odczyt.
 - `git diff --check` dla tej korekty dokumentacyjnej: zaliczone. Unit tests pozostają nieuruchamiane zgodnie z zakazem repozytorium.
 - HEAD worktree przy rozpoczęciu korekty: `bc665c997844aa747a212819571eec889bacabe4`; główny checkout nadal `master` na `f9179caf0a0681bdc92c2a87a308be21e9903919`. PR #185 oczekuje na CI/review, więc integracja na `master` jeszcze nie nastąpiła.
+
+## H0 — granica deploymentu i authority — 16.10.2026
+
+- Dodano [ADR 0060](../../adr/0060-principal-scoped-deployments-and-multi-project-execution.md): pierwszy release ma prywatny Fullmag deployment/SessionStore przypisany do jednego principalu; jeden deployment koordynuje wiele dokumentów i tasków, ale każdy Task/Attempt dostaje osobną allocation, scratch/tmp i output. Wspólny multi-user API jest odłożony do osobnego, kompletnego projektu auth/ACL. MicroLab pozostaje jedyną granicą HPC; Slurm jest ukryty za brokerem.
+- Uzgodniono specyfikację zasobów §10 oraz P7-C z R2. Status API MicroLab nadal jest propozycją czekającą na S1; nie twierdzimy, że istnieje provider.
+- Źródła uzasadniają migrację: `AppState.current_live_state` w `crates/fullmag-api/src/types.rs:140`; sesyjny header/fencing w `crates/fullmag-api/src/router_v2/middleware/session_scope.rs:13,30,77`; lokalna capability tylko dla NodePolicy w `crates/fullmag-api/src/types.rs:125-126`; pojedynczy frontendowy kontroler dokumentu w `apps/control-room/src/kernel/KernelProvider.tsx:129`.
+- Obecny wire compatibility to `run_spec.v1`/`run_spec.v2` oraz `run_intent.v1` w `crates/fullmag-application/src/run_spec.rs:16-18`; `crates/fullmag-session/src/types.rs:232` ma projekcję RunIntent. Nie dodano user identity do RunSpec i nie uznano `x-fullmag-session-scope` za auth.
+- `git diff --check`: zaliczone; ręcznie sprawdzono resolution trzech nowych ADR links (P7, HPC plan, compute spec): wszystkie istnieją. Zmiana dokumentacyjna nie wymaga builda; testy jednostkowe nie były uruchamiane.
+- HEAD przed tym fragmentem: `c111221ed48fedc43e4b77a44b80f97125c771aa`. Kod authority/session registry, scoped API, multi-document kernel, UI tabs i równoległy runtime nie są jeszcze zaimplementowane ani zweryfikowane.

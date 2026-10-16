@@ -327,7 +327,7 @@ Kolejność: `H0 → H1/H2 → H3 → H4/H5 → H7`; H6 może dojść później 
 
 ### 9.1 Granice pierwszego release i następnych rozszerzeń
 
-**Pierwszy release:** lokalne karty, poprawna izolacja contextów, scoped control plane, private per-principal deployment i provider MicroLab (Slurm za brokerem), immutable state fan-out dla obsługiwanych eigensolve cases, wynik częściowy, recovery i właściwe zasoby. Może początkowo ograniczać liczbę aktywnych cases lub obsługiwane lane'y, ale ograniczenia muszą być jawne.
+**Pierwszy release:** lokalne karty, poprawna izolacja contextów, scoped control plane, private per-principal deployment i provider MicroLab (Slurm za brokerem), immutable state fan-out dla obsługiwanych eigensolve cases, wynik częściowy, recovery i właściwe zasoby. Jeden deployment może koordynować wiele kart i tasków tego principalu; każde Task/Attempt zachowuje osobne allocation, scratch/tmp, output i receipt. Współdzielony multi-user Fullmag API nie należy do pierwszego release. Zob. [ADR 0060](../../adr/0060-principal-scoped-deployments-and-multi-project-execution.md). Może początkowo ograniczać liczbę aktywnych cases lub obsługiwane lane'y, ale ograniczenia muszą być jawne.
 
 Zachować basic external-dispatch/headless z [HPC v1](../../specs/hpc-cluster-execution-v1.md); zintegrowany provider Fullmaga rozmawia z MicroLab, a nie ze schedulerem klastra. W H0 uzgodnić ten starszy dokument, [compute execution §10](../../specs/compute-resource-execution-v1.md#10-wiele-hostów-i-scheduler-zewnętrzny), ADR 0049/0052 oraz P7-C. Nie tworzyć równoległego, bezpośredniego adaptera Slurma.
 
