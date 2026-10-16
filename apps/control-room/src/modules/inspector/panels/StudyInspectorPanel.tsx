@@ -1660,6 +1660,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     globalDirty,
     profileEditState.dirty,
     stagesDirty,
+    state.stageDrafts,
   ]);
   const resetInspectorDraft = useCallback(() => {
     dispatch({ type: "revertGlobalDraft" });
