@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fmrModalSpectrumSelectionOwner } from "./FmrModalSpectrumInspectorPanel";
+import { fmrModalSpectrumSelectionOwner } from "./FmrModalSpectrumInspectorModel";
 
 describe("FMR modal spectrum Results owner propagation", () => {
   const manifest = {

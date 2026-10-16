@@ -18,8 +18,6 @@ import {
 import {
   buildEigenSpectrumChartModel,
   eigenModeFieldAvailable,
-  frequencyDomainManifestPayload,
-  frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type {
   EigenSpectrumPoint,
@@ -31,6 +29,7 @@ import {
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { FrequencyDomainSpectrumChart } from "../FrequencyDomainCharts";
+import { fmrModalSpectrumSelectionOwner } from "./FmrModalSpectrumInspectorModel";
 import {
   FrequencyDomainModeTable,
   type FrequencyDomainModeTableAction,
@@ -348,39 +347,6 @@ function useFmrModalSpectrumSummary(selection: InspectorPanelProps["selection"])
     spectrumModel,
     spectrumResource,
     spectrumStatus: spectrum.status,
-  };
-}
-
-export function fmrModalSpectrumSelectionOwner(
-  manifestResource: unknown,
-  spectrumResource: unknown,
-  selection?: InspectorPanelProps["selection"],
-): { analysisRunId: string; analysisStageId: string } | null {
-  const manifestOwner = frequencyDomainResultContextFromManifest(
-    frequencyDomainManifestPayload(manifestResource),
-  );
-  const spectrum = record(spectrumResource);
-  if (
-    !manifestOwner.runId?.trim() ||
-    !manifestOwner.stageId?.trim() ||
-    spectrum?.run_id !== manifestOwner.runId ||
-    spectrum?.stage_id !== manifestOwner.stageId
-  ) {
-    return null;
-  }
-  const ref = selection?.ref;
-  const expectedOwner = ref?.type === "frequency-domain"
-    ? { runId: ref.analysisRunId, stageId: ref.analysisStageId }
-    : ref?.type === "analysis-result"
-      ? { runId: ref.runId, stageId: ref.stageId }
-      : null;
-  if (expectedOwner && (
-    expectedOwner.runId !== manifestOwner.runId ||
-    expectedOwner.stageId !== manifestOwner.stageId
-  )) return null;
-  return {
-    analysisRunId: manifestOwner.runId,
-    analysisStageId: manifestOwner.stageId,
   };
 }
 
