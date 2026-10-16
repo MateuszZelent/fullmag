@@ -894,6 +894,12 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
     baseUrl,
   );
   proofs.push(...timeDomainCatalogProofs);
+  const legacyModePinProof = await verifyLegacyModeVisualizationPin(
+    browser,
+    workspaceUrl,
+    baseUrl,
+  );
+  proofs.push(legacyModePinProof);
   persistFixtureProof(false);
   persistFixtureProof(true);
   return proofs;
@@ -1715,6 +1721,640 @@ function createReferenceImportFixture() {
     },
     surfaceId: "dispersion",
   };
+}
+
+
+function createLegacyModePinChartFixture() {
+  const baseFixture = createFrequencyDomainChartFixtures()[0];
+  if (!baseFixture?.expectedSelection || !baseFixture.spectrumPayload) {
+    throw new Error("The FMR mode-pin fixture requires the existing modal-spectrum chart contract.");
+  }
+  const branchId = "pin-branch-fmr-sample-0003";
+  const expectedSelection = {
+    ...baseFixture.expectedSelection,
+    branchId,
+  };
+  let selectedModeFound = false;
+  const spectrumPayload = {
+    ...baseFixture.spectrumPayload,
+    samples: baseFixture.spectrumPayload.samples.map((sample) => ({
+      ...sample,
+      modes: sample.modes.map((mode) => {
+        if (mode.mode_id !== expectedSelection.modeId) return mode;
+        selectedModeFound = true;
+        return { ...mode, branch_id: branchId };
+      }),
+    })),
+  };
+  if (!selectedModeFound) {
+    throw new Error("The FMR mode-pin fixture could not attach its branch to the selected chart mode.");
+  }
+  return {
+    ...baseFixture,
+    expectedSelection,
+    id: "legacy-mode-visualization-pin",
+    spectrumPayload,
+  };
+}
+
+function createLegacyModePinFixture(chartFixture) {
+  const expected = chartFixture.expectedSelection;
+  if (!expected?.branchId || !expected.sampleId || !expected.fieldId || !expected.modeId) {
+    throw new Error("The FMR mode-pin fixture needs exact branch, sample, mode, and field identities.");
+  }
+  const runId = REFERENCE_FIXTURE_RUN_ID;
+  const stageId = REFERENCE_FIXTURE_STAGE_ID;
+  const datasetId = "canonical-modal-eigen-dataset-pin-50c4";
+  const datasetRevision = "canonical-dataset-revision-pin-50c4";
+  const fieldRevision = "field-revision-pin-50c4";
+  const itemSourceRevision = "item-source-revision-pin-50c4";
+  const resultRunPath = "/v2/sessions/current/analysis/results/runs/" + runId;
+  const catalogPath = resultRunPath + "/datasets";
+  const datasetPath = catalogPath + "/" + datasetId;
+  const itemsPath = datasetPath + "/items";
+  const itemPath = itemsPath + "/" + encodeURIComponent(expected.modeId);
+  const datasetStatus = {
+    completeness: "complete",
+    execution: "published",
+    qualification: "unvalidated",
+    resource: "ready",
+  };
+  const fieldRef = {
+    field_id: expected.fieldId,
+    field_revision: fieldRevision,
+    mesh_ref: null,
+    quantity_id: "m",
+    representation: "complex-vector-xyz",
+    resource_key: expected.resourceRef,
+    status: "ready",
+  };
+  const item = {
+    branch_id: expected.branchId,
+    detail_resource: itemPath,
+    display_index: expected.modeIndex,
+    field_ref: fieldRef,
+    frequency_hz: expected.frequencyHz,
+    item_id: expected.modeId,
+    item_kind: "eigen_mode",
+    quality: {
+      qualification: "unvalidated",
+      residual_relative_l2: null,
+      tracking_score: null,
+    },
+    relations: [],
+    sample_id: expected.sampleId,
+    source_revision: itemSourceRevision,
+    status: {
+      completeness: "complete",
+      execution: "published",
+      qualification: "unvalidated",
+      resource: "ready",
+    },
+    wavevector_kf: null,
+  };
+  const datasetSummary = {
+    dataset_id: datasetId,
+    dataset_revision: datasetRevision,
+    item_count: 1,
+    manifest_resource_key: datasetPath,
+    product_kind: "modal_eigen",
+    run_id: runId,
+    sample_count: 1,
+    stage_id: stageId,
+    status: datasetStatus,
+    title: "Pinned FMR modal eigen result",
+  };
+  const manifest = {
+    axes: [],
+    capabilities: {
+      branch_tracking: false,
+      comparison: false,
+      export: true,
+      fields: true,
+      item_paging: true,
+      live_partial_results: false,
+      result_meshes: false,
+      sample_paging: true,
+      server_filtering: false,
+      server_sorting: false,
+    },
+    dataset_id: datasetId,
+    dataset_revision: datasetRevision,
+    default_cursor: {
+      item_id: expected.modeId,
+      sample_id: expected.sampleId,
+    },
+    item_index_resource: itemsPath,
+    item_kinds: ["eigen_mode"],
+    product_kind: "modal_eigen",
+    projections: [],
+    provenance: {
+      fixture: "legacy-mode-pin-browser-proof",
+      producer: "typed-analysis-result-catalog",
+    },
+    run_id: runId,
+    sample_index_resource: datasetPath + "/samples",
+    schema_version: "fullmag.analysis.result_dataset_index.v1",
+    source_artifacts: [],
+    stage_id: stageId,
+    status: datasetStatus,
+    title: "Pinned FMR modal eigen result",
+    topology_policy: "not_applicable",
+    units_policy: "canonical_si",
+  };
+  const artifactRevision = frequencyDomainManifestFixture(chartFixture).result_manifest.revision;
+  const currentRun = referenceCurrentRunFixture();
+  return {
+    artifactRevision,
+    catalog: {
+      items: [datasetSummary],
+      next_cursor: null,
+      revision: "catalog-revision-mode-pin-50c4",
+      run_id: runId,
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      status: "ready",
+      total_count: 1,
+      unsupported_reason: null,
+    },
+    catalogPath,
+    currentRun,
+    datasetId,
+    datasetManifestPath: datasetPath,
+    datasetRevision,
+    fieldRevision,
+    item,
+    itemIndexPath: itemsPath,
+    itemPath,
+    itemSourceRevision,
+    itemsPage: {
+      cursor: null,
+      dataset_id: datasetId,
+      dataset_revision: datasetRevision,
+      items: [item],
+      limit: 50,
+      next_cursor: null,
+      run_id: runId,
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      total_count: 1,
+    },
+    manifest,
+    resultRunPath,
+    runId,
+    runSummary: {
+      ...referenceCurrentRunSummaryFixture(),
+      run_id: runId,
+      selection_reason: "Legacy FMR chart mode selected for canonical dataset pin browser proof.",
+      stage_label: "Resonance",
+    },
+    stageId,
+  };
+}
+
+async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) {
+  const chartFixture = createLegacyModePinChartFixture();
+  const fixture = createLegacyModePinFixture(chartFixture);
+  const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
+  const fixtureState = await installAnalysisDatasetFixtureRoutes(
+    page,
+    chartFixture,
+    null,
+    fixture,
+  );
+  const expectedSessionScope = "session=" + encodeURIComponent(FIXTURE_SESSION_ID) +
+    "&epoch=" + encodeURIComponent(FIXTURE_SESSION_EPOCH) +
+    "&request_scope_epoch=" + encodeURIComponent(FIXTURE_REQUEST_SCOPE_EPOCH);
+  const consoleErrors = [];
+  const pageErrors = [];
+  const failedResponses = [];
+  const failedRequests = [];
+  const resourceRequests = [];
+  const frequencyRequests = [];
+  const isOwnedSessionResource = (requestPath) =>
+    requestPath === CURRENT_RUN_FIXTURE_PATH ||
+    requestPath === DATA_OBSERVATION_FRAMES_FIXTURE_PATH ||
+    requestPath?.startsWith("/v2/sessions/current/analysis/");
+
+  await seedAnalysisSurfacePreference(page, chartFixture.surfaceId);
+  await page.addInitScript(({ apiBase: configuredApiBase }) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      disableRealtime: true,
+      controlRoomApiBase: configuredApiBase,
+    };
+    window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ = true;
+    window.__FULLMAG_CHART_DIAGNOSTICS__ = {
+      activeInstances: 0,
+      createdInstances: 0,
+      disposedInstances: 0,
+      modelBuilds: 0,
+      plannedPoints: 0,
+      renderedPoints: 0,
+      resizeCalls: 0,
+      setOptionCalls: 0,
+    };
+  }, { apiBase: baseUrl });
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const messageText = message.text();
+    if (!messageText.startsWith("Failed to load resource:")) consoleErrors.push(messageText);
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("requestfailed", (request) => {
+    const requestPath = currentSessionPath(request.url());
+    if (!isOwnedSessionResource(requestPath)) return;
+    failedRequests.push({
+      error: request.failure()?.errorText ?? "unknown request failure",
+      method: request.method(),
+      path: requestPath,
+    });
+  });
+  page.on("response", (response) => {
+    if (response.status() < 400) return;
+    const responsePath = currentSessionPath(response.url());
+    if (!isOwnedSessionResource(responsePath)) return;
+    failedResponses.push({
+      method: response.request().method(),
+      path: responsePath,
+      status: response.status(),
+    });
+  });
+  page.on("request", (request) => {
+    if (request.method() === "OPTIONS") return;
+    const requestPath = currentSessionPath(request.url());
+    if (!isOwnedSessionResource(requestPath)) return;
+    resourceRequests.push({
+      method: request.method(),
+      path: requestPath,
+      sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+    });
+    if (requestPath?.startsWith("/v2/sessions/current/analysis/frequency-domain/")) {
+      frequencyRequests.push(requestPath.split("?")[0]);
+    }
+  });
+
+  try {
+    await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+    await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
+    await openAnalysisPlots(page);
+    await selectFrequencyDomainSubview(page, chartFixture);
+    await waitForFrequencyChart(page, chartFixture);
+    await inspectFrequencyChartOption(page, chartFixture);
+
+    const selectedPoint = await clickFrequencyDomainPoint(
+      page,
+      chartFixture.expectedSelection,
+      chartFixture.id,
+      chartFixture,
+      frequencyRequests,
+      failedResponses,
+    );
+    const expectedModePath = FREQUENCY_DOMAIN_PATHS.modePrefix +
+      chartFixture.expectedSelection.sampleIndex + "/" +
+      chartFixture.expectedSelection.modeIndex;
+    if (
+      !frequencyRequests.includes(chartFixture.resourcePath) ||
+      !frequencyRequests.includes(FREQUENCY_DOMAIN_PATHS.manifest) ||
+      !frequencyRequests.includes(expectedModePath)
+    ) {
+      throw new Error("The real FMR chart click did not read the selected mode and its owning frequency-domain artifacts: " +
+        JSON.stringify(frequencyRequests));
+    }
+
+    await page.locator(".fm-header__search").click({ timeout: timeoutMs });
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.waitFor({ state: "visible", timeout: timeoutMs });
+    const searchInput = palette.getByPlaceholder("Search commands");
+    await searchInput.fill("Pin mode visualization");
+    const pinCommand = palette.getByRole("option", { name: /Pin mode visualization/ });
+    await pinCommand.waitFor({ state: "visible", timeout: timeoutMs });
+    const disabledReason = await pinCommand.getAttribute("title");
+    if (await pinCommand.getAttribute("aria-disabled") === "true") {
+      throw new Error("Pin mode visualization was disabled for the real chart selection: " +
+        String(disabledReason ?? "no disabled reason"));
+    }
+
+    const postResponsePromise = page.waitForResponse((response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH,
+    { timeout: timeoutMs });
+    const readbackResponsePromise = page.waitForResponse(async (response) => {
+      if (
+        response.request().method() !== "GET" ||
+        new URL(response.url()).pathname !== POSTPROCESSING_DEFINITIONS_FIXTURE_PATH ||
+        fixtureState.modePinState.createRequests.length !== 1
+      ) return false;
+      const payload = await response.json().catch(() => null);
+      return payload?.scene_revision === 1 &&
+        Array.isArray(payload?.definitions) &&
+        payload.definitions.length === 1;
+    }, { timeout: timeoutMs });
+
+    const [postResponse, readbackResponse] = await Promise.all([
+      postResponsePromise,
+      readbackResponsePromise,
+      pinCommand.click({ timeout: timeoutMs }),
+    ]);
+    if (postResponse.status() !== 200 || readbackResponse.status() !== 200) {
+      throw new Error("Canonical mode pin create/readback failed: POST " + postResponse.status() +
+        ", GET " + readbackResponse.status());
+    }
+    const postPayload = await postResponse.json();
+    const readback = await readbackResponse.json();
+    const createRequests = fixtureState.modePinState.createRequests;
+    const postRequests = resourceRequests.filter((request) =>
+      request.method === "POST" &&
+      new URL(request.path, baseUrl).pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH,
+    );
+    if (createRequests.length !== 1 || postRequests.length !== 1) {
+      throw new Error("Expected exactly one real definitions POST; fixture=" +
+        createRequests.length + ", browser=" + postRequests.length);
+    }
+    const createRequest = createRequests[0];
+    const definition = createRequest.body?.definition;
+    const dataRef = definition?.data_ref;
+    if (
+      !definition ||
+      !dataRef ||
+      createRequest.body.expected_scene_revision !== 0 ||
+      definition.module_id !== "analysis.resonance" ||
+      definition.node_kind !== "analysis.resonance.mode_visualization" ||
+      definition.definition_schema !== "analysis.resonance.mode_visualization.v1" ||
+      dataRef.run_id !== fixture.runId ||
+      dataRef.dataset_id !== fixture.datasetId ||
+      dataRef.dataset_revision !== fixture.datasetRevision ||
+      dataRef.dataset_id === fixture.stageId ||
+      dataRef.dataset_revision === fixture.artifactRevision ||
+      dataRef.dataset_revision === fixture.itemSourceRevision ||
+      dataRef.dataset_revision === String(fixture.currentRun.revision) ||
+      dataRef.field_id !== chartFixture.expectedSelection.fieldId ||
+      dataRef.sample_id !== chartFixture.expectedSelection.sampleId ||
+      dataRef.item_id !== chartFixture.expectedSelection.modeId
+    ) {
+      throw new Error("The actual pin POST did not preserve canonical result owner identity: " +
+        JSON.stringify({ body: createRequest.body, artifactRevision: fixture.artifactRevision,
+          itemSourceRevision: fixture.itemSourceRevision }));
+    }
+    if (
+      createRequest.sessionScope !== expectedSessionScope ||
+      postRequests[0]?.sessionScope !== expectedSessionScope
+    ) {
+      throw new Error("The mode pin POST did not use the exact current-session scope fence.");
+    }
+    const savedDefinition = readback.definitions[0];
+    const expectedLabel = definition.label;
+    if (
+      !expectedLabel ||
+      savedDefinition?.definition_id !== definition.definition_id ||
+      savedDefinition?.module_id !== definition.module_id ||
+      savedDefinition?.definition_schema !== definition.definition_schema ||
+      savedDefinition?.data_ref?.run_id !== fixture.runId ||
+      savedDefinition?.data_ref?.dataset_id !== fixture.datasetId ||
+      savedDefinition?.data_ref?.dataset_revision !== fixture.datasetRevision ||
+      readback.scene_revision !== postPayload.scene_revision ||
+      fixtureState.modePinState.sceneRevision !== readback.scene_revision
+    ) {
+      throw new Error("The definition collection readback did not preserve the committed pin owner.");
+    }
+
+    const resultReads = fixtureState.modePinState.resultResourceReads;
+    const requiredResultPathnames = [
+      fixture.catalogPath,
+      fixture.datasetManifestPath,
+      fixture.itemIndexPath,
+      fixture.itemPath,
+    ];
+    const missingResultReads = requiredResultPathnames.filter((pathname) =>
+      !resultReads.some((request) =>
+        request.method === "GET" && request.pathname === pathname,
+      ),
+    );
+    const unexpectedResultGets = fixtureState.modePinState.unexpectedResultGets;
+    const filteredCatalogRead = resultReads.find((request) =>
+      request.method === "GET" &&
+      request.pathname === fixture.catalogPath &&
+      request.query.productKind === "modal_eigen" &&
+      request.query.stageId === fixture.stageId &&
+      request.query.limit === "500",
+    );
+    const filteredItemRead = resultReads.find((request) =>
+      request.method === "GET" &&
+      request.pathname === fixture.itemIndexPath &&
+      request.query.hasField === "true" &&
+      request.query.itemKind === "eigen_mode" &&
+      request.query.sampleId === chartFixture.expectedSelection.sampleId &&
+      request.query.branchId === chartFixture.expectedSelection.branchId &&
+      request.query.limit === "50",
+    );
+    if (
+      missingResultReads.length > 0 ||
+      unexpectedResultGets.length > 0 ||
+      !filteredCatalogRead ||
+      !filteredItemRead ||
+      resultReads.filter((request) =>
+        request.method === "GET" && request.pathname === fixture.datasetManifestPath,
+      ).length < 2
+    ) {
+      throw new Error("Legacy selection did not resolve through the exact run/stage/product catalog and fenced item owner: " +
+        JSON.stringify({ missingResultReads, unexpectedResultGets, resultReads }));
+    }
+
+    const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger")
+      .filter({ hasText: /^Results$/ })
+      .first();
+    await resultsTab.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await resultsTab.getAttribute("aria-selected") !== "true") {
+      await resultsTab.click({ timeout: timeoutMs });
+    }
+    const resultsRootId = "results:run:" + fixture.runId;
+    const resonanceFamilyId = resultsRootId + ":resonance";
+    const pinnedGroupId = resonanceFamilyId + ":pinned";
+    async function expandResultsNode(nodeId) {
+      const selector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + nodeId + "\"]";
+      const row = page.locator(selector);
+      await row.waitFor({ state: "visible", timeout: timeoutMs });
+      if (await row.getAttribute("aria-expanded") === "false") {
+        const branch = row.locator(".fm-explorer-tree-row__branch");
+        if (await branch.count()) await branch.click({ timeout: timeoutMs });
+        else await row.dblclick({ timeout: timeoutMs });
+      }
+      await page.waitForFunction(
+        (nodeSelector) => document.querySelector(nodeSelector)?.getAttribute("aria-expanded") === "true",
+        selector,
+        { timeout: timeoutMs },
+      );
+    }
+    await expandResultsNode(resultsRootId);
+    await expandResultsNode(resonanceFamilyId);
+    const familyRow = page.locator(
+      ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + resonanceFamilyId + "\"]",
+    );
+    if (
+      await familyRow.count() !== 1 ||
+      !(await familyRow.innerText()).includes("Resonance & FMR")
+    ) {
+      throw new Error("The run-scoped Resonance & FMR family is missing or duplicated.");
+    }
+    const pinnedGroup = page.locator(
+      ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + pinnedGroupId + "\"]",
+    );
+    await pinnedGroup.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await pinnedGroup.count() !== 1) {
+      throw new Error("The persisted mode pin did not produce exactly one Resonance & FMR pin group.");
+    }
+    await pinnedGroup.click({ timeout: timeoutMs });
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+      ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + pinnedGroupId + "\"]",
+      { timeout: timeoutMs },
+    );
+    const groupInspector = page.locator(
+      '.fm-inspector [data-inspector-owner="results.pinned_visualizations"]',
+    );
+    await groupInspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const groupInspectorOwner = await groupInspector.getAttribute("data-inspector-owner");
+    const groupInspectorText = (await groupInspector.innerText()).replace(/\s+/g, " ");
+    if (
+      !groupInspectorText.includes(expectedLabel) ||
+      !/Pinned\s+1/.test(groupInspectorText) ||
+      !new RegExp("Scene revision\\s+" + readback.scene_revision).test(groupInspectorText)
+    ) {
+      throw new Error("Pinned Visualizations Inspector did not show the stored label, count, and scene revision: " +
+        groupInspectorText);
+    }
+
+    await expandResultsNode(pinnedGroupId);
+    const pinnedModeRows = page.locator(
+      ".fm-explorer [role=\"treeitem\"][data-node-id^=\"" + pinnedGroupId + ":\"]",
+    );
+    await pinnedModeRows.first().waitFor({ state: "visible", timeout: timeoutMs });
+    if (await pinnedModeRows.count() !== 1) {
+      throw new Error("The canonical pin did not join to exactly one published FMR mode child.");
+    }
+    const pinnedModeRow = pinnedModeRows.first();
+    const pinnedModeNodeId = await pinnedModeRow.getAttribute("data-node-id");
+    if (!pinnedModeNodeId) {
+      throw new Error("The pinned mode child did not expose its Explorer identity.");
+    }
+    const pinnedModeText = (await pinnedModeRow.innerText()).replace(/\s+/g, " ");
+    if (
+      !pinnedModeText.includes(expectedLabel) ||
+      /not published/i.test(pinnedModeText)
+    ) {
+      throw new Error("The persisted pin did not resolve to its published mode node: " + pinnedModeText);
+    }
+    await pinnedModeRow.click({ timeout: timeoutMs });
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+      ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + pinnedModeNodeId + "\"]",
+      { timeout: timeoutMs },
+    );
+    const modeInspector = page.locator(
+      '[data-inspector-owner="frequency-domain.eigen-mode"]',
+    );
+    await modeInspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const modeInspectorText = (await modeInspector.innerText()).replace(/\s+/g, " ");
+    for (const expectedText of [
+      "sample " + chartFixture.expectedSelection.sampleIndex +
+        ", mode " + chartFixture.expectedSelection.modeIndex,
+      chartFixture.expectedSelection.fieldId,
+      chartFixture.expectedSelection.resourceRef,
+    ]) {
+      if (!modeInspectorText.includes(expectedText)) {
+        throw new Error("Selected persisted mode Inspector lost the exact sample/mode/field owner " +
+          expectedText + ": " + modeInspectorText);
+      }
+    }
+
+    const ownedRequests = resourceRequests.filter((request) =>
+      isOwnedSessionResource(request.path),
+    );
+    const unscopedRequests = ownedRequests.filter((request) =>
+      request.sessionScope !== expectedSessionScope,
+    );
+    const definitionsReadback = fixtureState.modePinState.definitionListResponses.filter((entry) =>
+      entry.sceneRevision === readback.scene_revision &&
+      entry.count === 1 &&
+      entry.definitionIds.includes(definition.definition_id),
+    );
+    if (
+      unscopedRequests.length > 0 ||
+      definitionsReadback.length === 0 ||
+      consoleErrors.length > 0 ||
+      pageErrors.length > 0 ||
+      failedResponses.length > 0 ||
+      failedRequests.length > 0
+    ) {
+      throw new Error("Canonical mode pin browser audit failed: " + JSON.stringify({
+        unscopedRequests,
+        definitionsReadback,
+        consoleErrors,
+        pageErrors,
+        failedResponses,
+        failedRequests,
+      }));
+    }
+
+    const proof = {
+      artifactRevision: fixture.artifactRevision,
+      fixture: "legacy-fmr-chart-click-canonical-mode-pin",
+      dataQualification: "fixture data and provenance are unvalidated; this browser case proves UI/resource identity plumbing only.",
+      limitation: "The real chart-produced legacy selection does not separately exercise the FMR table-select handler.",
+      owner: {
+        runId: fixture.runId,
+        stageId: fixture.stageId,
+        branchId: chartFixture.expectedSelection.branchId,
+        sampleId: chartFixture.expectedSelection.sampleId,
+        fieldId: chartFixture.expectedSelection.fieldId,
+        itemId: chartFixture.expectedSelection.modeId,
+        datasetId: fixture.datasetId,
+        datasetRevision: fixture.datasetRevision,
+        fieldRevision: fixture.fieldRevision,
+        itemSourceRevision: fixture.itemSourceRevision,
+      },
+      chartClick: selectedPoint,
+      command: {
+        title: "Pin mode visualization",
+        source: "visible command palette",
+        postCount: postRequests.length,
+        expectedSceneRevision: createRequest.body.expected_scene_revision,
+      },
+      persistedDefinition: {
+        definitionId: definition.definition_id,
+        label: expectedLabel,
+        moduleId: definition.module_id,
+        nodeKind: definition.node_kind,
+        schema: definition.definition_schema,
+        dataRef: dataRef,
+        readbackSceneRevision: readback.scene_revision,
+        readbackCount: readback.definitions.length,
+      },
+      explorer: {
+        resultsRootId,
+        resonanceFamilyId,
+        pinnedGroupId,
+        pinnedGroupCount: 1,
+        pinnedModeNodeId: await pinnedModeRow.getAttribute("data-node-id"),
+        pinnedModeNodeCount: await pinnedModeRows.count(),
+      },
+      inspectors: {
+        groupOwner: groupInspectorOwner,
+        groupText: groupInspectorText,
+        modeOwner: await modeInspector.getAttribute("data-inspector-owner"),
+        modeText: modeInspectorText,
+      },
+      sessionScope: expectedSessionScope,
+      requests: resourceRequests,
+      failures: { consoleErrors, pageErrors, failedResponses, failedRequests },
+    };
+    writeFileSync(
+      path.join(acceptanceDirectory, "analysis-canonical-mode-pin-proof.json"),
+      JSON.stringify(proof, null, 2) + "\n",
+      "utf8",
+    );
+    return proof;
+  } finally {
+    await page.close();
+  }
 }
 
 async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl) {
@@ -3226,9 +3866,11 @@ async function installAnalysisDatasetFixtureRoutes(
   page,
   frequencyDomainFixture = null,
   timeDomainFixture = null,
+  modePinFixture = null,
 ) {
   const referenceImportEnabled = frequencyDomainFixture?.referenceImport === true;
   const timeDomainCatalogEnabled = timeDomainFixture !== null;
+  const modePinEnabled = modePinFixture !== null;
   const referenceImportState = {
     definitionListResponses: [],
     definitions: [],
@@ -3240,6 +3882,14 @@ async function installAnalysisDatasetFixtureRoutes(
     analysisResultReads: [],
     observationFrameReads: [],
     unexpectedAnalysisResultGets: [],
+  };
+  const modePinState = {
+    createRequests: [],
+    definitionListResponses: [],
+    definitions: [],
+    resultResourceReads: [],
+    unexpectedResultGets: [],
+    sceneRevision: 0,
   };
   const datasetRef = "analysis-fixture";
   const revision = 17;
@@ -3330,7 +3980,7 @@ async function installAnalysisDatasetFixtureRoutes(
       "x-api-contract-version": "1.0.0",
     };
     if (
-      (referenceImportEnabled || timeDomainCatalogEnabled) &&
+      (referenceImportEnabled || timeDomainCatalogEnabled || modePinEnabled) &&
       request.method() === "OPTIONS"
     ) {
       await route.fulfill({
@@ -3338,11 +3988,57 @@ async function installAnalysisDatasetFixtureRoutes(
         headers: {
           ...cors,
           "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "content-type",
-          "access-control-allow-methods": referenceImportEnabled
+          "access-control-allow-methods": referenceImportEnabled || modePinEnabled
             ? "GET, POST, DELETE, OPTIONS"
             : "GET, OPTIONS",
         },
         status: 204,
+      });
+      return;
+    }
+    if (
+      modePinEnabled &&
+      request.method() === "POST" &&
+      url.pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH
+    ) {
+      let body = null;
+      try {
+        body = request.postDataJSON();
+      } catch {
+        body = null;
+      }
+      modePinState.createRequests.push({
+        body,
+        path: currentSessionPath(request.url()),
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+      if (!body || typeof body !== "object" || !body.definition || typeof body.definition !== "object") {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Mode-pin fixture received an invalid definition-create request." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 400,
+        });
+        return;
+      }
+      if (body.expected_scene_revision !== modePinState.sceneRevision) {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Fixture scene revision conflict during mode-pin creation." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 409,
+        });
+        return;
+      }
+      const sceneRevision = modePinState.sceneRevision + 1;
+      const definition = { ...body.definition, revision: sceneRevision };
+      modePinState.definitions.push(definition);
+      modePinState.sceneRevision = sceneRevision;
+      await route.fulfill({
+        body: JSON.stringify({ definition, scene_revision: sceneRevision }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
       });
       return;
     }
@@ -3464,6 +4160,58 @@ async function installAnalysisDatasetFixtureRoutes(
       return;
     }
     if (
+      modePinEnabled &&
+      url.pathname.startsWith("/v2/sessions/current/analysis/results/")
+    ) {
+      const query = {
+        branchId: url.searchParams.get("branch_id"),
+        hasField: url.searchParams.get("has_field"),
+        itemKind: url.searchParams.get("item_kind"),
+        limit: url.searchParams.get("limit"),
+        productKind: url.searchParams.get("product_kind"),
+        sampleId: url.searchParams.get("sample_id"),
+        stageId: url.searchParams.get("stage_id"),
+      };
+      modePinState.resultResourceReads.push({
+        method: request.method(),
+        path: currentSessionPath(request.url()),
+        pathname: url.pathname,
+        query,
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+      let resultResource = null;
+      if (request.method() === "GET" && url.pathname === modePinFixture.catalogPath) {
+        resultResource = modePinFixture.catalog;
+      } else if (request.method() === "GET" && url.pathname === modePinFixture.datasetManifestPath) {
+        resultResource = modePinFixture.manifest;
+      } else if (request.method() === "GET" && url.pathname === modePinFixture.itemIndexPath) {
+        resultResource = modePinFixture.itemsPage;
+      } else if (request.method() === "GET" && url.pathname === modePinFixture.itemPath) {
+        resultResource = modePinFixture.item;
+      }
+      if (!resultResource) {
+        modePinState.unexpectedResultGets.push({
+          method: request.method(),
+          path: currentSessionPath(request.url()),
+          sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+        });
+        await route.fulfill({
+          body: JSON.stringify({ error: "Unexpected analysis-result resource in legacy mode-pin fixture." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 404,
+        });
+        return;
+      }
+      await route.fulfill({
+        body: JSON.stringify(resultResource),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (
       timeDomainCatalogEnabled &&
       url.pathname.startsWith("/v2/sessions/current/analysis/results/")
     ) {
@@ -3507,13 +4255,35 @@ async function installAnalysisDatasetFixtureRoutes(
       return;
     }
     if (
-      (referenceImportEnabled || timeDomainCatalogEnabled) &&
+      (referenceImportEnabled || timeDomainCatalogEnabled || modePinEnabled) &&
       url.pathname === CURRENT_RUN_FIXTURE_PATH
     ) {
       await route.fulfill({
         body: JSON.stringify(timeDomainCatalogEnabled
           ? timeDomainFixture.currentRun
-          : referenceCurrentRunFixture()),
+          : modePinEnabled
+            ? modePinFixture.currentRun
+            : referenceCurrentRunFixture()),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (modePinEnabled && url.pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH) {
+      const definitionCollection = {
+        count: modePinState.definitions.length,
+        definitions: modePinState.definitions,
+        scene_revision: modePinState.sceneRevision,
+      };
+      modePinState.definitionListResponses.push({
+        count: definitionCollection.count,
+        definitionIds: definitionCollection.definitions.map((definition) => definition.definition_id),
+        sceneRevision: definitionCollection.scene_revision,
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+      await route.fulfill({
+        body: JSON.stringify(definitionCollection),
         contentType: "application/json",
         headers: cors,
         status: 200,
@@ -3569,17 +4339,19 @@ async function installAnalysisDatasetFixtureRoutes(
       });
       return;
     }
-    if (referenceImportEnabled && url.pathname === DATA_ARTIFACTS_FIXTURE_PATH) {
+    if ((referenceImportEnabled || modePinEnabled) && url.pathname === DATA_ARTIFACTS_FIXTURE_PATH) {
       await route.fulfill({ body: "[]", contentType: "application/json", headers: cors, status: 200 });
       return;
     }
     if (
-      (referenceImportEnabled || timeDomainCatalogEnabled) &&
+      (referenceImportEnabled || timeDomainCatalogEnabled || modePinEnabled) &&
       url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH
     ) {
       const frames = { frames: [], next_cursor: null, run_id: timeDomainCatalogEnabled
         ? timeDomainFixture.runId
-        : REFERENCE_FIXTURE_RUN_ID };
+        : modePinEnabled
+          ? modePinFixture.runId
+          : REFERENCE_FIXTURE_RUN_ID };
       if (timeDomainCatalogEnabled) {
         timeDomainState.observationFrameReads.push({
           frameCount: frames.frames.length,
@@ -3600,9 +4372,10 @@ async function installAnalysisDatasetFixtureRoutes(
       const status = analysisStatusFixture({
         frequencyDomainPublished: Boolean(frequencyDomainFixture),
         eigenModesPublished: frequencyDomainFixture?.calculationMode !== "frequency_response",
-        currentRunPublished: referenceImportEnabled || timeDomainCatalogEnabled,
+        currentRunPublished: referenceImportEnabled || timeDomainCatalogEnabled || modePinEnabled,
       });
       if (timeDomainCatalogEnabled) status.run = timeDomainFixture.runSummary;
+      if (modePinEnabled) status.run = modePinFixture.runSummary;
       await route.fulfill({
         body: JSON.stringify(status),
         contentType: "application/json",
@@ -3704,6 +4477,7 @@ async function installAnalysisDatasetFixtureRoutes(
     await fulfillMissingFixtureResource(route, cors);
   });
   referenceImportState.timeDomainState = timeDomainState;
+  referenceImportState.modePinState = modePinState;
   return referenceImportState;
 }
 
