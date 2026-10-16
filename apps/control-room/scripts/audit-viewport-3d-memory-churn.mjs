@@ -94,6 +94,7 @@ const auditedRequests = [];
 // Failed transport URLs are distinct evidence from the viewport's canonical
 // resource keys; retain the URL Playwright actually requested for fixture review.
 const requestFailureDiagnostics = [];
+const visualizationAckRequests = [];
 const fixture = createFdmFixture({ trackFieldResponses: true });
 let auditActive = false;
 let auditPhase = "bootstrap";
@@ -129,6 +130,21 @@ page.on("response", (response) => {
   if (status >= 400) errors.push(`${status} ${response.url()}`);
 });
 page.on("request", (request) => {
+  if (
+    request.method() === "POST" &&
+    new URL(request.url()).pathname === "/v2/sessions/current/visualization/client-acks"
+  ) {
+    const acknowledgement = request.postDataJSON();
+    visualizationAckRequests.push({
+      error: acknowledgement.error ?? null,
+      observedAtUnixMs: Date.now(),
+      phase: auditPhase,
+      revision: acknowledgement.revision,
+      status: acknowledgement.status,
+      viewportId: acknowledgement.viewport_id ?? null,
+    });
+    if (visualizationAckRequests.length > 512) visualizationAckRequests.shift();
+  }
   if (!auditActive) return;
   const requestUrl = request.url();
   auditedRequests.push(`${request.method()} ${requestUrl}`);
@@ -354,6 +370,7 @@ try {
   if (injectIdleLoop) {
     await injectViewportIdleLoop(page);
   }
+  auditPhase = "idle-observation";
   const idleRequestStart = auditedRequests.length;
   const idlePerformanceBefore = await captureViewportPerformanceSnapshot(page, "idle-before");
   const idle = await verifyViewportIdle(page, 5_000);
@@ -460,6 +477,7 @@ try {
     fixtureRequests,
     requestFailureDiagnostics,
     topologyRequests,
+    visualizationAckRequests,
   });
   throw error;
 } finally {
@@ -1019,6 +1037,7 @@ async function reportAuditFailure(
     fixtureRequests,
     requestFailureDiagnostics,
     topologyRequests,
+    visualizationAckRequests,
   },
 ) {
   const snapshot = await page
@@ -1079,6 +1098,8 @@ async function reportAuditFailure(
         fixtureRequests: fixtureRequests.slice(-20),
         requestFailureDiagnostics,
         topologyRequests: topologyRequests.slice(-10),
+        visualizationAckRequests: visualizationAckRequests.slice(-32),
+        latestVisualizationAcks: fixture.clientAcks,
         visualizationState: fixture.visualizationState,
       },
       null,
