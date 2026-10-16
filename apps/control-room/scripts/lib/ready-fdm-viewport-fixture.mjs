@@ -35,14 +35,34 @@ const EXACT_FIXTURE_PATHS = new Set([
   "/v2/workspace/settings/update.available",
   "/v2/sessions/current/status",
   "/v2/sessions/current/visualization/state",
+  "/v2/sessions/current/visualization/client-acks",
+  "/v2/sessions/current/visualization/mode-compositions/active",
   "/v2/sessions/current/data/domain/meta",
   "/v2/sessions/current/data/domain/fdm-multilayer-layout",
+  "/v2/sessions/current/data/fdm-region-memberships",
+  "/v2/sessions/current/data/quantities",
+  "/v2/sessions/current/data/scalars",
   FDM_PARTIAL_ACTIVE_MASK_PATH,
   "/v2/sessions/current/data/fields",
   "/v2/sessions/current/data/domain/topology",
   "/v2/sessions/current/model/scene",
   "/v2/sessions/current/model/universe",
+  "/v2/sessions/current/model/current-transports",
+  "/v2/sessions/current/model/couplings",
+  "/v2/sessions/current/model/frozen-spins",
+  "/v2/sessions/current/model/geometry/capabilities",
+  "/v2/sessions/current/model/geometry/validation",
+  "/v2/sessions/current/model/material-fields",
+  "/v2/sessions/current/model/physics-graph",
+  "/v2/sessions/current/model/planar-monitors",
+  "/v2/sessions/current/model/readiness",
+  "/v2/sessions/current/model/regions",
+  "/v2/sessions/current/meshing/capabilities",
+  "/v2/sessions/current/meshing/semantics",
   "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+  "/v2/sessions/current/persistence/checkpoints",
+  "/v2/sessions/current/simulation/solver/status",
+  "/v2/sessions/current/simulation/stages/execution",
 ]);
 
 export function createFdmFixture({ trackFieldResponses = false } = {}) {
@@ -50,6 +70,12 @@ export function createFdmFixture({ trackFieldResponses = false } = {}) {
   const fixture = {
     fieldRevision: 1,
     fieldVectorResponses: [],
+    clientAcks: [],
+    clientAckRevision: 0,
+    sceneRevision: 0,
+    hasExecutionPlan: false,
+    hasPersistedRegionMembershipDescriptor: false,
+    hasStageExecution: false,
     multilayerEnabled: false,
     patchCount: 0,
     status: null,
@@ -177,6 +203,248 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         await fulfillJson(route, fdmStatusFixture(fixture));
         return;
       }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/geometry/validation"
+      ) {
+        await fulfillJson(route, fdmGeometryValidationFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/readiness"
+      ) {
+        await fulfillJson(route, fdmModelReadinessFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/simulation/solver/status"
+      ) {
+        await fulfillJson(route, fdmSolverStatusFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/geometry/capabilities"
+      ) {
+        await fulfillJson(route, fdmGeometryCapabilitiesFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/meshing/capabilities"
+      ) {
+        await fulfillJson(route, fdmMeshCapabilitiesFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/meshing/semantics"
+      ) {
+        await fulfillJson(route, fdmMeshSemanticsFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/persistence/checkpoints"
+      ) {
+        await fulfillJson(route, { checkpoints: [] });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/planar-monitors"
+      ) {
+        await fulfillJson(route, {
+          scene_revision: fixture.sceneRevision,
+          count: 0,
+          monitors: [],
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/frozen-spins"
+      ) {
+        await fulfillJson(route, {
+          revision: fixture.sceneRevision,
+          count: 0,
+          definitions: [],
+          runtime_application: null,
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/regions"
+      ) {
+        await fulfillJson(route, {
+          scene_revision: fixture.sceneRevision,
+          geometry_realization_revision: fixture.sceneRevision,
+          region_topology_revision: fixture.sceneRevision,
+          region_membership_revision: fixture.sceneRevision,
+          region_coefficients_revision: fixture.sceneRevision,
+          region_initial_state_revision: fixture.sceneRevision,
+          regions: [],
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/material-fields"
+      ) {
+        await fulfillJson(route, {
+          scene_revision: fixture.sceneRevision,
+          region_coefficients_revision: fixture.sceneRevision,
+          fields: [],
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/couplings"
+      ) {
+        await fulfillJson(route, {
+          scene_revision: fixture.sceneRevision,
+          couplings: [],
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/physics-graph"
+      ) {
+        await fulfillJson(route, {
+          scene_revision: fixture.sceneRevision,
+          schema_version: "physics_graph.v1",
+          objects: [],
+          modules: [],
+          edges: [],
+          provenance: { normalizer: "physics_graph.v1" },
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/model/current-transports"
+      ) {
+        await fulfillJson(route, {
+          scene_revision: fixture.sceneRevision,
+          items: [],
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/data/quantities"
+      ) {
+        await fulfillJson(route, fdmQuantityCatalogFixture());
+        return;
+      }
+      if (
+        path === "/v2/sessions/current/visualization/client-acks" &&
+        request.method() === "GET"
+      ) {
+        await fulfillJson(route, {
+          revision: fixture.clientAckRevision,
+          entries: fixture.clientAcks,
+        });
+        return;
+      }
+      if (
+        path === "/v2/sessions/current/visualization/client-acks" &&
+        request.method() === "POST"
+      ) {
+        const acknowledgement = parseVisualizationClientAck(request);
+        if (acknowledgement === null) {
+          await route.fallback();
+          return;
+        }
+        const entry = {
+          ...acknowledgement,
+          received_at_unix_ms: Date.now(),
+        };
+        const existingIndex = fixture.clientAcks.findIndex(
+          (candidate) =>
+            candidate.client_id === entry.client_id &&
+            (candidate.viewport_id ?? null) === (entry.viewport_id ?? null),
+        );
+        if (existingIndex === -1) {
+          fixture.clientAcks.push(entry);
+        } else {
+          fixture.clientAcks[existingIndex] = entry;
+        }
+        fixture.clientAckRevision += 1;
+        await fulfillJson(route, entry);
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/visualization/mode-compositions/active"
+      ) {
+        await fulfillJson(route, fdmModeCompositionFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/data/scalars"
+      ) {
+        if (Array.from(requestUrl.searchParams.entries()).length !== 3) {
+          await route.fallback();
+          return;
+        }
+        if (
+          requestUrl.searchParams.get("columns") !==
+            "step,time,mx,my,mz,e_total" ||
+          requestUrl.searchParams.get("limit") !== "1" ||
+          requestUrl.searchParams.get("tail") !== "true"
+        ) {
+          await route.fallback();
+          return;
+        }
+        const columns = ["step", "time", "mx", "my", "mz", "e_total"];
+        await fulfillJson(route, {
+          revision: fixture.status.resources.scalars_revision,
+          total_rows: 0,
+          returned_rows: 0,
+          columns,
+          rows: [],
+          observation_frames: [],
+        });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/data/fdm-region-memberships"
+      ) {
+        if (
+          fixture.status.domain.discretization === "fdm" &&
+          fixture.status.run === null &&
+          !fixture.hasExecutionPlan &&
+          !fixture.hasPersistedRegionMembershipDescriptor
+        ) {
+          await fulfillEmpty(route, 204);
+        } else {
+          await route.fallback();
+        }
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/simulation/stages/execution"
+      ) {
+        if (
+          fixture.status.run === null &&
+          fixture.status.resources.stages_revision === 0 &&
+          !fixture.hasStageExecution
+        ) {
+          await fulfillEmpty(route, 204);
+        } else {
+          await route.fallback();
+        }
+        return;
+      }
       if (path === "/v2/sessions/current/visualization/state") {
         if (request.method() === "PATCH") {
           const patch = parsePatchBody(request);
@@ -209,7 +477,7 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         if (fixture.multilayerEnabled) {
           await fulfillJson(route, fdmMultilayerLayoutFixture());
         } else {
-          await fulfillEmpty(route, 204);
+          await fulfillJson(route, fdmUnavailableMultilayerLayoutFixture(fixture));
         }
         return;
       }
@@ -293,7 +561,11 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         request.method() === "GET" &&
         path === "/v2/sessions/current/model/scene"
       ) {
-        await fulfillJson(route, { objects: [], revision: 0, schema_version: 1 });
+        await fulfillJson(route, {
+          objects: [],
+          revision: fixture.sceneRevision,
+          schema_version: 1,
+        });
         return;
       }
       if (
@@ -608,6 +880,400 @@ function fdmMultilayerLayoutFixture() {
   };
 }
 
+function fdmUnavailableMultilayerLayoutFixture(fixture) {
+  return {
+    schema_version: "fdm-multilayer-layout.v1",
+    domain_generation_id: String(fixture.status.domain.generation_id),
+    available: false,
+    unavailable_reason: "not_fdm_multilayer",
+    backend: "fdm",
+    layout_revision: fixture.status.resources.domain_generation_id,
+    observation_revision: fixture.fieldRevision,
+    execution_revision: fixture.status.resources.stages_revision,
+    layout_fingerprint: null,
+    strategy: null,
+    requested_mode: null,
+    resolved_mode: null,
+    requested_common_cell_size: null,
+    common_transform_layout: null,
+    layers: [],
+    airbox: {
+      carrier_available: false,
+      h_demag_available: false,
+      h_eff_available: false,
+      unavailable_reason: "not_fdm_multilayer",
+      h_eff_unavailable_reason: "fdm_multilayer_airbox_h_eff_unavailable.v1",
+      cells: null,
+      origin_m: null,
+      cell_size_m: null,
+      carrier_fingerprint: null,
+      sample_count: null,
+      value_count: null,
+      carrier_revision: null,
+      source_policy: null,
+      target_only: null,
+      source_grid_fingerprints: null,
+      source_runtime_identity: null,
+    },
+  };
+}
+
+function fdmGeometryValidationFixture(fixture) {
+  return {
+    scene_revision: fixture.sceneRevision,
+    backend_target: "fem",
+    status: "ready",
+    dirty: false,
+    diagnostics: [],
+  };
+}
+
+function fdmModelReadinessFixture(fixture) {
+  const checks = [
+    {
+      id: "method",
+      state: "blocked",
+      label: "Simulation method",
+      target_resource: "model/study",
+      reason: "Choose FEM or FDM in Study settings.",
+    },
+    {
+      id: "domain",
+      state: "complete",
+      label: "Domain policy",
+      target_resource: "meshing/policies/universe",
+      reason:
+        "Automatic bounds will be derived after geometry is added. You can configure manual dimensions now or later.",
+    },
+    {
+      id: "geometry",
+      state: "blocked",
+      label: "Geometry",
+      target_resource: "model/scene",
+      reason: "Add at least one magnetic object.",
+    },
+    {
+      id: "material",
+      state: "blocked",
+      label: "Material",
+      target_resource: "model/materials",
+      reason: "Assign a material to every magnetic object.",
+    },
+    {
+      id: "texture",
+      state: "blocked",
+      label: "Initial magnetization",
+      target_resource: "model/magnetization-assets",
+      reason: "Assign initial magnetization to every magnetic object.",
+    },
+    {
+      id: "interactions",
+      state: "blocked",
+      label: "Interactions",
+      target_resource: "model/objects/interactions",
+      reason: "Enable at least one interaction for every magnetic object.",
+    },
+    {
+      id: "discretization",
+      state: "blocked",
+      label: "Discretization",
+      target_resource: "model/study",
+      reason: "Choose FDM or FEM discretization.",
+    },
+    {
+      id: "study",
+      state: "blocked",
+      label: "Study",
+      target_resource: "model/study",
+      reason: "Add at least one study stage.",
+    },
+    {
+      id: "execution",
+      state: "complete",
+      label: "Execution request",
+      target_resource: "model/study",
+      reason:
+        "The requested device is configured; engine availability is checked during preparation for each run.",
+    },
+  ];
+  const blockers = checks
+    .filter((check) => check.state !== "complete")
+    .map((check) => check.reason);
+  return {
+    scene_revision: fixture.sceneRevision,
+    ready_to_run: false,
+    ready_to_export: false,
+    checks,
+    blockers,
+    capabilities: {
+      move: { available: true, reason: null },
+      rotate: {
+        available: false,
+        reason:
+          "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+      },
+      scale: {
+        available: false,
+        reason:
+          "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+      },
+    },
+  };
+}
+
+function fdmSolverStatusFixture(fixture) {
+  return {
+    revision: 0,
+    runtime_state: "idle",
+    runtime_status_kind: "idle",
+    runtime_status_code: "idle",
+    session_status: "running",
+    is_busy: false,
+    can_accept_commands: true,
+    run_id: null,
+    stage_kind: null,
+    warnings: [],
+  };
+}
+
+function fdmGeometryCapabilitiesFixture(fixture) {
+  const primitiveCapabilities = [
+    ["box", "Box", "core", true, true, true, true, "production"],
+    ["cylinder", "Cylinder", "core", true, true, true, true, "production"],
+    ["sphere", "Sphere", "mumax", false, false, false, true, "preview"],
+    ["ellipsoid", "Ellipsoid", "mumax", false, false, false, true, "preview"],
+    ["disk", "Disk", "core", true, true, true, true, "production"],
+    ["thin_film", "Thin Film", "mumax", true, true, true, true, "production"],
+    ["pillar", "Pillar", "mumax", true, true, true, true, "production"],
+    ["nanowire", "Nanowire", "mumax", true, true, true, true, "production"],
+    ["ring", "Ring", "mumax", true, true, true, true, "production"],
+    ["arch_waveguide", "Arch Waveguide", "core", true, true, true, false, "production"],
+    ["microstrip_antenna_layout", "Microstrip Antenna Layout", "antenna", true, false, true, false, "preview"],
+    ["cpw_antenna_layout", "CPW Antenna Layout", "antenna", true, false, true, false, "preview"],
+    ["triangular_prism", "Triangular Prism", "core", false, false, false, true, "preview"],
+    ["cone", "Cone", "dcc", false, false, false, true, "preview"],
+    ["capsule", "Capsule", "dcc", false, false, false, true, "preview"],
+    ["tube", "Tube", "dcc", false, false, false, true, "preview"],
+    ["wedge", "Wedge", "dcc", false, false, false, true, "preview"],
+    ["polygon_prism", "Polygon Prism", "dcc", false, false, false, true, "preview"],
+  ].map(([id, label, category, fem, fdm, dsl, boolean, status]) => ({
+    id,
+    label,
+    category,
+    fem,
+    fdm,
+    dsl,
+    boolean,
+    status,
+  }));
+  return {
+    revision: fixture.sceneRevision,
+    primitive_capabilities: primitiveCapabilities,
+    csg_capabilities: [
+      {
+        op: "union",
+        fem: false,
+        fdm: false,
+        dsl: false,
+        status: "unsupported",
+        notes:
+          "Union is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+      },
+      {
+        op: "subtract",
+        fem: true,
+        fdm: true,
+        dsl: true,
+        status: "production",
+        notes:
+          "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings.",
+      },
+      {
+        op: "intersect",
+        fem: false,
+        fdm: false,
+        dsl: false,
+        status: "unsupported",
+        notes:
+          "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+      },
+    ],
+  };
+}
+
+function fdmMeshCapabilitiesFixture(fixture) {
+  return {
+    revision: fixture.status.resources.mesh_revision,
+    mesh_capabilities: null,
+    mesh_adaptivity_state: null,
+  };
+}
+
+function fdmMeshSemanticsFixture(fixture) {
+  return {
+    revision: fixture.status.resources.mesh_revision,
+    universe_config: null,
+    shared_domain_config: {
+      algorithm_2d: 6,
+      algorithm_3d: 1,
+      size_mode: "predefined",
+      hmax: "",
+      hmin: "",
+      maximum_element_size: "",
+      minimum_element_size: "",
+      calibrate_for: "general_physics",
+      size_preset: "normal",
+      size_factor: 1,
+      size_from_curvature: 0,
+      curvature_factor: "",
+      growth_rate: "",
+      maximum_element_growth_rate: "",
+      narrow_regions: 0,
+      narrow_region_resolution: "",
+      smoothing_steps: 1,
+      optimize: "",
+      optimize_iterations: 1,
+      compute_quality: true,
+      per_element_quality: true,
+      adaptive_enabled: false,
+      adaptive_policy: "manual",
+      adaptive_indicator: "geometric_only",
+      adaptive_target_quantity: "auto",
+      adaptive_convergence_metric: "energy_delta",
+      adaptive_theta: 0.3,
+      adaptive_h_min: "",
+      adaptive_h_max: "",
+      adaptive_max_passes: 5,
+      adaptive_error_tolerance: "",
+    },
+    object_configs: [],
+    solver_mesh: null,
+    mesh_build_diagnostics: null,
+    render_only_controls_do_not_change_solver_domain: true,
+  };
+}
+
+function fdmQuantityCatalogFixture() {
+  const quantities = [
+    {
+      id: "m",
+      label: "Magnetization",
+      description: "Reduced magnetization vector (|m|=1)",
+      shape: "vector_field",
+      unit: "dimensionless",
+      location: "node",
+      domain: "magnetic_only",
+      n_comp: 3,
+      normalization_hint: "unit_vector",
+      quick_access_label: "M",
+    },
+    {
+      id: "H_ex",
+      label: "Exchange Field",
+      description: "Exchange effective field contribution",
+      shape: "vector_field",
+      unit: "A/m",
+      location: "node",
+      domain: "magnetic_only",
+      n_comp: 3,
+      normalization_hint: "max_abs",
+      quick_access_label: "H_ex",
+    },
+    {
+      id: "H_demag",
+      label: "Demagnetization Field",
+      description: "Demagnetizing (stray) field",
+      shape: "vector_field",
+      unit: "A/m",
+      location: "node",
+      domain: "full_domain",
+      n_comp: 3,
+      normalization_hint: "max_abs",
+      quick_access_label: "H_demag",
+    },
+    {
+      id: "H_eff",
+      label: "Effective Field",
+      description: "Total effective magnetic field",
+      shape: "vector_field",
+      unit: "A/m",
+      location: "node",
+      domain: "full_domain",
+      n_comp: 3,
+      normalization_hint: "max_abs",
+      quick_access_label: "H_eff",
+    },
+  ].map((quantity) => ({
+    ...quantity,
+    interactive_preview: true,
+    supports_preview_2d: true,
+    supports_preview_3d: true,
+    supports_history: false,
+    supports_export: true,
+    capability_state: "supported",
+    solver_capability: "supported",
+    requestable: true,
+    renderable: true,
+    publication_state: "interactive",
+    materializable: true,
+    materialization_state: "complete",
+  }));
+  return { schema_version: "1.0.0", quantities };
+}
+
+function fdmModeCompositionFixture(fixture) {
+  return {
+    schema_version: "mode-composition.v1",
+    revision: 0,
+    composition_id: "",
+    lifecycle: {
+      session_id: "fdm-memory-churn-fixture",
+      run_id: null,
+      artifact_revision: 0,
+      mesh_revision: fixture.status.resources.mesh_revision,
+    },
+    run_id: "",
+    stage_id: "",
+    artifact_revision: "",
+    phase_clock: { synchronized: true, master_rate_hz: 1 },
+    layers: [],
+  };
+}
+
+function parseVisualizationClientAck(request) {
+  let body;
+  try {
+    body = request.postDataJSON();
+  } catch {
+    return null;
+  }
+  if (
+    !isPlainObject(body) ||
+    typeof body.client_id !== "string" ||
+    !Number.isSafeInteger(body.revision) ||
+    body.revision < 0 ||
+    !["applied", "rendered", "failed"].includes(body.status)
+  ) {
+    return null;
+  }
+  const acknowledgement = {
+    client_id: body.client_id,
+    revision: body.revision,
+    status: body.status,
+  };
+  for (const key of [
+    "client_label",
+    "viewport_id",
+    "effective_render_mode",
+    "error",
+  ]) {
+    if (typeof body[key] === "string") {
+      acknowledgement[key] = body[key];
+    }
+  }
+  return acknowledgement;
+}
+
 function makeFdmMultilayerActiveMaskBuffer() {
   const buffer = new ArrayBuffer(104 + FDM_PARTIAL_PACKED_MASK.byteLength);
   const view = new DataView(buffer);
@@ -812,4 +1478,5 @@ function quantityPhase(quantityId) {
   if (quantityId === "H_ex") return 2.1;
   return 0.0;
 }
+
 
