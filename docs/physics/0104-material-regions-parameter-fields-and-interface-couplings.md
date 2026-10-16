@@ -1000,6 +1000,30 @@ powietrza wymaga ponownej kontroli zbieżności airboxu i siatki przed naukową
 kwalifikacją demag i dyspersji. Requested intent i rzeczywista trasa meshera
 muszą pozostać rozróżnialne w raporcie; ten zapis decyzji nie dowodzi wykonania.
 
+(material-regions-frozen-interface-incidence)=
+<!-- DOC-ANCHOR:material-regions-frozen-interface-incidence -->
+#### Kontrola incydencji interfejsu zamrożonego magnetyku
+
+Przed zwróceniem merged mesh każdy zadeklarowany facet magnetyk–powietrze
+musi mieć dokładnie dwóch właścicieli komórkowych: jednego w zachowanym
+prefiksie magnetycznym i jednego w dołączonym powietrzu. Nie mogą wystąpić
+powtórzone deklaracje, brakujące dopasowania, właściciele po tej samej stronie
+ściany ani niezadeklarowane współdzielone ściany magnetyczne/powietrzne.
+Lista ścian wynika z kanonicznych rodzin elementów i rzeczywistego connectivity,
+bez dopasowywania interfejsu wyłącznie na podstawie centroidów lub etykiet.
+Niezgodność blokuje publikację wyniku; nie usuwa się jej przez pominięcie ściany.
+
+Testy muszą objąć poprawne otoczenie czterech ścian Tet4 i błędy brakującego,
+zdublowanego, przesuniętego oraz nakładającego się po tej samej stronie sąsiada.
+Zachowanie prefiksu magnetycznego pozostaje osobnym obowiązkiem. Kontrola
+normalnej strony używa istniejącego geometrycznego sprawdzenia ścian z
+tolerancją względną do rozmiaru ściany; nie dodaje nowego absolutnego progu SI.
+
+To kontrola topologii interfejsu, nie pełny dowód braku wszystkich przecięć
+objętościowych, poprawnych wektorów PBC ani zbieżności. Te wymagania nadal
+muszą być spełnione przed automatycznym włączeniem adaptacyjnej trasy powietrza.
+Implementacja i rzeczywiste wykonanie Gmsh tego kroku pozostają **NOT VERIFIED**.
+
 (material-regions-round-trip-and-failure-semantics)=
 ### 4.6 Round-trip and failure semantics
 
@@ -1134,6 +1158,11 @@ must include:
 | Walidacja IR | `crates/fullmag-ir/src/lib.rs` | `validate_region_mesh_policy` | skończoność, dodatniość i order |
 | Meshing | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | regionowe pola rozmiaru |
 | Exact-layer BODY_XY source mesh | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_apply_owner_wide_body_seed_mesh_options` | tylko owner-wide upper/lower na dokładnym wspólnym planformie; bez projekcji partial-Z |
+| Frozen magnetic-air interface | `packages/fullmag-py/src/fullmag/meshing/_frozen_interface.py` | `_validate_frozen_magnetic_air_interface` | incydencja i przeciwni właściciele rzeczywistych ścian; nie pełna kwalifikacja przecięć/PBC |
+| Frozen interface prefix regression | `packages/fullmag-py/tests/test_meshing.py` | `test_merge_frozen_magnetic_submesh_with_air_mesh_preserves_magnetic_indices` | Preserves exact magnetic connectivity and nodes in a valid nanometer Tet4 air shell. |
+| Frozen interface neighbor regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_interface_merge_rejects_missing_displaced_or_duplicate_air_neighbors` | Rejects absent, displaced and nonmanifold air neighbors at the frozen interface. |
+| Frozen interface side regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_interface_merge_rejects_same_side_air_neighbor_at_nanometer_scale` | Rejects positive-orientation cells occupying the same side of a shared interface face. |
+| Frozen interface declaration regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_interface_merge_rejects_duplicate_declarations_and_undeclared_contact` | Rejects duplicate declarations and undeclared magnetic-air contact. |
 | BODY_XY selector regression | `packages/fullmag-py/tests/test_meshing.py` | `test_owner_wide_body_seed_field_selection_excludes_regions_and_other_owners` | verifies only exact-owner whole-volume fields are selected for the source face |
 | BODY_XY authored-controls regression | `packages/fullmag-py/tests/test_meshing.py` | `test_owner_wide_body_seed_options_preserve_authored_mesh_controls` | verifies source projection preserves authored mesh controls such as hmin |
 | Exact-layer BODY_XY density regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_body_target_precedence_survives_air_and_local_fields` | preserves public density precedence and assertions for exact-layer body sizing |

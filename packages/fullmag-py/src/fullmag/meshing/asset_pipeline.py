@@ -52,6 +52,7 @@ from ._gmsh_swept import (
     _supports_scoped_layer_partitioned_box,
 )
 from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
+from ._frozen_interface import _validate_frozen_magnetic_air_interface
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -503,10 +504,11 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
             np.zeros(air_mesh.n_elements, dtype=np.int32),
         ]
     )
-    interface_face_keys = {
+    expected_interface_face_keys = [
         tuple(sorted(int(node) for node in magnetic_mesh.facet_node_ids(int(ordinal))))
         for ordinal in frozen.interface_facet_ordinals
-    }
+    ]
+    interface_face_keys = set(expected_interface_face_keys)
     facet_types: list[str] = []
     facet_roles: list[str] = []
     facet_offsets = [0]
@@ -549,7 +551,7 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         )
     )
 
-    return MeshData(
+    merged_mesh = MeshData(
         nodes=np.asarray(merged_nodes, dtype=np.float64),
         cell_types=merged_cell_types,
         cell_offsets=merged_cell_offsets,
@@ -565,6 +567,13 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         periodic_boundary_pairs=periodic_boundary_pairs,
         periodic_node_pairs=periodic_node_pairs,
     )
+    merged_mesh.validate_strict(require_positive_orientation=True)
+    _validate_frozen_magnetic_air_interface(
+        merged_mesh,
+        expected_interface_face_keys=expected_interface_face_keys,
+        magnetic_cell_count=magnetic_mesh.n_elements,
+    )
+    return merged_mesh
 
 
 def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:

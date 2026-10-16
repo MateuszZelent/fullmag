@@ -7520,84 +7520,185 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(boundary_faces, np.asarray([[1, 2, 4]], dtype=np.int32))
         np.testing.assert_array_equal(boundary_markers, np.asarray([99], dtype=np.int32))
 
-    def test_merge_frozen_magnetic_submesh_with_air_mesh_preserves_magnetic_indices(self) -> None:
+    def _frozen_tet4_air_shell_fixture(
+        self,
+        *,
+        missing_air_face: int | None = None,
+        displaced_air_neighbor: bool = False,
+        same_side_air_neighbor: bool = False,
+        duplicate_air_neighbor: bool = False,
+        interface_facet_ordinals: list[int] | None = None,
+    ) -> tuple[MeshData, mesh_asset_pipeline.FrozenMagneticSubmeshPayload, MeshData]:
+        scale = 1.0e-9
+        frozen_nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [scale, 0.0, 0.0],
+                [0.0, scale, 0.0],
+                [0.0, 0.0, scale],
+            ],
+            dtype=np.float64,
+        )
+        frozen_faces = np.asarray(
+            [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
+            dtype=np.int32,
+        )
         frozen_mesh = MeshData.from_legacy_tet4(
-            nodes=np.asarray(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=np.float64,
-            ),
+            nodes=frozen_nodes,
             elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
             element_markers=np.asarray([1], dtype=np.int32),
-            boundary_faces=np.asarray(
-                [
-                    [0, 1, 2],
-                    [0, 1, 3],
-                    [0, 2, 3],
-                    [1, 2, 3],
-                ],
-                dtype=np.int32,
-            ),
-            boundary_markers=np.asarray([10, 10, 10, 10], dtype=np.int32),
+            boundary_faces=frozen_faces,
+            boundary_markers=np.full(4, 10, dtype=np.int32),
         )
+        region_markers = [{"geometry_name": "film", "marker": 1}]
         payload = mesh_asset_pipeline.FrozenMagneticSubmeshPayload(
             mesh=frozen_mesh,
-            region_markers=[{"geometry_name": "film", "marker": 1}],
-            interface_facet_ordinals=np.arange(
-                frozen_mesh.n_boundary_faces,
+            region_markers=region_markers,
+            interface_facet_ordinals=np.asarray(
+                interface_facet_ordinals
+                if interface_facet_ordinals is not None
+                else [0, 1, 2, 3],
                 dtype=np.int64,
             ),
             magnetic_submesh_signatures=mesh_asset_pipeline._magnetic_submesh_signatures(
                 frozen_mesh,
-                [{"geometry_name": "film", "marker": 1}],
+                region_markers,
             ),
-        )
-        air_mesh = MeshData.from_legacy_tet4(
-            nodes=np.asarray(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, -1.0],
-                ],
-                dtype=np.float64,
-            ),
-            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
-            element_markers=np.asarray([7], dtype=np.int32),
-            boundary_faces=np.asarray(
-                [
-                    [0, 1, 2],
-                    [0, 1, 3],
-                    [0, 2, 3],
-                    [1, 2, 3],
-                ],
-                dtype=np.int32,
-            ),
-            boundary_markers=np.asarray([10, 99, 99, 99], dtype=np.int32),
         )
 
+        air_nodes = [
+            *[np.array(node, copy=True) for node in frozen_nodes],
+            np.asarray([0.0, 0.0, -scale], dtype=np.float64),
+            np.asarray([0.0, -scale, 0.0], dtype=np.float64),
+            np.asarray([-scale, 0.0, 0.0], dtype=np.float64),
+            np.asarray([scale, scale, scale], dtype=np.float64),
+        ]
+        air_cells = [
+            [0, 2, 1, 4],
+            [0, 1, 3, 5],
+            [0, 3, 2, 6],
+            [1, 2, 3, 7],
+        ]
+        if same_side_air_neighbor:
+            air_nodes[4] = np.asarray([0.0, 0.0, 2.0 * scale], dtype=np.float64)
+            air_cells[0] = [0, 1, 2, 4]
+        if displaced_air_neighbor:
+            displaced_node = len(air_nodes)
+            air_nodes.append(np.asarray([0.0, 0.0, 1.0e-11], dtype=np.float64))
+            air_cells[0] = [displaced_node, 2, 1, 4]
+        if missing_air_face is not None:
+            air_cells = [
+                cell for face_ordinal, cell in enumerate(air_cells)
+                if face_ordinal != missing_air_face
+            ]
+        if duplicate_air_neighbor:
+            duplicate_apex = len(air_nodes)
+            air_nodes.append(
+                np.asarray([0.25 * scale, 0.25 * scale, -2.0 * scale], dtype=np.float64)
+            )
+            air_cells.append([0, 2, 1, duplicate_apex])
+
+        interface_keys = {
+            tuple(sorted(int(node) for node in face))
+            for face in frozen_faces
+        }
+        boundary_faces: list[list[int]] = []
+        boundary_markers: list[int] = []
+        local_faces = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+        for cell in air_cells:
+            for local_face in local_faces:
+                face = [cell[index] for index in local_face]
+                boundary_faces.append(face)
+                boundary_markers.append(
+                    10 if tuple(sorted(face)) in interface_keys else 99
+                )
+        air_mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(air_nodes, dtype=np.float64),
+            elements=np.asarray(air_cells, dtype=np.int32),
+            element_markers=np.zeros(len(air_cells), dtype=np.int32),
+            boundary_faces=np.asarray(boundary_faces, dtype=np.int32),
+            boundary_markers=np.asarray(boundary_markers, dtype=np.int32),
+        )
+        return frozen_mesh, payload, air_mesh
+
+    def test_merge_frozen_magnetic_submesh_with_air_mesh_preserves_magnetic_indices(self) -> None:
+        frozen_mesh, payload, air_mesh = self._frozen_tet4_air_shell_fixture()
         merged = mesh_asset_pipeline._merge_frozen_magnetic_submesh_with_air_mesh(
             payload,
             air_mesh,
         )
 
         np.testing.assert_array_equal(merged.nodes[: frozen_mesh.n_nodes], frozen_mesh.nodes)
-        np.testing.assert_array_equal(merged.elements[: frozen_mesh.n_elements], frozen_mesh.elements)
-        np.testing.assert_array_equal(merged.element_markers, np.asarray([1, 0], dtype=np.int32))
-        np.testing.assert_array_equal(merged.elements[1], np.asarray([0, 1, 2, 4], dtype=np.int32))
-        self.assertEqual(merged.n_nodes, 5)
-        self.assertEqual(merged.n_elements, 2)
-        self.assertEqual(merged.n_boundary_faces, 7)
+        np.testing.assert_array_equal(
+            merged.elements[: frozen_mesh.n_elements],
+            frozen_mesh.elements,
+        )
+        np.testing.assert_array_equal(
+            merged.element_markers,
+            np.asarray([1, 0, 0, 0, 0], dtype=np.int32),
+        )
+        np.testing.assert_array_equal(merged.elements[1], np.asarray([0, 2, 1, 4], dtype=np.int32))
+        self.assertEqual(merged.n_nodes, 8)
+        self.assertEqual(merged.n_elements, 5)
+        self.assertEqual(merged.n_boundary_faces, 16)
         merged_faces = [sorted(face.tolist()) for face in merged.boundary_faces]
         self.assertIn([0, 1, 2], merged_faces)
         self.assertEqual(
             int(np.count_nonzero(merged.boundary_markers == 10)),
             frozen_mesh.n_boundary_faces,
         )
+
+    def test_frozen_interface_merge_rejects_missing_displaced_or_duplicate_air_neighbors(
+        self,
+    ) -> None:
+        cases = (
+            ("missing", {"missing_air_face": 3}, "exactly two cell owners"),
+            ("displaced", {"displaced_air_neighbor": True}, "exactly two cell owners"),
+            ("duplicate", {"duplicate_air_neighbor": True}, "exactly two cell owners"),
+        )
+        for name, fixture_options, message in cases:
+            with self.subTest(name=name):
+                _, payload, air_mesh = self._frozen_tet4_air_shell_fixture(**fixture_options)
+                with self.assertRaisesRegex(ValueError, message):
+                    mesh_asset_pipeline._merge_frozen_magnetic_submesh_with_air_mesh(
+                        payload,
+                        air_mesh,
+                    )
+
+    def test_frozen_interface_merge_rejects_same_side_air_neighbor_at_nanometer_scale(self) -> None:
+        _, payload, air_mesh = self._frozen_tet4_air_shell_fixture(
+            same_side_air_neighbor=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "same-side owners"):
+            mesh_asset_pipeline._merge_frozen_magnetic_submesh_with_air_mesh(
+                payload,
+                air_mesh,
+            )
+
+    def test_frozen_interface_merge_rejects_duplicate_declarations_and_undeclared_contact(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "duplicate declaration",
+                {"interface_facet_ordinals": [0, 0, 1, 2, 3]},
+                "duplicate frozen declarations",
+            ),
+            (
+                "undeclared contact",
+                {"interface_facet_ordinals": [0, 1, 2]},
+                "undeclared magnetic-air face",
+            ),
+        )
+        for name, fixture_options, message in cases:
+            with self.subTest(name=name):
+                _, payload, air_mesh = self._frozen_tet4_air_shell_fixture(**fixture_options)
+                with self.assertRaisesRegex(ValueError, message):
+                    mesh_asset_pipeline._merge_frozen_magnetic_submesh_with_air_mesh(
+                        payload,
+                        air_mesh,
+                    )
 
     def test_generate_air_mesh_for_frozen_submesh_drops_periodic_pairs_without_kept_elements(self) -> None:
         frozen_mesh = MeshData.from_legacy_tet4(
@@ -7692,52 +7793,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_generated_frozen_magnetic_submesh_mode_merges_prebuilt_air_mesh(self) -> None:
         film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
-        frozen_mesh = MeshData.from_legacy_tet4(
-            nodes=np.asarray(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=np.float64,
-            ),
-            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
-            element_markers=np.asarray([1], dtype=np.int32),
-            boundary_faces=np.asarray(
-                [
-                    [0, 1, 2],
-                    [0, 1, 3],
-                    [0, 2, 3],
-                    [1, 2, 3],
-                ],
-                dtype=np.int32,
-            ),
-            boundary_markers=np.asarray([10, 10, 10, 10], dtype=np.int32),
-        )
-        air_mesh = MeshData.from_legacy_tet4(
-            nodes=np.asarray(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, -1.0],
-                ],
-                dtype=np.float64,
-            ),
-            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
-            element_markers=np.asarray([7], dtype=np.int32),
-            boundary_faces=np.asarray(
-                [
-                    [0, 1, 2],
-                    [0, 1, 3],
-                    [0, 2, 3],
-                    [1, 2, 3],
-                ],
-                dtype=np.int32,
-            ),
-            boundary_markers=np.asarray([10, 99, 99, 99], dtype=np.int32),
-        )
+        frozen_mesh, _, air_mesh = self._frozen_tet4_air_shell_fixture()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             frozen_path = Path(tmp_dir) / "frozen_film.npz"
@@ -7766,7 +7822,10 @@ class MeshScaffoldTests(unittest.TestCase):
 
         np.testing.assert_array_equal(merged.nodes[: frozen_mesh.n_nodes], frozen_mesh.nodes)
         np.testing.assert_array_equal(merged.elements[: frozen_mesh.n_elements], frozen_mesh.elements)
-        np.testing.assert_array_equal(merged.element_markers, np.asarray([1, 0], dtype=np.int32))
+        np.testing.assert_array_equal(
+            merged.element_markers,
+            np.asarray([1, 0, 0, 0, 0], dtype=np.int32),
+        )
         self.assertEqual(region_markers, [{"geometry_name": "film", "marker": 1}])
         self.assertEqual(report.build_mode, "frozen_magnetic_submesh_merge")
         self.assertEqual(report.magnetic_submesh_signatures[0]["geometry_name"], "film")
@@ -7774,52 +7833,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_generated_frozen_magnetic_submesh_mode_uses_air_mesh_generator_when_no_source(self) -> None:
         film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
-        frozen_mesh = MeshData.from_legacy_tet4(
-            nodes=np.asarray(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=np.float64,
-            ),
-            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
-            element_markers=np.asarray([1], dtype=np.int32),
-            boundary_faces=np.asarray(
-                [
-                    [0, 1, 2],
-                    [0, 1, 3],
-                    [0, 2, 3],
-                    [1, 2, 3],
-                ],
-                dtype=np.int32,
-            ),
-            boundary_markers=np.asarray([10, 10, 10, 10], dtype=np.int32),
-        )
-        generated_air_mesh = MeshData.from_legacy_tet4(
-            nodes=np.asarray(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, -1.0],
-                ],
-                dtype=np.float64,
-            ),
-            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
-            element_markers=np.asarray([0], dtype=np.int32),
-            boundary_faces=np.asarray(
-                [
-                    [0, 1, 2],
-                    [0, 1, 3],
-                    [0, 2, 3],
-                    [1, 2, 3],
-                ],
-                dtype=np.int32,
-            ),
-            boundary_markers=np.asarray([10, 99, 99, 99], dtype=np.int32),
-        )
+        frozen_mesh, _, generated_air_mesh = self._frozen_tet4_air_shell_fixture()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             frozen_path = Path(tmp_dir) / "frozen_film.npz"
@@ -7852,7 +7866,10 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(generator.call_args.kwargs["geometries"], [film])
         self.assertEqual(generator.call_args.kwargs["hints"].hmax, 20e-9)
         self.assertEqual(region_markers, [{"geometry_name": "film", "marker": 1}])
-        np.testing.assert_array_equal(merged.element_markers, np.asarray([1, 0], dtype=np.int32))
+        np.testing.assert_array_equal(
+            merged.element_markers,
+            np.asarray([1, 0, 0, 0, 0], dtype=np.int32),
+        )
         self.assertEqual(report.build_mode, "frozen_magnetic_submesh_merge")
 
     def test_generated_frozen_magnetic_submesh_mode_generates_air_mesh_from_frozen_boundary(self) -> None:
