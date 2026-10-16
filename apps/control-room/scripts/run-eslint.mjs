@@ -32,7 +32,10 @@ async function runEslintCli() {
   const compilerUrl = pathToFileURL(compilerPath).href;
   const hooks = registerHooks({
     resolve(specifier, context, nextResolve) {
-      return nextResolve(specifier === "typescript" ? compilerUrl : specifier, context);
+      if (specifier !== "typescript") return nextResolve(specifier, context);
+      // CommonJS resolution expects a native filename; ESM uses a file URL.
+      const target = context.conditions.includes("require") ? compilerPath : compilerUrl;
+      return nextResolve(target, context);
     },
   });
   // ESLint's CommonJS CLI starts asynchronous work before its module import
