@@ -2993,7 +2993,6 @@ def _generate_coincident_ring_airbox_mesh(
             )
 
         source_fields: list[int] = []
-        source_mesh_generated = False
         if not scoped_layer_partitioning:
             if options.size_fields or options.lower_bound_fields:
                 source_fields.append(
@@ -3022,7 +3021,6 @@ def _generate_coincident_ring_airbox_mesh(
                 if options.hmin is not None:
                     gmsh.option.setNumber("Mesh.CharacteristicLengthMin", options.hmin * SCALE)
             gmsh.model.mesh.generate(2)
-            source_mesh_generated = True
         else:
             owner_seed_field = _apply_owner_wide_body_seed_mesh_options(
                 gmsh,
@@ -3036,7 +3034,6 @@ def _generate_coincident_ring_airbox_mesh(
             if owner_seed_field is not None:
                 source_fields.append(owner_seed_field)
                 gmsh.model.mesh.generate(2)
-                source_mesh_generated = True
 
         annulus_volumes: list[int] = []
         hole_volumes: list[int] = []
@@ -3268,20 +3265,8 @@ def _generate_coincident_ring_airbox_mesh(
                 )
             },
         )
-        previous_mesh_only_empty = (
-            gmsh.option.getNumber("Mesh.MeshOnlyEmpty")
-            if source_mesh_generated and hole_surface is not None
-            else None
-        )
-        if previous_mesh_only_empty is not None:
-            # Final air sizing must not remesh the owner-sized source cross-section.
-            gmsh.option.setNumber("Mesh.MeshOnlyEmpty", 1)
-        try:
-            with _GmshProgressLogger(gmsh):
-                gmsh.model.mesh.generate(3)
-        finally:
-            if previous_mesh_only_empty is not None:
-                gmsh.option.setNumber("Mesh.MeshOnlyEmpty", previous_mesh_only_empty)
+        with _GmshProgressLogger(gmsh):
+            gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, options)
         _reapply_periodic_surface_mappings(gmsh, periodic_specs)
         from ._gmsh_layered_tetrahedra import subdivide_layered_prisms

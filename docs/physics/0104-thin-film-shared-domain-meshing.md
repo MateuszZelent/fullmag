@@ -210,16 +210,20 @@ oba warianty airboxu 30 i 50 nm miały identyczne 25 punktów XY po `generate(2)
 lecz po `generate(3)` siedem punktów się różniło. Było to sprzężenie końcowego
 meshowania ze zmianą celu powietrza, nie brak pola źródłowego właściciela.
 
-Korekta wykorzystuje `Mesh.MeshOnlyEmpty` podczas końcowego `generate(3)`
-wyłącznie wtedy, gdy przekrój został uprzednio wygenerowany. Opcja ogranicza
-generowanie do encji bez istniejącej siatki, zgodnie z
-[manualem Gmsh](https://www.gmsh.info/doc/texinfo/gmsh.html#Mesh-options).
-Poprzednia wartość jest przywracana także po błędzie. Pola powietrza pozostają
-aktywne dla niesiatkowanych encji; liczba i położenie warstw Z nie zmieniają się.
-Ta korekta nie realizuje brakującego niezależnego zagęszczenia powietrza ani
-skończonego regionalnego ROI. Regresje niezmienności XY, exact layers, jakości
-i periodyczności wymagają nowego rzeczywistego Gmsh CI. FEM CPU/GPU, demag,
-zbieżność fizyczna i kwalifikacja produkcyjna pozostają osobnymi bramkami.
+Próba zachowania przekroju przez `Mesh.MeshOnlyEmpty=1` została odrzucona
+po rzeczywistym [GHA38946917101](https://github.com/MateuszZelent/fullmag/actions/runs/38946917101).
+Osiem regresji airboxu Ring nie potrafiło znaleźć ekstrudowanego węzła na
+powierzchni 21; wynik zestawu to 31 PASS i 8 FAIL. Samo zachowanie istniejących
+encji 2D nie zapewnia zgodności siatek powiązanych powierzchni ekstrudowanych.
+Nie ustalono jeszcze dokładnego wewnętrznego mechanizmu tej niezgodności.
+Zmiana opcji została wycofana; dotychczasowa trasa generowania jest zachowana.
+Nie przedstawiamy tej próby jako poprawki ani zweryfikowanej metody.
+
+Bezpośrednia regresja porównująca source XY po 2D i 3D pozostaje, aby ujawniać
+oryginalną zależność od celu airboxu. Nie zmieniono progów gęstości, jakości,
+liczby warstw ani periodyczności. Niezależne zagęszczenie powietrza, skończone
+regionalne ROI oraz jakość mieszanych elementów pozostają otwarte. FEM CPU/GPU,
+demag, zbieżność fizyczna i kwalifikacja produkcyjna wymagają osobnych dowodów.
 
 (thin-film-mesh-python-api)=
 ## Python API
