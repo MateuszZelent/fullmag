@@ -1260,7 +1260,7 @@ async function setObjectVisibilityAndWaitForAcknowledgement(page, panel, visible
     try {
       const patch = request.postDataJSON();
       return patch?.scope === "object" && patch.scope_id === objectId &&
-        patch.display?.surface?.visible === expectedVisible;
+        patch.visible === expectedVisible;
     } catch {
       return false;
     }
