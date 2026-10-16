@@ -140,6 +140,51 @@ let lastInitialForbiddenResourceRequestAt = 0;
 let recordCameraGestureRequests = false;
 
 async function installMissingSessionFastFailRoutes(page) {
+  const bootstrapReadFixtures = [
+    ["/v2/sessions", { schema_version: "2.0.0", sessions: [] }],
+    [
+      "/v2/platform/development-backend",
+      {
+        schema_version: "1.0.0",
+        configured: false,
+        revision: 0,
+        state: "disabled",
+        current_build: null,
+        ready_build: null,
+        build_available: false,
+        build_request_id: null,
+        workspace_identity: null,
+        restart_available: false,
+        reason: "disabled",
+      },
+    ],
+    [
+      "/v2/workspace/settings/telemetry.enabled",
+      { key: "telemetry.enabled", value: false, is_default: true, writable: true },
+    ],
+    [
+      "/v2/workspace/settings/update.available",
+      { key: "update.available", value: null, is_default: true, writable: false },
+    ],
+  ];
+
+  for (const [pathname, resource] of bootstrapReadFixtures) {
+    await page.route(
+      (url) => new URL(url).pathname === pathname,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          body: JSON.stringify(resource),
+          contentType: "application/json",
+          status: 200,
+        });
+      },
+    );
+  }
+
   await page.route("**/v2/sessions/current/**", async (route) => {
     const request = route.request();
     if (request.method() === "PATCH" || request.method() === "POST") {
