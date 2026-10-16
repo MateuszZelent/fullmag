@@ -1318,8 +1318,10 @@ export function withCatalogAnalysisFamilies(
       families.length > 0 ||
       comparison !== (existingComparison ?? null) ||
       dynamics !== (existingDynamics ?? null);
+    const hasCatalogResultData =
+      timeDomainDatasets.length > 0 || loops.length > 0 || comparison !== null;
     const rootDataAvailabilityChanged =
-      timeDomainDatasets.length > 0 &&
+      hasCatalogResultData &&
       (resultsRoot.availability !== "available" ||
         resultsRoot.resourceState === "idle" ||
         resultsRoot.status === "unavailable");
@@ -1329,7 +1331,7 @@ export function withCatalogAnalysisFamilies(
         : {
             ...resultsRoot,
             ...(rootChanged ? { children } : {}),
-            ...(timeDomainDatasets.length > 0
+            ...(hasCatalogResultData
               ? {
                   availability: "available" as const,
                   ...(resultsRoot.resourceState === "idle"

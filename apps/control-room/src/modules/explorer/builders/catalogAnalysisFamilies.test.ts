@@ -69,11 +69,28 @@ function reference(
 }
 
 describe("catalog analysis families", () => {
+  it.each([
+    { executionState: "running", resourceState: "ready", status: "ready" },
+    { executionState: "failed", resourceState: "error", status: "failed" },
+  ] as const)("keeps the $executionState lifecycle when a loop is published", (lifecycle) => {
+    const [results] = withCatalogAnalysisFamilies(
+      [{ ...root, ...lifecycle }],
+      [dataset("hysteresis_loop", "stage-001")],
+    );
+
+    expect(results?.availability).toBe("available");
+    expect(results).toMatchObject(lifecycle);
+  });
+
+
   it("adds a hysteresis family owned by analysis.hysteresis", () => {
     const [results] = withCatalogAnalysisFamilies([root], [dataset("hysteresis_loop", "stage-001")]);
     const family = results?.children?.find((child) => child.kind === "results.hysteresis.root");
     const datasetNode = family?.children?.[0];
     expect(results?.availability).toBe("available");
+    expect(results?.executionState).toBe("not_started");
+    expect(results?.resourceState).toBe("ready");
+    expect(results?.status).toBe("ready");
     expect(family?.analysisModuleId).toBe("analysis.hysteresis");
     expect(datasetNode).toMatchObject({
       analysisRunId: "run:1",
