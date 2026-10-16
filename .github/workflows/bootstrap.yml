@@ -553,11 +553,15 @@ jobs:
             sleep 1
           done
           test "$inspector_ready" = 1
-          pnpm --dir apps/control-room run smoke:inspector
-          node apps/control-room/scripts/smoke-adaptive-study-authoring.mjs
+          # Run each independent regression even when an earlier one fails.
+          # Preserve a failing terminal status; no individual gate is waived.
+          inspector_regression_status=0
+          pnpm --dir apps/control-room run smoke:inspector || inspector_regression_status=1
+          node apps/control-room/scripts/smoke-adaptive-study-authoring.mjs || inspector_regression_status=1
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
-            pnpm --dir apps/control-room run smoke:analysis-plots
+            pnpm --dir apps/control-room run smoke:analysis-plots || inspector_regression_status=1
+          exit "$inspector_regression_status"
 
       - name: Run start screen stylesheet browser check
         # Static CSS plus inline markup: no server and no audit build are needed.
