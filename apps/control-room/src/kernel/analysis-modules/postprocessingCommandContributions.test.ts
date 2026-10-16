@@ -200,7 +200,7 @@ function pinCommand() {
   );
 }
 
-function referenceCommandContext(input: unknown, list = vi.fn().mockResolvedValue({ definitions: [], scene_revision: 11 })) {
+function referenceCommandContext(input: unknown, list = vi.fn().mockResolvedValue({ definitions: [], scene_revision: 11 }), artifactRevision: number | string = 7) {
   const create = vi.fn();
   const invalidate = vi.fn();
   return {
@@ -214,7 +214,7 @@ function referenceCommandContext(input: unknown, list = vi.fn().mockResolvedValu
           ref: {
             analysisRunId: "run-1",
             analysisStageId: "stage-1",
-            artifactRevision: 7,
+            artifactRevision,
             type: "frequency-domain" as const,
           },
         }),
@@ -690,6 +690,24 @@ describe("pins from the typed Results item producer", () => {
 });
 
 describe("import dispersion reference command bounds", () => {
+  it.each(["unknown", "", " ", Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses an unidentified revision before reading or writing definitions (%s)",
+    async (revision) => {
+      const command = referenceCommand();
+      if (!command) throw new Error("Missing reference import command");
+      const fixture = referenceCommandContext({
+        fileName: "reference.csv",
+        label: "Reference",
+        points: [[0, 1], [1, 2]],
+        sourceUnits: { frequency: "GHz", path: "rad/um" },
+      }, undefined, revision);
+      expect(command.isEnabled?.(fixture.context)).toBe(false);
+      expect((await command.run(fixture.context)).status).toBe("failed");
+      expect(fixture.list).not.toHaveBeenCalled();
+      expect(fixture.create).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves valid SI pairs through the existing definitions API command", async () => {
     const command = referenceCommand();
     expect(command).toBeDefined();

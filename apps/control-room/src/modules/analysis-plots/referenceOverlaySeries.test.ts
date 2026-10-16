@@ -29,6 +29,26 @@ function createReferenceDefinition() {
 }
 
 describe("reference overlay series", () => {
+  it("uses the published envelope and rejects payload-only or non-ready revisions", async () => {
+    const imported = await createReferenceDefinition();
+    const envelope = { status: "ready", revision: "7", payload: { revision: "wrong-payload-revision" } };
+    expect(publishedReferenceDatasetRevision(envelope)).toBe("7");
+    expect(referenceOverlaySeries(computed, [imported], {
+      artifactRevision: publishedReferenceDatasetRevision(envelope),
+      runId: "run-1",
+      stageId: "eigen",
+    })).toHaveLength(1);
+    for (const resource of [
+      { status: "ready", payload: { revision: "7" } },
+      { status: "ready", revision: null, payload: { revision: "7" } },
+      { status: "loading", revision: "7" },
+      { status: "missing", revision: "7" },
+      { status: "ready", revision: "unknown" },
+    ]) {
+      expect(publishedReferenceDatasetRevision(resource)).toBeNull();
+    }
+  });
+
   it("matches the published selection revision separately from the CSV digest", async () => {
     const ref = selectionRefFromNode({
       id: "run-1:eigen:dispersion",
@@ -53,13 +73,13 @@ describe("reference overlay series", () => {
     const csvDigest = "csv-content-sha256";
     expect(imported.data_ref.dataset_revision).toBe("dataset-r7");
     expect(referenceOverlaySeries(computed, [imported], {
-      ...identity, artifactRevision: publishedReferenceDatasetRevision({ revision: "dataset-r7" }),
+      ...identity, artifactRevision: publishedReferenceDatasetRevision({ status: "ready", revision: "dataset-r7" }),
     })).toHaveLength(1);
     expect(referenceOverlaySeries(computed, [imported], { ...identity, artifactRevision: csvDigest })).toEqual([]);
     expect(referenceOverlaySeries(computed, [imported], {
-      ...identity, artifactRevision: publishedReferenceDatasetRevision({ revision: "dataset-r8" }),
+      ...identity, artifactRevision: publishedReferenceDatasetRevision({ status: "ready", revision: "dataset-r8" }),
     })).toEqual([]);
-    for (const payload of [undefined, {}, { revision: " " }, { revision: 7 }]) {
+    for (const payload of [undefined, {}, { status: "ready", revision: " " }, { status: "ready", revision: 7 }]) {
       expect(referenceOverlaySeries(computed, [imported], {
         ...identity, artifactRevision: publishedReferenceDatasetRevision(payload),
       })).toEqual([]);

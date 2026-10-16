@@ -535,6 +535,7 @@ describe("buildPhysicsFirstResultsTree", () => {
         currentRun: { revision: 17, run_id: "run-17" },
         frequencyDomainManifest: {
           result_manifest: {
+            revision: "result-17",
             payload: {
               equilibrium_identity: "eq-17",
               requested_execution: { boundary_context: "finite_open" },
@@ -665,6 +666,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       currentRun: { revision: 17, run_id: "runtime-run-17" },
       manifest: {
         result_manifest: {
+          revision: "eigen-r9",
           payload: {
             equilibrium_identity: "eq-relax-r4",
             requested_execution: { boundary_context: "finite_open" },
@@ -748,6 +750,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       },
       manifest: {
         result_manifest: {
+          revision: "dispersion-r4",
           payload: {
             equilibrium_identity: "eq-path",
             requested_execution: { boundary_context: "floquet_periodic" },
@@ -785,6 +788,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       },
       manifest: {
         result_manifest: {
+          revision: "dispersion-csv-k-r1",
           payload: {
             equilibrium_identity: "eq-csv-k",
             requested_execution: {
@@ -826,6 +830,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       },
       manifest: {
         result_manifest: {
+          revision: "grid-fields-r1",
           payload: {
             equilibrium_identity: "eq-grid-fields",
             requested_execution: {
@@ -870,6 +875,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       currentRun: { revision: 19, run_id: "runtime-run-19" },
       manifest: {
         result_manifest: {
+          revision: "response-r5",
           payload: {
             equilibrium_identity: "eq-driven",
             requested_execution: { boundary_context: "finite_open" },
@@ -995,6 +1001,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       },
       manifest: {
         result_manifest: {
+          revision: "eigen-r9",
           payload: {
             equilibrium_identity: "eq-relax-r4",
             geometry_identity: "geometry-r4",
@@ -1507,3 +1514,35 @@ describe("withPinnedAnalysisDefinitions", () => {
   });
 });
 
+
+describe("published frequency-domain artifact revision", () => {
+  it.each(["published-r9", undefined])(
+    "keeps the Explorer fence independent of payload and current-run revisions (%s)",
+    (revision) => {
+      const adapted = physicsFirstResultsSnapshotFromResources({
+        currentRun: { revision: 777, run_id: "run-1" },
+        manifest: {
+          result_manifest: {
+            ...(revision === undefined ? {} : { revision }),
+            status: "ready",
+            payload: {
+              revision: "payload-stale",
+              equilibrium_identity: "eq-1",
+              stage_id: "eigen",
+              study_product: "modal_eigen",
+              requested_execution: { boundary_context: "finite_open" },
+            },
+          },
+        },
+        spectrum: { status: "ready" },
+      });
+      const expected = revision ?? "unknown";
+      expect(adapted.snapshot.entries[0]?.artifactRevision).toBe(expected);
+      const spectrum = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+        .find((node) => node.kind === "results.resonance.modal.spectrum");
+      expect(spectrum?.artifactRevision).toBe(expected);
+      expect(spectrum?.artifactRevision).not.toBe("payload-stale");
+      expect(spectrum?.artifactRevision).not.toBe(777);
+    },
+  );
+});

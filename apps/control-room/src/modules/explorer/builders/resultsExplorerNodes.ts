@@ -46,6 +46,8 @@ import type {
   PostprocessingOwnerReadiness,
 } from "@/shared/domain/analysis/postprocessingTypes";
 
+import { publishedFrequencyDomainArtifactRevision } from "@/shared/domain/analysis/frequencyDomainArtifactIdentity";
+
 import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
 
 export interface PhysicsFirstResultProducts {
@@ -111,6 +113,7 @@ interface ResultResourceLike {
 
 interface ResultManifestLike extends ResultResourceLike {
   payload?: unknown;
+  revision?: string | null;
 }
 
 export interface PhysicsFirstResultResourceInput {
@@ -509,8 +512,7 @@ export function physicsFirstResultsSnapshotFromResources(
   for (const gap of frequencyContext.contractGaps) {
     addContractGap(gap);
   }
-  const artifactRevision =
-    nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
+  const artifactRevision = publishedFrequencyDomainArtifactRevision(resultManifest) ?? "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"
       ? {

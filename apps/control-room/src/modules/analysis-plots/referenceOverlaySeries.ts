@@ -16,13 +16,10 @@ const FREQUENCY_DIVISORS: Readonly<Record<string, number>> = {
  * path axis, and carry `reference_frequency`, so their points never select a
  * computed mode. Only references of the shown run, stage and published revision are drawn.
  */
-/** Explicit published dataset fence; CSV content digests are separate identities. */
-export function publishedReferenceDatasetRevision(
-  payload: Record<string, unknown> | null | undefined,
-): string | null {
-  const revision = payload?.revision;
-  return typeof revision === "string" && revision.trim().length > 0 ? revision : null;
-}
+/** Published artifact fence; payload fields and CSV digests are separate identities. */
+export {
+  publishedFrequencyDomainArtifactRevision as publishedReferenceDatasetRevision,
+} from "@/shared/domain/analysis/frequencyDomainArtifactIdentity";
 
 export function referenceOverlaySeries(
   computed: readonly ChartSeries[],

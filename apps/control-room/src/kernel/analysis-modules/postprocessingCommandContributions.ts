@@ -72,7 +72,15 @@ function importDataset(context: CommandContext) {
   if (ref?.type !== "frequency-domain" || !ref.analysisRunId || !ref.analysisStageId || ref.artifactRevision === undefined) {
     return null;
   }
-  return { artifactRevision: ref.artifactRevision, runId: ref.analysisRunId, stageId: ref.analysisStageId };
+  const revision = ref.artifactRevision;
+  if (
+    (typeof revision === "string" &&
+      (revision.trim().length === 0 || revision === "unknown")) ||
+    (typeof revision === "number" && !Number.isFinite(revision))
+  ) {
+    return null;
+  }
+  return { artifactRevision: revision, runId: ref.analysisRunId, stageId: ref.analysisStageId };
 }
 
 function invalidatePostprocessingDefinitionMutation(
