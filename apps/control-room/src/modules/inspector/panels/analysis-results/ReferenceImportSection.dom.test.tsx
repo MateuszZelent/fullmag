@@ -9,6 +9,7 @@ import {
   findElements,
   installSimulationPreparationTestDom,
   TestEvent,
+  TestHTMLFormElement,
   type TestElement,
   type TestHTMLOptionElement,
   type TestHTMLSelectElement,
@@ -268,7 +269,9 @@ describe("ReferenceImportSection file selection", () => {
         (element) => element.tagName.toLowerCase() === "button" && element.textContent.includes("Import reference"),
         "Import reference group trigger inside form",
       );
-      expect(trigger.closest("form")?.tagName).toBe("FORM");
+      const form = trigger.closest("form");
+      expect(form?.tagName).toBe("FORM");
+      expect(form).toBeInstanceOf(TestHTMLFormElement);
       await act(async () => { trigger.dispatchEvent(new TestEvent("click", { bubbles: true })); });
 
       const input = findElement(

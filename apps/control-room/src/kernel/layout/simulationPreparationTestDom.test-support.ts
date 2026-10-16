@@ -440,6 +440,8 @@ function serializeTestNode(node: TestNode): string {
   return `<${node.tagName.toLowerCase()}${attributes}>${node.childNodes.map(serializeTestNode).join("")}</${node.tagName.toLowerCase()}>`;
 }
 
+export class TestHTMLFormElement extends TestElement {}
+
 export class TestHTMLOptionElement extends TestElement {
   private selectedness = false;
   private selectednessIsDirty = false;
@@ -666,6 +668,7 @@ export class TestDocument extends TestNode {
 
   createElement(tagName: string): TestElement {
     const normalizedTagName = tagName.toLowerCase();
+    if (normalizedTagName === "form") return new TestHTMLFormElement(this, tagName);
     if (normalizedTagName === "select") {
       return new TestHTMLSelectElement(this, tagName);
     }
@@ -749,6 +752,7 @@ export function installSimulationPreparationTestDom({
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLFormElement: TestHTMLFormElement,
     HTMLSelectElement: TestHTMLSelectElement,
     HTMLIFrameElement: TestHtmlIFrameElement,
     location: { search: "" },
@@ -771,6 +775,7 @@ export function installSimulationPreparationTestDom({
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLFormElement: TestHTMLFormElement,
     HTMLSelectElement: TestHTMLSelectElement,
     MutationObserver: TestMutationObserver,
     Node: TestNode,
