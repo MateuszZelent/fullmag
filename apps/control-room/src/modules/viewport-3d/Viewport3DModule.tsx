@@ -104,6 +104,7 @@ import {
 } from "./hooks/useViewport3DVisualizationDebugPublisher";
 import {
   createViewport3DRenderAdoptionRegistry,
+  type Viewport3DSurfaceAdoptionAuditEvent,
   type Viewport3DRenderAdoptionRegistry,
 } from "./model/viewport3DRenderAdoptionRegistry";
 import {
@@ -218,6 +219,139 @@ import {
   type Viewport3DThumbnailColouring,
 } from "./viewport3dThumbnail";
 import { registerViewport3DThumbnailCapture } from "./viewport3dThumbnailRegistry";
+
+type Viewport3DAckAuditIdentity = {
+  fieldBufferId: string;
+  fieldRevision: string | null;
+  resourceKey: string;
+  sessionEpoch: string;
+  sessionId: string;
+  visualizationRevision: number;
+};
+
+type Viewport3DAckAuditTraceEntry = {
+  acknowledgementStatus?: "applied" | "failed" | "rendered";
+  ackKind?: "data" | "style" | null;
+  enabled?: boolean;
+  appliedIdentity?: Viewport3DAckAuditIdentity | null;
+  currentFullBuffer?: {
+    fieldRevision: string | null;
+    fieldBufferId: string | null;
+    resourceKey: string | null;
+    sessionEpoch: string | null;
+    sessionId: string | null;
+  } | null;
+  blockReason?: "missing-data-identity" | "no-matching-active-adoption" | null;
+  decision?: "send-rendered" | "blocked";
+  event: "ack-registration" | "frame-commit" | "surface-adoption";
+  hasActiveAdoption?: boolean;
+  latestActiveAdoption?: {
+    adoptionSequence: number;
+    carrierId: string;
+    fieldBufferId: string | null;
+    kind: string;
+    resourceKey: string | null;
+    requestScopeEpoch: string | null;
+    scalarBufferKey: string | null;
+    sessionEpoch: string;
+    sessionId: string;
+    targetId: string;
+    vectorBuildKey: string | null;
+  } | null;
+  resourceFrameKey?: string;
+  resourceKey?: string | null;
+  revision?: number;
+  requestScopeEpoch?: string | null;
+  resolvedChangeKind?: "data" | "style";
+  resolvedFrameIdentity?: Viewport3DAckAuditIdentity | null;
+  surfaceAdoption?: Viewport3DSurfaceAdoptionAuditEvent;
+  timestampMs: number;
+};
+
+declare global {
+  interface Window {
+    __FM_VIEWPORT_BROWSER_AUDIT__?: {
+      viewportAckTrace?: Viewport3DAckAuditTraceEntry[];
+    };
+  }
+}
+
+const MAX_VIEWPORT_ACK_AUDIT_TRACE_ENTRIES = 512;
+
+function viewportAckAuditEnabled(): boolean {
+  return typeof window !== "undefined" &&
+    Array.isArray(window.__FM_VIEWPORT_BROWSER_AUDIT__?.viewportAckTrace);
+}
+
+function recordViewportAckAuditTrace(
+  entry: Omit<Viewport3DAckAuditTraceEntry, "timestampMs">,
+): void {
+  if (!viewportAckAuditEnabled()) return;
+  try {
+    const trace = window.__FM_VIEWPORT_BROWSER_AUDIT__?.viewportAckTrace;
+    if (!trace) return;
+    trace.push({ ...entry, timestampMs: Date.now() });
+    if (trace.length > MAX_VIEWPORT_ACK_AUDIT_TRACE_ENTRIES) {
+      trace.splice(0, trace.length - MAX_VIEWPORT_ACK_AUDIT_TRACE_ENTRIES);
+    }
+  } catch {
+    // Browser audit tracing is observational and cannot affect rendering.
+  }
+}
+
+function viewportAckAuditIdentity(
+  identity: VisualizationDataAdoptionIdentity | null,
+): Viewport3DAckAuditIdentity | null {
+  return identity ? {
+    fieldBufferId: identity.fieldBufferId,
+    fieldRevision: identity.fieldRevision,
+    resourceKey: identity.resourceKey,
+    sessionEpoch: identity.sessionEpoch,
+    sessionId: identity.sessionId,
+    visualizationRevision: identity.visualizationRevision,
+  } : null;
+}
+
+function viewportAckAuditCurrentFullBuffer(
+  source: Viewport3DVisualizationDebugSource,
+): Viewport3DAckAuditTraceEntry["currentFullBuffer"] {
+  const identity = source.fullFieldBufferIdentity;
+  return identity ? {
+    fieldBufferId: identity.bufferId ?? null,
+    fieldRevision: identity.fieldRevision ?? null,
+    resourceKey: identity.resourceKey ?? null,
+    sessionEpoch: identity.sessionEpoch ?? null,
+    sessionId: identity.sessionId ?? null,
+  } : null;
+}
+
+function viewportAckAuditLatestAdoption(
+  registry: Viewport3DRenderAdoptionRegistry,
+  sessionIdentity: SessionResourceIdentity | null,
+): Viewport3DAckAuditTraceEntry["latestActiveAdoption"] {
+  if (!sessionIdentity?.sessionEpoch || !sessionIdentity.sessionId) return null;
+  const receipt = registry.latestActiveAdoption({
+    sessionEpoch: sessionIdentity.sessionEpoch,
+    sessionId: sessionIdentity.sessionId,
+  });
+  return receipt ? {
+    adoptionSequence: receipt.adoptionSequence,
+    carrierId: receipt.carrierId,
+    fieldBufferId: receipt.fieldBufferId,
+    kind: receipt.kind,
+    resourceKey: receipt.resourceKey,
+    requestScopeEpoch: receipt.requestScopeEpoch ?? null,
+    scalarBufferKey: receipt.scalarBufferKey,
+    sessionEpoch: receipt.sessionEpoch,
+    sessionId: receipt.sessionId,
+    targetId: receipt.targetId,
+    vectorBuildKey: receipt.vectorBuildKey,
+  } : null;
+}
+
+function recordSurfaceAdoptionAudit(event: Viewport3DSurfaceAdoptionAuditEvent): void {
+  recordViewportAckAuditTrace({ event: "surface-adoption", surfaceAdoption: event });
+}
 
 export function resolveViewport3DVisualizationAckDataIdentity({
   adoptionRegistry,
@@ -2062,7 +2196,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     }>(),
   );
   const visualizationDebugAdoptionRegistry = useMemo(
-    () => createViewport3DRenderAdoptionRegistry(),
+    () => createViewport3DRenderAdoptionRegistry({
+      onSurfaceAdoptionAudit: viewportAckAuditEnabled()
+        ? recordSurfaceAdoptionAudit
+        : undefined,
+    }),
     [],
   );
   visualizationDebugAdoptionRegistry.setSessionIdentity(sessionIdentity);
@@ -2364,15 +2502,43 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     const committedDataIdentity = frameAck.dataIdentity;
     const resourceKey = committedDataIdentity?.resourceKey ??
       ackKind?.resourceKey ?? sceneProps.resourceFrameKey;
-    const hasMatchingAdoption = !ackKind ||
-      ackKind.changeKind === "style" ||
-      (committedDataIdentity !== null &&
+    const hasActiveAdoption = Boolean(
+      ackKind?.changeKind === "data" &&
+        committedDataIdentity !== null &&
         visualizationDebugAdoptionRegistry.hasActiveAdoption({
           fieldBufferId: committedDataIdentity.fieldBufferId,
           resourceKey,
           sessionEpoch: committedDataIdentity.sessionEpoch,
           sessionId: committedDataIdentity.sessionId,
-        }));
+        }),
+    );
+    const hasMatchingAdoption = !ackKind ||
+      ackKind.changeKind === "style" || hasActiveAdoption;
+    if (viewportAckAuditEnabled()) {
+      recordViewportAckAuditTrace({
+        ackKind: ackKind?.changeKind ?? null,
+        blockReason: hasMatchingAdoption
+          ? null
+          : committedDataIdentity === null
+            ? "missing-data-identity"
+            : "no-matching-active-adoption",
+        currentFullBuffer: viewportAckAuditCurrentFullBuffer(visualizationDebugSource),
+        decision: hasMatchingAdoption ? "send-rendered" : "blocked",
+        enabled: clientReady && !visualizationError,
+        event: "frame-commit",
+        hasActiveAdoption,
+        latestActiveAdoption: viewportAckAuditLatestAdoption(
+          visualizationDebugAdoptionRegistry,
+          sessionIdentity,
+        ),
+        resourceFrameKey: sceneProps.resourceFrameKey,
+        resourceKey,
+        revision,
+        requestScopeEpoch: sessionIdentity?.requestScopeEpoch ?? null,
+        resolvedChangeKind: frameAck.changeKind,
+        resolvedFrameIdentity: viewportAckAuditIdentity(committedDataIdentity),
+      });
+    }
     if (hasMatchingAdoption) sendVisualizationAck({
       changeKind: frameAck.changeKind,
       effectiveRenderMode: visualizationEffectiveRenderMode,
@@ -2443,6 +2609,26 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       if (oldest === undefined) break;
       visualizationAckKindsRef.current.delete(oldest);
     }
+    const acknowledgementStatus: "failed" | "applied" | "rendered" =
+      visualizationError ? "failed" : changeKind === "data" ? "applied" : "rendered";
+    if (viewportAckAuditEnabled()) {
+      recordViewportAckAuditTrace({
+        acknowledgementStatus,
+        ackKind: changeKind,
+        appliedIdentity: viewportAckAuditIdentity(dataIdentity),
+        currentFullBuffer: viewportAckAuditCurrentFullBuffer(visualizationDebugSource),
+        enabled: clientReady,
+        event: "ack-registration",
+        latestActiveAdoption: viewportAckAuditLatestAdoption(
+          visualizationDebugAdoptionRegistry,
+          sessionIdentity,
+        ),
+        resourceFrameKey: sceneProps.resourceFrameKey,
+        resourceKey,
+        revision,
+        requestScopeEpoch: sessionIdentity?.requestScopeEpoch ?? null,
+      });
+    }
     sendVisualizationAck({
       changeKind,
       dataIdentity,
@@ -2454,7 +2640,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       requestScopeEpoch: sessionIdentity?.requestScopeEpoch ?? null,
       sessionId: sessionIdentity?.sessionId ?? null,
       sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
-      status: visualizationError ? "failed" : changeKind === "data" ? "applied" : "rendered",
+      status: acknowledgementStatus,
       viewportId: slotId,
     });
   }, [

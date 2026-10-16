@@ -62,6 +62,20 @@ export type Viewport3DRenderAdoptionResult =
       status: "unavailable";
     };
 
+export interface Viewport3DSurfaceAdoptionAuditEvent {
+  byteLength: number;
+  carrierId: string;
+  fieldBufferId: string | null;
+  ownerId: string | null;
+  requestScopeEpoch: string | null;
+  resourceKey: string | null;
+  result: Viewport3DRenderAdoptionResult;
+  scalarBufferKey: string;
+  sessionEpoch: string | null;
+  sessionId: string | null;
+  targetId: string | null;
+}
+
 type AdoptionPass = Omit<Viewport3DRenderAdoptionReceipt, "targetId">;
 type AdoptionInput = Omit<
   Viewport3DRenderAdoptionReceipt,
@@ -127,8 +141,10 @@ const MAX_INACTIVE_ADOPTION_HISTORY = 128;
 const MAX_REJECTED_TARGET_PASSES = 128;
 
 export function createViewport3DRenderAdoptionRegistry({
+  onSurfaceAdoptionAudit,
   now = Date.now,
 }: {
+  onSurfaceAdoptionAudit?: (event: Viewport3DSurfaceAdoptionAuditEvent) => void;
   now?: () => number;
 } = {}): Viewport3DRenderAdoptionRegistry {
   const demandCounts = new Map<string, number>();
@@ -444,8 +460,9 @@ export function createViewport3DRenderAdoptionRegistry({
       };
     },
     recordSurfaceAdoption(input) {
-      return adopt({
-        byteLength: safeByteLength(input.byteLength),
+      const byteLength = safeByteLength(input.byteLength);
+      const result = adopt({
+        byteLength,
         carrierId: input.carrierId,
         fieldBufferId: input.fieldBufferId,
         kind: "surface",
@@ -454,6 +471,24 @@ export function createViewport3DRenderAdoptionRegistry({
         sessionIdentity: input.sessionIdentity ?? null,
         vectorBuildKey: null,
       }, input.ownerId, input.targetId);
+      try {
+        onSurfaceAdoptionAudit?.({
+          byteLength,
+          carrierId: input.carrierId,
+          fieldBufferId: input.fieldBufferId,
+          ownerId: input.ownerId ?? null,
+          requestScopeEpoch: input.sessionIdentity?.requestScopeEpoch ?? null,
+          resourceKey: input.resourceKey ?? null,
+          result,
+          scalarBufferKey: input.scalarBufferKey,
+          sessionEpoch: input.sessionIdentity?.sessionEpoch ?? null,
+          sessionId: input.sessionIdentity?.sessionId ?? null,
+          targetId: input.targetId ?? null,
+        });
+      } catch {
+        // Optional audit instrumentation must never change adoption behavior.
+      }
+      return result;
     },
     recordVectorAdoption(input) {
       return adopt({

@@ -857,6 +857,11 @@ async function installBrowserAuditInstrumentation(page) {
       drawCalls: 0,
       frames: 0,
     };
+    const viewportAckTrace = [];
+    Object.defineProperty(counters, "viewportAckTrace", {
+      enumerable: false,
+      value: viewportAckTrace,
+    });
     const fdmBuildRequests = new Map();
     const fdmBuildResults = [];
     Object.defineProperty(counters, "fdmBuildResults", {
@@ -1082,6 +1087,8 @@ async function reportAuditFailure(
         auditStep: window.__FM_VIEWPORT_AUDIT_STEP__ ?? null,
         hud,
         menuItems,
+        viewportAckTrace:
+          window.__FM_VIEWPORT_BROWSER_AUDIT__?.viewportAckTrace?.slice(-512) ?? [],
         url: window.location.href,
       };
     })
