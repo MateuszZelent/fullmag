@@ -7,6 +7,8 @@ const FDM_GRID_FINGERPRINT = "0".repeat(64);
 const FDM_REGION_MEMBERSHIP_BUFFER_PATH =
   "/v2/sessions/current/data/fdm-region-membership";
 const FDM_READY_OBJECT_ID = "fdm-ready-box";
+const FDM_READY_OBJECT_METRICS_PATH =
+  `/v2/sessions/current/simulation/objects/${FDM_READY_OBJECT_ID}/metrics`;
 const FDM_READY_REGION_ID = `${FDM_READY_OBJECT_ID}:core`;
 export const FDM_PARTIAL_LAYER_ID = "layer:partial";
 export const FDM_DENSE_LAYER_ID = "layer:dense";
@@ -65,11 +67,13 @@ const EXACT_FIXTURE_PATHS = new Set([
   "/v2/sessions/current/model/planar-monitors",
   "/v2/sessions/current/model/readiness",
   "/v2/sessions/current/model/regions",
+  "/v2/sessions/current/meshing/summary",
   "/v2/sessions/current/meshing/capabilities",
   "/v2/sessions/current/meshing/semantics",
   "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
   "/v2/sessions/current/persistence/checkpoints",
   "/v2/sessions/current/simulation/solver/status",
+  FDM_READY_OBJECT_METRICS_PATH,
   "/v2/sessions/current/simulation/stages/execution",
 ]);
 
@@ -273,6 +277,17 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         path === "/v2/sessions/current/meshing/semantics"
       ) {
         await fulfillJson(route, fdmMeshSemanticsFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        path === "/v2/sessions/current/meshing/summary"
+      ) {
+        // This FDM fixture has no separate dashboard mesh-workspace summary;
+        // MeshSummaryResource still returns its required revision.
+        await fulfillJson(route, {
+          revision: fixture.status.resources.mesh_revision,
+        });
         return;
       }
       if (
@@ -628,6 +643,13 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
       }
       if (
         request.method() === "GET" &&
+        path === FDM_READY_OBJECT_METRICS_PATH
+      ) {
+        await fulfillJson(route, fdmReadyObjectMetricsFixture(fixture));
+        return;
+      }
+      if (
+        request.method() === "GET" &&
         path === "/v2/sessions/current/model/universe"
       ) {
         await fulfillJson(route, fixture.universe);
@@ -840,6 +862,28 @@ function fdmStatusFixture(fixture) {
     },
     solver: {
       state: "idle",
+    },
+  };
+}
+
+function fdmReadyObjectMetricsFixture(fixture) {
+  // The scene has no magnetization asset or solver sample, so the API reports
+  // its initial-state +Z default and zero energies before the first sample.
+  return {
+    object_id: FDM_READY_OBJECT_ID,
+    revision: fixture.sceneRevision,
+    source: "initial_state",
+    has_solver_sample: false,
+    step: 0,
+    time_seconds: 0,
+    magnetization_average: { mx: 0, my: 0, mz: 1 },
+    energies: {
+      exchange: 0,
+      demag: 0,
+      zeeman: 0,
+      anisotropy: 0,
+      dmi: 0,
+      total: 0,
     },
   };
 }
