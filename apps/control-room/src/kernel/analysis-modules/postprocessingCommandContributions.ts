@@ -23,6 +23,10 @@ import {
   modeVisualizationDefinitionFromSelection,
   modeVisualizationOwnerMatch,
 } from "./postprocessingDefinitions";
+import {
+  legacyModeVisualizationIdentity,
+  resolveLegacyModeVisualizationSelection,
+} from "./legacyModeVisualizationSelection";
 
 export const PIN_MODE_VISUALIZATION_COMMAND = "analysis.postprocessing.pin-mode-visualization";
 export const UNPIN_POSTPROCESSING_DEFINITION_COMMAND = "analysis.postprocessing.unpin-definition";
@@ -150,6 +154,10 @@ function pinDisabledReason(context: CommandContext): string | null {
     const published = modeVisualizationAnalysisResultSelection(selection);
     return published.ok ? null : published.reason;
   }
+  if (selection?.ref?.type === "frequency-domain") {
+    const legacy = legacyModeVisualizationIdentity(selection);
+    return legacy.ok ? null : legacy.reason;
+  }
   const legacy = modeVisualizationDefinitionFromSelection(selection);
   return legacy.ok ? null : legacy.reason;
 }
@@ -172,13 +180,84 @@ async function pinModeVisualization(context: CommandContext): Promise<CommandRes
     return { message: reason ?? "Mode visualization cannot be pinned.", status: "failed" };
   }
   const selection = context.selection?.get() ?? null;
-  const legacy = modeVisualizationDefinitionFromSelection(selection);
-  if (!legacy.ok) {
+  if (selection?.ref?.type === "analysis-result") {
     const published = modeVisualizationAnalysisResultSelection(selection);
     if (!published.ok) return { message: published.reason, status: "failed" };
     return pinPublishedResultModeVisualization(context, selection, published.selection);
   }
+  if (selection?.ref?.type === "frequency-domain") {
+    return pinLegacyModeVisualization(context, selection);
+  }
+  const legacy = modeVisualizationDefinitionFromSelection(selection);
+  if (!legacy.ok) return { message: legacy.reason, status: "failed" };
   return pinResolvedModeVisualization(context, legacy.definition);
+}
+
+async function pinLegacyModeVisualization(
+  context: CommandContext,
+  selection: Parameters<typeof modeVisualizationDefinitionFromSelection>[0],
+): Promise<CommandResult> {
+  const identity = legacyModeVisualizationIdentity(selection);
+  if (!identity.ok) return { message: identity.reason, status: "failed" };
+  const obsoleteBeforeCatalog = obsoleteSessionResult(context);
+  if (obsoleteBeforeCatalog) return obsoleteBeforeCatalog;
+  const controller = new AbortController();
+  const options = context.sessionScopeKey
+    ? { sessionScopeKey: context.sessionScopeKey, signal: controller.signal }
+    : { signal: controller.signal };
+  const results = context.api!.analysis.results;
+  const assertCurrentSession = (): void => {
+    if (obsoleteSessionResult(context)) {
+      controller.abort();
+      throw new Error("The selected session changed while resolving the Results catalog.");
+    }
+  };
+
+  try {
+    const resolved = await resolveLegacyModeVisualizationSelection(
+      selection,
+      controller.signal,
+      {
+        loadDatasetPage: async (query, signal) => {
+          assertCurrentSession();
+          const page = await results.datasets(identity.identity.runId, query, {
+            ...options,
+            signal,
+          });
+          assertCurrentSession();
+          return page;
+        },
+        loadItemPage: async (datasetId, query, signal) => {
+          assertCurrentSession();
+          const page = await results.items(
+            identity.identity.runId,
+            datasetId,
+            query,
+            { ...options, signal },
+          );
+          assertCurrentSession();
+          return page;
+        },
+      },
+    );
+    const obsoleteAfterCatalog = obsoleteSessionResult(context);
+    if (obsoleteAfterCatalog) return obsoleteAfterCatalog;
+    if (!resolved.ok) return { message: resolved.reason, status: "failed" };
+    const published = modeVisualizationAnalysisResultSelection(resolved.selection);
+    if (!published.ok) return { message: published.reason, status: "failed" };
+    return pinPublishedResultModeVisualization(
+      context,
+      resolved.selection,
+      published.selection,
+    );
+  } catch (error) {
+    const obsolete = obsoleteSessionResult(context);
+    if (obsolete) return obsolete;
+    const detail = error instanceof Error && error.message.length > 0
+      ? error.message
+      : "Unknown error.";
+    return { message: "Mode visualization pin failed: " + detail, status: "failed" };
+  }
 }
 
 async function pinResolvedModeVisualization(

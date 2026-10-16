@@ -18,6 +18,8 @@ import {
 import {
   buildEigenSpectrumChartModel,
   eigenModeFieldAvailable,
+  frequencyDomainManifestPayload,
+  frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type {
   EigenSpectrumPoint,
@@ -36,8 +38,7 @@ import {
 import { buildFmrModalSpectrumViewModel } from "./FmrModalSpectrumModel";
 
 export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useFmrModalSpectrumSummary();
+  const summary = useFmrModalSpectrumSummary(props.selection);
   const kernel = useKernel();
   const [selectedModeKey, setSelectedModeKey] = useState<string | null>(null);
   const view = buildFmrModalSpectrumViewModel({
@@ -58,6 +59,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
         nodeId,
         objectId: null,
         ref: {
+          ...(summary.modeSelectionOwner ?? {}),
           fieldId: eigenModeFieldAvailable(point)
             ? point.modeFieldId ?? undefined
             : undefined,
@@ -299,11 +301,16 @@ const FMR_MODAL_CHART_ROUTE = {
   primaryChart: "eigen-spectrum",
 } as const;
 
-function useFmrModalSpectrumSummary() {
+function useFmrModalSpectrumSummary(selection: InspectorPanelProps["selection"]) {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const chartRoute = FMR_MODAL_CHART_ROUTE;
+  const modeSelectionOwner = fmrModalSpectrumSelectionOwner(
+    manifest.data,
+    spectrum.data,
+    selection,
+  );
   const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const modalCapabilities = record(capabilities?.modal);
   const responseCapabilities = record(capabilities?.response);
@@ -333,6 +340,7 @@ function useFmrModalSpectrumSummary() {
       spectrumModel.points.map((point) => point.frequencyHz),
     ),
     modalModeCount: spectrumModel.points.length,
+    modeSelectionOwner,
     modalResidualCoverage: `${modalResidualCount}/${spectrumModel.points.length} mode(s)`,
     primaryModalResonance: firstModalPoint
       ? `mode ${firstModalPoint.rawModeIndex} at ${formatFrequency(firstModalPoint.frequencyHz)}`
@@ -340,6 +348,39 @@ function useFmrModalSpectrumSummary() {
     spectrumModel,
     spectrumResource,
     spectrumStatus: spectrum.status,
+  };
+}
+
+export function fmrModalSpectrumSelectionOwner(
+  manifestResource: unknown,
+  spectrumResource: unknown,
+  selection?: InspectorPanelProps["selection"],
+): { analysisRunId: string; analysisStageId: string } | null {
+  const manifestOwner = frequencyDomainResultContextFromManifest(
+    frequencyDomainManifestPayload(manifestResource),
+  );
+  const spectrum = record(spectrumResource);
+  if (
+    !manifestOwner.runId?.trim() ||
+    !manifestOwner.stageId?.trim() ||
+    spectrum?.run_id !== manifestOwner.runId ||
+    spectrum?.stage_id !== manifestOwner.stageId
+  ) {
+    return null;
+  }
+  const ref = selection?.ref;
+  const expectedOwner = ref?.type === "frequency-domain"
+    ? { runId: ref.analysisRunId, stageId: ref.analysisStageId }
+    : ref?.type === "analysis-result"
+      ? { runId: ref.runId, stageId: ref.stageId }
+      : null;
+  if (expectedOwner && (
+    expectedOwner.runId !== manifestOwner.runId ||
+    expectedOwner.stageId !== manifestOwner.stageId
+  )) return null;
+  return {
+    analysisRunId: manifestOwner.runId,
+    analysisStageId: manifestOwner.stageId,
   };
 }
 

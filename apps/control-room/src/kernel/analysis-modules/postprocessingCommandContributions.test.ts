@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  AnalysisResultDatasetCatalogResource,
   AnalysisResultDatasetManifestResource,
+  AnalysisResultItemPageResource,
+  AnalysisResultPageQuery,
   AnalysisResultSpectralItemSummary,
   SceneResource,
 } from "@/kernel/api/apiTypes";
@@ -73,22 +76,117 @@ function savedModeDefinition(
   };
 }
 
+function legacyResultsApi() {
+  const manifest = {
+    run_id: "run-1",
+    stage_id: "stage-1",
+    dataset_id: "catalog:eigen-dispersion",
+    dataset_revision: "catalog-revision-7",
+    product_kind: "modal_eigen",
+    item_kinds: ["eigen_mode"],
+    axes: [{ axis_id: "wavevector", role: "wavevector", cardinality: 2 }],
+    capabilities: { fields: true },
+    status: "ready",
+  } as unknown as AnalysisResultDatasetManifestResource;
+  const resultItem = {
+    item_id: "mode-0000",
+    item_kind: "eigen_mode",
+    branch_id: "branch-0001",
+    sample_id: "sample-0001",
+    frequency_hz: 1.20251e10,
+    source_revision: "item-source-revision-99",
+    field_ref: {
+      field_id: fieldId,
+      field_revision: "field-revision-3",
+      resource_key: "analysis-result:field:canonical-3",
+      status: "ready",
+      quantity_id: "m",
+      representation: "vector3",
+      mesh_ref: {
+        mesh_id: "mesh-1",
+        mesh_revision: "mesh-revision-2",
+        topology_fingerprint: "mesh-topology-2",
+      },
+    },
+  } as unknown as AnalysisResultSpectralItemSummary;
+  const datasetCatalog = {
+    items: [{
+      dataset_id: "catalog:eigen-dispersion",
+      dataset_revision: "catalog-revision-7",
+      item_count: 1,
+      product_kind: "modal_eigen",
+      run_id: "run-1",
+      sample_count: 1,
+      stage_id: "stage-1",
+      status: "ready",
+      title: "Eigen dispersion",
+    }],
+    next_cursor: null,
+    revision: "catalog-list-revision-1",
+    run_id: "run-1",
+    schema_version: "analysis-result-dataset-catalog.v1",
+    status: "ready",
+    total_count: 1,
+  } as unknown as AnalysisResultDatasetCatalogResource;
+  const itemPage = {
+    dataset_id: "catalog:eigen-dispersion",
+    dataset_revision: "catalog-revision-7",
+    items: [resultItem],
+    next_cursor: null,
+    run_id: "run-1",
+    total_count: 1,
+  } as unknown as AnalysisResultItemPageResource;
+  const datasets = vi.fn(async (
+    _runId: string,
+    _query: AnalysisResultPageQuery,
+    _options?: { sessionScopeKey?: string; signal?: AbortSignal },
+  ) => datasetCatalog);
+  const dataset = vi.fn(async (
+    _runId: string,
+    _datasetId: string,
+    _options?: { sessionScopeKey?: string },
+  ) => manifest);
+  const items = vi.fn(async (
+    _runId: string,
+    _datasetId: string,
+    _query: AnalysisResultPageQuery,
+    _options?: { sessionScopeKey?: string; signal?: AbortSignal },
+  ) => itemPage);
+  const item = vi.fn(async (
+    _runId: string,
+    _datasetId: string,
+    _itemId: string,
+    _options?: { sessionScopeKey?: string },
+  ) => resultItem);
+  return { dataset, datasets, item, items, itemPage, resultItem, manifest, datasetCatalog };
+}
+
 function commandContext(
   definitions: readonly ReturnType<typeof savedModeDefinition>[],
-  create = vi.fn(),
+  create = vi.fn().mockResolvedValue({
+    definition: { label: "Mode 1" },
+    scene_revision: 12,
+  }),
   authoringHistory?: AuthoringHistoryController,
   selectedMode = modeSelection(),
 ) {
   const list = vi.fn().mockResolvedValue({ definitions, scene_revision: 11 });
+  const results = legacyResultsApi();
   const invalidate = vi.fn();
   return {
     context: {
-      api: { analysis: { postprocessing: { definitions: { list, create } } } },
+      api: {
+        analysis: {
+          results,
+          postprocessing: { definitions: { list, create } },
+        },
+      },
       selection: { get: () => selectedMode },
       resources: { invalidate },
       authoringHistory,
     } as never,
     create,
+    ...results,
     invalidate,
     list,
   };
@@ -134,21 +232,56 @@ function referenceCommand() {
 }
 
 describe("pin mode visualization command owner deduplication", () => {
-  it("refuses to pin a field without canonical published dataset identity", async () => {
+  it("bridges a field without a dataset tuple through canonical Results resources", async () => {
     const command = pinCommand();
     expect(command).toBeDefined();
     if (!command) return;
-    const fixture = commandContext([], vi.fn(), undefined, modeSelection(false));
+    const fixture = commandContext([], undefined, undefined, modeSelection(false));
 
     const result = await command.run(fixture.context);
 
-    expect(result).toEqual({
-      message: "The selected field has no canonical published dataset identity.",
-      status: "failed",
+    expect(result.status).toBe("completed");
+    expect(fixture.datasets).toHaveBeenCalledTimes(1);
+    expect(fixture.datasets.mock.calls[0]?.[0]).toBe("run-1");
+    expect(fixture.datasets.mock.calls[0]?.[1]).toMatchObject({
+      product_kind: "modal_eigen",
+      stage_id: "stage-1",
+      limit: 500,
     });
-    expect(fixture.list).not.toHaveBeenCalled();
-    expect(fixture.create).not.toHaveBeenCalled();
-    expect(fixture.invalidate).not.toHaveBeenCalled();
+    expect(fixture.items).toHaveBeenCalledExactlyOnceWith(
+      "run-1",
+      "catalog:eigen-dispersion",
+      {
+        has_field: true,
+        item_kind: "eigen_mode",
+        limit: 50,
+        sample_id: "sample-0001",
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(fixture.dataset).toHaveBeenCalledTimes(2);
+    expect(fixture.item).toHaveBeenCalledExactlyOnceWith(
+      "run-1",
+      "catalog:eigen-dispersion",
+      "mode-0000",
+      undefined,
+    );
+    expect(fixture.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definition: expect.objectContaining({
+          data_ref: {
+            run_id: "run-1",
+            dataset_id: "catalog:eigen-dispersion",
+            dataset_revision: "catalog-revision-7",
+            field_id: fieldId,
+            sample_id: "sample-0001",
+            item_id: "mode-0000",
+          },
+        }),
+      }),
+      undefined,
+    );
+    expect(fixture.invalidate).toHaveBeenCalledTimes(2);
   });
 
   it("recognizes an existing field-only ID by its complete stored owner", async () => {
@@ -681,6 +814,7 @@ const scopedCommands = [
 function scopedCommandFixture(commandId: string) {
   let current = true;
   const list = vi.fn().mockResolvedValue({ definitions: [], scene_revision: 11 });
+  const results = legacyResultsApi();
   const mutation = vi.fn().mockResolvedValue(
     commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND
       ? { scene_revision: 13 }
@@ -688,7 +822,12 @@ function scopedCommandFixture(commandId: string) {
   );
   const invalidate = vi.fn();
   const context = {
-    api: { analysis: { postprocessing: { definitions: { list, create: mutation, remove: mutation } } } },
+    api: {
+      analysis: {
+        results,
+        postprocessing: { definitions: { list, create: mutation, remove: mutation } },
+      },
+    },
     input: commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND
       ? { definitionId: "pin-1" }
       : { fileName: "reference.csv", label: "Reference", points: [[0, 1], [1, 2]],
@@ -699,7 +838,15 @@ function scopedCommandFixture(commandId: string) {
     isCurrentSessionScope: () => current,
   };
   const command = POSTPROCESSING_DEFINITION_COMMANDS.find((candidate) => candidate.id === commandId)!;
-  return { context, list, mutation, invalidate, command, expire: () => { current = false; } };
+  return {
+    context,
+    list,
+    mutation,
+    invalidate,
+    command,
+    results,
+    expire: () => { current = false; },
+  };
 }
 
 function deferred<T>() {
@@ -732,6 +879,27 @@ describe.each(scopedCommands)("postprocessing command session scope: %s", (comma
         expect.objectContaining({ expected_scene_revision: 11 }), options,
       );
     }
+    if (commandId === PIN_MODE_VISUALIZATION_COMMAND) {
+      expect(fixture.results.datasets.mock.calls[0]?.[2]).toMatchObject({
+        ...options,
+        signal: expect.any(AbortSignal),
+      });
+      expect(fixture.results.items.mock.calls[0]?.[3]).toMatchObject({
+        ...options,
+        signal: expect.any(AbortSignal),
+      });
+      expect(fixture.results.dataset).toHaveBeenCalledExactlyOnceWith(
+        "run-1",
+        "catalog:eigen-dispersion",
+        options,
+      );
+      expect(fixture.results.item).toHaveBeenCalledExactlyOnceWith(
+        "run-1",
+        "catalog:eigen-dispersion",
+        "mode-0000",
+        options,
+      );
+    }
     const acknowledgedSceneRevision =
       commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND ? 13 : 12;
     expectSceneRevisionInvalidations(
@@ -744,6 +912,30 @@ describe.each(scopedCommands)("postprocessing command session scope: %s", (comma
     const fixture = scopedCommandFixture(commandId);
     fixture.expire();
     expect((await fixture.command.run(fixture.context as never)).status).toBe("cancelled");
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("cancels legacy resolution when its catalog page completes in an expired session", async () => {
+    if (commandId !== PIN_MODE_VISUALIZATION_COMMAND) return;
+    const fixture = scopedCommandFixture(commandId);
+    const catalogReadStarted = deferred<void>();
+    const catalogRead = deferred<AnalysisResultDatasetCatalogResource>();
+    fixture.results.datasets.mockImplementationOnce(() => {
+      catalogReadStarted.resolve();
+      return catalogRead.promise;
+    });
+
+    const pending = fixture.command.run(fixture.context as never);
+    await catalogReadStarted.promise;
+    fixture.expire();
+    catalogRead.resolve(fixture.results.datasetCatalog);
+
+    expect((await pending).status).toBe("cancelled");
+    expect(fixture.results.items).not.toHaveBeenCalled();
+    expect(fixture.results.dataset).not.toHaveBeenCalled();
+    expect(fixture.results.item).not.toHaveBeenCalled();
     expect(fixture.list).not.toHaveBeenCalled();
     expect(fixture.mutation).not.toHaveBeenCalled();
     expect(fixture.invalidate).not.toHaveBeenCalled();

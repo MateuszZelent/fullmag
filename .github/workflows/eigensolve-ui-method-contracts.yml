@@ -20,6 +20,8 @@ on:
       - 'apps/control-room/src/modules/ribbon/RibbonModule*'
       - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
+      - 'apps/control-room/src/kernel/analysis-modules/legacyModeVisualizationSelection*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FmrModalSpectrumInspectorPanel*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingDefinitions*'
       - 'apps/control-room/src/kernel/resources/postprocessingDefinitionResources*'
       - 'apps/control-room/src/kernel/resources/studyRuntimeResources*'
@@ -91,6 +93,8 @@ on:
       - 'apps/control-room/src/modules/ribbon/RibbonModule*'
       - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
+      - 'apps/control-room/src/kernel/analysis-modules/legacyModeVisualizationSelection*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FmrModalSpectrumInspectorPanel*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingDefinitions*'
       - 'apps/control-room/src/kernel/resources/postprocessingDefinitionResources*'
       - 'apps/control-room/src/kernel/resources/studyRuntimeResources*'
@@ -199,6 +203,8 @@ jobs:
           src/modules/ribbon/RibbonModule.layout.test.tsx
           src/modules/ribbon/ribbonCommands.test.ts
           src/kernel/analysis-modules/postprocessingCommandContributions.test.ts
+          src/kernel/analysis-modules/legacyModeVisualizationSelection.test.ts
+          src/modules/inspector/panels/frequency-domain/FmrModalSpectrumInspectorPanel.test.tsx
           src/kernel/analysis-modules/postprocessingDefinitions.test.ts
           src/kernel/resources/postprocessingDefinitionResources.test.tsx
           src/kernel/resources/studyRuntimeResources.test.ts
