@@ -254,6 +254,7 @@ jobs:
           src/kernel/resources/analysisResultCatalogPagination.test.ts
           src/kernel/layout/ViewportTabHost.test.tsx
           src/kernel/layout/ViewportTabHost.dom.test.tsx
+          src/modules/viewport-3d/viewportSmokeProjectionScript.test.ts
           src/shared/ui/Resizable.test.ts
           src/shared/ui/Resizable.dom.test.tsx
           src/kernel/resources/inactiveViewportResourcePolicy.test.ts
@@ -329,4 +330,5 @@ jobs:
             ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/explorer-catalog-browser.log
             ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/tmp/**/react-doctor-*/**
           if-no-files-found: error
+
 

@@ -138,7 +138,15 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("readCanvasContextState(page)");
     expect(smokeScript).toContain("await waitForCanvasClipBox(page)");
     expect(smokeScript).toContain("readCanvasClipBox(page)");
-    expect(smokeScript).not.toContain("canvas.evaluate");
+    // DOM identity checks may evaluate a canvas; projection pixel sampling must
+    // preserve its compositor screenshot fallback without canvas evaluation.
+    const sampleStart = smokeScript.indexOf("async function sampleCanvasComposite(page) {");
+    const sampleEnd = smokeScript.indexOf("\nasync function ", sampleStart + 1);
+    expect(sampleStart).toBeGreaterThanOrEqual(0);
+    expect(sampleEnd).toBeGreaterThan(sampleStart);
+    const compositeSampler = smokeScript.slice(sampleStart, sampleEnd);
+    expect(compositeSampler).toContain("page.screenshot({");
+    expect(compositeSampler).not.toContain("canvas.evaluate");
   });
 
   it("rechecks the final WebGL context and drawing buffer after every smoke flow", () => {
@@ -765,3 +773,4 @@ describe("viewport smoke projection round-trip", () => {
     );
   });
 });
+
