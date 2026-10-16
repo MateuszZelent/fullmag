@@ -12237,8 +12237,10 @@ export interface components {
             expected_revision: number;
             /**
              * @description Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,
-             *     dependencies, scheduling_priority and requested_execution. No defaults
-             *     or identities are inferred from a live session.
+             *     dependencies, scheduling_priority, requested_execution and execution_target.
+             *     Omitted execution_target defaults to local for pre-v3 clients. A selected
+             *     provider/profile is pinned into run_spec.v3; it is not principal identity
+             *     or a credential.
              */
             run_authoring: {
                 [key: string]: unknown;

@@ -41,6 +41,7 @@ fn inputs() -> (
     fixture["study_problem_catalog"]["entries"][0]["problem"]["study"]["dynamics"]
         ["fixed_timestep"] = serde_json::json!(1e-15);
     let original: RunIntent = serde_json::from_value(fixture["run_intent"].clone()).unwrap();
+    let execution_target = original.specification.resolved_execution_target();
     let authored = RunIntentAuthoring {
         run_id: original.specification.run_id,
         idempotency_key: original.idempotency_key,
@@ -49,6 +50,7 @@ fn inputs() -> (
         dependencies: original.specification.dependencies,
         scheduling_priority: original.specification.scheduling_priority,
         requested_execution: original.specification.requested_execution,
+        execution_target,
     };
     (
         ProjectEnvelope::blank(ProjectId::parse("project-submit").unwrap(), "Fixture").unwrap(),
@@ -100,6 +102,11 @@ fn materialization_preserves_explicit_run_identity_and_stable_replay() {
         authored.requested_execution
     );
     assert_eq!(
+        first.specification.execution_target,
+        Some(authored.execution_target.clone())
+    );
+    assert_eq!(first.specification.schema_version, crate::RUN_SPEC_SCHEMA);
+    assert_eq!(
         first.payload_fingerprint().unwrap(),
         second.payload_fingerprint().unwrap()
     );
@@ -110,6 +117,18 @@ fn materialization_preserves_explicit_run_identity_and_stable_replay() {
     assert_eq!(
         first.specification.study_catalog_sha256,
         fullmag_ir::canonical_ir_json_sha256(&serde_json::to_value(&catalog).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn legacy_authoring_without_target_defaults_to_local() {
+    let (_, _, _, authored) = inputs();
+    let mut payload = serde_json::to_value(authored).unwrap();
+    payload.as_object_mut().unwrap().remove("execution_target");
+    let decoded: RunIntentAuthoring = serde_json::from_value(payload).unwrap();
+    assert_eq!(
+        decoded.execution_target,
+        crate::ExecutionTargetReference::local()
     );
 }
 

@@ -29419,7 +29419,7 @@
           },
           "run_authoring": {
             "additionalProperties": {},
-            "description": "Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,\ndependencies, scheduling_priority and requested_execution. No defaults\nor identities are inferred from a live session.",
+            "description": "Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,\ndependencies, scheduling_priority, requested_execution and execution_target.\nOmitted execution_target defaults to local for pre-v3 clients. A selected\nprovider/profile is pinned into run_spec.v3; it is not principal identity\nor a credential.",
             "propertyNames": {
               "type": "string"
             },

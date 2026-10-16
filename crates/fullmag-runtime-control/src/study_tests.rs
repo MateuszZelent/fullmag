@@ -266,6 +266,23 @@ fn materialized_profile_is_replayed_before_accepting_a_planned_step() {
 }
 
 #[test]
+fn microlab_target_is_not_silently_dispatched_to_the_local_provider() {
+    let (catalog, plan) = lower_steps(&["cpu"]);
+    let mut specification = run_spec("cpu");
+    specification.execution_target =
+        Some(fullmag_application::ExecutionTargetReference::microlab("site-primary", 1).unwrap());
+
+    let error = validate_requested_execution(&specification, &catalog, &plan)
+        .expect_err("the unconfigured MicroLab target must fail before Submit");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("MicroLab execution target is not available"),
+        "{message}"
+    );
+    assert!(message.contains("run was not accepted"), "{message}");
+}
+
+#[test]
 fn explicit_run_backend_precision_and_mode_must_match_solver_plan() {
     let (catalog, plan) = lower_steps(&["cpu"]);
 

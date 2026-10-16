@@ -14,8 +14,78 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const LEGACY_RUN_SPEC_SCHEMA: &str = "run_spec.v1";
-pub const RUN_SPEC_SCHEMA: &str = "run_spec.v2";
+pub const RESOURCE_RUN_SPEC_SCHEMA: &str = "run_spec.v2";
+pub const RUN_SPEC_SCHEMA: &str = "run_spec.v3";
 pub const RUN_INTENT_SCHEMA: &str = "run_intent.v1";
+pub const EXECUTION_TARGET_REFERENCE_SCHEMA: &str = "execution_target.v1";
+
+/// A user-selected execution destination. It identifies a configured provider
+/// profile, never the authenticated principal or a broker credential.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "provider", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExecutionTargetReference {
+    Local {
+        schema_version: String,
+    },
+    #[serde(rename = "microlab")]
+    MicroLab {
+        schema_version: String,
+        profile_id: String,
+        profile_revision: u64,
+    },
+}
+
+impl ExecutionTargetReference {
+    pub fn local() -> Self {
+        Self::Local {
+            schema_version: EXECUTION_TARGET_REFERENCE_SCHEMA.into(),
+        }
+    }
+
+    pub fn microlab(
+        profile_id: impl Into<String>,
+        profile_revision: u64,
+    ) -> Result<Self, RunSpecError> {
+        let target = Self::MicroLab {
+            schema_version: EXECUTION_TARGET_REFERENCE_SCHEMA.into(),
+            profile_id: profile_id.into(),
+            profile_revision,
+        };
+        target.validate()?;
+        Ok(target)
+    }
+
+    pub fn validate(&self) -> Result<(), RunSpecError> {
+        let schema_version = match self {
+            Self::Local { schema_version } | Self::MicroLab { schema_version, .. } => {
+                schema_version
+            }
+        };
+        if schema_version != EXECUTION_TARGET_REFERENCE_SCHEMA {
+            return Err(RunSpecError::Invalid(format!(
+                "execution_target.schema_version must be {EXECUTION_TARGET_REFERENCE_SCHEMA}"
+            )));
+        }
+        if let Self::MicroLab {
+            profile_id,
+            profile_revision,
+            ..
+        } = self
+        {
+            require_identifier(profile_id, "execution_target.profile_id")?;
+            if *profile_revision == 0 {
+                return Err(RunSpecError::Invalid(
+                    "execution_target.profile_revision must be greater than zero".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_microlab(&self) -> bool {
+        matches!(self, Self::MicroLab { .. })
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -201,7 +271,7 @@ impl RequestedExecution {
         }
         let budget = self.minimum_resources.as_ref().ok_or_else(|| {
             RunSpecError::Invalid(
-                "compute_resources requires requested_execution.minimum_resources (run_spec.v2)"
+                "compute_resources requires requested_execution.minimum_resources (run_spec.v2 or v3)"
                     .into(),
             )
         })?;
@@ -329,6 +399,10 @@ pub struct RunSpecification {
     #[serde(default, skip_serializing_if = "is_default_scheduling_priority")]
     pub scheduling_priority: i32,
     pub requested_execution: RequestedExecution,
+    /// Versioned provider/profile selection. Legacy v1/v2 specs omit it and
+    /// resolve to the local provider without mutating their serialized payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_target: Option<ExecutionTargetReference>,
 }
 
 pub const MIN_SCHEDULING_PRIORITY: i32 = -1_000;
@@ -365,33 +439,62 @@ impl RunSpecification {
             immutable_assets: Vec::new(),
             scheduling_priority: 0,
             requested_execution,
+            execution_target: Some(ExecutionTargetReference::local()),
         }
     }
 
+    /// Resolve legacy RunSpec payloads without writing inferred fields back to
+    /// their durable representation.
+    pub fn resolved_execution_target(&self) -> ExecutionTargetReference {
+        self.execution_target
+            .clone()
+            .unwrap_or_else(ExecutionTargetReference::local)
+    }
+
     pub fn validate(&self) -> Result<(), RunSpecError> {
-        if !matches!(
-            self.schema_version.as_str(),
-            LEGACY_RUN_SPEC_SCHEMA | RUN_SPEC_SCHEMA
-        ) {
-            return Err(RunSpecError::Invalid(format!(
-                "schema_version must be {LEGACY_RUN_SPEC_SCHEMA} or {RUN_SPEC_SCHEMA}"
-            )));
-        }
-        match (
-            self.schema_version.as_str(),
-            self.requested_execution.minimum_resources.as_ref(),
-        ) {
-            (RUN_SPEC_SCHEMA, None) => {
-                return Err(RunSpecError::Invalid(
-                    "run_spec.v2 requires requested_execution.minimum_resources".into(),
-                ));
+        match self.schema_version.as_str() {
+            LEGACY_RUN_SPEC_SCHEMA => {
+                if self.requested_execution.minimum_resources.is_some() {
+                    return Err(RunSpecError::Invalid(
+                        "run_spec.v1 cannot contain requested_execution.minimum_resources".into(),
+                    ));
+                }
+                if self.execution_target.is_some() {
+                    return Err(RunSpecError::Invalid(
+                        "run_spec.v1 cannot contain execution_target".into(),
+                    ));
+                }
             }
-            (LEGACY_RUN_SPEC_SCHEMA, Some(_)) => {
-                return Err(RunSpecError::Invalid(
-                    "run_spec.v1 cannot contain requested_execution.minimum_resources".into(),
-                ));
+            RESOURCE_RUN_SPEC_SCHEMA => {
+                if self.requested_execution.minimum_resources.is_none() {
+                    return Err(RunSpecError::Invalid(
+                        "run_spec.v2 requires requested_execution.minimum_resources".into(),
+                    ));
+                }
+                if self.execution_target.is_some() {
+                    return Err(RunSpecError::Invalid(
+                        "run_spec.v2 cannot contain execution_target".into(),
+                    ));
+                }
             }
-            _ => {}
+            RUN_SPEC_SCHEMA => {
+                if self.requested_execution.minimum_resources.is_none() {
+                    return Err(RunSpecError::Invalid(
+                        "run_spec.v3 requires requested_execution.minimum_resources".into(),
+                    ));
+                }
+                self.execution_target
+                    .as_ref()
+                    .ok_or_else(|| {
+                        RunSpecError::Invalid("run_spec.v3 requires execution_target".into())
+                    })?
+                    .validate()?;
+            }
+            _ => {
+                return Err(RunSpecError::Invalid(format!(
+                    "schema_version must be {LEGACY_RUN_SPEC_SCHEMA}, {RESOURCE_RUN_SPEC_SCHEMA}, or {RUN_SPEC_SCHEMA}"
+                )));
+            }
         }
         require_identifier(self.run_id.as_str(), "run_id")?;
         self.snapshot.validate()?;
@@ -697,10 +800,16 @@ mod tests {
     }
 
     #[test]
-    fn resource_budget_is_required_only_by_run_spec_v2() {
+    fn resource_budget_is_required_by_run_spec_v2_and_v3() {
         let mut current = specification();
         current.requested_execution.minimum_resources = None;
         assert!(current.validate().is_err());
+
+        let mut v2 = specification();
+        v2.schema_version = RESOURCE_RUN_SPEC_SCHEMA.into();
+        v2.execution_target = None;
+        v2.requested_execution.minimum_resources = None;
+        assert!(v2.validate().is_err());
 
         let mut legacy = specification();
         legacy.schema_version = LEGACY_RUN_SPEC_SCHEMA.into();
@@ -714,6 +823,57 @@ mod tests {
             storage_bytes: 1,
         });
         assert!(legacy.validate().is_err());
+    }
+
+    #[test]
+    fn run_spec_v3_requires_a_typed_execution_target_and_fingerprints_it() {
+        let mut specification = specification();
+        assert_eq!(specification.schema_version, RUN_SPEC_SCHEMA);
+        assert_eq!(
+            specification.execution_target,
+            Some(ExecutionTargetReference::local())
+        );
+        let local_fingerprint = specification.fingerprint().unwrap();
+
+        specification.execution_target =
+            Some(ExecutionTargetReference::microlab("cluster-profile", 3).unwrap());
+        specification.validate().unwrap();
+        assert_ne!(local_fingerprint, specification.fingerprint().unwrap());
+
+        specification.execution_target = None;
+        assert!(specification
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("execution_target"));
+    }
+
+    #[test]
+    fn legacy_run_specs_remain_unmodified_and_resolve_to_local() {
+        let mut legacy = specification();
+        legacy.schema_version = RESOURCE_RUN_SPEC_SCHEMA.into();
+        legacy.execution_target = None;
+        legacy.validate().unwrap();
+        let legacy_payload = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_payload.get("execution_target").is_none());
+        let decoded: RunSpecification = serde_json::from_value(legacy_payload).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(
+            decoded.resolved_execution_target(),
+            ExecutionTargetReference::local()
+        );
+
+        let mut invalid = legacy.clone();
+        invalid.execution_target = Some(ExecutionTargetReference::local());
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn microlab_target_requires_a_valid_profile_reference() {
+        for (profile_id, profile_revision) in [("../escape", 1), ("cluster-profile", 0)] {
+            let target = ExecutionTargetReference::microlab(profile_id, profile_revision);
+            assert!(target.is_err());
+        }
     }
 
     #[test]

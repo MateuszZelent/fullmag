@@ -11,8 +11,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ImmutableAssetReference, ProjectEnvelope, ProjectSnapshot, RequestedExecution, RunDependency,
-    RunId, RunIntent, RunSpecification, StudyId, StudyReference,
+    ExecutionTargetReference, ImmutableAssetReference, ProjectEnvelope, ProjectSnapshot,
+    RequestedExecution, RunDependency, RunId, RunIntent, RunSpecification, StudyId, StudyReference,
 };
 
 /// Explicit authored values, not a second RunSpec or a persisted document.
@@ -27,6 +27,8 @@ pub struct RunIntentAuthoring {
     pub dependencies: Vec<RunDependency>,
     pub scheduling_priority: i32,
     pub requested_execution: RequestedExecution,
+    #[serde(default = "ExecutionTargetReference::local")]
+    pub execution_target: ExecutionTargetReference,
 }
 
 /// Compile the final submission identity without publishing it. Study/ProblemIR
@@ -87,6 +89,7 @@ pub fn materialize_run_intent(
         authored.requested_execution,
     );
     specification.run_id = authored.run_id;
+    specification.execution_target = Some(authored.execution_target);
     specification.seeds = authored.seeds;
     specification.dependencies = authored.dependencies;
     specification.scheduling_priority = authored.scheduling_priority;

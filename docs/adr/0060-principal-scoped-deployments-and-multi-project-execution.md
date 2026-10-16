@@ -17,9 +17,11 @@ uwierzytelnia użytkownika. `local_compute_operator_token` jest krótką
 zdolnością lokalnego operatora wyłącznie do zapisów NodePolicy, nie principalem
 MicroLab. Kernel frontendu ma pojedynczy mutable `ProjectDocumentController`.
 
-Obecne źródła definiują `run_spec.v1`, `run_spec.v2` i `run_intent.v1`; nie ma
-implementacji `execution_scope_identity.v1`. RunSpec opisuje zaakceptowaną
-pracę i ustawienia solvera, a nie jest źródłem tożsamości użytkownika.
+Źródła zachowują odczyt `run_spec.v1` i `run_spec.v2`, a nowe zlecenia
+używają `run_spec.v3` z `execution_target.v1`; zewnętrzna koperta pozostaje
+`run_intent.v1`. Nie ma implementacji `execution_scope_identity.v1`. RunSpec
+opisuje zaakceptowaną pracę, ustawienia solvera i wybrany provider/profile,
+ale nigdy tożsamość principalu ani credential.
 
 ## Decyzja
 
@@ -46,11 +48,12 @@ pracę i ustawienia solvera, a nie jest źródłem tożsamości użytkownika.
    wspólnego stanu wejściowego. Jedna alokacja brokera na Task/Attempt jest
    pierwszym zakresem; pule/arrays są późniejszą optymalizacją MicroLab.
 5. **Rozdział danych i authority:** RunSpecification/ProblemIR opisują co
-   rozwiązać i requested execution. Wybór target/profile jest jawny,
-   wersjonowany i wyrażalny tak samo przez UI, CLI i publiczny Python. Principal,
-   DeploymentId, broker allocation, generation i grants są wiązane po stronie
-   zaufanego Fullmag API/provider adaptera; nie są poświadczeniami ani polami
-   użytkownika do podrobienia w RunSpec.
+   rozwiązać i requested execution. `run_spec.v3` zawiera jawny
+   `execution_target.v1`: `local` albo `microlab` z `profile_id` i
+   `profile_revision`. To wybór wykonania, nie principal/DeploymentId,
+   allocation, generation ani grant. Interfejsy UI, CLI i publiczny Python
+   muszą używać tego samego kontraktu. Principal i grants są wiązane wyłącznie
+   po stronie zaufanego API/provider adaptera.
 6. **API sesji:** nowe operacje adresują jawny Project/Session/Run/Task scope,
    expected revision i deployment context. `/v2/sessions/current/...` pozostaje
    nazwanym adapterem zgodności do czasu migracji konsumentów i osobnej bramki
@@ -62,11 +65,11 @@ pracę i ustawienia solvera, a nie jest źródłem tożsamości użytkownika.
    skuteczny envelope. Slurm, login node, SSH, sbatch/squeue/sacct oraz
    scheduler credentials pozostają poza Fullmag. Worker otrzymuje tylko grant
    ograniczony do allocation/generation/Task/Attempt; nigdy token użytkownika.
-8. **Legacy:** zachować odczyt RunSpec v1/v2 i RunIntent v1 bez dopisywania
-   principalu, targetu, grantów ani provenance, których nie miały. Nowe pola
-   identity/target muszą mieć jawne schematy, fingerprinty, migrację i
-   compatibility tests. Brak scope dla historycznego runu pozostaje
-   `legacy/unreported`, nie jest uzupełniany domysłem.
+8. **Legacy:** zachować odczyt RunSpec v1/v2 i RunIntent v1 bez
+   przepisywania ich payloadów. Brak targetu w v1/v2 rozwiązuje się jako
+   `local` tylko w pamięci; nowe authoringowe zlecenia zapisują jawny target
+   w v3, który wchodzi do fingerprintu. Brak scope dla historycznego runu
+   pozostaje `legacy/unreported`, nie jest uzupełniany domysłem.
 
 ## Rozważone alternatywy
 

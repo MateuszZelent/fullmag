@@ -85,9 +85,11 @@ pub use repository::{
     RepositoryOpenResult,
 };
 pub use run_spec::{
-    ImmutableAssetReference, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
-    RunDependency, RunId, RunIntent, RunIntentLedger, RunSpecError, RunSpecification, StudyId,
-    StudyReference, SubmitDisposition, SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
+    ExecutionTargetReference, ImmutableAssetReference, ProjectSnapshot, RequestedExecution,
+    RequestedResourceBudget, RunDependency, RunId, RunIntent, RunIntentLedger, RunSpecError,
+    RunSpecification, StudyId, StudyReference, SubmitDisposition, SubmitReceipt,
+    EXECUTION_TARGET_REFERENCE_SCHEMA, LEGACY_RUN_SPEC_SCHEMA, RESOURCE_RUN_SPEC_SCHEMA,
+    RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };
 pub use run_intent_materialization::{materialize_run_intent, RunIntentAuthoring};
 pub use script_antenna_inspection_planning::plan_script_antenna_inspection;

@@ -2858,6 +2858,14 @@ pub fn validate_requested_execution(
     plan: &StudyExecutionPlan,
 ) -> Result<()> {
     let requested = &specification.requested_execution;
+    if let Some(target) = &specification.execution_target {
+        target.validate().map_err(anyhow::Error::msg)?;
+        if target.is_microlab() {
+            bail!(
+                "MicroLab execution target is not available in this Fullmag deployment; the run was not accepted"
+            );
+        }
+    }
 
     // This check is deliberately snapshot-only. In particular, do not call
     // the runner's host resolver here: submit validation must not inspect the

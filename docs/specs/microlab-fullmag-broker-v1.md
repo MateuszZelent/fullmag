@@ -24,6 +24,7 @@ V1 przyjmuje jedną alokację brokera na jeden Fullmag TaskId i AttemptId. Wiele
 | Principal | Stabilny, niezmienny identyfikator zweryfikowany przez MicroLab z tokenu uwierzytelnionego użytkownika. Nie jest polem żądania tworzącego alokację. |
 | Fullmag deployment | Prywatny deployment przypisany server-side do principalu. Rozdziela projekty, durable intents, credentials i output catalog. |
 | Client intent | Trwała w Fullmag identyfikacja jednego zamiaru utworzenia albo anulowania alokacji. Jest kluczem uzgadniania lost ACK, nie credentialem. |
+| Execution target | W `run_spec.v3` jawny `execution_target.v1`: provider `local` albo `microlab` z `profile_id` i `profile_revision`. Jest wyborem trasy, nie principalem ani credentialem. Do czasu rejestracji providera MicroLab Fullmag odrzuca taki target przed trwałą akceptacją. |
 | Project/Run/Case/Task/Attempt | Kanoniczne identyfikatory domenowe Fullmaga. Ich zakres jest kontrolowany przez Fullmag i nie jest zastępowany identyfikatorem joba schedulera. |
 | Broker allocation | Opaque ID zwrócone przez MicroLab wraz z principalem, generacją/incarnation, statusem i audytowalnym envelope. |
 | Generation | Licznik przypisany do broker allocation. Restart lub podmiana VM/agent incarnation unieważnia starszy connection grant i wymaga nowego. |
@@ -32,7 +33,7 @@ V1 przyjmuje jedną alokację brokera na jeden Fullmag TaskId i AttemptId. Wiele
 | Connection grant | Krótko ważne capability do konkretnego allocation, generation, task/attempt, audience i zestawu operacji. Nie jest tokenem użytkownika. |
 | Transfer grant | Odrębne krótkotrwałe capability do jednego transferu i kierunku. Nie daje prawa do odczytu innych danych principalu. |
 
-Bieżąca granica kompatybilności Fullmaga to `run_spec.v1`/`run_spec.v2` oraz `run_intent.v1`. Audyt źródeł nie wykazał zaimplementowanego `execution_scope_identity.v1` ani historycznego pola `authority=slurm`; nie należy opisywać ich jako istniejącego kontraktu. Powiązanie z brokerem musi zostać wprowadzone jako jawny, wersjonowany scope/fingerprint po decyzjach H0, z zachowaniem odczytu istniejących RunSpec i RunIntent.
+Bieżąca granica kompatybilności zachowuje `run_spec.v1`/`run_spec.v2` i `run_intent.v1`; nowe authoringowe RunSpec używają `run_spec.v3` z `execution_target.v1`. Ten target identyfikuje wybrany profil `local` albo `microlab` i jest częścią fingerprintu. Nie jest `execution_scope_identity.v1`: broker principal, allocation, generation i grants nadal wymagają osobnego, zaufanego kontraktu. Audyt nie wykazał historycznego pola `authority=slurm`.
 
 ## 3. Uwierzytelnienie i granica zaufania
 
