@@ -946,13 +946,45 @@ path; projecting them to a 2D face would extend their constraint through every
 extruded Z interval and outside their authored ROI. Their BODY_XY density and
 ROI behavior remain **NOT VERIFIED**. This change does not claim independent
 airbox XY grading: a conforming 3D mesh shares the source triangulation at the
-body/air interface. It preserves the existing Z-plane list, exact-layer count,
+body/air interface. It preserves the magnetic Z-plane list and exact-layer count,
 PBC mapping and recertification, `hmin`, and mesh-quality assertions. The
 existing `test_exact_layer_body_target_precedence_survives_air_and_local_fields`
 remains the public density regression. The selector guard is
 `test_owner_wide_body_seed_field_selection_excludes_regions_and_other_owners`;
 the ring route regression also checks the filtered source options and retained
 `hmin`. Source inspection alone does not qualify Gmsh runtime behavior.
+
+(material-regions-adaptive-air-exact-magnetic-layers)=
+<!-- DOC-ANCHOR:material-regions-adaptive-air-exact-magnetic-layers -->
+#### Adaptacyjne powietrze i dokładne warstwy magnetyczne — zatwierdzony kontrakt
+
+Decyzja użytkownika z 16.10.2026 dopuszcza dodatkowe węzły Z wewnątrz
+powietrza. Zadane płaszczyzny i dokładna liczba warstw obowiązują w magnetyku;
+nie są globalnym ograniczeniem wszystkich węzłów airboxu. Ta decyzja zastępuje
+wcześniejsze wymaganie zachowania zadanych płaszczyzn także w całym powietrzu.
+Implementacja nowej trasy oraz jej wykonanie Gmsh pozostają **NOT VERIFIED**.
+
+Każdy węzeł incydentny do komórki magnetycznej, także współdzielony z
+powietrzem, nadal podlega dokładnym magnetycznym płaszczyznom. Żadna komórka
+magnetyczna nie może przecinać zadanej płaszczyzny wewnętrznej; wszystkie
+żądane przedziały grubości muszą mieć komórki i zachowane znaczniki domeny.
+Swoboda powietrza nie uprawnia do remeshingu zmieniającego magnetyczną
+triangulację, numerację bez jawnego mapowania ani rozkład warstw.
+
+Powietrze musi pozostać konforemne na interfejsie z magnetykiem. Nie wolno
+pozostawić szczelin ani zdublowanych interfejsowych stopni swobody. Parowanie
+PBC, przesunięcia periodyczne i certyfikacja siatki nadal są obowiązkowe;
+przeciwległe powierzchnie nie mogą uzyskać niezależnych, niezgodnych map węzłów.
+Zadane pola rozmiaru, lokalne ROI, hmin/hmax i istniejące progi jakości oraz
+gęstości pozostają bez osłabienia. Adaptacyjne powietrze samo nie naprawia ROI
+wewnątrz materiału.
+
+Weryfikacja musi osobno kontrolować magnetyczne płaszczyzny i warstwy,
+konforemność, air-only węzły Z, domeny i PBC oraz jakość/gęstość obu domen.
+Nie wystarcza usunięcie globalnej asercji Z z testu. Zmiana siatkowania
+powietrza wymaga ponownej kontroli zbieżności airboxu i siatki przed naukową
+kwalifikacją demag i dyspersji. Requested intent i rzeczywista trasa meshera
+muszą pozostać rozróżnialne w raporcie; ten zapis decyzji nie dowodzi wykonania.
 
 (material-regions-round-trip-and-failure-semantics)=
 ### 4.6 Round-trip and failure semantics

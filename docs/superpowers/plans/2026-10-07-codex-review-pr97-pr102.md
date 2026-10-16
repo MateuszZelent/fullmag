@@ -4932,3 +4932,41 @@ PR97 jest merged, PR102 closed. Późniejsze poprawki brancha i wszystkie wymaga
 Weryfikowane pliki mają SHA256: asset_pipeline.py `97561ffcb58f51cdeefbdaf35daef7fd7f289b26a1826f841197489aeb432b98`, test_meshing.py `ad72f634f33f332a310f6d98aeb1fd2f14ec1b4755b9b252a8f6ae232828336e`. Root pobrał i odczytał pełny log, SHA256 `84705ce8caf3a7475245c51f41a0c3f1a6875b9a23d63e1f5e4f64e6ee3da504`; sukces nie wynika z samego statusu workflow ani AST.
 
 39 airbox testów PASS w240.18s i7body-only PASS w1.13s. Pełna suite341testów w94.336s nadal ma3failures/1error/1skip: Ring XY/density, partial-Z ROI oraz mixed-element quality. Te uwagi pozostają otwarte. Dowód5483294585 nie kwalifikuje całego meshera, solvera FEM/GPU ani zgodności dyspersji z COMSOL. Nie wykonywano lokalnych testów ani projektu.
+
+### 2026-10-16 — rzeczywisty błąd adaptera managed i jego regresje
+
+[Managed run38950088516](https://github.com/MateuszZelent/fullmag/actions/runs/38950088516), exact `dfc0bbbc73db832c2e93929edbbbc8b43c6b6ec6`, zakończył się FAILURE przed utworzeniem koordynatora. Trzy obrazy zbudowano, ale adapter Unix odrzucał `--hostname`, `--restart unless-stopped` i loopbackowy `--publish` emitowane przez rzeczywisty `container_client.start`. Nie wykonano modal wrappera ani jego 10 CTest. Uwaga4060116277 pozostaje otwarta dla managed runtime.
+
+Commit `c2848f03836a3a06069fa4024f7f82f9094a4b80` mapuje te trzy opcje do Docker Engine API, z odrzucaniem nieobsługiwanych wartości. [Fast run38956207145](https://github.com/MateuszZelent/fullmag/actions/runs/38956207145), exact c284, SUCCESS: 33+29+13+11 = **86 PASS**. Log zawiera trzy nowe testy `test_container_client_start_uses_unix_engine_create_contract`, `test_coordinator_create_options_map_to_exact_engine_fields` i `test_coordinator_create_options_reject_unsafe_values`. Test startu korzysta z fake Engine; nie jest rzeczywistym uruchomieniem kontenera.
+
+Jednokrotnie ponowiono pełny [managed run38956446578](https://github.com/MateuszZelent/fullmag/actions/runs/38956446578), exact c284. Na potwierdzonym odczycie był in_progress; jego terminalne receipty, biblioteka, JUnit i nauka pozostają NOT VERIFIED. Nie restartować wyłącznie z powodu niedostępnego aktywnego logu.
+
+### 2026-10-16 — GPU: dwa powtarzalne cykle przyrostu licznika
+
+Commit `3f754ed8e6ddc411088bff6c7db318cd43ab1273` dodał ograniczoną diagnostykę kontekstów i faz bez zmiany progów, kolejności ani 120 przejść. [Browser run38954748560](https://github.com/MateuszZelent/fullmag/actions/runs/38954748560), exact 3f754: Inspector i Control Room SUCCESS; browser pre-proof FAILURE. Pełny log zawiera 137 migawek; rzeczywista bramka wynosiła baseline322, after378, limit+16. Kontekst1 po zamknięciu otrzymał context-lost i bilans8; kontekst2 miał316 przed stresem,438 po stabilizacji120 przejść i370 po shaderach. To liczniki wywołań createBuffer/deleteBuffer, nie liczba zatrzymanych obiektów ani bajty sterownika.
+
+Dwa identyczne cykle60 ustawień dały po+60 netto (pierwsze i ostatnie12 po+12). Dane przeczą hipotezie jednorazowego warmup/plateau dla tego licznika. Trwa źródłowa diagnoza owner/disposal; nie podniesiono limitu ani nie przesunięto baseline dla zielonego testu. Artefakt12069768278 ma GitHub digest `sha256:109794f14a3a1f1c0ddf45869ef27acb30b914169cc82507eab1fbf57d0ea3ed`. Powiązane uwagi viewport/browser i późniejszy companion/coldChart pozostają otwarte.
+
+### 2026-10-16 — native tracking mass: pierwszy atom, integracja nadal otwarta
+
+Commit `4c7d24499542bfad6ad7082c6906e061c5dad51d` dodaje niemutowalny, nieważony materiałowo scalar P1 CSR w pełnej kanonicznej przestrzeni fizycznych węzłów; air-only wiersze są zachowane i puste. Brak lumpingu, dzielenia Prism6 na tetraedry i regularizacji. Nowy real-MFEM test obejmuje niezależne Tet4/Wedge6 współczynniki w skalach1m/1nm, mapowanie pięciu węzłów magnetic/air, symetrię, objętość i odmowy błędnych wejść. Dokument0831, source-map i ADR0060 określają granice tego atomu.
+
+[Positive-mass run38955540585](https://github.com/MateuszZelent/fullmag/actions/runs/38955540585), exact4c7: na ostatnim potwierdzonym odczycie in_progress; wynik nowego CTest pozostaje NOT VERIFIED. Provider nie jest jeszcze podłączony do C ABI/Rust/direct/adaptive/bias sweep ani GPU. Uwaga4207786265 nadal `valid_unfixed` dla całej legalnej ścieżki mixed-topology; sam builder nie zamyka wymagania.
+
+### 2026-10-16 — decyzja: powietrze adaptacyjne, magnetyk z dokładnymi warstwami
+
+Użytkownik zatwierdził dodatkowe węzły Z wewnątrz powietrza przy zachowaniu dokładnych zadanych warstw i płaszczyzn magnetyku. Aktualny kontrakt zapisano w0104 pod `material-regions-adaptive-air-exact-magnetic-layers` przed zmianą implementacji. Pozostają obowiązkowe konforemność interfejsu, domeny/PBC, progi jakości/gęstości i ponowna zbieżność. Implementacja tej nowej trasy Gmsh jest nadal pending; usunięcie globalnej asercji testowej nie stanowi naprawy. Decyzja nie rozwiązuje sama partial-Z ROI w materiale.
+
+Przy odczycie rzeczywistego workflow `eigensolve-scientific-source-maps.yml` ustalono, że dotąd walidował trzy inne noty; jego zielony status sam nie dowodził kontroli0104 ani0831. Ten etap dodaje obie mapy do wyzwalaczy i faktycznych poleceń walidatora, zachowując poprzednie trzy. Nowy wynik jest pending; nie przenosić historycznego SUCCESS na szerszy zakres.
+
+Śledzenie źródeł exact4c7 wskazało istniejący reusable frozen flow w `asset_pipeline.py`: `_generate_air_mesh_for_frozen_magnetic_submesh` → air generator → `_air_element_mask_outside_frozen_magnetic_submesh` → `_merge_frozen_magnetic_submesh_with_air_mesh`. Nie wolno automatycznie uznać go za gotowy realizator nowej decyzji. Obecny merge dopasowuje współrzędne przez kwantyzację1e-12m i usuwa interface faces według klucza węzłów, ale nie wymaga pełnej bijekcji wszystkich ścian interfejsu. Filtrowanie centroid/strict-interior-vertex samo nie dowodzi braku komórek przecinających magnetyk. Clearance helper może rozszerzyć bbox; przy PBC trzeba udowodnić zachowanie zadanych wektorów komórki. Brak takiego dowodu jest ograniczeniem, a nie potwierdzeniem fizycznie poprawnej konforemności.
+
+Pozostały plan implementacji adaptacyjnego powietrza:
+
+1. Dodać niezależny certyfikat rzeczywistego connectivity magnetic-air: każda interface Tri3 ma dokładnie właściwego sąsiada, bez szczelin, duplikatów i komórek przecinających powierzchnię. Nie opierać certyfikatu wyłącznie na centroidach.
+2. Zachować requested bbox/wektory PBC i jednoznaczną mapę node pairs; nie rozszerzać periodycznej komórki helperem clearance bez jawnego kontraktu. Recertification musi badać rzeczywiste translacje i mapy końcowej siatki.
+3. Zbudować magnetyk istniejącą trasą body-only z dokładnymi warstwami; niezależny air generator ma zachować interfejs, sizing i provenance. Nie ignorować object_regions/per-object recipes: zaimplementować ich poprawne przekazanie albo zachować jawną odmowę do pełnej obsługi, bez deklaracji ukończenia całej trasy.
+4. Uruchomić rzeczywiste Box/Ring fixtures z air-only dodatkowymi Z-nodes, dokładnymi magnetycznymi planes/warstwami, pełnym interface/PBC certificate i niezmienionymi progami jakości/gęstości. Zachować istniejące negatywne przypadki.
+5. Powtórzyć zbieżność siatki/airboxu i dopiero potem kwalifikację demag/dyspersji. BODY_XY oraz partial-Z ROI pozostają osobnymi niezakończonymi wymaganiami; adaptacyjne powietrze ich automatycznie nie zamyka.
+
+PR97 pozostaje closed/merged, PR102 closed/unmerged. Cały audyt, integracja późniejszych commitów oraz wymagane browser/runtime/scientific gates pozostają **nieukończone**.

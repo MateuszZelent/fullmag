@@ -714,6 +714,13 @@
       "evidence_status": "implemented"
     },
     {
+      "id": "adaptive-air-exact-magnetic-layer-decision",
+      "path": "docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md",
+      "symbol": "DOC-ANCHOR:material-regions-adaptive-air-exact-magnetic-layers",
+      "responsibility": "Accepted user contract: adaptive air-only Z nodes with exact magnetic layers, conformal interface, unchanged quality/density/PBC gates, and renewed convergence evidence; implementation and runtime remain unverified.",
+      "evidence_status": "planned_contract"
+    },
+    {
       "id": "body-xy-owner-source-field-selector",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_owner_wide_body_seed_fields",
