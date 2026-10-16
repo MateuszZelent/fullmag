@@ -1,23 +1,25 @@
-# Fullmag na workstation i HPC — korekta architektury, Slurm i współdzielony stan eigensolve
+# Fullmag na workstation i HPC — MicroLab broker, Slurm za brokerem i współdzielony stan eigensolve
 
 Data: 05.10.2026. Status: **audyt źródłowy i propozycja R2; implementacja oraz kwalifikacja pozostają otwarte**.
-Rozwinięcie i korekta [audytu kart projektów](multi-project-tabs-20261005.md). Użytkownik wskazał **Slurm jako pierwszy adapter HPC**.
+Rozwinięcie i korekta [audytu kart projektów](multi-project-tabs-20261005.md). Korekta decyzji z 16.10.2026: **MicroLab jest jedyną granicą integracji Fullmaga z HPC; Slurm jest pierwszym schedulerem za brokerem**, nie bezpośrednim adapterem Fullmaga.
 Odczyt rozpoczęto na `master`, HEAD `25a449c44dda53684b63c5281c6bc59c6b49ab87`, z lokalnymi zmianami oraz konfliktami integracji w frontendzie i wygenerowanym OpenAPI. Nie rozwiązywano tych konfliktów i nie traktowano tych plików jako dowodu poprawnego kontraktu runtime. Ten etap zmienia wyłącznie dokumentację audytu.
+
+Korekta z 16.10.2026: szczegółowe odwołania do mechanizmów Slurma w dalszej części opisują scheduler wewnętrzny MicroLab i wymagania kontraktu z brokerem. Nie są projektem bezpośredniego klienta Slurma w Fullmag.
 
 ## 1. Werdykt po ponownej analizie
 
-Poprzedni kierunek — wspólny control plane i izolowane wykonanie — pozostaje właściwy, ale **globalny owner/ledger na fizyczny host nie jest poprawną granicą produktu HPC**. Granicą jest autoryzowany deployment, a dla wykonania klastrowego konkretny przydział zasobów od Slurma. Różni użytkownicy i kilka zadań jednego użytkownika mogą współistnieć na tym samym węźle.
+Poprzedni kierunek — wspólny control plane i izolowane wykonanie — pozostaje właściwy, ale **globalny owner/ledger na fizyczny host nie jest poprawną granicą produktu HPC**. Granicą jest autoryzowany deployment/ExecutionScope potwierdzony przez MicroLab oraz przydział i resource envelope zwrócone przez broker. Slurm jako pierwszy scheduler działa za brokerem i nie jest klientem Fullmaga. Różni użytkownicy i kilka zadań jednego użytkownika mogą współistnieć na tym samym węźle.
 
 Rekomenduję modułowy control plane Fullmaga oraz providerów wykonania, z zachowaniem uruchomienia przez zewnętrzny dispatcher:
 
 1. **Local provider:** lokalna usługa użytkownika i izolowane procesy workerów; dobre domyślne zachowanie desktopu.
-2. **External allocation execution:** zewnętrzny dispatcher, np. Microlab lub skrypt batch, uruchamia `fullmag task.py --headless` we własnej alokacji. Fullmag nie wymaga wtedy swojego stale działającego koordynatora ani własnego submitu do klastra.
-3. **Slurm batch/array provider:** pierwszy zintegrowany adapter HPC dla kampanii sterowanych z Fullmaga; przyjęte przypadki są wykonywane jako zwykłe zadania/tablice zadań Slurma. UI może się odłączyć.
-4. **Slurm allocation-pool provider:** następny zakres dla dużej liczby krótkich/podobnych przypadków; jedna przyznana alokacja, agent i pula workerów. Agent rozdziela wyłącznie zasoby alokacji.
+2. **External-dispatch/headless:** MicroLab albo inny zatwierdzony launcher uruchamia `fullmag task.py --headless` w otrzymanym scope; ta ścieżka nie wymaga stale działającego Fullmag control plane.
+3. **MicroLab broker provider:** pierwszy zintegrowany HPC provider Fullmaga. Fullmag przesyła idempotentny intent do MicroLab; broker potwierdza allocation, zasoby, granty i transfer. Slurm batch/arrays jest pierwszą schedulerową realizacją *za* brokerem, jeśli MicroLab ją udostępni. UI może się odłączyć.
+4. **MicroLab broker allocation-pool:** późniejszy zakres dla wielu krótkich/podobnych przypadków; broker zarządza VM/alokacją, grantami i agentem, który dzieli tylko przyznany envelope. Nie dodaje bezpośredniego klienta Slurma do Fullmaga.
 
 Te tryby używają tego samego Study DAG, RunSpec, CaseId/TaskId/AttemptId, typed artifact refs, provenance i danych wynikowych. API, autorstwo dokumentu i planowanie zależności nie muszą być oddzielnymi mikroserwisami. Proces solvera pozostaje izolowany; odrębny fizyczny „orchestrator node” nie jest obowiązkowym elementem instalacji.
 
-To rozwija istniejący [HPC Cluster Execution v1](../../specs/hpc-cluster-execution-v1.md), który już przyjmuje external-dispatch-first i Slurm jako pierwszy scheduler. Optional orchestration jest rozszerzeniem produktu, nie warunkiem podstawowego headless HPC. Starsze sformułowanie „one session” należy pogodzić w H0 z wieloma dokumentami, zachowując jeden model semantyczny, a nie jeden singleton procesu.
+To rozwija istniejący [HPC Cluster Execution v1](../../specs/hpc-cluster-execution-v1.md): zachowujemy external-dispatch/headless, a zintegrowany Fullmag provider komunikuje się wyłącznie z MicroLab. Slurm jest pierwszym schedulerem za brokerem; Fullmag nie wywołuje `sbatch`, `squeue`, `sacct` ani `slurmrestd`. Starsze sformułowanie „one session” należy pogodzić w H0 z wieloma dokumentami, zachowując jeden model semantyczny, a nie jeden singleton procesu.
 
 **Dla przykładu użytkownika właściwy przepływ to:** jedna relaksacja → zatwierdzony niezmienny stan równowagi → wiele niezależnych eigensolve cases czytających ten sam stan → agregacja i śledzenie modów. Nie kopiujemy żywego obiektu solvera ani jego wskaźników GPU między procesami.
 
@@ -26,9 +28,9 @@ To rozwija istniejący [HPC Cluster Execution v1](../../specs/hpc-cluster-execut
 | Wcześniejsze uproszczenie | Obowiązujące rozstrzygnięcie R2 |
 |---|---|
 | Jeden owner na host | Jeden owner danego execution scope; wiele scope'ów na węźle |
-| Jeden wspólny ledger fizycznego hosta | Local: ledger uprawnionej lokalnej domeny. HPC: Slurm przyznaje envelope, Fullmag subalokuje go |
+| Jeden wspólny ledger fizycznego hosta | Local: ledger uprawnionej lokalnej domeny. HPC: MicroLab potwierdza scope i envelope, a scheduler/site (pierwszy: Slurm) egzekwuje przydział; Fullmag subalokuje wyłącznie potwierdzony envelope |
 | Jeden application store | Jeden autorytatywny katalog deploymentu/tenant scope; nie baza wszystkich użytkowników węzła |
-| Multi-node dopiero później | Provider/identity/artifact contracts od początku; adapter Slurma jest pierwszą implementacją HPC |
+| Multi-node dopiero później | Provider/identity/artifact contracts od początku; MicroLab jest pierwszym i jedynym providerem HPC Fullmaga, Slurm pozostaje za brokerem |
 | UUID namespace rozwiązuje izolację | UUID zapobiega kolizjom; authorization, ACL i resource enforcement są odrębnymi obowiązkami |
 | Wiele procesów to distributed solver | Independent cases i pojedynczy MPI/distributed solve mają osobne kontrakty i kwalifikację |
 | Stan relaksacji można po prostu podać wszystkim | Potrzebne immutable manifest, quality/compatibility gate, transport, pins i task-local mutable kopie |
@@ -39,10 +41,11 @@ To rozwija istniejący [HPC Cluster Execution v1](../../specs/hpc-cluster-execut
 flowchart TB
   UI[UI i CLI użytkownika] --> CP[Control plane deploymentu: projekty DAG runy katalog]
   CP --> LP[Local provider]
-  CP --> SP[Slurm provider]
+  CP --> MP[MicroLab broker provider]
   LP --> LO[Local execution scope i supervisor]
   LO --> LW[Izolowane lokalne workery]
-  SP --> SL[Slurm: polityka klastra użytkownicy przydziały]
+  MP --> ML[MicroLab: identity, VM lifecycle, grants, transfer]
+  ML --> SL[Site scheduler: Slurm jako pierwszy]
   SL --> A[Allocation A użytkownika U1]
   SL --> B[Allocation B użytkownika U1]
   SL --> C[Allocation C użytkownika U2]
@@ -58,14 +61,15 @@ flowchart TB
 
 | Warstwa | Odpowiada za | Nie uzyskuje przez to prawa do |
 |---|---|---|
-| Slurm / administrator klastra | Account/QoS/partition, kolejkę globalną, allocation, OS enforcement i czas życia jobów | Definiowania fizyki Fullmaga |
+| MicroLab | Principal, lifecycle VM/allocation, granty, envelope, transfer, quota oraz audyt dostępu Fullmaga | Zmiany fizyki Fullmaga ani przekroczenia polityki ośrodka |
+| Slurm / administrator klastra | Za brokerem: account/QoS/partition, kolejkę, alokację, OS enforcement i czas życia jobów | Definiowania fizyki Fullmaga ani bycia endpointem klienta Fullmaga |
 | Control plane Fullmaga | Dokumenty, study dependencies, immutable submit, przypadki, retry policy i katalog naukowy | Rezerwowania obcych CPU/GPU poza provider allocation |
 | Execution provider | Tłumaczenie żądań, submit/query/cancel/reconcile, staging i provider receipts | Drugiego niezależnego źródła prawdy o study |
 | Allocation agent | Lokalny supervisor, podział envelope i heartbeat przypisanych workerów | Discovery całego hosta jako dostępnej puli |
 | Worker/attempt | Weryfikację wejścia, solver, output publication i execution receipt | Modyfikacji immutable wejścia lub publikacji w cudzym runie |
 | UI / karty | Widok projektu i statusów | Własności jobów, klastra albo stateful native Context |
 
-Fullmag planuje **gotowość i semantykę** zadań. Slurm planuje **prawo do fizycznych zasobów i czas startu**. Scheduler DAG nie znika, ale nie konkuruje z globalnym schedulerem klastra. Preparation, staging, solve i postprocessing też zużywają przydział; nie są darmową pracą wykonywaną poza nim.
+Fullmag planuje **gotowość i semantykę** zadań. MicroLab uwierzytelnia principal, zarządza lifecycle VM/alokacji i zwraca Fullmagowi autoryzowany resource envelope; Slurm po stronie brokera planuje **prawo do fizycznych zasobów i czas startu**. Scheduler DAG nie znika, ale nie konkuruje z globalnym schedulerem klastra. Preparation, staging, solve i postprocessing też zużywają przydział; nie są darmową pracą wykonywaną poza nim.
 
 ### 2.1 Trzy konkretne przypadki współistnienia
 
@@ -73,7 +77,7 @@ Fullmag planuje **gotowość i semantykę** zadań. Slurm planuje **prawo do fiz
 
 **Trzy osobne joby tego samego użytkownika.** Mogą należeć do jednego deploymentu i kampanii, ale mają różne provider allocation identities, attempts, scratch, logs i output reservations. Katalog kampanii łączy ich wyniki; nie scala mutable runtime'ów. Jeśli są to trzy niezależne uruchomienia Fullmaga, dostają odrębne deployment/execution scopes i mogą później importować autoryzowane immutable wyniki.
 
-**Trzy workery wewnątrz jednej alokacji.** Alokacja ma jednego suballocatora, albo zasoby kroków przydziela Slurm przez job steps. Workery nie tworzą trzech ofert pełnej RAM/CPU/GPU tej samej alokacji. Przy niejednoznacznym discovery kolejny spawn jest odrzucony.
+**Trzy workery wewnątrz jednej alokacji.** Scope VM/alokacji ma jednego suballocatora, a MicroLab potwierdza envelope. Slurm może wewnętrznie przydzielać job steps. Workery nie tworzą trzech ofert pełnej RAM/CPU/GPU tej samej alokacji. Przy niejednoznacznym discovery kolejny spawn jest odrzucony.
 
 ### 2.2 Co potwierdza aktualny kod
 
@@ -90,7 +94,7 @@ Fullmag planuje **gotowość i semantykę** zadań. Slurm planuje **prawo do fiz
 | `crates/fullmag-session/src/writer.rs:331`, `require_local_filesystem` | Wymagana kwalifikowana lokalna trasa lock/durability | Shared FS transport wymaga nowego adaptera/dowodów, nie wyłączenia guarda |
 | `crates/fullmag-api/src/main.rs:2589`, listener construction | Domyślne 8081 oraz bind `0.0.0.0`; prywatny service control jest innym kanałem loopback | Przed multi-user node potrzebna jawna endpoint/auth boundary i discovery bez kolizji portów; kod nie dowodzi ograniczeń zapory hosta |
 | `crates/fullmag-cli/src/control_room.rs`, `runtime_state_root` | Unix wybiera XDG/HOME, a przy ich braku pozostaje fallback `temp_dir()/fullmag` | HPC wymaga jawnego private root. Nie twierdzić, że zwykły Unix zawsze ignoruje HOME; problem dotyczy fallbacku i braku allocation scope |
-| `docs/plans/active/compute-execution-20261004/README.md`, E2/E6; `implementation-checkpoint.md` | Host ledger/provider transfers pozostają etapami planu | Nie uznawać opisanej architektury za zaimplementowany Slurm provider |
+| `docs/plans/active/compute-execution-20261004/README.md`, E2/E6; `implementation-checkpoint.md` | Host ledger/provider transfers pozostają etapami planu | Nie uznawać opisanej architektury za zaimplementowany MicroLab provider |
 
 Przegląd wykonawczych modułów API/runtime-control/session/CLI nie znalazł adaptera `sbatch/srun/SLURM_*` ani provider job reconciliation. Nie jest to stwierdzenie o zewnętrznych skryptach ośrodka; audyt dotyczy produktowej ścieżki Fullmaga. W przejrzanym routerze nie potwierdzono modelu request principal/RBAC; same instance UUID/store binding nie dają dowodu multi-user auth. H0 obejmuje pełne inventory wejść zamiast zakładania zabezpieczenia przez listener/port.
 
@@ -282,7 +286,7 @@ Brak connectivity nie oznacza końca obliczeń. Widok pokazuje osobno status pro
 - Preemption/walltime signal pozwala checkpointować wyłącznie obsługiwany stan. Checkpoint compatibility określa runtime; brak supportu oznacza interrupted/retry od legalnego inputu, nie „resume” od losowego output file.
 - Pierwszy coordinator ma jednego aktywnego leadera, trwały journal i restart recovery. HA z kilkoma writerami wymaga transakcyjnego backendu/consensus i fencing, nie dwóch kopii procesu nad tym samym folderem. Nie jest blokadą pierwszego batch/array zakresu.
 
-Slurm REST może być adapterem zamiast lokalnych narzędzi klienta, gdy ośrodek go udostępnia. Wymaga site authentication/proxy i wersjonowania; nie wystawiać slurmrestd bezpośrednio z aplikacji. Preferowany pierwszy adapter to zatwierdzony klient Slurma działający jako właściwy użytkownik, z typowanymi argumentami i parsowalnym wynikiem, bez składania dowolnego shell z pól UI. [Slurm REST](https://slurm.schedmd.com/rest.html).
+MicroLab może użyć Slurm REST wewnątrz własnego adaptera, jeśli ośrodek go udostępnia. Wymaga to site authentication/proxy i wersjonowania; Fullmag nie łączy się ze slurmrestd ani nie przechowuje scheduler credentials. [Slurm REST](https://slurm.schedmd.com/rest.html) jest tu wyłącznie źródłem wymagań dla implementacji brokera.
 
 ### 7.4 Pakowanie i zgodność wykonania
 
@@ -313,9 +317,9 @@ Etapy H0–H2 są częścią **obecnego projektowania**, żeby późniejsze HPC 
 | **H0 — kontrakt authority/scope** | ADR, aktualizacja P7/compute spec; `fullmag-application` identity/RunSpec, `fullmag-session` owner records, API auth/scope; nowe pola są wersjonowane | Przed MT-1/2: jednoznaczne ownership dla dwóch users i trzech allocations; legacy single-user binding ma ograniczony adapter |
 | **H1 — provider i allocation envelope** | Istniejący `fullmag-runtime-control`, local resource discovery, runtime service/startup, provider adaptery; user identity i site config | Effective cpuset/RAM/GPU/deadline nie przekracza allocation; dwa agents nie subalokują tego samego scope bez ownera |
 | **H2 — immutable execution/state bundles** | `fullmag-application` typed artifacts/dependencies; `fullmag-session` CAS/catalog/reachability; worker input/output bridge i istniejące accepted-state owners | Remote task nie zależy od writable wspólnego SessionStore; hash/codec/quality/ACL, resumable staging, durable outbox i pins |
-| **H3 — Slurm submit/query/cancel/reconcile** | Nowy provider moduł w istniejącej warstwie runtime; CLI target/profile config, schemas/OpenAPI/facade/resources | Lost submit ACK, requeue, precise cancel i multi-user namespace mają process/provider proof; brak ślepego retry |
+| **H3 — MicroLab create/query/cancel/reconcile** | Nowy provider moduł w istniejącej warstwie runtime; CLI target/profile config, schemas/OpenAPI/facade/resources | Lost create ACK, allocation replacement, precise cancel i multi-user namespace mają process/provider proof; brak ślepego retry |
 | **H4 — relax→eigen fan-out** | Obecny Study compiler, state/artefact adapters, eigensolve case dispatch, typed aggregation i mode-tracking owners | Jedna zgodna relaksacja, N stable cases, niezależny fan-out z tym samym input hash i poprawny fan-in; quality/coverage |
-| **H5 — produkt local + Slurm arrays** | MT-3/4/6/7, Jobs/campaign view, restore, OutputStorage, distribution profiles | Desktop i HPC mają ten sam kontrakt; UI disconnect/reopen nie dubluje jobs i zachowuje wyniki |
+| **H5 — produkt local + MicroLab campaigns** | MT-3/4/6/7, Jobs/campaign view, restore, OutputStorage, distribution profiles | Desktop i HPC mają ten sam kontrakt; UI disconnect/reopen nie dubluje jobs i zachowuje wyniki |
 | **H6 — allocation pool** | Provider agent/protocol/supervisor, bounded worker pool, node cache i transport | Dopiero po pomiarze H3–H5; poprawne walltime/drain, worker loss, zasoby steps, koszt idle i cache eviction |
 | **H7 — kwalifikacja produkcyjna** | Repozytoryjne managed recipes, receipts, fault/security/performance/physics matrices | Osobne local/Slurm i cztery lane'y, pełny scope zadeklarowanych capabilities; brak „skip=pass” |
 
@@ -323,9 +327,9 @@ Kolejność: `H0 → H1/H2 → H3 → H4/H5 → H7`; H6 może dojść później 
 
 ### 9.1 Granice pierwszego release i następnych rozszerzeń
 
-**Pierwszy release:** lokalne karty, poprawna izolacja contextów, scoped control plane, private per-principal deployment, Slurm batch/arrays, immutable state fan-out dla obsługiwanych eigensolve cases, wynik częściowy, recovery i właściwe zasoby. Może początkowo ograniczać liczbę aktywnych cases lub obsługiwane lane'y, ale ograniczenia muszą być jawne.
+**Pierwszy release:** lokalne karty, poprawna izolacja contextów, scoped control plane, private per-principal deployment i provider MicroLab (Slurm za brokerem), immutable state fan-out dla obsługiwanych eigensolve cases, wynik częściowy, recovery i właściwe zasoby. Może początkowo ograniczać liczbę aktywnych cases lub obsługiwane lane'y, ale ograniczenia muszą być jawne.
 
-Zachować basic external-dispatch/headless z [HPC v1](../../specs/hpc-cluster-execution-v1.md); pełny integrated submit/Jobs adapter jest rozszerzeniem. W H0 uzgodnić ten starszy dokument, [compute execution §10](../../specs/compute-resource-execution-v1.md#10-wiele-hostów-i-scheduler-zewnętrzny), ADR 0049/0052 oraz P7-C. Nie tworzyć nowego równoległego kontraktu dla Microlab i innego dla własnego adaptera Slurm.
+Zachować basic external-dispatch/headless z [HPC v1](../../specs/hpc-cluster-execution-v1.md); zintegrowany provider Fullmaga rozmawia z MicroLab, a nie ze schedulerem klastra. W H0 uzgodnić ten starszy dokument, [compute execution §10](../../specs/compute-resource-execution-v1.md#10-wiele-hostów-i-scheduler-zewnętrzny), ADR 0049/0052 oraz P7-C. Nie tworzyć równoległego, bezpośredniego adaptera Slurma.
 
 **Następne rozszerzenia:** adaptive pool, długotrwały worker reuse, site/team service, HA control plane, inne schedulery. MPI/distributed pojedynczy solve pozostaje oddzielnym E7 z podziałem operatorów, communicatorami, kolektywami i kwalifikacją numeryczną; nie wynika z obecności PETSc/SLEPc ani kilku worker nodes.
 
@@ -358,13 +362,13 @@ Nie wystarczy pokazać kilku uruchomionych procesów. Trzeba potwierdzić faktyc
 
 ## 10. Decyzja „co jest najlepsze teraz”
 
-Zachować i rozszerzyć istniejące warstwy Fullmaga. Już teraz poprawić scope/authority oraz typed state dependencies, ponieważ dotyczą także zwykłego desktopu. Jako pierwszy HPC provider wdrożyć Slurm batch/arrays. Zaprojektować adapter allocation pool tak, aby nie zmieniał publicznego DAG ani artefaktów, lecz wdrażać go po profilu obciążenia i fault tests.
+Zachować i rozszerzyć istniejące warstwy Fullmaga. Już teraz poprawić scope/authority oraz typed state dependencies, ponieważ dotyczą także zwykłego desktopu. Jako pierwszy HPC provider Fullmaga wdrożyć MicroLab; Slurm batch/arrays pozostaje realizacją po stronie brokera. Zaprojektować adapter allocation pool tak, aby nie zmieniał publicznego DAG ani artefaktów, lecz wdrażać go po profilu obciążenia i fault tests.
 
 Nie potrzebujemy na start infrastruktury centralnej dla całego klastra ani osobnego daemon managera na każdym węźle. Potrzebujemy natomiast produkcyjnego protokołu z poprawnymi ownerami, niezmiennymi wejściami, autoryzacją, jednoznacznym recovery oraz istniejącym schedulerem ośrodka jako źródłem przydziału. To pozwala osiągnąć opisany przez użytkownika fan-out bez zamykania drogi do większej instalacji usługowej.
 
 ## 11. Dowody i stan dokumentu
 
-Audyt objął trzy niezależne zakresy: izolacja/owner/resources HPC, typed state i eigensolve fan-out oraz integracja providerów i kontraktów produktu. Wniosek o topologii deploymentów jest rekomendacją; źródła nie dowodzą działającego adaptera Slurma, zdalnego state transfer ani gotowej wieloużytkownikowej usługi.
+Audyt objął trzy niezależne zakresy: izolacja/owner/resources HPC, typed state i eigensolve fan-out oraz integracja providerów i kontraktów produktu. Wniosek o topologii deploymentów jest rekomendacją; źródła nie dowodzą działającego adaptera MicroLab, zdalnego state transfer ani gotowej wieloużytkownikowej usługi.
 
 Zweryfikowano aktualne dokumentacje pierwotne Slurma i COMSOL, wskazane przy twierdzeniach. Odniesienie do komercyjnego solvera dotyczy modelu workflow; nie przenosi jego wyników wydajności, fizyki ani licencjonowania na Fullmaga. Nie ma pomiaru pozwalającego już dziś wybrać allocation pool zamiast arrays dla wszystkich workloadów.
 

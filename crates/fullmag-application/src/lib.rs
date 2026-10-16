@@ -7,6 +7,7 @@
 //! Close semantics.
 
 mod application;
+mod artifact_transfer_manifest;
 mod batch_expansion;
 mod coordinator;
 mod declared_execution;
@@ -27,6 +28,10 @@ mod study_artifact;
 mod study_execution_materialization;
 mod task_execution;
 
+pub use artifact_transfer_manifest::{
+    ArtifactTransferDirectionV1, ArtifactTransferEntryV1, ArtifactTransferManifestV1,
+    ArtifactTransferProvenanceV1, ARTIFACT_TRANSFER_MANIFEST_V1,
+};
 pub use application::{
     ActiveExecution, ActiveExecutionPolicy, ApplicationError, CloseRequest, CloseResult,
     CreateProjectRequest, DirtyClosePolicy, DocumentMode, DocumentView, OpenProjectResult,

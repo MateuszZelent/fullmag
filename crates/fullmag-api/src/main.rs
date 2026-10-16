@@ -38,6 +38,7 @@ mod accepted_fem_state;
 mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
 mod accepted_study_worker;
+mod accepted_artifact_transfer;
 mod accepted_project_storage;
 mod analysis;
 mod artifacts;

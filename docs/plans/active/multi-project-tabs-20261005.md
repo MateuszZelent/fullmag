@@ -2,14 +2,14 @@
 
 Data: 05.10.2026. Status: **propozycja architektury i plan; implementacja nie rozpoczęta**.
 Zakres: karty dokumentów/projektów w jednym Control Room, niezależne sesje i równoległe obliczenia.
-Aktualizacja R2: wymagania HPC, wielu użytkowników i kilku alokacji tego samego użytkownika zmieniają granicę własności zasobów. **Slurm jest wybranym przez użytkownika pierwszym adapterem.** Uzupełnienie i obowiązujące rozstrzygnięcia: [HPC, izolacja i fan-out eigensolve](multi-project-hpc-execution-20261005.md). Rozdziały poniżej skorygowano, aby „jeden owner” nie oznaczał globalnego singletona na fizycznym węźle.
+Aktualizacja decyzji z 16.10.2026: **MicroLab jest jedynym providerem HPC Fullmaga; Slurm jest pierwszym schedulerem działającym za brokerem, bez bezpośrednich połączeń Fullmaga.** Uzupełnienie i obowiązujące rozstrzygnięcia: [HPC, izolacja i fan-out eigensolve](multi-project-hpc-execution-20261005.md). Odwołania do Slurma niżej opisują wewnętrzną politykę i egzekwowanie klastra.
 Baza odczytu: `master`, HEAD `f7500b82dc56234ededf0132a22955a90584e7e5`, współdzielony dirty checkout.
 Stan lokalnych zmian jest częścią audytu; sam HEAD nie identyfikuje wszystkich odczytanych źródeł.
 Nie uruchamiano buildów, solverów, testów ani restartu działającego workspace. Ustalenia są dowodem źródłowym, a nie kwalifikacją wykonania.
 
 ## 1. Rekomendacja
 
-**Jeden frontend i spójne API w obrębie uprawnionego deploymentu użytkownika, wiele izolowanych kontekstów projektów oraz izolowane procesy wykonawcze.** Lokalnie nadzoruje je runtime owner; w HPC adapter Slurma i agenci ograniczeni do konkretnych alokacji. Kilka deploymentów/użytkowników może działać na tym samym węźle.
+**Jeden frontend i spójne API w obrębie uprawnionego deploymentu użytkownika, wiele izolowanych kontekstów projektów oraz izolowane procesy wykonawcze.** Lokalnie nadzoruje je runtime owner; w HPC Fullmag korzysta z MicroLab i agentów ograniczonych do brokerowych scope'ów/alokacji. Slurm pozostaje za MicroLab. Kilka deploymentów/użytkowników może działać na tym samym węźle.
 
 Karta reprezentuje otwarty dokument. Nie tworzy własnego serwera HTTP, portu ani schedulera. Projekt może być edytowany bez procesu solvera; przyjęty run może trwać po zamknięciu jego karty. Proces wykonawczy należy do konkretnej próby zadania, ewentualnie do jawnie wspieranego interaktywnego runtime'u, a nie do czasu życia komponentu React.
 
@@ -34,7 +34,7 @@ flowchart TB
   D --> API
 ```
 
-Diagram pokazuje lokalną realizację. Jeden owner dotyczy **konkretnego autoryzowanego deploymentu/execution scope**, a nie wszystkich użytkowników fizycznego hosta. API, usługa, scheduler, supervisor, preparer i worker mają różne role. W HPC fizyczne zasoby przyznaje Slurm; Fullmag dzieli wyłącznie otrzymany envelope. Dwa obce deploymenty lub trzy alokacje tego samego użytkownika nie współdzielą domyślnie owner record, writer lock, credential, portu ani scratch. Proces API per karta nadal jest niewłaściwą granicą; niezależne instancje aplikacji są prawidłowym przypadkiem wdrożenia.
+Diagram pokazuje lokalną realizację. Jeden owner dotyczy **konkretnego autoryzowanego deploymentu/execution scope**, a nie wszystkich użytkowników fizycznego hosta. API, usługa, scheduler, supervisor, preparer i worker mają różne role. W HPC MicroLab potwierdza principal, scope i resource envelope; Slurm przydziela zasoby wewnątrz brokera, a Fullmag dzieli wyłącznie otrzymany envelope. Dwa obce deploymenty lub trzy alokacje tego samego użytkownika nie współdzielą domyślnie owner record, writer lock, credential, portu ani scratch. Proces API per karta nadal jest niewłaściwą granicą; niezależne instancje aplikacji są prawidłowym przypadkiem wdrożenia.
 
 ### 1.1 Rozważone warianty
 
@@ -192,11 +192,11 @@ Python korzysta z jednego DSL i istniejącego ExecutionContext. Niezależne skry
 
 ### 4.1 Admission i bilans hosta
 
-Zachować istniejące schedulery, preparation/solve leases, immutable claims i owner fencing. Współbieżność wynika z ograniczeń targetu i ledger-a **własnej domeny przydziału**, nie z liczby kart. Dla HPC globalnym arbitrem zasobów jest Slurm; nie powstaje konkurujący z nim host-wide scheduler Fullmaga.
+Zachować istniejące schedulery, preparation/solve leases, immutable claims i owner fencing. Współbieżność wynika z ograniczeń targetu i ledger-a **własnej domeny przydziału**, nie z liczby kart. Dla HPC Fullmag otrzymuje autorytatywny scope i envelope przez MicroLab; broker koordynuje scheduler klastra (pierwszy: Slurm). Nie powstaje konkurujący z nim host-wide scheduler Fullmaga.
 
-Warunek admission obejmuje jednocześnie: legalny backend/device/precision, CPU thread/affinity budget, RAM, GPU UUID i VRAM, scratch/disk reserve oraz limity aktywnych zadań. Suma rezerwacji mieści się w uprawnionym przydziale: lokalnej polityce ownera albo allocation/step envelope Slurma. Nie wolno użyć całej pamięci/CPU/GPU węzła tylko dlatego, że telemetry je widzi. Liczba logicznych CPU nie dowodzi liczby fizycznych rdzeni; natywne BLAS/OpenMP/MFEM/CUDA muszą potwierdzić skuteczny przydział. Telemetria wolnej pamięci nie zastępuje rezerwacji ani twardego OS enforcement.
+Warunek admission obejmuje jednocześnie: legalny backend/device/precision, CPU thread/affinity budget, RAM, GPU UUID i VRAM, scratch/disk reserve oraz limity aktywnych zadań. Suma rezerwacji mieści się w uprawnionym przydziale: lokalnej polityce ownera albo envelope potwierdzonym przez MicroLab, odpowiadającym allocation/step przydzielonemu przez scheduler klastra. Nie wolno użyć całej pamięci/CPU/GPU węzła tylko dlatego, że telemetry je widzi. Liczba logicznych CPU nie dowodzi liczby fizycznych rdzeni; natywne BLAS/OpenMP/MFEM/CUDA muszą potwierdzić skuteczny przydział. Telemetria wolnej pamięci nie zastępuje rezerwacji ani twardego OS enforcement.
 
-Pierwsza lokalna ścieżka korzysta z autorytatywnego application SessionStore **jednego deploymentu użytkownika** i katalogów wielu ProjectId/RunId. Output folders pozostają odrębne. Store nie jest globalną bazą wszystkich użytkowników węzła. Prace dzielące ten sam przydział używają jednego admission/ledger; oddzielne alokacje Slurma mają oddzielne envelopes i wykonawcze namespaces, nawet przy wspólnym katalogu kampanii. Mutable SessionStore nie staje się współdzielonym network database przez umieszczenie go na NFS/Lustre. Model staging/CAS i trwałość koordynatora opisuje uzupełnienie HPC. Nie tworzyć ownera/store na kartę jako obejścia admission.
+Pierwsza lokalna ścieżka korzysta z autorytatywnego application SessionStore **jednego deploymentu użytkownika** i katalogów wielu ProjectId/RunId. Output folders pozostają odrębne. Store nie jest globalną bazą wszystkich użytkowników węzła. Prace dzielące ten sam brokerowy scope używają jednego admission/ledger; oddzielne allocations MicroLab mają oddzielne envelopes i wykonawcze namespaces, nawet przy wspólnym katalogu kampanii. Mutable SessionStore nie staje się współdzielonym network database przez umieszczenie go na NFS/Lustre. Model staging/CAS i trwałość koordynatora opisuje uzupełnienie HPC. Nie tworzyć ownera/store na kartę jako obejścia admission.
 
 | Zestaw prac | Polityka domyślna |
 |---|---|
@@ -211,7 +211,7 @@ Współdzielenie jednego GPU przez kilka procesów nie zapewnia przyspieszenia. 
 
 Izolacja procesu chroni pamięć i błędy lokalnego workera; nie gwarantuje izolacji awarii sprzętu/sterownika. Przy utracie urządzenia jego allocation i stan targetu przechodzą do reconciling/quarantine zgodnie z istniejącym ownerem, a nowe admission jest zamknięte do potwierdzenia stanu. Nie obiecywać, że reset wspólnego GPU/hosta nie wpłynie na inne zadania. Worker OOM i OS-kill także wymagają potwierdzenia exit, integralności katalogu i odzyskania zasobów, a nie automatycznego re-spawnu.
 
-Fairness Fullmaga obejmuje uprawnione projekty i runy we własnym scope, żeby sweep A nie blokował każdego Submit B. Polityka między użytkownikami/alokacjami HPC należy do Slurma. Rozwinąć istniejący round-robin i bounded queue; zachować zależności continuation/histerezy. Priorytet aktywnej karty może podnosić priorytet odczytu/decode, nie samoczynnie zmieniać immutable compute priority ani zabierać urządzenia działającemu A.
+Fairness Fullmaga obejmuje uprawnione projekty i runy we własnym scope, żeby sweep A nie blokował każdego Submit B. Polityka między użytkownikami/alokacjami HPC należy do MicroLab i polityki ośrodka; Slurm egzekwuje przydział za brokerem. Rozwinąć istniejący round-robin i bounded queue; zachować zależności continuation/histerezy. Priorytet aktywnej karty może podnosić priorytet odczytu/decode, nie samoczynnie zmieniać immutable compute priority ani zabierać urządzenia działającemu A.
 
 ### 4.2 Trwałość i pliki
 
