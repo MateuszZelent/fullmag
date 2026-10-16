@@ -19819,6 +19819,34 @@ fn fem_eigen_branch_tracking_rejects_certified_mixed_eigen_study() {
 }
 
 #[test]
+fn fem_eigen_public_planner_rejects_certified_mixed_mesh() {
+    let mut ir = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [0.0, 0.0, 0.0],
+    }));
+    ir.geometry_assets
+        .as_mut()
+        .expect("Eigen fixture has geometry assets")
+        .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset());
+
+    let errors = plan(&ir)
+        .expect_err("the public planner must reject a certified mixed Prism6/Quad4 Eigen study");
+    assert!(
+        errors
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("fem_mixed_p1_scope_rejected")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("unsupported_study")),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn fem_eigen_branch_tracking_tetra_single_and_path_remain_plannable() {
     let path = fullmag_ir::KSamplingIR::Path {
         points: vec![
