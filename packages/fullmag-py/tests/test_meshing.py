@@ -7946,6 +7946,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(air_mesh_generator.call_count, 1)
         air_call = air_mesh_generator.call_args
+        self.assertIs(air_call.kwargs["preserve_surface_mesh"], True)
         air_options = air_call.kwargs["options"]
         self.assertEqual(air_options.hmin, 0.05)
         self.assertEqual(air_call.kwargs["airbox"].minimum_element_size, 0.1)

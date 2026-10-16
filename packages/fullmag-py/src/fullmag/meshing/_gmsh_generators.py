@@ -893,11 +893,14 @@ def generate_mesh_from_file(
     *,
     provisional_interface_markers: set[int] | None = None,
     geometry_name: str | None = None,
+    preserve_surface_mesh: bool = False,
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
     opts = options or MeshOptions()
     path = Path(source)
     suffix = path.suffix.lower()
+    if preserve_surface_mesh and suffix != ".stl":
+        raise ValueError("preserve_surface_mesh requires an STL surface input")
     scale_xyz = _normalize_scale_xyz(scale)
     source_hmax = _source_hmax_from_scale(hmax, scale_xyz)
     if suffix in {".json", ".npz"}:
@@ -928,6 +931,7 @@ def generate_mesh_from_file(
             options=opts,
             provisional_interface_markers=provisional_interface_markers,
             geometry_name=geometry_name,
+            preserve_surface_mesh=preserve_surface_mesh,
         )
     raise ValueError(f"unsupported mesh/geometry source format: {path.suffix}")
 
@@ -1111,6 +1115,7 @@ def _mesh_stl_surface(
     options: MeshOptions | None = None,
     provisional_interface_markers: set[int] | None = None,
     geometry_name: str | None = None,
+    preserve_surface_mesh: bool = False,
 ) -> MeshData:
     opts = options or MeshOptions()
     stl_opts = _sanitize_volume_mesh_options(opts, context="STL mesh")
@@ -1127,6 +1132,7 @@ def _mesh_stl_surface(
                 options=stl_opts,
                 provisional_interface_markers=provisional_interface_markers,
                 geometry_name=geometry_name,
+                preserve_surface_mesh=preserve_surface_mesh,
             )
         except Exception as exc:
             retry_algorithm = _stl_meshing_retry_algorithm(
@@ -1154,6 +1160,7 @@ def _mesh_stl_surface_once(
     options: MeshOptions,
     provisional_interface_markers: set[int] | None = None,
     geometry_name: str | None = None,
+    preserve_surface_mesh: bool = False,
 ) -> MeshData:
     stl_opts = options
     gmsh = _import_gmsh()
@@ -1184,8 +1191,18 @@ def _mesh_stl_surface_once(
             airbox_maximum_element_size=airbox.maximum_element_size if airbox is not None else None,
             component_volume_tags=component_volume_tags,
         )
-        with _GmshProgressLogger(gmsh):
-            gmsh.model.mesh.generate(3)
+        # Frozen magnetic interfaces are constraints, not remeshing inputs.
+        # Restore the option even on failure: Gmsh options are process-global.
+        previous_mesh_only_empty = None
+        if preserve_surface_mesh:
+            previous_mesh_only_empty = gmsh.option.getNumber("Mesh.MeshOnlyEmpty")
+            gmsh.option.setNumber("Mesh.MeshOnlyEmpty", 1)
+        try:
+            with _GmshProgressLogger(gmsh):
+                gmsh.model.mesh.generate(3)
+        finally:
+            if previous_mesh_only_empty is not None:
+                gmsh.option.setNumber("Mesh.MeshOnlyEmpty", previous_mesh_only_empty)
         _apply_post_mesh_options(gmsh, stl_opts)
         quality, _pdq = (
             _extract_quality_metrics(gmsh, stl_opts) if stl_opts.compute_quality else (None, None)

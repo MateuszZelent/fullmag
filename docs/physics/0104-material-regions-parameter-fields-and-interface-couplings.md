@@ -1022,7 +1022,23 @@ tolerancją względną do rozmiaru ściany; nie dodaje nowego absolutnego progu 
 To kontrola topologii interfejsu, nie pełny dowód braku wszystkich przecięć
 objętościowych, poprawnych wektorów PBC ani zbieżności. Te wymagania nadal
 muszą być spełnione przed automatycznym włączeniem adaptacyjnej trasy powietrza.
-Implementacja i rzeczywiste wykonanie Gmsh tego kroku pozostają **NOT VERIFIED**.
+Walidator jest zaimplementowany; jego regresje incydencji przeszły w GitHub
+Actions na commicie `5ec4926e`. To samo wykonanie odrzuciło trzy rzeczywiste
+siatki frozen-air z brakującymi sąsiadami. Nie stanowi to kwalifikacji generatora.
+
+Trasa zamrożonego magnetyku musi traktować wejściową triangulację jako
+ograniczenie, a nie powierzchnię do ponownego dyskretyzowania. Zwykły import
+STL odtwarza geometrię i może zmienić jej triangulację podczas `generate(3)`.
+Zachowanie istniejących elementów powierzchni w tej prywatnej trasie powinno
+być jawne i sprawdzane przez niezmieniony walidator incydencji. Nie zmienia się
+domyślnego remeshingu STL ani tras swept/extrusion. Samo ustawienie opcji
+meshera nie jest dowodem zachowania granicy: wymagane są rzeczywiste testy
+prostego frozen Tet4, zmiany airboxu i periodycznego antidotu. Ich powodzenie,
+PBC i zbieżność pozostają **NOT VERIFIED**.
+
+Opcja Gmsh `Mesh.MeshOnlyEmpty` ogranicza generowanie do encji bez istniejącej
+siatki ([dokumentacja Gmsh](https://gmsh.info/doc/texinfo/#Mesh-options));
+nie zastępuje kontroli wyniku ani nie gwarantuje poprawności komórki PBC.
 
 (material-regions-round-trip-and-failure-semantics)=
 ### 4.6 Round-trip and failure semantics
@@ -1159,6 +1175,7 @@ must include:
 | Meshing | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | regionowe pola rozmiaru |
 | Exact-layer BODY_XY source mesh | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_apply_owner_wide_body_seed_mesh_options` | tylko owner-wide upper/lower na dokładnym wspólnym planformie; bez projekcji partial-Z |
 | Frozen magnetic-air interface | `packages/fullmag-py/src/fullmag/meshing/_frozen_interface.py` | `_validate_frozen_magnetic_air_interface` | incydencja i przeciwni właściciele rzeczywistych ścian; nie pełna kwalifikacja przecięć/PBC |
+| Frozen STL surface constraint | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_mesh_stl_surface_once` | jawne zachowanie istniejącej siatki powierzchni tylko dla frozen-air; bez kwalifikacji PBC/zbieżności |
 | Frozen interface prefix regression | `packages/fullmag-py/tests/test_meshing.py` | `test_merge_frozen_magnetic_submesh_with_air_mesh_preserves_magnetic_indices` | Preserves exact magnetic connectivity and nodes in a valid nanometer Tet4 air shell. |
 | Frozen interface neighbor regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_interface_merge_rejects_missing_displaced_or_duplicate_air_neighbors` | Rejects absent, displaced and nonmanifold air neighbors at the frozen interface. |
 | Frozen interface side regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_interface_merge_rejects_same_side_air_neighbor_at_nanometer_scale` | Rejects positive-orientation cells occupying the same side of a shared interface face. |

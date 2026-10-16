@@ -789,6 +789,13 @@
       "symbol": "test_exact_layer_body_target_precedence_survives_air_and_local_fields",
       "responsibility": "Locks the public exact-layer BODY_XY density precedence assertions with air and local fields.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "frozen-stl-surface-preservation",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "_mesh_stl_surface_once",
+      "responsibility": "Opt-in existing STL surface mesh constraint for frozen magnetic-air generation, with process-global option restoration; topology/PBC/convergence must be verified separately.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {

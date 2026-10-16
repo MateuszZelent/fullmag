@@ -975,6 +975,7 @@ def _generate_air_mesh_for_frozen_magnetic_submesh(
             airbox=_airbox_with_clearance_for_frozen_surface(airbox, frozen.mesh),
             options=mesh_options,
             provisional_interface_markers={10},
+            preserve_surface_mesh=True,
         )
     air_mask = _air_element_mask_outside_frozen_magnetic_submesh(generated, frozen)
     if not np.any(air_mask):
