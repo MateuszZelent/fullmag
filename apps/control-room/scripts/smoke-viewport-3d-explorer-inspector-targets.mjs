@@ -1259,8 +1259,9 @@ async function setObjectVisibilityAndWaitForAcknowledgement(page, panel, visible
         new URL(response.url()).pathname !== "/v2/sessions/current/visualization/state") return false;
     try {
       const patch = request.postDataJSON();
-      return patch?.scope === "object" && patch.scope_id === objectId &&
-        patch.visible === expectedVisible;
+      return Array.isArray(patch?.overrides) && patch.overrides.some((override) =>
+        override?.scope === "object" && override.scope_id === objectId &&
+        override.visible === expectedVisible);
     } catch {
       return false;
     }
@@ -1272,6 +1273,11 @@ async function setObjectVisibilityAndWaitForAcknowledgement(page, panel, visible
     throw new Error(`Target visibility mutation was not acknowledged: HTTP ${acknowledgement.status()}.`);
   }
   const acknowledgedState = await acknowledgement.json();
+  const acknowledgedTarget = acknowledgedState?.overrides?.find((override) =>
+    override?.scope === "object" && override.scope_id === objectId);
+  if (acknowledgedTarget?.visible !== expectedVisible) {
+    throw new Error(`Target visibility mutation for ${objectId} returned a mismatched target override: ${JSON.stringify(acknowledgedTarget ?? null)}.`);
+  }
   if (!Number.isSafeInteger(acknowledgedState?.revision) ||
       (previousRevision !== null && acknowledgedState.revision <= previousRevision)) {
     throw new Error(`Target visibility mutation for ${objectId} returned no advancing visualization revision: ${JSON.stringify({ acknowledgedState, previousRevision })}.`);
