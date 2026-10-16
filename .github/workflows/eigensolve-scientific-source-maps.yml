@@ -25,8 +25,10 @@ jobs:
         run: git rev-parse HEAD
       - name: Validate Schur, R4, Floquet, material and modal source contracts
         run: |
-          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/poisson-airbox-schur-execution-observability.source-map.json --repo-root .
-          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/r4-linearization-identity-v2.source-map.json --repo-root .
-          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0828-fem-frequency-domain-floquet-demag.source-map.json --repo-root .
-          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.source-map.json --repo-root .
-          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.source-map.json --repo-root .
+          source_map_validation_status=0
+          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/poisson-airbox-schur-execution-observability.source-map.json --repo-root . || source_map_validation_status=1
+          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/r4-linearization-identity-v2.source-map.json --repo-root . || source_map_validation_status=1
+          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0828-fem-frequency-domain-floquet-demag.source-map.json --repo-root . || source_map_validation_status=1
+          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.source-map.json --repo-root . || source_map_validation_status=1
+          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.source-map.json --repo-root . || source_map_validation_status=1
+          exit "$source_map_validation_status"
