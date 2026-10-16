@@ -49,9 +49,11 @@ const ROWS_BIN_PATTERN =
 const FREQUENCY_DOMAIN_PATHS = {
   branches: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
   dispersion: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+  modeFieldMetaPrefix: "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/",
   manifest: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
   modePrefix: "/v2/sessions/current/analysis/frequency-domain/eigen/modes/",
   response: "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+  responseProgress: "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
   spectrum: "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
 };
 
@@ -1928,7 +1930,11 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
   const failedResponses = [];
   const failedRequests = [];
   const resourceRequests = [];
+  const resourceResponses = [];
   const frequencyRequests = [];
+  const requestAttemptByRequest = new WeakMap();
+  let requestAttemptSequence = 0;
+  let uiPhase = "fixture-installed";
   const isOwnedSessionResource = (requestPath) =>
     requestPath === CURRENT_RUN_FIXTURE_PATH ||
     requestPath === DATA_OBSERVATION_FRAMES_FIXTURE_PATH ||
@@ -1959,47 +1965,133 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
     if (!messageText.startsWith("Failed to load resource:")) consoleErrors.push(messageText);
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("requestfinished", (request) => {
+    const attempt = requestAttemptByRequest.get(request);
+    if (!attempt) return;
+    attempt.terminalState = "finished";
+    attempt.finishedAtUiPhase = uiPhase;
+  });
   page.on("requestfailed", (request) => {
     const requestPath = currentSessionPath(request.url());
     if (!isOwnedSessionResource(requestPath)) return;
+    const attempt = requestAttemptByRequest.get(request);
+    if (attempt) {
+      attempt.terminalState = "failed";
+      attempt.failedAtUiPhase = uiPhase;
+      attempt.failure = request.failure()?.errorText ?? "unknown request failure";
+    }
     failedRequests.push({
       error: request.failure()?.errorText ?? "unknown request failure",
       method: request.method(),
       path: requestPath,
+      requestAttempt: attempt?.attemptId ?? null,
+      sessionScope: attempt?.sessionScope ?? request.headers()["x-fullmag-session-scope"] ?? null,
+      startedAtUiPhase: attempt?.startedAtUiPhase ?? null,
+      failedAtUiPhase: uiPhase,
     });
   });
   page.on("response", (response) => {
-    if (response.status() < 400) return;
     const responsePath = currentSessionPath(response.url());
     if (!isOwnedSessionResource(responsePath)) return;
+    const attempt = requestAttemptByRequest.get(response.request());
+    if (attempt) {
+      attempt.responseStatus = response.status();
+      attempt.responseAtUiPhase = uiPhase;
+    }
+    resourceResponses.push({
+      attemptId: attempt?.attemptId ?? null,
+      method: response.request().method(),
+      path: responsePath,
+      response,
+      sessionScope: attempt?.sessionScope ?? response.request().headers()["x-fullmag-session-scope"] ?? null,
+      startedAtUiPhase: attempt?.startedAtUiPhase ?? null,
+      status: response.status(),
+      uiPhase,
+    });
+    if (response.status() < 400) return;
     failedResponses.push({
       method: response.request().method(),
       path: responsePath,
       status: response.status(),
+      requestAttempt: attempt?.attemptId ?? null,
+      sessionScope: attempt?.sessionScope ?? null,
+      startedAtUiPhase: attempt?.startedAtUiPhase ?? null,
+      responseAtUiPhase: uiPhase,
     });
   });
   page.on("request", (request) => {
     if (request.method() === "OPTIONS") return;
     const requestPath = currentSessionPath(request.url());
     if (!isOwnedSessionResource(requestPath)) return;
-    resourceRequests.push({
+    const attempt = {
+      attemptId: ++requestAttemptSequence,
       method: request.method(),
       path: requestPath,
       sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
-    });
+      startedAtUiPhase: uiPhase,
+      terminalState: "pending",
+      finishedAtUiPhase: null,
+      failedAtUiPhase: null,
+      responseStatus: null,
+      responseAtUiPhase: null,
+    };
+    requestAttemptByRequest.set(request, attempt);
+    resourceRequests.push(attempt);
     if (requestPath?.startsWith("/v2/sessions/current/analysis/frequency-domain/")) {
       frequencyRequests.push(requestPath.split("?")[0]);
     }
   });
 
+  function waitForResourceResponse(pathname) {
+    const existing = resourceResponses.find((entry) =>
+      entry.method === "GET" &&
+      entry.path === pathname &&
+      entry.sessionScope === expectedSessionScope,
+    );
+    if (existing) return Promise.resolve({ error: null, response: existing.response });
+    return page.waitForResponse((response) => {
+      const request = response.request();
+      const attempt = requestAttemptByRequest.get(request);
+      return request.method() === "GET" &&
+        currentSessionPath(response.url()) === pathname &&
+        attempt?.sessionScope === expectedSessionScope;
+    }, { timeout: timeoutMs }).then(
+      (response) => ({ error: null, response }),
+      (error) => ({ error, response: null }),
+    );
+  }
+
+  async function requireFixtureJsonResponse(outcomePromise, pathname, validate) {
+    const outcome = await outcomePromise;
+    if (outcome.error) throw outcome.error;
+    const response = outcome.response;
+    if (response.status() !== 200) {
+      throw new Error("Expected exact fixture GET 200 for " + pathname + "; received " + response.status());
+    }
+    const payload = await response.json();
+    if (!validate(payload)) {
+      throw new Error("Fixture GET payload did not match the expected resource contract for " +
+        pathname + ": " + JSON.stringify(payload));
+    }
+    return { attemptId: requestAttemptByRequest.get(response.request())?.attemptId ?? null, payload, response };
+  }
+
   try {
+    uiPhase = "workspace-navigation";
     await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
     await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
+    uiPhase = "analysis-plots-entry";
     await openAnalysisPlots(page);
+    uiPhase = "chart-subview-selection";
     await selectFrequencyDomainSubview(page, chartFixture);
     await waitForFrequencyChart(page, chartFixture);
     await inspectFrequencyChartOption(page, chartFixture);
 
+    const expectedModeFieldMetaPath = FREQUENCY_DOMAIN_PATHS.modeFieldMetaPrefix +
+      chartFixture.expectedSelection.sampleIndex + "/" +
+      chartFixture.expectedSelection.modeIndex + "/meta";
+    const modeFieldMetaResponsePromise = waitForResourceResponse(expectedModeFieldMetaPath);
+    uiPhase = "legacy-chart-selection";
     const selectedPoint = await clickFrequencyDomainPoint(
       page,
       chartFixture.expectedSelection,
@@ -2020,6 +2112,7 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
         JSON.stringify(frequencyRequests));
     }
 
+    uiPhase = "pin-command-palette";
     await page.locator(".fm-header__search").click({ timeout: timeoutMs });
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.waitFor({ state: "visible", timeout: timeoutMs });
@@ -2040,6 +2133,7 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
       (response) => ({ error: null, response }),
       (error) => ({ error, response: null }),
     );
+    uiPhase = "pin-command-submit";
     const clickOutcomePromise = pinCommand.click({ timeout: timeoutMs }).then(
       () => ({ error: null }),
       (error) => ({ error }),
@@ -2142,6 +2236,15 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
     if (await resultsTab.getAttribute("aria-selected") === "true") {
       throw new Error("The canonical pin fixture must activate Results after the create POST.");
     }
+    const expectedResultsResourcePaths = [
+      FREQUENCY_DOMAIN_PATHS.responseProgress,
+      FREQUENCY_DOMAIN_PATHS.response,
+      FREQUENCY_DOMAIN_PATHS.branches,
+      FREQUENCY_DOMAIN_PATHS.dispersion,
+    ];
+    const activeResultsResponsePromises = new Map(expectedResultsResourcePaths.map((pathname) =>
+      [pathname, waitForResourceResponse(pathname)],
+    ));
     const readbackOutcomePromise = page.waitForResponse(async (response) => {
       if (
         response.request().method() !== "GET" ||
@@ -2156,6 +2259,7 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
       (response) => ({ error: null, response }),
       (error) => ({ error, response: null }),
     );
+    uiPhase = "results-activation";
     await resultsTab.click({ timeout: timeoutMs });
     const resultsRootId = "results:run:" + fixture.runId;
     const resonanceFamilyId = resultsRootId + ":resonance";
@@ -2175,8 +2279,59 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
         { timeout: timeoutMs },
       );
     }
+    uiPhase = "results-tree-expansion";
     await expandResultsNode(resultsRootId);
     await expandResultsNode(resonanceFamilyId);
+    const resultsResourcePayloads = new Map();
+    const resultsResourceValidators = new Map([
+      [FREQUENCY_DOMAIN_PATHS.responseProgress, (payload) => {
+        let embedded = null;
+        try {
+          embedded = JSON.parse(payload.progress_json);
+        } catch {
+          return false;
+        }
+        return payload.schema_version === "frequency_domain_sweep_progress.v1" &&
+          payload.status === "missing" &&
+          payload.state === "not_started" &&
+          payload.complete === false &&
+          payload.total_frequency_points === 0 &&
+          payload.completed_frequency_points === 0 &&
+          payload.written_frequency_point_artifacts === 0 &&
+          payload.partial_artifacts_available === false &&
+          embedded?.state === "not_started" &&
+          embedded?.status === "missing";
+      }],
+      [FREQUENCY_DOMAIN_PATHS.response, (payload) =>
+        payload.schema_version === "frequency_domain_response_sweep_resource.v1" &&
+        payload.resource_key === FREQUENCY_DOMAIN_PATHS.response &&
+        payload.status === "unavailable" &&
+        payload.payload === null &&
+        payload.run_id === fixture.runId &&
+        payload.stage_id === fixture.stageId],
+      [FREQUENCY_DOMAIN_PATHS.branches, (payload) =>
+        payload.schema_version === "frequency_domain_eigen_branches.v1" &&
+        payload.resource_key === FREQUENCY_DOMAIN_PATHS.branches &&
+        payload.status === "unavailable" &&
+        payload.payload === null &&
+        payload.run_id === fixture.runId &&
+        payload.stage_id === fixture.stageId],
+      [FREQUENCY_DOMAIN_PATHS.dispersion, (payload) =>
+        payload.schema_version === "frequency_domain_eigen_dispersion.v1" &&
+        payload.resource_key === FREQUENCY_DOMAIN_PATHS.dispersion &&
+        payload.status === "unavailable" &&
+        payload.text === null &&
+        payload.run_id === fixture.runId &&
+        payload.stage_id === fixture.stageId],
+    ]);
+    for (const pathname of expectedResultsResourcePaths) {
+      const outcome = await activeResultsResponsePromises.get(pathname);
+      resultsResourcePayloads.set(pathname, await requireFixtureJsonResponse(
+        Promise.resolve(outcome),
+        pathname,
+        resultsResourceValidators.get(pathname),
+      ));
+    }
     const readbackOutcome = await readbackOutcomePromise;
     if (readbackOutcome.error) throw readbackOutcome.error;
     const readbackResponse = readbackOutcome.response;
@@ -2256,6 +2411,7 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
     ) {
       throw new Error("The persisted pin did not resolve to its published mode node: " + pinnedModeText);
     }
+    uiPhase = "pinned-mode-selection";
     await pinnedModeRow.click({ timeout: timeoutMs });
     await page.waitForFunction(
       (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
@@ -2266,6 +2422,21 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
       '[data-inspector-owner="frequency-domain.eigen-mode"]',
     );
     await modeInspector.waitFor({ state: "visible", timeout: timeoutMs });
+    uiPhase = "pinned-mode-inspector";
+    const modeFieldMetaResource = await requireFixtureJsonResponse(
+      modeFieldMetaResponsePromise,
+      expectedModeFieldMetaPath,
+      (payload) =>
+        payload.schema_version === "frequency_domain_mode_field.v1" &&
+        payload.status === "ready" &&
+        payload.field_id === chartFixture.expectedSelection.fieldId &&
+        payload.resource_key === chartFixture.expectedSelection.resourceRef &&
+        payload.run_id === fixture.runId &&
+        payload.stage_id === fixture.stageId &&
+        payload.session_id === FIXTURE_SESSION_ID &&
+        payload.default_view === "phase_rotated_real" &&
+        payload.available_views.includes("phase_rotated_real"),
+    );
     const modeInspectorText = (await modeInspector.innerText()).replace(/\s+/g, " ");
     for (const expectedText of [
       "sample " + chartFixture.expectedSelection.sampleIndex +
@@ -2279,34 +2450,10 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
       }
     }
 
-    const ownedRequests = resourceRequests.filter((request) =>
-      isOwnedSessionResource(request.path),
-    );
-    const unscopedRequests = ownedRequests.filter((request) =>
-      request.sessionScope !== expectedSessionScope,
-    );
-    const definitionsReadback = fixtureState.modePinState.definitionListResponses.filter((entry) =>
-      entry.sceneRevision === readback.scene_revision &&
-      entry.count === 1 &&
-      entry.definitionIds.includes(definition.definition_id),
-    );
-    if (
-      unscopedRequests.length > 0 ||
-      definitionsReadback.length === 0 ||
-      consoleErrors.length > 0 ||
-      pageErrors.length > 0 ||
-      failedResponses.length > 0 ||
-      failedRequests.length > 0
-    ) {
-      throw new Error("Canonical mode pin browser audit failed: " + JSON.stringify({
-        unscopedRequests,
-        definitionsReadback,
-        consoleErrors,
-        pageErrors,
-        failedResponses,
-        failedRequests,
-      }));
-    }
+    const requiredSettledResourcePaths = [
+      ...expectedResultsResourcePaths,
+      expectedModeFieldMetaPath,
+    ];
 
     const proof = {
       artifactRevision: fixture.artifactRevision,
@@ -2356,10 +2503,75 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
         modeOwner: await modeInspector.getAttribute("data-inspector-owner"),
         modeText: modeInspectorText,
       },
+      activeResultsResources: [...resultsResourcePayloads.entries()].map(([resourcePath, result]) => ({
+        attemptId: result.attemptId,
+        path: resourcePath,
+        sessionScope: result.response.request().headers()["x-fullmag-session-scope"] ?? null,
+        status: result.response.status(),
+      })),
+      modeFieldMetadata: {
+        attemptId: modeFieldMetaResource.attemptId,
+        fieldId: modeFieldMetaResource.payload.field_id,
+        path: expectedModeFieldMetaPath,
+        resourceKey: modeFieldMetaResource.payload.resource_key,
+        runId: modeFieldMetaResource.payload.run_id,
+        stageId: modeFieldMetaResource.payload.stage_id,
+        sessionScope: modeFieldMetaResource.response.request().headers()["x-fullmag-session-scope"] ?? null,
+        status: modeFieldMetaResource.response.status(),
+      },
       sessionScope: expectedSessionScope,
       requests: resourceRequests,
+      resourceResponses: resourceResponses.map(({ attemptId, method, path, sessionScope, startedAtUiPhase, status, uiPhase: responseUiPhase }) => ({
+        attemptId,
+        method,
+        path,
+        sessionScope,
+        startedAtUiPhase,
+        status,
+        responseUiPhase,
+      })),
       failures: { consoleErrors, pageErrors, failedResponses, failedRequests },
     };
+    const ownedRequests = resourceRequests.filter((request) =>
+      isOwnedSessionResource(request.path),
+    );
+    const unscopedRequests = ownedRequests.filter((request) =>
+      request.sessionScope !== expectedSessionScope,
+    );
+    const unsettledOwnedRequests = ownedRequests.filter((request) =>
+      request.terminalState === "pending",
+    );
+    const unsettledExpectedRequests = ownedRequests.filter((request) =>
+      requiredSettledResourcePaths.includes(request.path) &&
+      request.sessionScope === expectedSessionScope &&
+      request.terminalState === "pending",
+    );
+    const definitionsReadback = fixtureState.modePinState.definitionListResponses.filter((entry) =>
+      entry.sceneRevision === readback.scene_revision &&
+      entry.count === 1 &&
+      entry.definitionIds.includes(definition.definition_id),
+    );
+    if (
+      unscopedRequests.length > 0 ||
+      unsettledOwnedRequests.length > 0 ||
+      unsettledExpectedRequests.length > 0 ||
+      definitionsReadback.length === 0 ||
+      consoleErrors.length > 0 ||
+      pageErrors.length > 0 ||
+      failedResponses.length > 0 ||
+      failedRequests.length > 0
+    ) {
+      throw new Error("Canonical mode pin browser audit failed: " + JSON.stringify({
+        unscopedRequests,
+        unsettledOwnedRequests,
+        unsettledExpectedRequests,
+        definitionsReadback,
+        consoleErrors,
+        pageErrors,
+        failedResponses,
+        failedRequests,
+      }));
+    }
     writeFileSync(
       path.join(acceptanceDirectory, "analysis-canonical-mode-pin-proof.json"),
       JSON.stringify(proof, null, 2) + "\n",
@@ -4446,6 +4658,7 @@ async function installAnalysisDatasetFixtureRoutes(
       url.pathname,
       frequencyDomainFixture,
       cors,
+      modePinEnabled ? modePinFixture : null,
     )) {
       return;
     }
@@ -4495,7 +4708,82 @@ async function installAnalysisDatasetFixtureRoutes(
   return referenceImportState;
 }
 
-async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, headers) {
+async function fulfillFrequencyDomainFixtureResource(
+  route,
+  pathname,
+  fixture,
+  headers,
+  modePinFixture = null,
+) {
+  if (modePinFixture) {
+    const expectedSelection = fixture.expectedSelection;
+    const modeFieldMetaPath = expectedSelection
+      ? `${FREQUENCY_DOMAIN_PATHS.modeFieldMetaPrefix}${expectedSelection.sampleIndex}/${expectedSelection.modeIndex}/meta`
+      : null;
+    const missingResponseReason = "No response sweep is published by the legacy mode-pin fixture.";
+    if (pathname === FREQUENCY_DOMAIN_PATHS.responseProgress) {
+      await route.fulfill({
+        body: JSON.stringify(frequencyDomainNotStartedProgressFixture()),
+        contentType: "application/json",
+        headers,
+        status: 200,
+      });
+      return true;
+    }
+    if (pathname === FREQUENCY_DOMAIN_PATHS.response) {
+      await route.fulfill({
+        body: JSON.stringify(frequencyDomainUnavailableJsonArtifactFixture({
+          artifactPath: "response/magnetic_response_sweep.v2.json",
+          missingReason: missingResponseReason,
+          resourceKey: FREQUENCY_DOMAIN_PATHS.response,
+          schemaVersion: "frequency_domain_response_sweep_resource.v1",
+        })),
+        contentType: "application/json",
+        headers,
+        status: 200,
+      });
+      return true;
+    }
+    if (pathname === FREQUENCY_DOMAIN_PATHS.branches) {
+      await route.fulfill({
+        body: JSON.stringify(frequencyDomainUnavailableJsonArtifactFixture({
+          artifactPath: "eigen/branches.v2.json",
+          missingReason: "Mode branches are not published by the legacy mode-pin fixture.",
+          resourceKey: FREQUENCY_DOMAIN_PATHS.branches,
+          schemaVersion: "frequency_domain_eigen_branches.v1",
+        })),
+        contentType: "application/json",
+        headers,
+        status: 200,
+      });
+      return true;
+    }
+    if (pathname === FREQUENCY_DOMAIN_PATHS.dispersion) {
+      await route.fulfill({
+        body: JSON.stringify(frequencyDomainUnavailableTextArtifactFixture({
+          artifactPath: "eigen/dispersion.csv",
+          missingReason: "Dispersion rows are not published by the legacy mode-pin fixture.",
+          resourceKey: FREQUENCY_DOMAIN_PATHS.dispersion,
+        })),
+        contentType: "application/json",
+        headers,
+        status: 200,
+      });
+      return true;
+    }
+    if (modeFieldMetaPath && pathname === modeFieldMetaPath) {
+      await route.fulfill({
+        body: JSON.stringify(frequencyDomainModeFieldMetaFixture(
+          expectedSelection,
+          modePinFixture,
+        )),
+        contentType: "application/json",
+        headers,
+        status: 200,
+      });
+      return true;
+    }
+  }
   if (pathname === FREQUENCY_DOMAIN_PATHS.manifest) {
     await route.fulfill({
       body: JSON.stringify(frequencyDomainManifestFixture(fixture)),
@@ -4784,6 +5072,100 @@ function frequencyDomainUnavailableJsonArtifactFixture({ artifactPath, missingRe
     session_id: FIXTURE_SESSION_ID,
     stage_id: REFERENCE_FIXTURE_STAGE_ID,
     status: "unavailable",
+  };
+}
+
+function frequencyDomainUnavailableTextArtifactFixture({ artifactPath, missingReason, resourceKey }) {
+  const revision = sha256Digest(Buffer.from("unavailable:" + resourceKey + ":" + missingReason, "utf8"));
+  return {
+    artifact_path: artifactPath,
+    artifact_set_id: "analysis-frequency-fixture-artifact-set",
+    content_digest: revision,
+    content_type: "text/csv; charset=utf-8",
+    mesh_generation_id: "analysis-fixture-mesh",
+    missing_reason: missingReason,
+    path_metadata: null,
+    resource_key: resourceKey,
+    revision,
+    run_id: REFERENCE_FIXTURE_RUN_ID,
+    schema_version: "frequency_domain_eigen_dispersion.v1",
+    session_id: FIXTURE_SESSION_ID,
+    stage_id: REFERENCE_FIXTURE_STAGE_ID,
+    status: "unavailable",
+    text: null,
+  };
+}
+
+function frequencyDomainNotStartedProgressFixture() {
+  const progress = {
+    schema_version: "frequency_domain_sweep_progress.v1",
+    status: "missing",
+    state: "not_started",
+    complete: false,
+    total_frequency_points: 0,
+    completed_frequency_points: 0,
+    written_frequency_point_artifacts: 0,
+    frequency_min_hz: null,
+    frequency_max_hz: null,
+    current_frequency_hz: null,
+    partial_artifacts_available: false,
+    latest_artifact_manifest_path: null,
+  };
+  return {
+    ...progress,
+    demag_mode: null,
+    missing_reason: "response sweep progress artifacts are not present",
+    progress_json: JSON.stringify({
+      ...progress,
+      missing_reason: "response sweep progress artifacts are not present",
+    }),
+  };
+}
+
+function frequencyDomainModeFieldMetaFixture(selection, modePinFixture) {
+  const sampleIndex = String(selection.sampleIndex).padStart(4, "0");
+  const modeIndex = String(selection.modeIndex).padStart(4, "0");
+  const metadata = {
+    artifact_path: `eigen/mode_fields/sample_${sampleIndex}/mode_${modeIndex}/vector.bin`,
+    available_views: [
+      "complex",
+      "real",
+      "imag",
+      "abs",
+      "amplitude",
+      "phase",
+      "phase_rotated_real",
+    ],
+    binary_layout: "complex_f64_pairs_little_endian",
+    complex_pair_count: 6,
+    component_basis: "global_xyz",
+    component_count: 3,
+    components: ["x", "y", "z"],
+    default_phase_rad: 0,
+    default_view: "phase_rotated_real",
+    field_id: selection.fieldId,
+    payload_encoding: "f64_interleaved_real_imag_xyz",
+    payload_value_count: 12,
+    quantity: "delta_m",
+    resource_key: selection.resourceRef,
+    schema_version: "frequency_domain_mode_field.v1",
+    source_family: "analysis/eigen",
+    status: "ready",
+    value_kind: "complex_spatial_vector",
+  };
+  const revision = sha256Digest(Buffer.from(JSON.stringify(metadata), "utf8"));
+  return {
+    ...metadata,
+    artifact_set_id: "analysis-frequency-fixture-artifact-set",
+    content_digest: revision,
+    generation_id: null,
+    generation_status: null,
+    mesh_generation_id: "analysis-fixture-mesh",
+    missing_reason: null,
+    revision,
+    run_id: modePinFixture.runId,
+    session_id: FIXTURE_SESSION_ID,
+    stage_id: modePinFixture.stageId,
   };
 }
 
