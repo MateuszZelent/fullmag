@@ -267,6 +267,7 @@ if(FULLMAG_USE_MFEM_STACK)
         cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
         cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
           cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
+        cpu/frequency_domain/modal/tracking_mass_provider.cpp
         cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
         cpu/mfem/interactions/oersted/vector_potential.cpp
     )
@@ -464,6 +465,24 @@ file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
 enable_testing()
 
 if(FULLMAG_USE_MFEM_STACK)
+    add_executable(
+        fem_tracking_mass_provider_contract
+        tests/frequency_domain/tracking_mass_provider_test.cpp
+    )
+    target_link_libraries(fem_tracking_mass_provider_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_tracking_mass_provider_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_tracking_mass_provider_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_tracking_mass_provider_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_tracking_mass_provider_contract
+        COMMAND fem_tracking_mass_provider_contract)
+
     add_executable(
         fem_mesh_space_preparation_contract
         tests/mesh_space_preparation_contract.cpp

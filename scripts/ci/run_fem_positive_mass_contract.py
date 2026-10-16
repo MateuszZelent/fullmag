@@ -60,6 +60,12 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
                 "marker": "PASS: floquet_positive_tangent_mass_matches_independent_phase_reduction",
                 "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1"],
             },
+            {
+                "name": "fem_tracking_mass_provider_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp",
+                "marker": "PASS: fem_tracking_mass_provider_geometric_csr_contract",
+                "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1"],
+            },
         ],
         "uses_slepc": False,
         "timeout": {

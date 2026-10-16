@@ -638,6 +638,16 @@
       ]
     },
     {
+      "id": "eq-native-p1-geometric-tracking-mass",
+      "symbols": [
+        "tracking_geometric_mass"
+      ],
+      "sources": [
+        "source-native-p1-tracking-mass-provider",
+        "test-native-p1-tracking-mass-provider"
+      ]
+    },
+    {
       "id": "eq-count-fixture-equilibrium",
       "symbols": [
         "count_fixture_bias",
@@ -1579,6 +1589,12 @@
       "si_unit": "$\\mathrm{m^3}$"
     },
     {
+      "id": "tracking_geometric_mass",
+      "latex": "$M_T^{\\mathrm{track}}$",
+      "meaning": "unweighted scalar P1 consistent geometric mass integrated over the selected magnetic domain before vector-component embedding",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
       "id": "modal_mass_overlap",
       "latex": "$\\eta_M$",
       "meaning": "normalized absolute overlap in the geometric tangent-mass metric",
@@ -2479,6 +2495,18 @@
       "path": "crates/fullmag-runner/src/eigen/tracking.rs",
       "symbol": "exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass",
       "responsibility": "Uncompiled analytic regression distinguishes consistent and diagonal mass"
+    },
+    {
+      "id": "source-native-p1-tracking-mass-provider",
+      "path": "backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp",
+      "symbol": "assemble_consistent_p1_tracking_mass",
+      "responsibility": "Assembles unweighted scalar H1 P1 consistent geometric mass on selected linear Tet4/Prism6 elements; returns full canonical-vertex CSR with exact zero air-only rows and applies the existing MFEM orientation/order-2 sampled-Jacobian sanity check (not a full non-affine Prism6 geometry certificate); C++/Rust integration, managed runtime, and GPU behavior remain unverified"
+    },
+    {
+      "id": "test-native-p1-tracking-mass-provider",
+      "path": "backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp",
+      "symbol": "main",
+      "responsibility": "Real-MFEM analytic Tet4/Wedge6 coefficients at 1 m and 1 nm scales, mixed magnetic/air selection with the full physical map and an exactly zero air-only row, CSR symmetry/volume invariants, degenerate-Tet4 rejection, and fail-closed vector/P2/attribute requests; GHA execution pending"
     },
     {
       "id": "source-tracking-envelope-payload",

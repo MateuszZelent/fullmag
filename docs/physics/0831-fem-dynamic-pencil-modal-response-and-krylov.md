@@ -2748,6 +2748,50 @@ równowagi pozostają wymaganiami przed zaliczeniem S06/S07.
 | `source-tracking-consistent-subspace` | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `mass_weighted_subspace_transport` | Consistent-mass orthonormalization, principal angles and recovered branch frames |
 | `source-tracking-consistent-fem-adapter` | `crates/fullmag-runner/src/fem/eigen_path.rs` | `eigen_path_consistent_tracking_metric` | Construct a shared exact metric on every physical magnetic node |
 | `source-tracking-consistent-basis-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass` | Uncompiled analytic regression distinguishes consistent and diagonal mass |
+| `source-native-p1-tracking-mass-provider` | `backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp` | `assemble_consistent_p1_tracking_mass` | Internal full physical-vertex scalar P1 geometric CSR over explicit magnetic attributes; not yet connected to Rust tracking |
+| `test-native-p1-tracking-mass-provider` | `backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp` | `main` | Real-MFEM analytic Tet4/Wedge6 at 1 m and 1 nm, mixed magnetic/air full-map and degenerate-Tet4 cases; GHA execution pending |
+
+### Natywny geometryczny provider CSR dla trackingu — pierwszy atom
+
+Oddzielny provider MFEM buduje niematerialową, consistent masę skalarnego P1
+na elementach wskazanych jawną maską atrybutów objętościowych:
+
+```{math}
+:label: eq-native-p1-geometric-tracking-mass
+ (M_T^{\mathrm{track}})_{ij}
+ = \sum_{e\subset\Omega_m}\int_e N_i N_j\,\mathrm dV.
+```
+
+W podanej siatce SI wynik ma jednostkę $\mathrm{m^3}$. Snapshot przechowuje
+pełny CSR fizycznej przestrzeni wierzchołkowej oraz dokładne mapy wszystkich
+kanonicznych indeksów wierzchołków i scalar P1 DOF. Węzeł współdzielony z
+powietrzem dostaje magnetyczny wkład z wybranych komórek; wiersz węzła
+wyłącznie powietrznego pozostaje jawnie pusty, czyli ma dokładnie zerową
+masę. Dalszy konsument określa aktywne węzły z sum wierszy, nie przez
+usuwanie wierszy ze snapshotu. Provider wymaga skalarnej, conforming H1 P1
+na wybranych liniowych Tet4/Prism6 oraz niezakrzywionej siatki MFEM. Wstępnie
+odrzuca elementy zgłoszone przez kontrolę orientacji MFEM i niedodatni lub
+niefinitywny Jacobian w punktach reguły rzędu 2, zgodnie z istniejącym
+mesh-builderem. Te próbki nie stanowią pełnego dowodu dodatniości Jacobianu
+w każdym punkcie nieafinicznego Prism6. Provider odrzuca także przestrzenie
+albo mapowanie, które nie zachowują jednego DOF na kanoniczny wierzchołek;
+nie dopasowuje węzłów po współrzędnych.
+
+To inna macierz niż ważona przez $M_s$ macierz wymiany, masa lumped, tangent
+mass bloku Floqueta i uogólniona masa pencil. Interfejs providera nie
+przyjmuje pól materiałowych: składa wyłącznie geometryczne $N_iN_j$, bez
+$M_s$, regularizacji, tetrahedralizacji pryzm ani zastępowania metryki
+identycznością. Snapshot nie przechowuje uchwytów MFEM i jest niemutowalny
+po zbudowaniu.
+
+Ten atom dostarcza wewnętrzny builder i niezależny test MFEM; nie podłącza go
+jeszcze do `crates/fullmag-runner`, publicznego ABI, selekcji backendu,
+adaptacyjnego sweepu ani GPU. Test analityczny obejmuje Tet4 i affine Wedge6
+przy skali 1 m oraz 1 nm, a także selekcję domeny magnetycznej w sąsiedztwie
+powietrza z zachowanym pustym wierszem fizycznego węzła air-only i odrzucenie
+degenerowanego Tet4. GHA dla
+nowego CTest pozostaje wymagane; bez tego wykonania i późniejszej integracji
+tracking/runtime pozostają **NOT VERIFIED**.
 
 ### Natywny Floquet tangent-mass assembly foundation
 
