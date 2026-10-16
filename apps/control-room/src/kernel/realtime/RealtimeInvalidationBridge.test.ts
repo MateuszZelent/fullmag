@@ -2023,6 +2023,89 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(otherSessionDatasetCatalogKey)).toBeNull();
   });
 
+
+  it.each([true, false])("refreshes hysteresis run datasets with coalesced flush=%s", (coalesced) => {
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    let flush: (() => void) | undefined;
+    const bridge = new RealtimeInvalidationBridge(
+      resources,
+      coalesced ? { scheduleFlush: (callback) => {
+        flush = callback;
+        return () => {};
+      } } : {},
+    );
+    const identity: SessionResourceIdentity = {
+      requestScopeEpoch: "instance-points:1",
+      sessionEpoch: "epoch-points",
+      sessionId: "session-points",
+    };
+    const runId = "run/points α";
+    const pointsKey = ANALYSIS_HYSTERESIS_POINTS_PATH.replace("{stage_id}", "stage-000");
+    const scoped = (suffix: string) => analysisResultDatasetCatalogKey(identity, runId, suffix);
+    const affected = [
+      scoped(""),
+      scoped("?limit=50&cursor=next"),
+      scoped("?limit=50::complete-catalog"),
+      scoped("::complete-catalog"),
+      scoped("/hysteresis%3Astage-000"),
+      scoped("/hysteresis%3Astage-000/projection?axis=field"),
+      scoped("/hysteresis%3Astage-000/items?cursor=next"),
+    ];
+    const unaffected = [
+      analysisResultDatasetCatalogKey(identity, "another-run", "/dataset/projection"),
+      analysisResultDatasetCatalogKey(
+        { ...identity, sessionId: "session-foreign" }, runId, "/dataset/projection",
+      ),
+      scoped("-unrelated"),
+    ];
+    for (const key of [...affected, ...unaffected]) resources.subscribe(key, () => {});
+    expect(bridge.handleEvent({
+      session_id: identity.sessionId,
+      run_id: runId,
+      type: "resource.batch_changed",
+      payload: { changes: [{
+        recommended_fetch: pointsKey,
+        resource: "analysis.hysteresis.points",
+        revision: 51,
+      }] },
+    })).toBe(true);
+    if (coalesced) {
+      for (const key of affected) expect(resources.getRevision(key)).toBeNull();
+      expect(flush).toBeDefined();
+      flush?.();
+    }
+    for (const key of affected) {
+      expect(resources.getRevision(key)).toBe(dependentRevision(pointsKey, 51));
+    }
+    for (const key of unaffected) expect(resources.getRevision(key)).toBeNull();
+  });
+
+  it.each([
+    { session_id: "session-points" },
+    { run_id: "run-points" },
+    {},
+  ])("does not guess dataset owners for points events without complete identity %j", (owner) => {
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const identity: SessionResourceIdentity = {
+      requestScopeEpoch: "instance-points:1",
+      sessionEpoch: "epoch-points",
+      sessionId: "session-points",
+    };
+    const key = analysisResultDatasetCatalogKey(identity, "run-points", "/dataset/projection");
+    resources.subscribe(key, () => {});
+    bridge.handleEvent({
+      ...owner,
+      type: "resource.batch_changed",
+      payload: { changes: [{
+        recommended_fetch: ANALYSIS_HYSTERESIS_POINTS_PATH.replace("{stage_id}", "stage-000"),
+        resource: "analysis.hysteresis.points",
+        revision: 51,
+      }] },
+    });
+    expect(resources.getRevision(key)).toBeNull();
+  });
+
   it("refreshes stage hysteresis analysis dependents when points update", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -2160,3 +2243,4 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(otherStagePointKey)).toBeNull();
   });
 });
+

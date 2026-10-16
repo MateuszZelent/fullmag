@@ -378,10 +378,11 @@ function matchesConcreteStageScopedResource(
   return stageScopedRegex(stagePathTemplate).test(resourceKey);
 }
 
-function matchesAnalysisResultDatasetCatalogResource(
+function matchesAnalysisResultDatasetResource(
   resourceKey: string,
   sessionId: string | undefined,
   runId: string | null | undefined,
+  includeDatasetResources = false,
 ): boolean {
   if (!sessionId || !runId) return false;
   const separator = resourceKey.indexOf("|");
@@ -406,7 +407,8 @@ function matchesAnalysisResultDatasetCatalogResource(
   return (
     suffix === "" ||
     suffix === "::complete-catalog" ||
-    suffix.startsWith("?")
+    suffix.startsWith("?") ||
+    (includeDatasetResources && suffix.startsWith("/"))
   );
 }
 
@@ -569,16 +571,22 @@ export class RealtimeInvalidationBridge {
           continue;
         }
         const recommendedFetch = change.recommended_fetch ?? change.resource_key;
+        const pointsUpdated = recommendedFetch !== undefined &&
+          concreteStageIdFromResourceKey(
+            recommendedFetch,
+            ANALYSIS_HYSTERESIS_POINTS_PATH,
+          ) !== null;
         if (
           recommendedFetch &&
-          recommendedFetch === SIMULATION_STAGES_EXECUTION_PATH
+          (recommendedFetch === SIMULATION_STAGES_EXECUTION_PATH || pointsUpdated)
         ) {
           this.queueMatchingInvalidation(
             (resourceKey) =>
-              matchesAnalysisResultDatasetCatalogResource(
+              matchesAnalysisResultDatasetResource(
                 resourceKey,
                 event.session_id,
                 event.run_id,
+                pointsUpdated,
               ),
             dependentResourceRevision(recommendedFetch, change.revision),
           );
@@ -1261,3 +1269,4 @@ export class RealtimeInvalidationBridge {
     );
   }
 }
+
