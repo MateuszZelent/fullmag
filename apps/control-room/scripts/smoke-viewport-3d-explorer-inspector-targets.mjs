@@ -439,16 +439,14 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       throw new Error(`Positive-control part B was not visibly rendered in its solid-color baseline: ${JSON.stringify({ positiveRedPixels })}.`);
     }
     await enableMagnitudeSurfaceColoring(page, fixture, "fem-visible");
-    const positiveFieldResource = await waitForFdmFieldResource(page, quantityId, {
-      component: "full",
-      partId: "part-visible",
-      scopeKind: "part",
-    });
-    if (positiveFieldResource.status !== "ready" || !positiveFieldResource.hasTargetPart || !positiveFieldResource.hasValues) {
+    // With both scalar targets visible, the production demand planner
+    // coalesces equal quantity/mode requests into the full-domain envelope.
+    const positiveFieldResource = await waitForFdmFullFieldPayload(page, quantityId);
+    if (positiveFieldResource.status !== "ready" || !positiveFieldResource.hasValues) {
       throw new Error(`Nonempty FEM part did not acquire its own field envelope: ${JSON.stringify(positiveFieldResource)}.`);
     }
-    if (!fixture.emptyPartFieldResponses.some((entry) => entry.partId === "part-visible" && entry.status === 200 && entry.nodeIndices.join(",") === "4,5,6,7")) {
-      throw new Error("Positive FEM part did not receive its exact scoped node membership.");
+    if (!fixture.fullDomainFieldResponses.some((entry) => entry.revision === 1 && entry.pointCount === 8)) {
+      throw new Error("The two scalar targets did not adopt the full-domain nodal field.");
     }
     const positiveOverride = assertMagnitudeThicknessOverride(fixture, "fem-visible");
     const positiveDelta = await waitForViewportPixelDelta(
@@ -460,7 +458,7 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     await assertHealthyCanvas(page, "nonempty FEM positive field-color control");
 
     // Build an A-only sample mask while B is stable, then perturb only B's
-    // scoped values while both targets remain visible and A's target settings
+    // full-domain nodal values while both targets remain visible and A's target settings
     // remain unchanged.
     await selectVisualizationNode(page, "fem-empty", null);
     await assertTarget(page, "object:fem-empty");
@@ -550,11 +548,11 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     const bSettingsBeforeBRefresh = await readObjectVisualizationSettings(page, "fem-visible");
     if (
       !aSettingsBeforeBRefresh ||
-      aSettingsBeforeBRefresh.activeQuantityId !== quantityId ||
-      aSettingsBeforeBRefresh.surfaceColorSource !== "magnitude" ||
+      aSettingsBeforeBRefresh.quantity?.active_quantity_id !== quantityId ||
+      aSettingsBeforeBRefresh.style?.surface_color_source !== "magnitude" ||
       !bSettingsBeforeBRefresh ||
-      bSettingsBeforeBRefresh.activeQuantityId !== quantityId ||
-      bSettingsBeforeBRefresh.surfaceColorSource !== "magnitude"
+      bSettingsBeforeBRefresh.quantity?.active_quantity_id !== quantityId ||
+      bSettingsBeforeBRefresh.style?.surface_color_source !== "magnitude"
     ) {
       await captureViewportComparisonFailure(
         page,
@@ -565,14 +563,9 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       );
       throw new Error("Both FEM targets must retain H_eff magnitude settings before perturbing B.");
     }
-    const bFieldBeforeRefresh = await waitForFdmFieldResource(page, quantityId, {
-      component: "full",
-      partId: "part-visible",
-      scopeKind: "part",
-    });
+    const bFieldBeforeRefresh = await waitForFdmFullFieldPayload(page, quantityId);
     if (
       bFieldBeforeRefresh.status !== "ready" ||
-      !bFieldBeforeRefresh.hasTargetPart ||
       !bFieldBeforeRefresh.hasValues
     ) {
       await captureViewportComparisonFailure(
@@ -586,39 +579,36 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     }
 
     const bValuesBeforeExpected = [
+      1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0,
       1_000, 0, 0,
       10_000, 0, 0,
       100_000, 0, 0,
       1_000_000, 0, 0,
     ];
-    const bPayloadBefore = await waitForFdmPartFieldPayload(
-      page,
-      bFieldBeforeRefresh.key,
-      "part-visible",
-      {
-        etag: '"fixture-part-visible-r1"',
-        values: bValuesBeforeExpected,
-      },
-    );
+    const bPayloadBefore = await waitForFdmFullFieldPayload(page, quantityId, {
+      etag: '"fixture-full-r1"',
+      values: bValuesBeforeExpected,
+    });
     const bBeforePixels = await sampleViewportPixels(page, null, true);
     await assertViewportSampleGeometryEqual(page, aRestoredForMask, bBeforePixels, "pre-perturbation viewport");
     const bRequest = {
       component: "full",
       quantityId,
-      scopeId: "part-visible",
-      scopeKind: "part",
+      scopeId: null,
+      scopeKind: "full",
     };
     const bRequestsBefore = countFieldRequests(fixture, bRequest);
 
     const aFixtureResponseRevisionBefore = fixture.scopedFieldRevisions["part-empty-range"];
     fixture.scopedFieldRevisions["part-visible"] = 2;
+    fixture.fullFieldRevision = 2;
     fixture.scopedFieldMagnitudes = [1, 2, 3, 4, 1_000_000, 1_000_000, 1_000_000, 1_000_000];
     const bCanonicalRequest = [...fixture.fieldRequests].reverse().find((entry) =>
       entry.method === "GET" &&
       entry.quantityId === quantityId &&
       entry.component === "full" &&
-      entry.scopeId === "part-visible" &&
-      entry.scopeKind === "part",
+      entry.scopeId === null &&
+      entry.scopeKind === "full",
     );
     if (!bCanonicalRequest) {
       throw new Error("Could not resolve the canonical H_eff field request for part B.");
@@ -628,8 +618,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     if (
       bRecommendedFetchUrl.pathname !== "/v2/sessions/current/data/fields/H_eff/samples/vector" ||
       bRecommendedFetchUrl.searchParams.get("component") !== "full" ||
-      bRecommendedFetchUrl.searchParams.get("scope_id") !== "part-visible" ||
-      bRecommendedFetchUrl.searchParams.get("scope_kind") !== "part"
+      bRecommendedFetchUrl.searchParams.has("scope_id") ||
+      bRecommendedFetchUrl.searchParams.get("scope_kind") !== "full"
     ) {
       throw new Error("Part B realtime invalidation did not use its canonical field request URL.");
     }
@@ -637,13 +627,13 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
 
     let bPayloadAfter;
     try {
-      bPayloadAfter = await waitForFdmPartFieldPayload(
+      bPayloadAfter = await waitForFdmFullFieldPayload(
         page,
-        bFieldBeforeRefresh.key,
-        "part-visible",
+        quantityId,
         {
-          etag: '"fixture-part-visible-r2"',
+          etag: '"fixture-full-r2"',
           values: [
+            1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0,
             1_000_000, 0, 0,
             1_000_000, 0, 0,
             1_000_000, 0, 0,
@@ -663,8 +653,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     }
 
     const bRequestsAfter = countFieldRequests(fixture, bRequest);
-    const bRevisionResponses = fixture.emptyPartFieldResponses.filter(
-      (entry) => entry.partId === "part-visible" && entry.revision === 2,
+    const bRevisionResponses = fixture.fullDomainFieldResponses.filter(
+      (entry) => entry.revision === 2 && entry.pointCount === 8,
     );
     const aUnexpectedRevisionResponses = fixture.emptyPartFieldResponses.filter(
       (entry) =>
@@ -672,11 +662,17 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
         entry.revision !== aFixtureResponseRevisionBefore,
     );
     const aFixtureResponseRevisionAfter = fixture.scopedFieldRevisions["part-empty-range"];
-    const aFieldAfterBRefresh = await waitForFdmFieldResource(page, quantityId, {
-      component: "full",
-      partId: "part-empty-range",
-      scopeKind: "part",
-    });
+    const aPartAfterBRefresh = fixture.manifest.mesh_parts.find(
+      (part) => part.id === "part-empty-range",
+    );
+    const aFieldAfterBRefresh = {
+      emptyNodeMembership: aPartAfterBRefresh?.node_count === 0 &&
+        (aPartAfterBRefresh.node_indices === undefined ||
+          (Array.isArray(aPartAfterBRefresh.node_indices) && aPartAfterBRefresh.node_indices.length === 0)),
+      fullFieldValuesOutsideBUnchanged:
+        JSON.stringify(bPayloadAfter.values.slice(0, 12)) ===
+        JSON.stringify(bPayloadBefore.values.slice(0, 12)),
+    };
     const aSettingsAfterBRefresh = await readObjectVisualizationSettings(page, "fem-empty");
     const bSettingsAfterBRefresh = await readObjectVisualizationSettings(page, "fem-visible");
     if (
@@ -684,9 +680,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       bRevisionResponses.length === 0 ||
       aFixtureResponseRevisionAfter !== aFixtureResponseRevisionBefore ||
       aUnexpectedRevisionResponses.length > 0 ||
-      aFieldAfterBRefresh.status !== "ready" ||
-      aFieldAfterBRefresh.hasTargetPart ||
-      aFieldAfterBRefresh.hasValues ||
+      !aFieldAfterBRefresh.emptyNodeMembership ||
+      !aFieldAfterBRefresh.fullFieldValuesOutsideBUnchanged ||
       JSON.stringify(aSettingsBeforeBRefresh) !== JSON.stringify(aSettingsAfterBRefresh) ||
       JSON.stringify(bSettingsBeforeBRefresh) !== JSON.stringify(bSettingsAfterBRefresh)
     ) {
@@ -765,6 +760,7 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       fieldRequests: fixture.fieldRequests,
       fieldResource,
       scopedFieldResponses: fixture.emptyPartFieldResponses,
+      fullDomainFieldResponses: fixture.fullDomainFieldResponses,
       positiveFieldResource,
       positiveControlPartB: {
         fieldColorDelta: positiveDelta,
@@ -793,8 +789,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
         maskRestoreDeltaB: bMaskRestoreDelta,
       },
       projectionMode: "thickness_average_z",
-      topology: "FEM scoped H_eff: empty part 204; nonempty part FMVP v3 explicit node indices",
-      qualificationScope: "Scoped empty-support browser behavior; full-domain empty-selection mapper regression is covered separately by unit tests.",
+      topology: "FEM H_eff: isolated empty part 204; equal scalar modes coalesced to full-domain nodal envelope",
+      qualificationScope: "Browser empty support under a full-domain field refresh changing only B; independent scoped-empty response is checked before coalescing.",
     };
   } catch (error) {
     hasOriginalFailure = true;
@@ -1043,6 +1039,14 @@ async function installFixtureApi(page, fixture) {
       if (fixture.fieldMode === "stale") return fulfillBinary(route, fdmFieldVectorBuffer({ quantityId, gridShape: fixture.domain.grid?.shape }), fieldVectorHeaders({ ...fieldRequest, domainGenerationId: "stale" }));
       if (fixture.fieldMode === "mismatch") return fulfillBinary(route, fdmFieldVectorBuffer({ quantityId: "H_eff", gridShape: fixture.domain.grid?.shape }), fieldVectorHeaders({ ...fieldRequest, quantityId: "H_eff" }));
       if (fieldRequest.scopeKind === "full") {
+        if (fixture.fullDomainFieldResponses) {
+          const revision = fixture.fullFieldRevision;
+          const etag = '"fixture-full-r' + revision + '"';
+          fixture.fullDomainFieldResponses.push({ etag, pointCount: 8, revision });
+          return fulfillBinary(route,
+            femEmptyPartColorFieldVectorBuffer(quantityId, fixture.scopedFieldMagnitudes),
+            { ...fieldVectorHeaders(fieldRequest), etag });
+        }
         if (fixture.fieldVectorFactory) {
           return fulfillBinary(
             route,
@@ -2190,10 +2194,13 @@ async function assertViewportPixelDeltaOnMask(page, before, after, mask, label, 
 async function readObjectVisualizationSettings(page, objectId) {
   return page.evaluate((id) => {
     const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    return audit?.readVisualizationTargetSettings?.({
-      id: "object:" + id,
-      kind: "object",
-    }) ?? null;
+    // The renderer resolves persisted overrides together with controller
+    // preferences. Raw controller defaults alone are not the object settings.
+    const state = audit?.readViewportAuditResource?.("/v2/sessions/current/visualization/state");
+    return state?.status === "ready"
+      ? state.data?.overrides?.find((override) =>
+          override.scope === "object" && override.scope_id === id) ?? null
+      : null;
   }, objectId);
 }
 
@@ -2348,26 +2355,32 @@ async function waitForFdmFieldResource(page, quantityId, targetPart = null) {
   }, { quantity: quantityId, targetPart }, { timeout: timeoutMs }).then((handle) => handle.jsonValue());
 }
 
-async function waitForFdmPartFieldPayload(page, resourceKey, partId, expected) {
-  return page.waitForFunction(({ key, expectedPartId, etag, values }) => {
+async function waitForFdmFullFieldPayload(page, quantityId, expected = {}) {
+  return page.waitForFunction(({ quantity, etag, values }) => {
     const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    const snapshot = audit?.readViewportAuditResource?.(key);
-    if (snapshot?.status !== "ready" || !(snapshot.data instanceof Map)) return null;
-    const envelope = snapshot.data.get(expectedPartId);
-    if (!envelope?.data?.values) return null;
-    const actualValues = Array.from(envelope.data.values);
-    if (envelope.etag !== etag || actualValues.length !== values.length) return null;
-    if (!actualValues.every((value, index) => value === values[index])) return null;
-    return {
-      etag: envelope.etag,
-      partId: expectedPartId,
-      resourceKey: key,
-      resourceRevision: snapshot.revision,
-      values: actualValues,
-    };
-  }, { key: resourceKey, expectedPartId: partId, etag: expected.etag, values: expected.values }, {
-    timeout: timeoutMs,
-  }).then((handle) => handle.jsonValue());
+    const path = `/data/fields/${encodeURIComponent(quantity)}/samples/vector?`;
+    const keys = Object.keys(audit?.readViewportAuditRuntime?.().listenerCounts ?? {});
+    for (const key of keys) {
+      if (key.includes("#viewport-3d:")) continue;
+      const offset = key.indexOf(path);
+      if (offset < 0) continue;
+      const query = new URLSearchParams(key.slice(offset + path.length));
+      if (query.get("scope_kind") !== "full" || query.get("component") !== "full") continue;
+      const snapshot = audit?.readViewportAuditResource?.(key);
+      const envelope = snapshot?.data;
+      const payload = envelope?.data;
+      if (snapshot?.status !== "ready" || !payload?.values?.length) continue;
+      if (etag && envelope.etag !== etag) continue;
+      const actualValues = Array.from(payload.values);
+      if (values && (actualValues.length !== values.length ||
+        actualValues.some((value, index) => value !== values[index]))) continue;
+      return { etag: envelope.etag, hasValues: true, key,
+        pointCount: payload.pointCount, resourceRevision: snapshot.revision,
+        status: snapshot.status, values: actualValues };
+    }
+    return null;
+  }, { quantity: quantityId, ...expected }, { timeout: timeoutMs })
+    .then((handle) => handle.jsonValue());
 }
 
 async function invalidateFieldResource(page, resourceKey, reason = "smoke-recovery") {
@@ -2542,6 +2555,8 @@ function createEmptyPartColorFixture() {
   fixture.fieldVectorFactory = (fieldQuantityId) =>
     femEmptyPartColorFieldVectorBuffer(fieldQuantityId);
   fixture.emptyPartFieldResponses = [];
+  fixture.fullDomainFieldResponses = [];
+  fixture.fullFieldRevision = 1;
   fixture.scopedFieldRevisions = {
     "part-empty-range": 1,
     "part-visible": 1,
@@ -3027,7 +3042,7 @@ function femEmptyPartColorTopologyBuffer() {
   return buffer;
 }
 
-function femEmptyPartColorFieldVectorBuffer(quantityId) {
+function femEmptyPartColorFieldVectorBuffer(quantityId, magnitudes = [1, 2, 3, 4, 1_000, 10_000, 100_000, 1_000_000]) {
   const pointCount = 8;
   const componentCount = 3;
   const buffer = new ArrayBuffer(
@@ -3044,7 +3059,6 @@ function femEmptyPartColorFieldVectorBuffer(quantityId) {
   view.setUint32(24, 1, true);
   new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
   const values = new Float64Array(buffer, 48);
-  const magnitudes = [1, 2, 3, 4, 1_000, 10_000, 100_000, 1_000_000];
   for (let point = 0; point < pointCount; point += 1) {
     values[point * componentCount] = magnitudes[point];
     values[point * componentCount + 1] = 0;
