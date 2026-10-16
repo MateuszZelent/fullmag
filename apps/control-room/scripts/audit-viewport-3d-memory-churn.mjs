@@ -46,6 +46,11 @@ const WARM_QUANTITIES = ["m", "H_eff", "H_demag", "H_ex"];
 const FDM_READY_OBJECT_TARGET_ID = "object:fdm-ready-box";
 const FDM_READY_OBJECT_SCOPE_ID = FDM_READY_OBJECT_TARGET_ID.slice("object:".length);
 const FDM_NEUTRAL_SURFACE_COLOR = "#d752a7";
+const MAX_NEUTRAL_PIXEL_SAMPLE_PREFIX = 64;
+const MAX_NEUTRAL_PIXEL_HISTOGRAM_ENTRIES = 16;
+const MAX_NEUTRAL_PIXEL_MATCH_COORDINATES = 32;
+const MAX_NEUTRAL_PIXEL_CHANGED_COORDINATES = 32;
+const MAX_NEUTRAL_PIXEL_NEAREST_COLORS = 8;
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
 const MAX_GPU_LIFECYCLE_TIMELINE_ENTRIES = 256;
@@ -108,6 +113,7 @@ let gpuLifecycleTimelineDropped = 0;
 let fdmSurfaceInstanceColorBeforeStress = null;
 let fdmSurfaceInstanceColorStressDelta = null;
 let fdmNeutralSurfaceColorProof = null;
+let fdmNeutralSurfaceColorDiagnostics = null;
 
 await installFdmFixtureApi(page, fixture, fixtureRequests);
 await installBrowserAuditInstrumentation(page);
@@ -615,6 +621,7 @@ try {
     fdmSurfaceInstanceColorBeforeStress,
     fdmSurfaceInstanceColorStressDelta,
     fdmNeutralSurfaceColorProof,
+    fdmNeutralSurfaceColorDiagnostics,
   });
   throw error;
 } finally {
@@ -696,6 +703,7 @@ async function assertCanvasHasFidelity(
       expectedColorMatches,
       height: bitmap.height,
       pixelSamples,
+      sampleStride: stride,
       signature: String(signature >>> 0),
       varied,
       width: bitmap.width,
@@ -744,11 +752,37 @@ async function assertFdmNeutralSurfaceColorPixels(
     expectedPixelColor: expectedMaterialColor,
     includePixelSamples: true,
   });
+  fdmNeutralSurfaceColorDiagnostics = {
+    expectedMaterialColor: {
+      css: FDM_NEUTRAL_SURFACE_COLOR,
+      rgb: expectedMaterialColor,
+    },
+    stage: "solid-first-capture",
+    solid: summarizeNeutralSurfaceColorSample(solid, expectedMaterialColor),
+  };
   const solidRepeat = await assertCanvasHasFidelity(page, {
     expectedPixelColor: expectedMaterialColor,
     includePixelSamples: true,
   });
   const solidRepeatDelta = compareCanvasPixelSamples(solid, solidRepeat);
+  fdmNeutralSurfaceColorDiagnostics = {
+    expectedMaterialColor: {
+      css: FDM_NEUTRAL_SURFACE_COLOR,
+      rgb: expectedMaterialColor,
+    },
+    solid: summarizeNeutralSurfaceColorSample(solid, expectedMaterialColor),
+    solidRepeat: summarizeNeutralSurfaceColorSample(
+      solidRepeat,
+      expectedMaterialColor,
+    ),
+    solidRepeatChangedSamples: solidRepeatDelta.changedSamples,
+    solidRepeatChangedSampleCoordinates: changedCanvasSampleCoordinates(
+      solid,
+      solidRepeat,
+      MAX_NEUTRAL_PIXEL_CHANGED_COORDINATES,
+    ),
+    stage: "solid-repeat-captured",
+  };
   if (solidRepeatDelta.changedSamples !== 0) {
     throw new Error("FDM solid surface-color pixels were not stable across repeated captures.");
   }
@@ -921,6 +955,108 @@ function summarizeCanvasPixelSample(sample) {
     varied: sample.varied,
     width: sample.width,
   };
+}
+
+function summarizeNeutralSurfaceColorSample(sample, expectedColor) {
+  const pixelSamples = Array.isArray(sample.pixelSamples)
+    ? sample.pixelSamples
+    : [];
+  const colors = new Map();
+  for (let offset = 0; offset + 2 < pixelSamples.length; offset += 3) {
+    const rgb = pixelSamples.slice(offset, offset + 3);
+    const key = rgb.join(",");
+    const entry = colors.get(key) ?? {
+      count: 0,
+      distanceSquared: rgb.reduce(
+        (sum, channel, index) => sum + (channel - expectedColor[index]) ** 2,
+        0,
+      ),
+      rgb,
+    };
+    entry.count += 1;
+    colors.set(key, entry);
+  }
+  const colorEntries = Array.from(colors.values());
+  const histogram = colorEntries
+    .slice()
+    .sort((left, right) =>
+      right.count - left.count || left.rgb.join(",").localeCompare(right.rgb.join(",")),
+    )
+    .slice(0, MAX_NEUTRAL_PIXEL_HISTOGRAM_ENTRIES)
+    .map(({ count, rgb }) => ({ count, rgb }));
+  const nearestColors = colorEntries
+    .slice()
+    .sort((left, right) =>
+      left.distanceSquared - right.distanceSquared ||
+      right.count - left.count ||
+      left.rgb.join(",").localeCompare(right.rgb.join(",")),
+    )
+    .slice(0, MAX_NEUTRAL_PIXEL_NEAREST_COLORS)
+    .map(({ count, distanceSquared, rgb }) => ({
+      count,
+      distanceSquared,
+      rgb,
+    }));
+  const samplePrefix = [];
+  for (
+    let offset = 0;
+    offset + 2 < pixelSamples.length &&
+    samplePrefix.length < MAX_NEUTRAL_PIXEL_SAMPLE_PREFIX;
+    offset += 3
+  ) {
+    samplePrefix.push(pixelSamples.slice(offset, offset + 3));
+  }
+  return {
+    exactExpectedColorMatchCount: sample.expectedColorMatches?.length ?? null,
+    exactExpectedColorMatchCoordinates:
+      sample.expectedColorMatches?.slice(0, MAX_NEUTRAL_PIXEL_MATCH_COORDINATES) ??
+      null,
+    height: sample.height,
+    nearestColors,
+    sampleCount: pixelSamples.length / 3,
+    samplePrefix,
+    sampleStride: sample.sampleStride,
+    signature: sample.signature,
+    topColorHistogram: histogram,
+    uniqueSampledColorCount: colorEntries.length,
+    varied: sample.varied,
+    width: sample.width,
+  };
+}
+
+function changedCanvasSampleCoordinates(left, right, limit) {
+  const leftSamples = left.pixelSamples ?? [];
+  const rightSamples = right.pixelSamples ?? [];
+  if (
+    left.width !== right.width ||
+    left.height !== right.height ||
+    left.sampleStride !== right.sampleStride ||
+    leftSamples.length !== rightSamples.length ||
+    left.sampleStride <= 0
+  ) {
+    return { count: null, coordinates: null };
+  }
+  const columns = Math.ceil(left.width / left.sampleStride);
+  const coordinates = [];
+  let count = 0;
+  for (let offset = 0; offset + 2 < leftSamples.length; offset += 3) {
+    if (
+      leftSamples[offset] === rightSamples[offset] &&
+      leftSamples[offset + 1] === rightSamples[offset + 1] &&
+      leftSamples[offset + 2] === rightSamples[offset + 2]
+    ) {
+      continue;
+    }
+    count += 1;
+    if (coordinates.length < limit) {
+      const sampleIndex = offset / 3;
+      coordinates.push([
+        (sampleIndex % columns) * left.sampleStride,
+        Math.floor(sampleIndex / columns) * left.sampleStride,
+      ]);
+    }
+  }
+  return { count, coordinates };
 }
 
 async function assertInitialFdmFieldAdoption(
@@ -1872,6 +2008,7 @@ async function reportAuditFailure(
     fdmSurfaceInstanceColorBeforeStress,
     fdmSurfaceInstanceColorStressDelta,
     fdmNeutralSurfaceColorProof,
+    fdmNeutralSurfaceColorDiagnostics,
   },
 ) {
   const instanceColorLifecycle = await readInstanceColorLifecycleAudit(page);
@@ -1935,6 +2072,7 @@ async function reportAuditFailure(
           fdmSurfaceInstanceColorBeforeStress?.summary ?? null,
         instanceColorLifecycleStressDelta: fdmSurfaceInstanceColorStressDelta,
         fdmNeutralSurfaceColorProof,
+        fdmNeutralSurfaceColorDiagnostics,
         gpuLifecycleTimeline,
         gpuLifecycleTimelineDropped,
         errors: errors.slice(-10),
@@ -1957,6 +2095,7 @@ async function reportAuditFailure(
       `${JSON.stringify({
         instanceColorLifecycle,
         fdmNeutralSurfaceColorProof,
+        fdmNeutralSurfaceColorDiagnostics,
         instanceColorLifecycleBeforeStress:
           fdmSurfaceInstanceColorBeforeStress?.summary ?? null,
         instanceColorLifecycleStressDelta: fdmSurfaceInstanceColorStressDelta,
