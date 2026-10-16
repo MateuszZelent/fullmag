@@ -131,6 +131,10 @@ export function ImportedDispersionReferenceInspectorPanel({
               ? String(definitions.data.scene_revision)
               : "—",
           },
+          {
+            label: "Artifact revision",
+            value: definition ? definition.data_ref.dataset_revision : "—",
+          },
         ]}
         primary={definition ? (
           <>
@@ -174,3 +178,4 @@ export function ImportedDispersionReferenceInspectorPanel({
     </div>
   );
 }
+

@@ -1,9 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   REMOVE_DISPERSION_REFERENCE_COMMAND,
 } from "@/kernel/analysis-modules/postprocessingCommandContributions";
+import {
+  findElements,
+  installSimulationPreparationTestDom,
+  TestElement,
+  TestNode,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { ImportedDispersionReferenceInspectorPanel } from "./ImportedDispersionReferenceInspectorPanel";
 
@@ -63,6 +69,7 @@ const selection = {
 
 describe("ImportedDispersionReferenceInspectorPanel DOM", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mocks.definitionsResource.mockReturnValue({
       data: { definitions: [importedDefinition], scene_revision: 17 },
       status: "ready",
@@ -73,68 +80,144 @@ describe("ImportedDispersionReferenceInspectorPanel DOM", () => {
     });
   });
 
-  afterEach(() => {
-    cleanup();
-    vi.clearAllMocks();
-  });
-
   it("shows imported reference metadata and removes the selected definition through CommandRegistry", async () => {
-    render(<ImportedDispersionReferenceInspectorPanel selection={selection} />);
+    await withRenderedPanel(async (container) => {
+      const metricStrip = findElements(
+        container,
+        (element) => element.getAttribute("data-slot") === "inspector-metric-strip",
+      )[0];
 
-    expect(screen.getByText("Imported · not qualified")).toBeTruthy();
-    expect(screen.getByText("measured.csv")).toBeTruthy();
-    expect(screen.getAllByText("Measured branch").length).toBeGreaterThan(0);
-    expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("rad/um · GHz")).toBeTruthy();
+      expect(metricStrip?.getAttribute("data-count")).toBe("4");
+      expect(metricValue(container, "Status")).toBe("Imported · not qualified");
+      expect(metricValue(container, "Points")).toBe("2");
+      expect(metricValue(container, "Scene revision")).toBe("17");
+      expect(metricValue(container, "Artifact revision")).toBe("artifact-r2");
+      expect(container.textContent).toContain("measured.csv");
+      expect(container.textContent).toContain("Measured branch");
+      expect(container.textContent).toContain("rad/um · GHz");
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove reference" }));
-    await waitFor(() => {
+      await act(async () => {
+        findRemoveButton(container).click();
+        await Promise.resolve();
+      });
+
       expect(mocks.execute).toHaveBeenCalledWith(
         REMOVE_DISPERSION_REFERENCE_COMMAND,
         expect.objectContaining({ source: "inspector" }),
         { definitionId: importedDefinition.definition_id },
       );
+      const feedback = findElements(
+        container,
+        (element) => element.getAttribute("role") === "status",
+      )[0];
+      expect(feedback?.textContent).toContain("Reference Measured branch removed.");
     });
-    expect((await screen.findByRole("status")).textContent).toContain("Reference Measured branch removed.");
   });
 
   it.each([
-    ["missing", []],
-    ["stale", [{
-      ...importedDefinition,
-      data_ref: { ...importedDefinition.data_ref, run_id: "run-foreign" },
-    }]],
-  ])("fails closed when the selected definition is %s", (_case, definitions) => {
-    mocks.definitionsResource.mockReturnValue({
-      data: { definitions, scene_revision: 18 },
-      status: "ready",
-    });
+    [
+      "missing",
+      [],
+      "This imported reference no longer exists in the current scene.",
+    ],
+    [
+      "owner mismatch",
+      [{
+        ...importedDefinition,
+        data_ref: { ...importedDefinition.data_ref, run_id: "run-foreign" },
+      }],
+      "This reference no longer matches the selected run and stage.",
+    ],
+  ])(
+    "fails closed when the selected definition is %s",
+    async (_case, definitions, reason) => {
+      mocks.definitionsResource.mockReturnValue({
+        data: { definitions, scene_revision: 18 },
+        status: "ready",
+      });
 
-    render(<ImportedDispersionReferenceInspectorPanel selection={selection} />);
-
-    expect(screen.queryByRole("button", { name: "Remove reference" })).toBeNull();
-    expect(screen.getByText(_case === "missing"
-      ? "This imported reference no longer exists in the current scene."
-      : "This reference no longer matches the selected run and stage.")).toBeTruthy();
-    expect(mocks.execute).not.toHaveBeenCalled();
-  });
+      await withRenderedPanel((container) => {
+        expect(findRemoveButtons(container)).toHaveLength(0);
+        expect(container.textContent).toContain(reason);
+        expect(mocks.execute).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.each([
     ["idle", "The saved reference definition has not been loaded yet."],
     ["loading", "Loading the saved reference definition."],
     ["stale", "The saved reference definition is stale and cannot be changed."],
     ["error", "The saved reference definition could not be loaded."],
-  ] as const)("hides removal when retained definitions are %s", (status, reason) => {
+  ] as const)("hides removal when retained definitions are %s", async (status, reason) => {
     mocks.definitionsResource.mockReturnValue({
       data: { definitions: [importedDefinition], scene_revision: 18 },
       status,
     });
 
-    render(<ImportedDispersionReferenceInspectorPanel selection={selection} />);
-
-    expect(screen.queryByRole("button", { name: "Remove reference" })).toBeNull();
-    expect(screen.queryByText("Imported · not qualified")).toBeNull();
-    expect(screen.getByText(reason)).toBeTruthy();
-    expect(mocks.execute).not.toHaveBeenCalled();
+    await withRenderedPanel((container) => {
+      expect(findRemoveButtons(container)).toHaveLength(0);
+      expect(metricValue(container, "Status")).toBe("Unavailable");
+      expect(metricValue(container, "Points")).toBe("—");
+      expect(metricValue(container, "Artifact revision")).toBe("—");
+      expect(container.textContent).not.toContain("Imported · not qualified");
+      expect(container.textContent).toContain(reason);
+      expect(mocks.execute).not.toHaveBeenCalled();
+    });
   });
 });
+
+async function withRenderedPanel(
+  assertion: (container: TestElement) => void | Promise<void>,
+): Promise<void> {
+  const dom = installSimulationPreparationTestDom();
+  const container = dom.document.createElement("div");
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container as unknown as Element);
+
+  try {
+    await act(async () => root.render(
+      <ImportedDispersionReferenceInspectorPanel selection={selection} />,
+    ));
+    await assertion(container);
+  } finally {
+    await act(async () => root.unmount());
+    dom.restore();
+  }
+}
+
+function metricValue(root: TestNode, label: string): string {
+  const card = findElements(root, (element) =>
+    element.getAttribute("data-slot") === "inspector-metric" &&
+    findElements(element, (child) =>
+      child.tagName === "SPAN" &&
+      child.getAttribute("class") === "fm-inspector-metric-card__label" &&
+      child.textContent.trim() === label,
+    ).length === 1,
+  )[0];
+  if (!card) throw new Error("Missing Inspector metric " + label);
+
+  const value = findElements(
+    card,
+    (element) =>
+      element.tagName === "SPAN" &&
+      element.getAttribute("class")
+        ?.split(/\s+/)
+        .includes("fm-inspector-metric-card__value") === true,
+  )[0];
+  if (!value) throw new Error("Missing Inspector metric value " + label);
+  return value.textContent.trim();
+}
+
+function findRemoveButtons(root: TestNode): TestElement[] {
+  return findElements(root, (element) =>
+    element.tagName === "BUTTON" && element.textContent.includes("Remove reference"),
+  );
+}
+
+function findRemoveButton(root: TestNode): TestElement {
+  const button = findRemoveButtons(root)[0];
+  if (!button) throw new Error("Missing Remove reference button");
+  return button;
+}
+
