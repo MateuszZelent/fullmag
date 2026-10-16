@@ -221,7 +221,7 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
         request.method() === "GET" &&
         path === "/v2/sessions/current/simulation/solver/status"
       ) {
-        await fulfillJson(route, fdmSolverStatusFixture(fixture));
+        await fulfillJson(route, fdmSolverStatusFixture());
         return;
       }
       if (
@@ -1021,7 +1021,7 @@ function fdmModelReadinessFixture(fixture) {
   };
 }
 
-function fdmSolverStatusFixture(fixture) {
+function fdmSolverStatusFixture() {
   return {
     revision: 0,
     runtime_state: "idle",
