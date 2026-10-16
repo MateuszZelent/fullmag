@@ -15215,6 +15215,95 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 },
             }
 
+        def phase_xy_delta(
+            air30_evidence: dict[str, object],
+            air50_evidence: dict[str, object],
+            dimension: int,
+        ) -> dict[str, object]:
+            def latest_observation(
+                evidence: dict[str, object],
+            ) -> tuple[dict[str, object] | None, int]:
+                observations = evidence.get("generate_phase_observations")
+                if not isinstance(observations, list):
+                    return None, 0
+                matching = [
+                    item
+                    for item in observations
+                    if isinstance(item, dict) and item.get("dimension") == dimension
+                ]
+                latest = matching[-1] if matching else None
+                if latest is None or latest.get("status") != "available":
+                    return None, len(matching)
+                return latest, len(matching)
+
+            try:
+                air30, air30_event_count = latest_observation(air30_evidence)
+                air50, air50_event_count = latest_observation(air50_evidence)
+                if air30 is None or air50 is None:
+                    return {
+                        "status": "unavailable",
+                        "dimension": dimension,
+                        "airbox_hmax_30nm_event_count": air30_event_count,
+                        "airbox_hmax_50nm_event_count": air50_event_count,
+                    }
+
+                air30_plane = air30.get("outer_source_plane_xy")
+                air50_plane = air50.get("outer_source_plane_xy")
+                if not isinstance(air30_plane, dict) or not isinstance(air50_plane, dict):
+                    return {"status": "unavailable", "dimension": dimension}
+                air30_points = air30_plane.get("projected_xy_m")
+                air50_points = air50_plane.get("projected_xy_m")
+                if not isinstance(air30_points, list) or not isinstance(air50_points, list):
+                    return {"status": "unavailable", "dimension": dimension}
+                if any(
+                    not isinstance(point, list) or len(point) != 2
+                    for point in (*air30_points, *air50_points)
+                ):
+                    return {"status": "unavailable", "dimension": dimension}
+
+                air30_xy = {
+                    tuple(float(value) for value in point) for point in air30_points
+                }
+                air50_xy = {
+                    tuple(float(value) for value in point) for point in air50_points
+                }
+                shared_xy = air30_xy & air50_xy
+                air30_only_xy = air30_xy - air50_xy
+                air50_only_xy = air50_xy - air30_xy
+                return {
+                    "status": "available",
+                    "dimension": dimension,
+                    "selection": "last successful generate(dim) call",
+                    "airbox_hmax_30nm": {
+                        "generate_call_index": air30.get("generate_call_index"),
+                        "measured_outer_z_m": air30.get("measured_outer_z_m"),
+                        "gmsh_node_count": air30.get("gmsh_node_count"),
+                        "generate_event_count_for_dimension": air30_event_count,
+                        "outer_source_plane_xy": air30_plane,
+                    },
+                    "airbox_hmax_50nm": {
+                        "generate_call_index": air50.get("generate_call_index"),
+                        "measured_outer_z_m": air50.get("measured_outer_z_m"),
+                        "gmsh_node_count": air50.get("gmsh_node_count"),
+                        "generate_event_count_for_dimension": air50_event_count,
+                        "outer_source_plane_xy": air50_plane,
+                    },
+                    "outer_source_z_delta_m": float(
+                        air50["measured_outer_z_m"]
+                    ) - float(air30["measured_outer_z_m"]),
+                    "shared_xy_count": len(shared_xy),
+                    "air30_only_xy_count": len(air30_only_xy),
+                    "air50_only_xy_count": len(air50_only_xy),
+                    "air30_only_xy_m": [list(point) for point in sorted(air30_only_xy)],
+                    "air50_only_xy_m": [list(point) for point in sorted(air50_only_xy)],
+                }
+            except Exception as error:  # Diagnostics must not change test behavior.
+                return {
+                    "status": "unavailable",
+                    "dimension": dimension,
+                    "reason": f"{type(error).__name__}: {error}",
+                }
+
         def realize(
             geometry: Geometry,
             *,
@@ -15271,17 +15360,86 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 mesh_workflow["per_geometry"] = [
                     {"geometry": geometry.geometry_name, "hmax": owner_hmax}
                 ]
-            mesh, markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
-                geometries=[geometry],
-                hints=fm.FEM(order=1, hmax=hint_hmax),
-                study_universe={
-                    "mode": "manual",
-                    "size": [40e-9, 40e-9, 410e-9],
-                    "center": [0.0, 0.0, 0.0],
-                    "airbox_hmax": airbox_hmax,
-                },
-                mesh_workflow=mesh_workflow,
-            )
+            generation_phase_observations: list[dict[str, object]] = []
+            mesh_generation_patch = contextlib.nullcontext()
+            if geometry.geometry_name == "owner_target_ring":
+                real_generate = gmsh.model.mesh.generate
+                generate_call_count = 0
+
+                def observe_generate(*args, **kwargs):
+                    nonlocal generate_call_count
+                    generate_call_count += 1
+                    dimension_arg = args[0] if args else kwargs.get("dim", 3)
+                    result = real_generate(*args, **kwargs)
+                    try:
+                        dimension = int(dimension_arg)
+                    except (TypeError, ValueError):
+                        return result
+                    if dimension not in (2, 3):
+                        return result
+
+                    observation: dict[str, object] = {
+                        "generate_call_index": generate_call_count,
+                        "dimension": dimension,
+                    }
+                    try:
+                        node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
+                        gmsh_nodes = np.asarray(coordinates, dtype=np.float64).reshape(
+                            -1, 3
+                        )
+                        # The Ring GEO route scales meters by 1.0e6 before Gmsh.
+                        nodes_m = gmsh_nodes / 1.0e6
+                        observation["gmsh_node_count"] = int(len(node_tags))
+                        if len(nodes_m) == 0:
+                            observation["status"] = "no_nodes"
+                        else:
+                            tolerance = 64.0 * np.finfo(float).eps * max(
+                                float(np.max(np.abs(nodes_m))), 8e-9
+                            )
+                            source_z_m = float(np.min(nodes_m[:, 2]))
+                            source_node_ids = np.flatnonzero(
+                                np.abs(nodes_m[:, 2] - source_z_m) <= tolerance
+                            )
+                            observation.update(
+                                {
+                                    "status": "available",
+                                    "gmsh_coordinate_scale_units_per_m": 1.0e6,
+                                    "measured_outer_z_m": source_z_m,
+                                    "coordinate_tolerance_m": tolerance,
+                                    "outer_source_plane_xy": xy_set_evidence(
+                                        nodes_m, source_node_ids
+                                    ),
+                                }
+                            )
+                    except Exception as error:  # Diagnostics must not change test behavior.
+                        observation.update(
+                            {
+                                "status": "unavailable",
+                                "reason": f"{type(error).__name__}: {error}",
+                            }
+                        )
+                    generation_phase_observations.append(observation)
+                    return result
+
+                mesh_generation_patch = patch.object(
+                    gmsh.model.mesh,
+                    "generate",
+                    wraps=observe_generate,
+                )
+            with mesh_generation_patch:
+                mesh, markers, report = (
+                    realize_fem_domain_mesh_asset_from_components_with_report(
+                        geometries=[geometry],
+                        hints=fm.FEM(order=1, hmax=hint_hmax),
+                        study_universe={
+                            "mode": "manual",
+                            "size": [40e-9, 40e-9, 410e-9],
+                            "center": [0.0, 0.0, 0.0],
+                            "airbox_hmax": airbox_hmax,
+                        },
+                        mesh_workflow=mesh_workflow,
+                    )
+                )
             try:
                 evidence = mesh_precedence_evidence(
                     mesh,
@@ -15296,6 +15454,8 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     "status": "unavailable",
                     "reason": f"{type(error).__name__}: {error}",
                 }
+            if geometry.geometry_name == "owner_target_ring":
+                evidence["generate_phase_observations"] = generation_phase_observations
             return body_xy(mesh, markers, geometry), report, evidence
 
         geometries = (
@@ -15348,6 +15508,17 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     "owner_hint10_owner20_air50": far_air_evidence,
                     "manual_owner_constant20_hint10_air50": manual_owner_evidence,
                 }
+                if geometry.geometry_name == "owner_target_ring":
+                    precedence_diagnostic[
+                        "ring_airbox_hmax30nm_vs_hmax50nm_generate_phase_xy_deltas"
+                    ] = {
+                        "after_generate_2": phase_xy_delta(
+                            resolved_evidence, far_air_evidence, 2
+                        ),
+                        "after_generate_3": phase_xy_delta(
+                            resolved_evidence, far_air_evidence, 3
+                        ),
+                    }
                 try:
                     precedence_diagnostic_message = (
                         "mesh body-precedence coordinate diagnostics: "
