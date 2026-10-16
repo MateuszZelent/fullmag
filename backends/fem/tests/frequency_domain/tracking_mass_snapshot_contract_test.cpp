@@ -495,6 +495,8 @@ void check_stub_reports_unavailable_without_handles()
     fullmag_fem_tracking_mass_snapshot_destroy_v1(nullptr);
 }
 
+#endif
+
 } // namespace
 
 int main()
