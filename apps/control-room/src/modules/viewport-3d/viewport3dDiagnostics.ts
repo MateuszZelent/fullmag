@@ -173,7 +173,7 @@ interface Viewport3DInstanceColorAuditStore {
     >;
     totalEvents: number;
   };
-  viewportAckTrace?: unknown[];
+  viewportAckTrace?: unknown;
 }
 
 const instanceColorAuditAttributeIds = new WeakMap<object, number>();
@@ -256,10 +256,6 @@ export function recordViewport3DInstanceColorLifecycleAuditEvent({
     }
     events.push(event);
 
-    ackTrace.push(event);
-    if (ackTrace.length > MAX_INSTANCE_COLOR_AUDIT_EVENTS) {
-      ackTrace.splice(0, ackTrace.length - MAX_INSTANCE_COLOR_AUDIT_EVENTS);
-    }
   } catch {
     // This opt-in browser trace must never affect viewport rendering.
   }

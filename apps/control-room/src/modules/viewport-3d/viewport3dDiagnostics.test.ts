@@ -35,7 +35,7 @@ describe("viewport3dDiagnostics", () => {
         },
         totalEvents: 0,
       },
-      viewportAckTrace: [] as unknown[],
+      viewportAckTrace: [],
     };
   }
 
@@ -82,6 +82,7 @@ describe("viewport3dDiagnostics", () => {
       },
       totalEvents: 513,
     });
+    expect(audit.viewportAckTrace).toEqual([]);
   });
 
   it("uses stable numeric attribute identities without retaining attribute payloads", () => {
