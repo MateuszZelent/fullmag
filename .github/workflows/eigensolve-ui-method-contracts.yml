@@ -64,6 +64,7 @@ on:
       - 'apps/control-room/src/shared/domain/analysis/referenceImport*'
       - 'apps/control-room/src/kernel/visualization/AnalysisResultFieldOverlayIntent*'
       - 'apps/control-room/src/modules/inspector/panels/StudyInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel*'
       - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
@@ -138,6 +139,7 @@ on:
       - 'apps/control-room/src/shared/domain/analysis/referenceImport*'
       - 'apps/control-room/src/kernel/visualization/AnalysisResultFieldOverlayIntent*'
       - 'apps/control-room/src/modules/inspector/panels/StudyInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel*'
       - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
@@ -235,6 +237,7 @@ jobs:
           src/shared/domain/analysis/referenceImport.test.ts
           src/kernel/visualization/AnalysisResultFieldOverlayIntent.test.ts
           src/modules/inspector/panels/StudyInspectorPanelModel.test.ts
+          src/modules/inspector/panels/StudyGlobalAuthoringModel.test.ts
           src/modules/inspector/panels/StudyInspectorPanel.test.tsx
           src/shared/domain/analysis/frequencyDomainChartModels.test.ts
           src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.test.tsx

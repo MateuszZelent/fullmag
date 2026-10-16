@@ -104,11 +104,13 @@ import { ProjectRunsSection } from "./ProjectRunsSection";
 import { ProjectBatchesSection } from "./ProjectBatchesSection";
 
 import {
+  buildStudyGlobalAndStagesMergePatch,
   buildStudyGlobalMergePatch,
   createStudyGlobalDraft,
   isExplicitFdmStudy,
   normalizeDemagRealizationForLane,
   resolveFdmGridPreview,
+  validateStudyAdaptiveExecution,
   validateStudyGlobalDraft,
   type StudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
@@ -1028,8 +1030,9 @@ export function useStudyInspectorPanelController(
       });
       return false;
     }
+    const profileBound = hasStudyExecutionProfile(currentScene.scene);
     if (
-      hasStudyExecutionProfile(currentScene.scene) &&
+      profileBound &&
       hasChangeDeviceStudyStage(currentScene.scene, state.stageDrafts)
     ) {
       dispatch({
@@ -1043,16 +1046,17 @@ export function useStudyInspectorPanelController(
       });
       return false;
     }
+    const committedGlobalDraft = createStudyGlobalDraft(currentScene.scene);
     const localIssues = state.stageDrafts.flatMap((draft, index) =>
       validateStudyStageDraft(draft, {
         activeLane: runtimeStatus?.capabilities.active_lane ?? null,
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
-        backend: model.requested.backend,
-        demagEnabled: state.globalDraft.demagEnabled,
-        device: model.requested.device,
+        backend: committedGlobalDraft.requestedBackend,
+        demagEnabled: committedGlobalDraft.demagEnabled,
+        device: committedGlobalDraft.requestedDevice,
         ...k0ModalReadinessFor(draft),
-        mode: model.requested.mode,
-        precision: state.globalDraft.requestedPrecision,
+        mode: committedGlobalDraft.requestedMode,
+        precision: committedGlobalDraft.requestedPrecision,
       }).map((issue) => ({
         ...issue,
         message: `Stage ${index + 1}: ${issue.message}`,
@@ -1064,7 +1068,12 @@ export function useStudyInspectorPanelController(
         message: `Stage ${issue.index + 1}: ${issue.message}`,
       }),
     );
-    const issues = [...localIssues, ...workflowIssues];
+    const adaptiveIssues = validateStudyAdaptiveExecution(committedGlobalDraft, {
+      studyStageDrafts: state.stageDrafts,
+      activeLane: runtimeStatus?.capabilities.active_lane ?? null,
+      executionProfileBound: profileBound,
+    });
+    const issues = [...localIssues, ...workflowIssues, ...adaptiveIssues];
     const errors = issues.filter((issue) => issue.severity === "error");
     if (errors.length > 0) {
       dispatch({
@@ -1146,7 +1155,9 @@ export function useStudyInspectorPanelController(
       dispatch({ type: "setAuthoringBusy", busy: false });
     }
   };
-  const commitGlobalDraft = async () => {
+  const commitGlobalDraft = async (
+    targetStageDrafts?: readonly StudyStageDraft[],
+  ) => {
     const currentScene = await readAuthoritativeScene();
     if (currentScene === null) {
       dispatch({
@@ -1162,15 +1173,74 @@ export function useStudyInspectorPanelController(
     }
     const baseRevision = currentScene.revision;
     const profileBound = hasStudyExecutionProfile(currentScene.scene);
-    const errors = validateStudyGlobalDraft(state.globalDraft, {
-      studyStages: rawStudyStages(currentScene.scene),
+    const includesStageDrafts = targetStageDrafts !== undefined;
+    const stageDraftsToSubmit = targetStageDrafts ?? [];
+    if (
+      includesStageDrafts &&
+      profileBound &&
+      hasChangeDeviceStudyStage(currentScene.scene, stageDraftsToSubmit)
+    ) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "stages",
+        feedback: {
+          kind: "error",
+          message:
+            "A Change device stage cannot be saved while an execution profile is bound. Remove the stage or clear the profile first.",
+        },
+      });
+      return false;
+    }
+
+    const sessionDiscretization = resolveSessionDiscretization(runtimeStatus);
+    const committedGlobalDraft = createStudyGlobalDraft(currentScene.scene);
+    const globalIssues = validateStudyGlobalDraft(state.globalDraft, {
+      ...(includesStageDrafts
+        ? { studyStageDrafts: stageDraftsToSubmit }
+        : { studyStages: rawStudyStages(currentScene.scene) }),
       activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
       executionProfileBound: profileBound,
       magneticObjectCount: magneticObjectCount(currentScene.scene),
       magneticObjectIds: magneticObjectIds(currentScene.scene),
-      sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
-    }).filter(
+      sessionDiscretization,
+    });
+    const targetBackend = profileBound
+      ? committedGlobalDraft.requestedBackend
+      : state.globalDraft.requestedBackend;
+    const targetDevice = profileBound
+      ? committedGlobalDraft.requestedDevice
+      : state.globalDraft.requestedDevice;
+    const targetMode = profileBound
+      ? committedGlobalDraft.requestedMode
+      : state.globalDraft.requestedMode;
+    const targetPrecision = profileBound
+      ? committedGlobalDraft.requestedPrecision
+      : state.globalDraft.requestedPrecision;
+    const localIssues = includesStageDrafts
+      ? stageDraftsToSubmit.flatMap((draft, index) =>
+          validateStudyStageDraft(draft, {
+            activeLane: runtimeStatus?.capabilities.active_lane ?? null,
+            algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+            backend: targetBackend,
+            demagEnabled: state.globalDraft.demagEnabled,
+            device: targetDevice,
+            ...k0ModalReadinessFor(draft),
+            mode: targetMode,
+            precision: targetPrecision,
+          }).map((issue) => ({
+            ...issue,
+            message: `Stage ${index + 1}: ${issue.message}`,
+          })),
+        )
+      : [];
+    const workflowIssues = includesStageDrafts
+      ? validateStudyWorkflow(stageDraftsToSubmit).map((issue) => ({
+          ...issue,
+          message: `Stage ${issue.index + 1}: ${issue.message}`,
+        }))
+      : [];
+    const errors = [...globalIssues, ...localIssues, ...workflowIssues].filter(
       (issue) => issue.severity === "error",
     );
     if (errors.length > 0) {
@@ -1185,18 +1255,51 @@ export function useStudyInspectorPanelController(
       return false;
     }
 
+    let request: ReturnType<typeof buildStudyGlobalMergePatch>;
+    try {
+      request = includesStageDrafts
+        ? buildStudyGlobalAndStagesMergePatch(
+            state.globalDraft,
+            stageDraftsToSubmit,
+            {
+              baseRevision,
+              executionProfileBound: profileBound,
+              sessionDiscretization,
+              scene: currentScene.scene,
+            },
+          )
+        : buildStudyGlobalMergePatch(state.globalDraft, {
+            baseRevision,
+            executionProfileBound: profileBound,
+            sessionDiscretization,
+          });
+    } catch (error) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "global",
+        feedback: {
+          kind: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : includesStageDrafts
+                ? "Failed to prepare the combined Study transaction."
+                : "Failed to prepare the global Study transaction.",
+        },
+      });
+      return false;
+    }
+
     const mutationContext = createAuthoringMutationContext(currentScene.scene);
     dispatch({ type: "setAuthoringBusy", busy: true });
     try {
       const response = await runAuthoringMutationWithHistory(
         mutationContext,
-        "Edit global study settings",
+        includesStageDrafts
+          ? "Edit global study settings and stages"
+          : "Edit global study settings",
         () => kernel.api.model.commitTransaction(
-          buildStudyGlobalMergePatch(state.globalDraft, {
-            baseRevision,
-            executionProfileBound: profileBound,
-            sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
-          }),
+          request,
           sessionScopeKey ? { sessionScopeKey } : undefined,
         ),
       );
@@ -1210,16 +1313,17 @@ export function useStudyInspectorPanelController(
       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
       const explicitFdm = isExplicitFdmStudy({
-        requestedBackend: profileBound
-          ? null
-          : state.globalDraft.requestedBackend,
-        sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
+        requestedBackend: profileBound ? null : state.globalDraft.requestedBackend,
+        sessionDiscretization,
       });
       if (explicitFdm) {
         invalidateFdmGridResources(kernel.resources, revision);
       }
+      const committedMessage = includesStageDrafts
+        ? `Committed global study settings and ${stageDraftsToSubmit.length} study stage${stageDraftsToSubmit.length === 1 ? "" : "s"}.`
+        : "Committed global study settings.";
       let feedbackKind: "success" | "warning" | "error" = "success";
-      let feedbackMessage = "Committed global study settings.";
+      let feedbackMessage = committedMessage;
       if (explicitFdm) {
         try {
           const result = await runFdmGridRefreshOperation(commandContext, {
@@ -1228,23 +1332,23 @@ export function useStudyInspectorPanelController(
             precondition: { scene_revision: revision },
           });
           if (result.status === "completed") {
-            feedbackMessage = "Committed global study settings. FDM grid replan completed; magnetization was reinitialized from the model.";
+            feedbackMessage = `${committedMessage} FDM grid replan completed; magnetization was reinitialized from the model.`;
           } else if (result.status === "failed") {
             feedbackKind = "error";
-            feedbackMessage =
-              result.message ??
-              "Global study settings were saved, but the FDM grid replan failed.";
+            feedbackMessage = includesStageDrafts
+              ? result.message ?? "Study settings and stages were saved, but the FDM grid replan failed."
+              : result.message ?? "Global study settings were saved, but the FDM grid replan failed.";
           } else {
             feedbackKind = "warning";
-            feedbackMessage =
-              result.message ??
-              "Global study settings were saved. FDM grid replan remains active; see Mesh Jobs.";
+            feedbackMessage = includesStageDrafts
+              ? result.message ?? "Study settings and stages were saved. FDM grid replan remains active; see Mesh Jobs."
+              : result.message ?? "Global study settings were saved. FDM grid replan remains active; see Mesh Jobs.";
           }
         } catch (error) {
           feedbackKind = "warning";
-          feedbackMessage = `Global study settings were saved, but the FDM grid replan could not be submitted: ${
-            error instanceof Error ? error.message : "unknown command error"
-          }`;
+          feedbackMessage = includesStageDrafts
+            ? `Study settings and stages were saved, but the FDM grid replan could not be submitted: ${error instanceof Error ? error.message : "unknown command error"}`
+            : `Global study settings were saved, but the FDM grid replan could not be submitted: ${error instanceof Error ? error.message : "unknown command error"}`;
         }
       }
       if (mutationContext.isCurrentSessionScope() === false) return false;
@@ -1257,6 +1361,7 @@ export function useStudyInspectorPanelController(
         },
       });
       dispatch({ type: "acceptGlobalDraft" });
+      if (includesStageDrafts) dispatch({ type: "acceptStageDrafts" });
       return true;
     } catch (error) {
       if (mutationContext.isCurrentSessionScope() === false) return false;
@@ -1272,8 +1377,9 @@ export function useStudyInspectorPanelController(
           scope: "global",
           feedback: {
             kind: "error",
-            message:
-              "Scene revision conflict. Refetched the canonical scene; the grid draft was preserved for review and retry.",
+            message: includesStageDrafts
+              ? "Scene revision conflict. Refetched the canonical scene; both Study drafts were preserved for review and retry."
+              : "Scene revision conflict. Refetched the canonical scene; the grid draft was preserved for review and retry.",
           },
         });
       } else {
@@ -1285,7 +1391,9 @@ export function useStudyInspectorPanelController(
             message:
               error instanceof Error
                 ? error.message
-                : "Failed to commit global study settings.",
+                : includesStageDrafts
+                  ? "Failed to commit global study settings and stages."
+                  : "Failed to commit global study settings.",
           },
         });
       }
@@ -1488,45 +1596,71 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     [],
   );
   const sceneMagneticObjectIds = magneticObjectIds(scene.data);
-  const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
-    studyStages: rawStudyStages(scene.data),
-    studyStageDrafts: state.stageDrafts,
+  const globalDirty =
+    JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft);
+  const stagesDirty =
+    JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
+  const profileBound =
+    hasStudyExecutionProfile(scene.data) || profileEditState.profileBound;
+  const committedGlobalDraft = createStudyGlobalDraft(scene.data);
+  const validationGlobalDraft = globalDirty
+    ? state.globalDraft
+    : committedGlobalDraft;
+  const globalValidation = validateStudyGlobalDraft(validationGlobalDraft, {
+    studyStages: stagesDirty ? undefined : rawStudyStages(scene.data),
+    studyStageDrafts: stagesDirty ? state.stageDrafts : undefined,
     activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
-    executionProfileBound:
-      hasStudyExecutionProfile(scene.data) || profileEditState.profileBound,
+    executionProfileBound: profileBound,
     magneticObjectCount: sceneMagneticObjectCount,
     magneticObjectIds: sceneMagneticObjectIds,
     sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
   });
   const workflowValidation = validateStudyWorkflow(state.stageDrafts);
+  const stageBackend = globalDirty && !profileBound
+    ? state.globalDraft.requestedBackend
+    : model.requested.backend;
+  const stageDevice = globalDirty && !profileBound
+    ? state.globalDraft.requestedDevice
+    : model.requested.device;
+  const stageMode = globalDirty && !profileBound
+    ? state.globalDraft.requestedMode
+    : model.requested.mode;
+  const stagePrecision = globalDirty && !profileBound
+    ? state.globalDraft.requestedPrecision
+    : model.requested.precision;
   const stageValidation = state.stageDrafts.flatMap((draft, index) => [
     ...validateStudyStageDraft(draft, {
       activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
-      backend: model.requested.backend,
-      demagEnabled: state.globalDraft.demagEnabled,
-      device: model.requested.device,
-      mode: model.requested.mode,
-      precision: state.globalDraft.requestedPrecision,
+      backend: stageBackend,
+      demagEnabled: validationGlobalDraft.demagEnabled,
+      device: stageDevice,
+      mode: stageMode,
+      precision: stagePrecision,
     }),
     ...workflowValidation.flatMap(({ index: issueIndex, message, severity }) =>
       issueIndex === index ? [{ message, severity }] : [],
     ),
   ]);
-  const globalDirty =
-    JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft);
-  const stagesDirty =
-    JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
   const applyInspectorDraft = useCallback(async () => {
     if (profileEditState.dirty) {
       if (globalDirty || stagesDirty) return false;
       return (await profileEditSessionRef.current?.apply()) === true;
     }
-    if (globalDirty && !(await commitGlobalDraft())) return false;
-    if (stagesDirty && !(await commitStageDrafts())) return false;
+    if (globalDirty && stagesDirty) {
+      return commitGlobalDraft(state.stageDrafts);
+    }
+    if (globalDirty) return commitGlobalDraft();
+    if (stagesDirty) return commitStageDrafts();
     return true;
-  }, [commitGlobalDraft, commitStageDrafts, globalDirty, profileEditState.dirty, stagesDirty]);
+  }, [
+    commitGlobalDraft,
+    commitStageDrafts,
+    globalDirty,
+    profileEditState.dirty,
+    stagesDirty,
+  ]);
   const resetInspectorDraft = useCallback(() => {
     dispatch({ type: "revertGlobalDraft" });
     dispatch({ type: "revertStageDrafts" });
@@ -1536,7 +1670,10 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     "staged",
     state.authoringBusy,
     globalDirty || stagesDirty || profileEditState.dirty,
-    ![...globalValidation, ...stageValidation].some(
+    ![
+      ...(globalDirty || stagesDirty ? globalValidation : []),
+      ...(stagesDirty ? stageValidation : []),
+    ].some(
       (issue) => issue.severity === "error",
     ) && profileEditState.valid,
     state.authoringBusy ? "Study changes are being saved." : undefined,
@@ -1635,7 +1772,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
               : null
           }
           commandDisabledReason={commandDisabledReason}
-          demagEnabled={state.globalDraft.demagEnabled}
+          demagEnabled={committedGlobalDraft.demagEnabled}
           executionProfileBound={
             hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
           }

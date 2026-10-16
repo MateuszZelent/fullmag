@@ -4,14 +4,17 @@ import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabi
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 
 import {
+  buildStudyGlobalAndStagesMergePatch,
   buildStudyGlobalMergePatch,
   createStudyGlobalDraft,
   FDM_SINGLE_GRID_MULTI_BODY_REASON,
   isExplicitFdmStudy,
   normalizeDemagRealizationForLane,
   resolveFdmGridPreview,
+  validateStudyAdaptiveExecution,
   validateStudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
+import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
 
 function requireJsonObject(value: JsonValue | undefined): JsonObject {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -681,6 +684,113 @@ describe("StudyGlobalAuthoringModel", () => {
       ...draft.parallelExecution, mode: "serial",
     } }, { studyStages: [{ kind: "frequency_response" }] })
       .filter((issue) => issue.message.startsWith("Adaptive parallel execution"))).toEqual([]);
+  });
+
+  it("validates adaptive execution against the target stage drafts instead of stale scene stages", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem",
+      requested_device: "cpu",
+      parallel_execution: { mode: "adaptive" },
+    } });
+    const targetStages = [
+      createDefaultStudyStageDraft("relax", 0),
+      createDefaultStudyStageDraft("eigenmodes", 1),
+    ];
+    const adaptiveIssues = (issues: ReturnType<typeof validateStudyGlobalDraft>) =>
+      issues.filter((issue) => issue.message.startsWith("Adaptive parallel execution"));
+
+    expect(
+      validateStudyAdaptiveExecution(draft, {
+        studyStages: [{ kind: "frequency_response" }],
+      }),
+    ).not.toEqual([]);
+    expect(
+      validateStudyAdaptiveExecution(draft, {
+        studyStageDrafts: targetStages,
+      }),
+    ).toEqual([]);
+    expect(
+      adaptiveIssues(validateStudyGlobalDraft(draft, {
+        studyStageDrafts: targetStages,
+      })),
+    ).toEqual([]);
+  });
+
+  it("combines global and stage serializers into one revision-fenced transaction", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem",
+      requested_device: "cpu",
+      requested_precision: "double",
+      requested_mode: "strict",
+      parallel_execution: { mode: "adaptive" },
+    } });
+    const stages = [
+      createDefaultStudyStageDraft("relax", 0),
+      createDefaultStudyStageDraft("eigenmodes", 1),
+    ];
+    const request = buildStudyGlobalAndStagesMergePatch(draft, stages, {
+      baseRevision: 42,
+      scene: { study: { stages: [] } },
+    });
+
+    expect(request).toMatchObject({
+      kind: "merge_patch",
+      base_revision: 42,
+    });
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    const study = requireJsonObject(request.merge_patch.study);
+    expect(study.parallel_execution).toMatchObject({ mode: "adaptive" });
+    expect(study.stages).toEqual([
+      expect.objectContaining({ kind: "relax" }),
+      expect.objectContaining({ kind: "eigenmodes" }),
+    ]);
+  });
+
+  it("keeps profile-controlled request fields out of a combined transaction", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem",
+      requested_device: "cpu",
+      parallel_execution: { mode: "adaptive" },
+    } });
+    const request = buildStudyGlobalAndStagesMergePatch(
+      draft,
+      [createDefaultStudyStageDraft("relax", 0)],
+      {
+        baseRevision: 7,
+        executionProfileBound: true,
+        sessionDiscretization: "fem",
+        scene: { study: { stages: [] } },
+      },
+    );
+
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    const study = requireJsonObject(request.merge_patch.study);
+    expect(study).not.toHaveProperty("requested_backend");
+    expect(study).not.toHaveProperty("requested_device");
+    expect(study).toHaveProperty("parallel_execution");
+    expect(study).toHaveProperty("stages");
+  });
+
+  it("retains the canonical-pipeline write guard in a combined transaction", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem",
+      requested_device: "cpu",
+      parallel_execution: { mode: "adaptive" },
+    } });
+
+    expect(() => buildStudyGlobalAndStagesMergePatch(
+      draft,
+      [createDefaultStudyStageDraft("relax", 0)],
+      {
+        baseRevision: 9,
+        scene: {
+          study: {
+            stages: [{ kind: "relax" }],
+            study_pipeline: { version: "study_pipeline.v1", nodes: [] },
+          },
+        },
+      },
+    )).toThrow("Editing a canonical pipeline through the flat-stage editor is not supported");
   });
 
   it("uses the current workflow context rather than a prior eligible preview", () => {

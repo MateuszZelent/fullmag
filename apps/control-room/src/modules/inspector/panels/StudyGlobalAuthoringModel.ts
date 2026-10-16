@@ -7,7 +7,11 @@ import {
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
 
-import { createStudyStageDrafts, type StudyStageDraft } from "./StudyStageAuthoringModel";
+import {
+  buildStudyStagesMergePatch,
+  createStudyStageDrafts,
+  type StudyStageDraft,
+} from "./StudyStageAuthoringModel";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -257,19 +261,48 @@ export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
   };
 }
 
+interface StudyGlobalDraftValidationContext {
+  activeLane?: ActiveLaneCapabilitySnapshot | null;
+  algorithmsAvailable?: readonly string[];
+  executionProfileBound?: boolean;
+  magneticObjectCount?: number;
+  magneticObjectIds?: readonly string[];
+  requestedDiscretization?: string | null;
+  sessionDiscretization?: string | null;
+  studyStages?: readonly unknown[];
+  studyStageDrafts?: readonly StudyStageDraft[];
+}
+
+export function validateStudyAdaptiveExecution(
+  draft: StudyGlobalDraft,
+  capabilities?: Pick<
+    StudyGlobalDraftValidationContext,
+    "activeLane" | "executionProfileBound" | "studyStages" | "studyStageDrafts"
+  >,
+): StudyGlobalDraftValidation[] {
+  if (draft.parallelExecution.mode !== "adaptive") return [];
+
+  const issues: StudyGlobalDraftValidation[] = [];
+  const parallelLane = capabilities?.executionProfileBound
+    ? capabilities.activeLane?.requested
+    : { backend: draft.requestedBackend, device: draft.requestedDevice };
+  if (
+    parallelLane?.backend.trim().toLowerCase() !== "fem" ||
+    parallelLane?.device.trim().toLowerCase() !== "cpu"
+  ) {
+    issues.push({
+      message:
+        "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.",
+      severity: "error",
+    });
+  }
+  validateAdaptiveWorkflow(issues, capabilities?.studyStages, capabilities?.studyStageDrafts);
+  return issues;
+}
+
 export function validateStudyGlobalDraft(
   draft: StudyGlobalDraft,
-  capabilities?: {
-    activeLane?: ActiveLaneCapabilitySnapshot | null;
-    algorithmsAvailable?: readonly string[];
-    executionProfileBound?: boolean;
-    magneticObjectCount?: number;
-    magneticObjectIds?: readonly string[];
-    requestedDiscretization?: string | null;
-    sessionDiscretization?: string | null;
-    studyStages?: readonly unknown[];
-    studyStageDrafts?: readonly StudyStageDraft[];
-  },
+  capabilities?: StudyGlobalDraftValidationContext,
 ): StudyGlobalDraftValidation[] {
   const issues: StudyGlobalDraftValidation[] = [];
   if (capabilities?.activeLane !== undefined) {
@@ -322,23 +355,7 @@ export function validateStudyGlobalDraft(
     }
   }
   validateParallelExecutionDraft(issues, draft.parallelExecution);
-  const parallelLane = capabilities?.executionProfileBound
-    ? capabilities.activeLane?.requested
-    : { backend: draft.requestedBackend, device: draft.requestedDevice };
-  if (
-    draft.parallelExecution.mode === "adaptive" &&
-    (parallelLane?.backend.trim().toLowerCase() !== "fem" ||
-      parallelLane?.device.trim().toLowerCase() !== "cpu")
-  ) {
-    issues.push({
-      message:
-        "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.",
-      severity: "error",
-    });
-  }
-  if (draft.parallelExecution.mode === "adaptive") {
-    validateAdaptiveWorkflow(issues, capabilities?.studyStages, capabilities?.studyStageDrafts);
-  }
+  issues.push(...validateStudyAdaptiveExecution(draft, capabilities));
   validateSolverDraft(issues, draft.solver, draft, capabilities);
   const explicitFdm = isExplicitFdmStudy({
     requestedBackend: capabilities?.executionProfileBound
@@ -495,6 +512,42 @@ export function buildStudyGlobalMergePatch(
       : { base_revision: context.baseRevision }),
     merge_patch: {
       study,
+    },
+  };
+}
+
+function studyFromMergePatch(request: AuthoringTransactionRequest): JsonObject {
+  if (request.kind !== "merge_patch") {
+    throw new Error("Expected a merge-patch authoring transaction.");
+  }
+  const study = request.merge_patch.study;
+  if (study === null || typeof study !== "object" || Array.isArray(study)) {
+    throw new Error("Expected a study object in the authoring merge patch.");
+  }
+  return study;
+}
+
+export function buildStudyGlobalAndStagesMergePatch(
+  draft: StudyGlobalDraft,
+  stages: readonly StudyStageDraft[],
+  context: StudyExecutionDiscretizationContext & { scene?: unknown } = {},
+): AuthoringTransactionRequest {
+  const globalPatch = buildStudyGlobalMergePatch(draft, context);
+  const stagesPatch = buildStudyStagesMergePatch(
+    stages,
+    context.baseRevision,
+    context.scene,
+  );
+  const globalStudy = studyFromMergePatch(globalPatch);
+  const stagesStudy = studyFromMergePatch(stagesPatch);
+
+  return {
+    kind: "merge_patch",
+    ...(context.baseRevision === undefined || context.baseRevision === null
+      ? {}
+      : { base_revision: context.baseRevision }),
+    merge_patch: {
+      study: { ...globalStudy, ...stagesStudy },
     },
   };
 }
