@@ -280,6 +280,73 @@ interface ResolveStudyInspectorModelInput {
 
 type JsonRecord = Record<string, unknown>;
 
+export function resolveStudyConflictFeedbackAfterSceneReset({
+  feedback,
+  feedbackScope,
+  hasPreservedGlobalDraft,
+  hasPreservedStageDrafts,
+  nextAuthoringScopeKey,
+  nextSceneRevision,
+  nextSceneSignature,
+  previousAuthoringScopeKey,
+  previousSceneRevision,
+  previousSceneSignature,
+  preserveOnNextSceneRefresh,
+}: {
+  feedback: {
+    kind: "error" | "success" | "warning";
+    message: string;
+  } | null;
+  feedbackScope: "global" | "stages" | null;
+  hasPreservedGlobalDraft: boolean;
+  hasPreservedStageDrafts: boolean;
+  nextAuthoringScopeKey: string;
+  nextSceneRevision: number | string | null;
+  nextSceneSignature: string;
+  previousAuthoringScopeKey: string | null;
+  previousSceneRevision: number | string | null;
+  previousSceneSignature: string;
+  preserveOnNextSceneRefresh: boolean;
+}): {
+  feedback: {
+    kind: "error" | "success" | "warning";
+    message: string;
+  } | null;
+  feedbackScope: "global" | "stages" | null;
+  preserveOnNextSceneRefresh: false;
+} {
+  const preserveConflictFeedback =
+    preserveOnNextSceneRefresh &&
+    feedback?.kind === "error" &&
+    (previousSceneRevision !== nextSceneRevision ||
+      previousSceneSignature !== nextSceneSignature) &&
+    previousAuthoringScopeKey === nextAuthoringScopeKey &&
+    (hasPreservedGlobalDraft || hasPreservedStageDrafts);
+
+  return {
+    feedback: preserveConflictFeedback ? feedback : null,
+    feedbackScope: preserveConflictFeedback ? feedbackScope : null,
+    preserveOnNextSceneRefresh: false,
+  };
+}
+
+export function preserveStudyDraftOnSceneReset<T>({
+  baseline,
+  draft,
+  nextAuthoringScopeKey,
+  previousAuthoringScopeKey,
+}: {
+  baseline: T;
+  draft: T;
+  nextAuthoringScopeKey: string;
+  previousAuthoringScopeKey: string | null;
+}): T | undefined {
+  return previousAuthoringScopeKey === nextAuthoringScopeKey &&
+    JSON.stringify(draft) !== JSON.stringify(baseline)
+    ? draft
+    : undefined;
+}
+
 export function studySnapshotFromScene(
   scene: SceneResource | null | undefined,
 ): StudyInspectorSnapshot {

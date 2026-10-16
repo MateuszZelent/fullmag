@@ -36,6 +36,10 @@ import {
 } from "./StudyPipelineSection";
 import { createStudyGlobalDraft } from "./StudyGlobalAuthoringModel";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
+import {
+  preserveStudyDraftOnSceneReset,
+  resolveStudyConflictFeedbackAfterSceneReset,
+} from "./StudyInspectorPanelModel";
 
 function testBoundary(overrides: Record<string, string> = {}) {
   return {
@@ -61,6 +65,101 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("preserves a conflict banner only for its same-scope dirty-draft refresh", () => {
+    const conflictFeedback = {
+      kind: "error" as const,
+      message: "The canonical scene changed; drafts need review.",
+    };
+    const clearedFeedback = {
+      feedback: null,
+      feedbackScope: null,
+      preserveOnNextSceneRefresh: false,
+    };
+    const conflictRefresh = {
+      feedback: conflictFeedback,
+      feedbackScope: "global" as const,
+      hasPreservedGlobalDraft: true,
+      hasPreservedStageDrafts: true,
+      nextAuthoringScopeKey: "session-a:client-a",
+      nextSceneRevision: 2,
+      nextSceneSignature: "same-study-payload",
+      previousAuthoringScopeKey: "session-a:client-a",
+      previousSceneRevision: 1,
+      previousSceneSignature: "same-study-payload",
+      preserveOnNextSceneRefresh: true,
+    };
+    expect(
+      resolveStudyConflictFeedbackAfterSceneReset(conflictRefresh),
+    ).toEqual({
+      feedback: conflictFeedback,
+      feedbackScope: "global",
+      preserveOnNextSceneRefresh: false,
+    });
+    expect(
+      resolveStudyConflictFeedbackAfterSceneReset({
+        ...conflictRefresh,
+        hasPreservedGlobalDraft: false,
+        hasPreservedStageDrafts: false,
+      }),
+    ).toEqual(clearedFeedback);
+    expect(
+      resolveStudyConflictFeedbackAfterSceneReset({
+        ...conflictRefresh,
+        nextAuthoringScopeKey: "session-b:client-a",
+      }),
+    ).toEqual(clearedFeedback);
+    expect(
+      resolveStudyConflictFeedbackAfterSceneReset({
+        ...conflictRefresh,
+        feedback: { kind: "success", message: "Retry applied." },
+        nextSceneRevision: 3,
+        preserveOnNextSceneRefresh: false,
+      }),
+    ).toEqual(clearedFeedback);
+    expect(
+      resolveStudyConflictFeedbackAfterSceneReset({
+        ...conflictRefresh,
+        preserveOnNextSceneRefresh: false,
+      }),
+    ).toEqual(clearedFeedback);
+    expect(
+      resolveStudyConflictFeedbackAfterSceneReset({
+        ...conflictRefresh,
+        nextSceneRevision: 1,
+      }),
+    ).toEqual(clearedFeedback);
+  });
+
+  it("preserves dirty drafts only while resetting within the same authoring scope", () => {
+    const dirtyDraft = { field: "draft" };
+    const sameScopeDirtyDraft = {
+      baseline: { field: "canonical" },
+      draft: dirtyDraft,
+      nextAuthoringScopeKey: "session-a:client-a",
+      previousAuthoringScopeKey: "session-a:client-a",
+    };
+    expect(preserveStudyDraftOnSceneReset(sameScopeDirtyDraft)).toBe(
+      dirtyDraft,
+    );
+    expect(
+      preserveStudyDraftOnSceneReset({
+        ...sameScopeDirtyDraft,
+        baseline: dirtyDraft,
+      }),
+    ).toBeUndefined();
+    expect(
+      preserveStudyDraftOnSceneReset({
+        ...sameScopeDirtyDraft,
+        nextAuthoringScopeKey: "session-b:client-a",
+      }),
+    ).toBeUndefined();
+    expect(
+      preserveStudyDraftOnSceneReset({
+        ...sameScopeDirtyDraft,
+        previousAuthoringScopeKey: null,
+      }),
+    ).toBeUndefined();
+  });
   it("rerenders when the runtime advertises a new relaxation algorithm", () => {
     const previous = {
       capabilities: {

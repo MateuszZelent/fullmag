@@ -125,7 +125,9 @@ import {
 } from "./StudyStageAuthoringModel";
 import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
 import {
+  resolveStudyConflictFeedbackAfterSceneReset,
   resolveStudyInspectorModel,
+  preserveStudyDraftOnSceneReset,
   stageExecutionForCurrentScope,
   studySnapshotFromScene,
   type StudyInspectorModel,
@@ -154,6 +156,7 @@ export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 interface StudyInspectorPanelState {
   authoringBusy: boolean;
   authoringDraftsInitialized: boolean;
+  authoringFeedbackPreserveOnNextSceneRefresh: boolean;
   authoringFeedback: {
     kind: "error" | "success" | "warning";
     message: string;
@@ -161,6 +164,7 @@ interface StudyInspectorPanelState {
   authoringFeedbackScope: "global" | "stages" | null;
   baselineGlobalDraft: StudyGlobalDraft;
   baselineStageDrafts: StudyStageDraft[];
+  draftAuthoringScopeKey: string | null;
   draftSceneRevision: number | string | null;
   draftSceneSignature: string;
   globalDraft: StudyGlobalDraft;
@@ -186,6 +190,7 @@ type StudyInspectorPanelAction =
       preserveGlobalDraft?: StudyGlobalDraft;
       preserveStageDrafts?: StudyStageDraft[];
       revision: number | string | null;
+      scopeKey: string;
       selectedIndex: number;
       signature: string;
     }
@@ -211,6 +216,7 @@ type StudyInspectorPanelAction =
   | {
       type: "setAuthoringFeedback";
       feedback: StudyInspectorPanelState["authoringFeedback"];
+      preserveOnNextSceneRefresh?: boolean;
       scope: StudyInspectorPanelState["authoringFeedbackScope"];
     }
   | { type: "setImportDialogOpen"; open: boolean }
@@ -229,10 +235,12 @@ type StudyInspectorPanelAction =
 const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
   authoringBusy: false,
   authoringDraftsInitialized: false,
+  authoringFeedbackPreserveOnNextSceneRefresh: false,
   authoringFeedback: null,
   authoringFeedbackScope: null,
   baselineGlobalDraft: createStudyGlobalDraft(null),
   baselineStageDrafts: [],
+  draftAuthoringScopeKey: null,
   draftSceneRevision: null,
   draftSceneSignature: "",
   globalDraft: createStudyGlobalDraft(null),
@@ -255,22 +263,40 @@ function studyInspectorPanelReducer(
   action: StudyInspectorPanelAction,
 ): StudyInspectorPanelState {
   switch (action.type) {
-    case "resetStageDrafts":
+    case "resetStageDrafts": {
       if (
         state.authoringDraftsInitialized &&
         state.draftSceneRevision === action.revision &&
-        state.draftSceneSignature === action.signature
+        state.draftSceneSignature === action.signature &&
+        state.draftAuthoringScopeKey === action.scopeKey
       ) {
         return state;
       }
+      const nextConflictFeedback = resolveStudyConflictFeedbackAfterSceneReset({
+        feedback: state.authoringFeedback,
+        feedbackScope: state.authoringFeedbackScope,
+        hasPreservedGlobalDraft: action.preserveGlobalDraft !== undefined,
+        hasPreservedStageDrafts: action.preserveStageDrafts !== undefined,
+        nextAuthoringScopeKey: action.scopeKey,
+        nextSceneRevision: action.revision,
+        nextSceneSignature: action.signature,
+        previousAuthoringScopeKey: state.draftAuthoringScopeKey,
+        previousSceneRevision: state.draftSceneRevision,
+        previousSceneSignature: state.draftSceneSignature,
+        preserveOnNextSceneRefresh:
+          state.authoringFeedbackPreserveOnNextSceneRefresh,
+      });
       return {
         ...state,
         authoringBusy: false,
         authoringDraftsInitialized: true,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
+        authoringFeedback: nextConflictFeedback.feedback,
+        authoringFeedbackPreserveOnNextSceneRefresh:
+          nextConflictFeedback.preserveOnNextSceneRefresh,
+        authoringFeedbackScope: nextConflictFeedback.feedbackScope,
         baselineGlobalDraft: action.globalDraft,
         baselineStageDrafts: action.drafts,
+        draftAuthoringScopeKey: action.scopeKey,
         draftSceneRevision: action.revision,
         draftSceneSignature: action.signature,
         globalDraft: action.preserveGlobalDraft ?? action.globalDraft,
@@ -280,6 +306,7 @@ function studyInspectorPanelReducer(
             : clampIndex(state.selectedDraftIndex, action.preserveStageDrafts),
         stageDrafts: action.preserveStageDrafts ?? action.drafts,
       };
+    }
     case "acceptGlobalDraft":
       return { ...state, baselineGlobalDraft: state.globalDraft };
     case "acceptStageDrafts":
@@ -288,6 +315,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         globalDraft: state.baselineGlobalDraft,
       };
@@ -295,6 +323,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         selectedDraftIndex: clampIndex(
           state.selectedDraftIndex,
@@ -306,6 +335,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         globalDraft: { ...state.globalDraft, ...action.patch },
       };
@@ -318,6 +348,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         stageDrafts: state.stageDrafts.map((draft, index) =>
           index === action.index ? { ...draft, ...action.patch } : draft,
@@ -331,6 +362,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         selectedDraftIndex: state.stageDrafts.length,
         stageDrafts: [...state.stageDrafts, draft],
@@ -350,6 +382,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         selectedDraftIndex: action.index + 1,
         stageDrafts,
@@ -362,6 +395,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         selectedDraftIndex: clampIndex(action.index, stageDrafts),
         stageDrafts,
@@ -383,6 +417,7 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: null,
+        authoringFeedbackPreserveOnNextSceneRefresh: false,
         authoringFeedbackScope: null,
         selectedDraftIndex: targetIndex,
         stageDrafts,
@@ -394,6 +429,8 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         authoringFeedback: action.feedback,
+        authoringFeedbackPreserveOnNextSceneRefresh:
+          action.preserveOnNextSceneRefresh === true,
         authoringFeedbackScope: action.scope,
       };
     case "setImportDialogOpen":
@@ -865,15 +902,20 @@ export function useStudyInspectorPanelController(
       type: "resetStageDrafts",
       drafts: stageDrafts,
       globalDraft: createStudyGlobalDraft(scene.data),
-      preserveGlobalDraft:
-        JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft)
-          ? state.globalDraft
-          : undefined,
-      preserveStageDrafts:
-        JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts)
-          ? state.stageDrafts
-          : undefined,
+      preserveGlobalDraft: preserveStudyDraftOnSceneReset({
+        baseline: state.baselineGlobalDraft,
+        draft: state.globalDraft,
+        nextAuthoringScopeKey: authoringScopeKey,
+        previousAuthoringScopeKey: state.draftAuthoringScopeKey,
+      }),
+      preserveStageDrafts: preserveStudyDraftOnSceneReset({
+        baseline: state.baselineStageDrafts,
+        draft: state.stageDrafts,
+        nextAuthoringScopeKey: authoringScopeKey,
+        previousAuthoringScopeKey: state.draftAuthoringScopeKey,
+      }),
       revision: sceneRevision,
+      scopeKey: authoringScopeKey,
       selectedIndex:
         stageDrafts.length === 0
           ? 0
@@ -881,11 +923,13 @@ export function useStudyInspectorPanelController(
       signature: studySignature,
     });
   }, [
+    authoringScopeKey,
     scene.data,
     sceneRevision,
     selectedStageIndex,
     state.baselineGlobalDraft,
     state.baselineStageDrafts,
+    state.draftAuthoringScopeKey,
     state.globalDraft,
     state.stageDrafts,
     studySignature,
@@ -1131,6 +1175,7 @@ export function useStudyInspectorPanelController(
         dispatch({
           type: "setAuthoringFeedback",
           scope: "stages",
+          preserveOnNextSceneRefresh: true,
           feedback: {
             kind: "error",
             message:
@@ -1375,6 +1420,7 @@ export function useStudyInspectorPanelController(
         dispatch({
           type: "setAuthoringFeedback",
           scope: "global",
+          preserveOnNextSceneRefresh: true,
           feedback: {
             kind: "error",
             message: includesStageDrafts
