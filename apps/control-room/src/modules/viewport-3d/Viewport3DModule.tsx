@@ -241,6 +241,18 @@ type Viewport3DAckAuditTraceEntry = {
     sessionEpoch: string | null;
     sessionId: string | null;
   } | null;
+  currentFullBufferActiveAdoptions?: Array<{
+    adoptionSequence: number;
+    carrierId: string;
+    fieldBufferId: string;
+    kind: "surface";
+    resourceKey: string;
+    requestScopeEpoch: string;
+    sessionEpoch: string;
+    sessionId: string;
+    targetId: string;
+    targetKind: string;
+  }>;
   blockReason?: "missing-data-identity" | "no-matching-active-adoption" | null;
   decision?: "send-rendered" | "blocked";
   event: "ack-registration" | "frame-commit" | "surface-adoption";
@@ -323,6 +335,53 @@ function viewportAckAuditCurrentFullBuffer(
     sessionEpoch: identity.sessionEpoch ?? null,
     sessionId: identity.sessionId ?? null,
   } : null;
+}
+
+function viewportAckAuditCurrentFullBufferActiveAdoptions(
+  source: Viewport3DVisualizationDebugSource,
+  registry: Viewport3DRenderAdoptionRegistry,
+  sessionIdentity: SessionResourceIdentity | null,
+): NonNullable<Viewport3DAckAuditTraceEntry["currentFullBufferActiveAdoptions"]> {
+  const identity = source.fullFieldBufferIdentity;
+  const requestScopeEpoch = sessionIdentity?.requestScopeEpoch;
+  if (
+    !identity ||
+    !identity.bufferId ||
+    !identity.resourceKey ||
+    !identity.sessionEpoch ||
+    !identity.sessionId ||
+    !requestScopeEpoch ||
+    sessionIdentity?.sessionEpoch !== identity.sessionEpoch ||
+    sessionIdentity?.sessionId !== identity.sessionId
+  ) {
+    return [];
+  }
+
+  const { bufferId, resourceKey, sessionEpoch, sessionId } = identity;
+
+  return source.targets.flatMap(({ target }) => {
+    if (target.kind !== "object") return [];
+    const receipt = registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: bufferId,
+      requestScopeEpoch,
+      resourceKey,
+      sessionEpoch,
+      sessionId,
+      targetId: target.id,
+    });
+    return receipt ? [{
+      adoptionSequence: receipt.adoptionSequence,
+      carrierId: receipt.carrierId,
+      fieldBufferId: bufferId,
+      kind: "surface" as const,
+      resourceKey,
+      requestScopeEpoch,
+      sessionEpoch,
+      sessionId,
+      targetId: receipt.targetId,
+      targetKind: target.kind,
+    }] : [];
+  });
 }
 
 function viewportAckAuditLatestAdoption(
@@ -2527,6 +2586,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         enabled: clientReady && !visualizationError,
         event: "frame-commit",
         hasActiveAdoption,
+        currentFullBufferActiveAdoptions: viewportAckAuditCurrentFullBufferActiveAdoptions(
+          visualizationDebugSource,
+          visualizationDebugAdoptionRegistry,
+          sessionIdentity,
+        ),
         latestActiveAdoption: viewportAckAuditLatestAdoption(
           visualizationDebugAdoptionRegistry,
           sessionIdentity,

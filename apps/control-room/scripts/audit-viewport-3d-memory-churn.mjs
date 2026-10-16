@@ -43,6 +43,7 @@ const QUANTITY_SEQUENCE = Array.from(
   (_, index) => ["m", "H_eff", "H_demag", "H_ex"][index % 4],
 );
 const WARM_QUANTITIES = ["m", "H_eff", "H_demag", "H_ex"];
+const FDM_READY_OBJECT_TARGET_ID = "object:fdm-ready-box";
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
 const injectDroppedPublication =
@@ -244,6 +245,7 @@ try {
     page,
     initialQuantityId,
     initialFullFieldResponse.etag,
+    FDM_READY_OBJECT_TARGET_ID,
   );
 
   auditLog("reading baseline diagnostics");
@@ -563,7 +565,12 @@ async function assertCanvasHasFidelity(page) {
   return sample;
 }
 
-async function assertInitialFdmFieldAdoption(page, quantityId, payloadEtag) {
+async function assertInitialFdmFieldAdoption(
+  page,
+  quantityId,
+  payloadEtag,
+  expectedObjectTargetId,
+) {
   let trace = [];
   let adoption = null;
   let lastCheck = null;
@@ -574,7 +581,12 @@ async function assertInitialFdmFieldAdoption(page, quantityId, payloadEtag) {
           window.__FM_VIEWPORT_BROWSER_AUDIT__?.viewportAckTrace?.slice(-512) ?? [],
         );
         try {
-          adoption = resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag);
+          adoption = resolveInitialFdmFieldAdoption(
+            trace,
+            quantityId,
+            payloadEtag,
+            expectedObjectTargetId,
+          );
           lastCheck = null;
           return true;
         } catch (error) {
@@ -594,7 +606,12 @@ async function assertInitialFdmFieldAdoption(page, quantityId, payloadEtag) {
   return adoption;
 }
 
-function resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag) {
+function resolveInitialFdmFieldAdoption(
+  trace,
+  quantityId,
+  payloadEtag,
+  expectedObjectTargetId,
+) {
   if (!Array.isArray(trace) || trace.length === 0) {
     throw new Error("The browser acknowledgement trace is empty.");
   }
@@ -647,7 +664,6 @@ function resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag) {
   if (
     !frame.requestScopeEpoch ||
     !frame.latestActiveAdoption.requestScopeEpoch ||
-    receipt.fieldBufferId !== identity.fieldBufferId ||
     receipt.resourceKey !== identity.resourceKey ||
     receipt.sessionId !== identity.sessionId ||
     receipt.sessionEpoch !== identity.sessionEpoch ||
@@ -655,6 +671,26 @@ function resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag) {
   ) {
     throw new Error(
       `FDM field ${quantityId} full buffer did not have a matching active adoption receipt: ${JSON.stringify(receipt)}.`,
+    );
+  }
+
+  const activeObjectAdoption = Array.isArray(frame.currentFullBufferActiveAdoptions)
+    ? frame.currentFullBufferActiveAdoptions.find((adoption) => (
+        adoption?.targetKind === "object" &&
+        adoption.targetId === expectedObjectTargetId &&
+        adoption.kind === "surface" &&
+        adoption.fieldBufferId === identity.fieldBufferId &&
+        adoption.resourceKey === identity.resourceKey &&
+        adoption.sessionId === identity.sessionId &&
+        adoption.sessionEpoch === identity.sessionEpoch &&
+        adoption.requestScopeEpoch === frame.requestScopeEpoch &&
+        Boolean(adoption.targetId) &&
+        Boolean(adoption.carrierId)
+      ))
+    : null;
+  if (!activeObjectAdoption) {
+    throw new Error(
+      `FDM field ${quantityId} current full-field buffer had no active object surface adoption: ${JSON.stringify(frame.currentFullBufferActiveAdoptions ?? null)}.`,
     );
   }
 
@@ -667,7 +703,9 @@ function resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag) {
       adoption.resourceKey === identity.resourceKey &&
       adoption.sessionId === identity.sessionId &&
       adoption.sessionEpoch === identity.sessionEpoch &&
-      adoption.requestScopeEpoch === frame.requestScopeEpoch
+      adoption.requestScopeEpoch === frame.requestScopeEpoch &&
+      adoption.carrierId === activeObjectAdoption.carrierId &&
+      (!adoption.targetId || adoption.targetId === activeObjectAdoption.targetId)
     );
   });
   if (!surfaceEvent) {
@@ -682,6 +720,8 @@ function resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag) {
     resourceKey: identity.resourceKey,
     sessionEpoch: identity.sessionEpoch,
     sessionId: identity.sessionId,
+    activeObjectAdoption,
+    latestActiveAdoption: receipt,
     surfaceAdoption: surfaceEvent.surfaceAdoption,
   };
 }

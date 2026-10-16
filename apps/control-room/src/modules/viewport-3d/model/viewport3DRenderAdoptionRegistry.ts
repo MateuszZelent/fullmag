@@ -117,6 +117,14 @@ export interface Viewport3DRenderAdoptionRegistry {
     sessionEpoch: string;
     sessionId: string;
   }): boolean;
+  findActiveSurfaceAdoptionForTarget(input: {
+    fieldBufferId: string;
+    requestScopeEpoch: string;
+    resourceKey: string;
+    sessionEpoch: string;
+    sessionId: string;
+    targetId: string;
+  }): (Viewport3DRenderAdoptionReceipt & { kind: "surface" }) | null;
   registerCarrierAdoptionReplay(
     carrierId: string,
     replay: () => void,
@@ -445,6 +453,32 @@ export function createViewport3DRenderAdoptionRegistry({
         }
       }
       return false;
+    },
+    findActiveSurfaceAdoptionForTarget({
+      fieldBufferId,
+      requestScopeEpoch,
+      resourceKey,
+      sessionEpoch,
+      sessionId,
+      targetId,
+    }) {
+      for (const owners of activePasses.values()) {
+        for (const owned of owners.values()) {
+          const receipt = owned.receipt;
+          if (
+            receipt.kind === "surface" &&
+            ownerTargetIds(owned).includes(targetId) &&
+            receipt.fieldBufferId === fieldBufferId &&
+            receipt.resourceKey === resourceKey &&
+            receipt.requestScopeEpoch === requestScopeEpoch &&
+            receipt.sessionEpoch === sessionEpoch &&
+            receipt.sessionId === sessionId
+          ) {
+            return { ...receipt, kind: "surface", targetId };
+          }
+        }
+      }
+      return null;
     },
     registerCarrierAdoptionReplay(carrierId, replay) {
       const replays = replaysByCarrier.get(carrierId) ?? new Set();

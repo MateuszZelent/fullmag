@@ -327,6 +327,147 @@ describe("viewport3DRenderAdoptionRegistry", () => {
     })).toBe(true);
   });
 
+  it("finds the active full-field surface on an object target despite a newer region receipt", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    const sessionIdentity = {
+      requestScopeEpoch: "api:scope-3",
+      sessionEpoch: "session-3@1000",
+      sessionId: "session-3",
+    };
+    registry.setSessionIdentity(sessionIdentity);
+    registry.setCarrierTargets(new Map([
+      ["fdm-domain", ["object:box-a"]],
+      ["fdm-region-body", ["region:body"]],
+    ]));
+    registry.retainDemand("object:box-a");
+    registry.retainDemand("region:body");
+    const shared = {
+      byteLength: 96,
+      resourceKey: "field-vector:H_eff:full",
+      sessionIdentity,
+    };
+    registry.recordSurfaceAdoption({
+      ...shared,
+      carrierId: "fdm-domain",
+      fieldBufferId: "full-field-buffer",
+      ownerId: "object-surface",
+      scalarBufferKey: "object-colors",
+    });
+    registry.recordSurfaceAdoption({
+      ...shared,
+      carrierId: "fdm-region-body",
+      fieldBufferId: "region-field-buffer",
+      ownerId: "region-surface",
+      scalarBufferKey: "region-colors",
+    });
+
+    expect(registry.latestActiveAdoption(sessionIdentity)).toMatchObject({
+      fieldBufferId: "region-field-buffer",
+      targetId: "region:body",
+    });
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "full-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      targetId: "object:box-a",
+    })).toMatchObject({
+      fieldBufferId: "full-field-buffer",
+      kind: "surface",
+      requestScopeEpoch: "api:scope-3",
+      targetId: "object:box-a",
+    });
+
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "other-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      targetId: "object:box-a",
+    })).toBeNull();
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "full-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: "other-session",
+      targetId: "object:box-a",
+    })).toBeNull();
+
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "full-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      targetId: "region:body",
+    })).toBeNull();
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "full-field-buffer",
+      requestScopeEpoch: "api:scope-other",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      targetId: "object:box-a",
+    })).toBeNull();
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "full-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: "field-vector:H_ex:full",
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      targetId: "object:box-a",
+    })).toBeNull();
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "full-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: "session-3@stale",
+      sessionId: sessionIdentity.sessionId,
+      targetId: "object:box-a",
+    })).toBeNull();
+
+    registry.clearAdoption("object-surface", {
+      byteLength: 96,
+      carrierId: "fdm-domain",
+      fieldBufferId: "full-field-buffer",
+      kind: "surface",
+      requestScopeEpoch: sessionIdentity.requestScopeEpoch,
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      scalarBufferKey: "object-colors",
+      vectorBuildKey: null,
+    });
+
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "full-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      targetId: "object:box-a",
+    })).toBeNull();
+    expect(registry.findActiveSurfaceAdoptionForTarget({
+      fieldBufferId: "region-field-buffer",
+      requestScopeEpoch: "api:scope-3",
+      resourceKey: shared.resourceKey,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+      targetId: "region:body",
+    })).toMatchObject({
+      fieldBufferId: "region-field-buffer",
+      kind: "surface",
+      targetId: "region:body",
+    });
+    expect(registry.latestActiveAdoption(sessionIdentity)).toMatchObject({
+      fieldBufferId: "region-field-buffer",
+      targetId: "region:body",
+    });
+  });
+
   it("does not let a stale buffer adoption satisfy a newer data revision", () => {
     const registry = createViewport3DRenderAdoptionRegistry();
     registry.setSessionIdentity({ sessionEpoch: "epoch-1", sessionId: "session-1" });
