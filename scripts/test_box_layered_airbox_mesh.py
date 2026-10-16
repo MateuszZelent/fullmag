@@ -21,6 +21,12 @@ _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M = 5e-9 + 2e-6
 _MAX_GMSH_DIAGNOSTIC_ITEMS = 128
 _MAX_BODY_XY_DIAGNOSTIC_BYTES = 64 * 1024
 _MAX_GMSH_ELEMENT_TYPE_DIAGNOSTIC_ENTRIES = 16
+_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES = 64
+_MAX_GMSH_HORIZONTAL_PLANE_SAMPLE_POINTS = 8
+_MAX_GMSH_HORIZONTAL_SIGNATURE_NODES = 100_000
+_MAX_GMSH_HORIZONTAL_SIGNATURE_ELEMENTS = 200_000
+_GMSH_MODEL_UNITS_PER_METER = 1.0e6
+_GMSH_HORIZONTAL_Z_TOLERANCE = 1.0e-6
 
 
 def _diagnostic_value(value):
@@ -79,16 +85,485 @@ def _gmsh_element_type_counts(gmsh):
     return dimensions
 
 
-def _observe_subdivision_types(gmsh, subdivide, destination):
-    """Observe counts around the existing converter and preserve its behavior/errors."""
+def _sha256_json(value):
+    encoded = json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _normalized_plane_mesh_signature(node_coordinates, elements, bbox):
+    """Hash bounded plane coordinates and connectivity without using Gmsh node IDs."""
+    x_span = float(bbox[3] - bbox[0])
+    y_span = float(bbox[4] - bbox[1])
+
+    def normalized_xy(point):
+        x, y = float(point[0]), float(point[1])
+        return (
+            round((x - float(bbox[0])) / x_span, 12) if x_span > 0.0 else 0.0,
+            round((y - float(bbox[1])) / y_span, 12) if y_span > 0.0 else 0.0,
+        )
+
+    if not node_coordinates:
+        return {
+            "node_count": 0,
+            "element_count": len(elements),
+            "normalized_xy_sha256": "not-computed-empty-surface",
+            "normalized_xy_sample": [],
+            "connectivity_coordinate_index_sha256": "not-computed-empty-surface",
+            "connectivity_signature_status": "empty surface node capture",
+        }
+    xy_by_node = {
+        int(node_tag): normalized_xy(coordinates)
+        for node_tag, coordinates in node_coordinates.items()
+    }
+    unique_xy = sorted(set(xy_by_node.values()))
+    result = {
+        "node_count": len(node_coordinates),
+        "element_count": len(elements),
+        "normalized_xy_sha256": None,
+        "normalized_xy_sample": [list(point) for point in unique_xy[:_MAX_GMSH_HORIZONTAL_PLANE_SAMPLE_POINTS]],
+        "connectivity_coordinate_index_sha256": None,
+        "connectivity_signature_status": "available",
+    }
+    if len(node_coordinates) > _MAX_GMSH_HORIZONTAL_SIGNATURE_NODES:
+        result["normalized_xy_sha256"] = "not-computed-node-limit"
+        result["connectivity_coordinate_index_sha256"] = "not-computed-node-limit"
+        result["connectivity_signature_status"] = "node limit exceeded"
+        return result
+
+    result["normalized_xy_sha256"] = _sha256_json(unique_xy)
+    if len(elements) > _MAX_GMSH_HORIZONTAL_SIGNATURE_ELEMENTS:
+        result["connectivity_coordinate_index_sha256"] = "not-computed-element-limit"
+        result["connectivity_signature_status"] = "element limit exceeded"
+        return result
+
+    coordinate_index = {point: index for index, point in enumerate(unique_xy)}
+    element_signatures = []
+    for element_type, node_tags in elements:
+        try:
+            indices = sorted(coordinate_index[xy_by_node[int(node_tag)]] for node_tag in node_tags)
+        except KeyError:
+            result["connectivity_coordinate_index_sha256"] = "not-computed-missing-node-coordinate"
+            result["connectivity_signature_status"] = "element node missing from surface node capture"
+            return result
+        element_signatures.append((int(element_type), indices))
+    element_signatures.sort()
+    result["connectivity_coordinate_index_sha256"] = _sha256_json(element_signatures)
+    return result
+
+
+def _gmsh_surface_mesh_capture(gmsh, surface_tag):
+    """Capture one horizontal surface without retaining or logging Gmsh IDs in its hash."""
+    model = gmsh.model
+    bbox = [float(value) for value in model.getBoundingBox(2, int(surface_tag))]
+    node_tags, raw_coordinates, _parametric_coordinates = model.mesh.getNodes(
+        2, int(surface_tag), True, False,
+    )
+    coordinates = np.asarray(raw_coordinates, dtype=float).reshape(-1, 3)
+    if len(node_tags) != len(coordinates):
+        raise ValueError("surface node tags and coordinates have different lengths")
+    node_coordinates = {
+        int(node_tag): tuple(float(value) for value in point)
+        for node_tag, point in zip(node_tags, coordinates, strict=True)
+    }
+
+    element_types, element_tags, raw_element_nodes = model.mesh.getElements(2, int(surface_tag))
+    elements = []
+    element_type_counts = []
+    for element_type, tags, raw_nodes in zip(
+        element_types, element_tags, raw_element_nodes, strict=True,
+    ):
+        element_count = len(tags)
+        flat_nodes = np.asarray(raw_nodes, dtype=np.int64)
+        if not element_count:
+            continue
+        if flat_nodes.size % element_count:
+            raise ValueError("surface element connectivity has an invalid width")
+        width = int(flat_nodes.size // element_count)
+        if width <= 0:
+            raise ValueError("surface element connectivity is empty")
+        element_type_counts.append({
+            "gmsh_element_type": int(element_type),
+            "count": int(element_count),
+            "nodes_per_element": width,
+        })
+        elements.extend(
+            (int(element_type), tuple(int(node_tag) for node_tag in row))
+            for row in flat_nodes.reshape(element_count, width)
+        )
+
+    signature = _normalized_plane_mesh_signature(node_coordinates, elements, bbox)
+    record = {
+        "entity_tag": int(surface_tag),
+        "z_model_units": 0.5 * (bbox[2] + bbox[5]),
+        "z_m": 0.5 * (bbox[2] + bbox[5]) / _GMSH_MODEL_UNITS_PER_METER,
+        "bbox_gmsh_model_units": bbox,
+        "bbox_m": [value / _GMSH_MODEL_UNITS_PER_METER for value in bbox],
+        "node_count": signature["node_count"],
+        "element_count": signature["element_count"],
+        "surface_element_types": element_type_counts,
+        "normalized_xy_sha256": signature["normalized_xy_sha256"],
+        "normalized_xy_sample": signature["normalized_xy_sample"],
+        "connectivity_coordinate_index_sha256": signature[
+            "connectivity_coordinate_index_sha256"
+        ],
+        "connectivity_signature_status": signature["connectivity_signature_status"],
+    }
+    return record, node_coordinates, elements
+
+
+def _horizontal_plane_group_capture(surface_captures):
+    records = [capture[0] for capture in surface_captures]
+    bboxes = [record["bbox_gmsh_model_units"] for record in records]
+    bbox = [
+        min(values[index] for values in bboxes) if index < 3
+        else max(values[index] for values in bboxes)
+        for index in range(6)
+    ]
+    node_coordinates = {}
+    elements = []
+    for _record, surface_nodes, surface_elements in surface_captures:
+        node_coordinates.update(surface_nodes)
+        elements.extend(surface_elements)
+    signature = _normalized_plane_mesh_signature(node_coordinates, elements, bbox)
+    z_model_units = sum(record["z_model_units"] for record in records) / len(records)
+    element_type_counts = {}
+    for record in records:
+        for entry in record["surface_element_types"]:
+            element_type = int(entry["gmsh_element_type"])
+            element_type_counts[element_type] = (
+                element_type_counts.get(element_type, 0) + int(entry["count"])
+            )
+    return {
+        "z_model_units": z_model_units,
+        "z_m": z_model_units / _GMSH_MODEL_UNITS_PER_METER,
+        "surface_count": len(records),
+        "surface_entity_tags": [
+            record["entity_tag"] for record in records[:_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES]
+        ],
+        "surface_entity_tags_truncated": len(records) > _MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES,
+        "bbox_gmsh_model_units": bbox,
+        "bbox_m": [value / _GMSH_MODEL_UNITS_PER_METER for value in bbox],
+        "node_count": signature["node_count"],
+        "element_count": signature["element_count"],
+        "surface_element_types": [
+            {"gmsh_element_type": element_type, "count": count}
+            for element_type, count in sorted(element_type_counts.items())
+        ],
+        "normalized_xy_sha256": signature["normalized_xy_sha256"],
+        "normalized_xy_sample": signature["normalized_xy_sample"],
+        "connectivity_coordinate_index_sha256": signature[
+            "connectivity_coordinate_index_sha256"
+        ],
+        "connectivity_signature_status": signature["connectivity_signature_status"],
+        "surface_entities": records[:_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES],
+        "surface_entities_truncated": len(records) > _MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES,
+    }
+
+
+def _group_horizontal_surface_captures(surface_captures):
+    groups = []
+    for capture in sorted(surface_captures, key=lambda item: (item[0]["z_model_units"], item[0]["entity_tag"])):
+        z_model_units = capture[0]["z_model_units"]
+        group = next(
+            (
+                candidate for candidate in groups
+                if abs(candidate[0][0]["z_model_units"] - z_model_units)
+                <= _GMSH_HORIZONTAL_Z_TOLERANCE
+            ),
+            None,
+        )
+        if group is None:
+            group = []
+            groups.append(group)
+        group.append(capture)
+    return [_horizontal_plane_group_capture(group) for group in groups]
+
+
+def _gmsh_horizontal_plane_mesh_snapshot(gmsh, phase):
+    """Trace only the outer source plane and body planes around prism subdivision."""
+    snapshot = {
+        "phase": phase,
+        "pointwise_field_values_evaluated": False,
+        "coordinate_units": "Gmsh model units are meters * 1e6; reported _m fields are SI",
+        "connectivity_identity": "sorted coordinate indices, never Gmsh node IDs",
+        "air_planes_observed": "only the source outer-air zmin plane; other air planes omitted",
+        "physical_volume_groups": [],
+        "source_outer_air_planes": [],
+        "body_horizontal_planes": [],
+        "source_to_body_hash_comparisons": [],
+    }
+    try:
+        model = gmsh.model
+        physical_groups = {}
+        for dimension, physical_tag in model.getPhysicalGroups():
+            dimension, physical_tag = int(dimension), int(physical_tag)
+            if dimension != 3:
+                continue
+            name = str(model.getPhysicalName(dimension, physical_tag))
+            if name not in ("magnetic", "air"):
+                continue
+            entity_tags = sorted(
+                int(tag) for tag in model.getEntitiesForPhysicalGroup(dimension, physical_tag)
+            )
+            physical_groups[name] = {
+                "physical_tag": physical_tag,
+                "entity_count": len(entity_tags),
+                "entity_tags": entity_tags[:_MAX_GMSH_DIAGNOSTIC_ITEMS],
+                "entity_tags_truncated": len(entity_tags) > _MAX_GMSH_DIAGNOSTIC_ITEMS,
+                "_all_entity_tags": entity_tags,
+            }
+        snapshot["physical_volume_groups"] = [
+            {
+                "name": name,
+                **{
+                    key: value for key, value in physical_groups[name].items()
+                    if key != "_all_entity_tags"
+                },
+            }
+            for name in ("magnetic", "air") if name in physical_groups
+        ]
+        body_volume_tags = set(
+            physical_groups.get("magnetic", {}).get("_all_entity_tags", [])
+        )
+        air_volume_tags = set(physical_groups.get("air", {}).get("_all_entity_tags", []))
+
+        body_surface_parents = {}
+        for volume_tag in sorted(body_volume_tags):
+            boundary = model.getBoundary(
+                [(3, volume_tag)], combined=False, oriented=False,
+            )
+            for dimension, signed_surface_tag in boundary:
+                if int(dimension) == 2:
+                    surface_tag = abs(int(signed_surface_tag))
+                    body_surface_parents.setdefault(surface_tag, set()).add(volume_tag)
+
+        air_volume_bboxes = {
+            volume_tag: [float(value) for value in model.getBoundingBox(3, volume_tag)]
+            for volume_tag in air_volume_tags
+        }
+        air_min_z = min((bbox[2] for bbox in air_volume_bboxes.values()), default=None)
+        source_air_volume_tags = {
+            volume_tag for volume_tag, bbox in air_volume_bboxes.items()
+            if air_min_z is not None
+            and abs(bbox[2] - air_min_z) <= _GMSH_HORIZONTAL_Z_TOLERANCE
+        }
+
+        def capture_horizontal_surface(surface_tag):
+            bbox = [float(value) for value in model.getBoundingBox(2, int(surface_tag))]
+            if abs(bbox[5] - bbox[2]) > _GMSH_HORIZONTAL_Z_TOLERANCE:
+                return None
+            return _gmsh_surface_mesh_capture(gmsh, int(surface_tag))
+
+        source_captures = []
+        source_surface_parent_air_tags = {}
+        if air_min_z is not None:
+            for volume_tag in sorted(source_air_volume_tags):
+                boundary = model.getBoundary(
+                    [(3, volume_tag)], combined=False, oriented=False,
+                )
+                for dimension, signed_surface_tag in boundary:
+                    if int(dimension) != 2:
+                        continue
+                    surface_tag = abs(int(signed_surface_tag))
+                    capture = capture_horizontal_surface(surface_tag)
+                    if capture is None:
+                        continue
+                    if abs(capture[0]["z_model_units"] - air_min_z) <= _GMSH_HORIZONTAL_Z_TOLERANCE:
+                        source_surface_parent_air_tags.setdefault(surface_tag, set()).add(volume_tag)
+                        if all(existing[0]["entity_tag"] != surface_tag for existing in source_captures):
+                            source_captures.append(capture)
+        body_captures = []
+        for surface_tag in sorted(body_surface_parents):
+            capture = capture_horizontal_surface(surface_tag)
+            if capture is not None:
+                body_captures.append(capture)
+
+        source_planes = _group_horizontal_surface_captures(source_captures)
+        body_planes = _group_horizontal_surface_captures(body_captures)
+        snapshot["source_outer_air_planes"] = source_planes[:_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES]
+        snapshot["body_horizontal_planes"] = body_planes[:_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES]
+        snapshot["source_outer_air_plane_count"] = len(source_planes)
+        snapshot["source_outer_air_planes_truncated"] = (
+            len(source_planes) > _MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES
+        )
+        snapshot["body_horizontal_plane_count"] = len(body_planes)
+        snapshot["body_horizontal_planes_truncated"] = (
+            len(body_planes) > _MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES
+        )
+        source_surface_tags = {capture[0]["entity_tag"] for capture in source_captures}
+        source_parent_volume_tags = {
+            volume_tag
+            for surface_tag in source_surface_tags
+            for volume_tag in source_surface_parent_air_tags.get(surface_tag, set())
+        }
+        source_body_surface_tags = sorted(source_surface_tags & set(body_surface_parents))
+        source_parent_body_tags = sorted({
+            volume_tag
+            for surface_tag in source_body_surface_tags
+            for volume_tag in body_surface_parents.get(surface_tag, set())
+        })
+        snapshot["source_surface_parent_air_volume_tags"] = sorted(source_parent_volume_tags)[
+            :_MAX_GMSH_DIAGNOSTIC_ITEMS
+        ]
+        snapshot["source_surface_parent_body_volume_tags"] = source_parent_body_tags
+        snapshot["source_surface_shared_with_body_boundary_tags"] = source_body_surface_tags
+        snapshot["source_surface_outside_body_volume_group"] = bool(source_surface_tags) and not bool(
+            source_parent_body_tags
+        )
+        snapshot["source_surface_outside_body_boundary"] = bool(source_surface_tags) and not bool(
+            source_body_surface_tags
+        )
+        snapshot["source_surface_parent_air_volume_tags_truncated"] = (
+            len(source_parent_volume_tags) > _MAX_GMSH_DIAGNOSTIC_ITEMS
+        )
+        comparisons = []
+        for source_plane in source_planes:
+            for body_plane in body_planes:
+                source_bbox = source_plane["bbox_gmsh_model_units"]
+                body_bbox = body_plane["bbox_gmsh_model_units"]
+                comparisons.append({
+                    "source_z_m": source_plane["z_m"],
+                    "body_z_m": body_plane["z_m"],
+                    "source_entity_tags": source_plane["surface_entity_tags"],
+                    "body_entity_tags": body_plane["surface_entity_tags"],
+                    "same_xy_bbox": all(
+                        abs(source_bbox[index] - body_bbox[index])
+                        <= _GMSH_HORIZONTAL_Z_TOLERANCE
+                        for index in (0, 1, 3, 4)
+                    ),
+                    "same_normalized_xy_sha256": (
+                        source_plane["normalized_xy_sha256"]
+                        == body_plane["normalized_xy_sha256"]
+                        if all(
+                            isinstance(digest, str)
+                            and len(digest) == 64
+                            and all(character in "0123456789abcdef" for character in digest)
+                            for digest in (
+                                source_plane["normalized_xy_sha256"],
+                                body_plane["normalized_xy_sha256"],
+                            )
+                        ) else None
+                    ),
+                    "same_connectivity_coordinate_index_sha256": (
+                        source_plane["connectivity_coordinate_index_sha256"]
+                        == body_plane["connectivity_coordinate_index_sha256"]
+                        if all(
+                            isinstance(digest, str)
+                            and len(digest) == 64
+                            and all(character in "0123456789abcdef" for character in digest)
+                            for digest in (
+                                source_plane["connectivity_coordinate_index_sha256"],
+                                body_plane["connectivity_coordinate_index_sha256"],
+                            )
+                        ) else None
+                    ),
+                })
+        snapshot["source_to_body_hash_comparisons"] = comparisons[
+            :_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES
+        ]
+        snapshot["source_to_body_hash_comparisons_truncated"] = (
+            len(comparisons) > _MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES
+        )
+        if "magnetic" not in physical_groups or "air" not in physical_groups:
+            snapshot["capture_error"] = "physical volume groups magnetic/air not both present"
+    except Exception as error:
+        snapshot["capture_error"] = f"{type(error).__name__}: {str(error)[:240]}"
+    return snapshot
+
+
+def _horizontal_plane_trace_summary(conversion_snapshot):
+    """Retain the plane hashes if surrounding Gmsh diagnostics need truncation."""
+    plane_fields = (
+        "z_model_units",
+        "z_m",
+        "surface_count",
+        "surface_entity_tags",
+        "surface_entity_tags_truncated",
+        "bbox_gmsh_model_units",
+        "bbox_m",
+        "node_count",
+        "element_count",
+        "surface_element_types",
+        "normalized_xy_sha256",
+        "normalized_xy_sample",
+        "connectivity_coordinate_index_sha256",
+        "connectivity_signature_status",
+    )
+
+    def summarize_planes(planes):
+        return [
+            {key: plane.get(key) for key in plane_fields}
+            for plane in planes[:_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES]
+        ]
+
+    comparison_fields = (
+        "source_z_m",
+        "body_z_m",
+        "same_xy_bbox",
+        "same_normalized_xy_sha256",
+        "same_connectivity_coordinate_index_sha256",
+    )
+    result = {
+        "stage": conversion_snapshot.get("stage"),
+        "before": None,
+        "after": None,
+    }
+    for phase in ("before", "after"):
+        phase_snapshot = conversion_snapshot.get(f"horizontal_planes_{phase}")
+        if not isinstance(phase_snapshot, dict):
+            continue
+        result[phase] = {
+            key: phase_snapshot.get(key)
+            for key in (
+                "capture_error",
+                "pointwise_field_values_evaluated",
+                "physical_volume_groups",
+                "source_surface_outside_body_volume_group",
+                "source_surface_outside_body_boundary",
+                "source_surface_parent_body_volume_tags",
+                "source_surface_shared_with_body_boundary_tags",
+                "source_outer_air_plane_count",
+                "source_outer_air_planes_truncated",
+                "body_horizontal_plane_count",
+                "body_horizontal_planes_truncated",
+                "source_to_body_hash_comparisons_truncated",
+                "source_surface_parent_air_volume_tags",
+            )
+        }
+        result[phase]["source_outer_air_planes"] = summarize_planes(
+            phase_snapshot.get("source_outer_air_planes", [])
+        )
+        result[phase]["body_horizontal_planes"] = summarize_planes(
+            phase_snapshot.get("body_horizontal_planes", [])
+        )
+        result[phase]["source_to_body_hash_comparisons"] = [
+            {key: comparison.get(key) for key in comparison_fields}
+            for comparison in phase_snapshot.get("source_to_body_hash_comparisons", [])[
+                :_MAX_GMSH_HORIZONTAL_SURFACE_ENTRIES
+            ]
+        ]
+    return result
+
+
+def _observe_subdivision_types(
+    gmsh, subdivide, destination, *, capture_horizontal_plane_trace=False,
+):
+    """Observe bounded plane topology around the existing converter and preserve behavior/errors."""
     snapshot = {
         "stage": "layered_prism_quad_subdivision",
-        "interpretation": "Element type counts only; no element, node, or face inventory.",
+        "interpretation": (
+            "Bounded horizontal source/body coordinate and connectivity signatures plus "
+            "element type counts; no Gmsh node IDs or full air-plane inventory."
+        ),
     }
     try:
         snapshot["before"] = _gmsh_element_type_counts(gmsh)
     except Exception as error:
         snapshot["before_capture_error"] = f"{type(error).__name__}: {str(error)[:160]}"
+    if capture_horizontal_plane_trace:
+        snapshot["horizontal_planes_before"] = _gmsh_horizontal_plane_mesh_snapshot(
+            gmsh, "before_prism_subdivision",
+        )
     try:
         return subdivide(gmsh)
     finally:
@@ -96,6 +571,10 @@ def _observe_subdivision_types(gmsh, subdivide, destination):
             snapshot["after"] = _gmsh_element_type_counts(gmsh)
         except Exception as error:
             snapshot["after_capture_error"] = f"{type(error).__name__}: {str(error)[:160]}"
+        if capture_horizontal_plane_trace:
+            snapshot["horizontal_planes_after"] = _gmsh_horizontal_plane_mesh_snapshot(
+                gmsh, "after_prism_subdivision",
+            )
         try:
             if len(destination) < 8:
                 destination.append(snapshot)
@@ -467,6 +946,7 @@ def _gmsh_realization_failure_diagnostic_line(snapshots, fixture_name, error):
                 "field_setter_call_count": snapshot.get("field_setter_call_count"),
                 "mesh_option_set_call_count": snapshot.get("mesh_option_set_call_count"),
                 "volume_count": snapshot.get("volume_count"),
+                "horizontal_plane_trace": _horizontal_plane_trace_summary(snapshot),
             }
             for snapshot in snapshots[:8]
             if isinstance(snapshot, dict)
@@ -537,12 +1017,19 @@ def _realize_public_de_smoke_box(
         from fullmag.meshing import _gmsh_layered_tetrahedra
 
         actual_subdivide = _gmsh_layered_tetrahedra.subdivide_layered_prisms
+        capture_horizontal_plane_trace = fixture_name in {
+            "implicit_airbox_cap.py",
+            "body_hmax_airbox_cap.py",
+            "explicit_airbox_minimum.py",
+            "body_hmax_reference.py",
+        }
         with monkeypatch.context() as gmsh_patch:
             gmsh_patch.setattr(
                 _gmsh_layered_tetrahedra,
                 "subdivide_layered_prisms",
                 lambda gmsh: _observe_subdivision_types(
                     gmsh, actual_subdivide, capture_snapshots,
+                    capture_horizontal_plane_trace=capture_horizontal_plane_trace,
                 ),
             )
             gmsh_patch.setattr(
@@ -834,6 +1321,7 @@ def _body_xy_failure_diagnostics_impl(mesh, report, reference, reference_report,
                                     "body_air_shared_surface_count"
                                 ),
                                 "capture_error": snapshot.get("capture_error"),
+                                "horizontal_plane_trace": _horizontal_plane_trace_summary(snapshot),
                             }
                             for snapshot in snapshots[:8]
                         ],
