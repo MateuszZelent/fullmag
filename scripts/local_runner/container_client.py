@@ -984,6 +984,11 @@ def request(
         raise ContainerClientError("Runner API request failed") from error
     except TimeoutError as error:
         raise ContainerClientError("Runner API request timed out") from error
+    except OSError as error:
+        # A socket can reset during open/read without urllib wrapping it in
+        # URLError. Normalize the transport boundary; only the bounded startup
+        # health loop may retry, never a potentially accepted submission here.
+        raise ContainerClientError("Runner API request failed") from error
     if not content:
         return None
     try:
@@ -999,6 +1004,7 @@ def _verify_startup_profile_activation(
 ) -> tuple[object, dict[str, Any]]:
     """Bound startup by a wall-clock deadline and require the exact profile set."""
     last_reason = "Coordinator health did not confirm the configured profile list."
+    last_health_error: ContainerClientError | None = None
     deadline = time.monotonic() + STARTUP_HEALTH_TIMEOUT_SECONDS
     checks = 0
     for attempt in range(STARTUP_HEALTH_ATTEMPTS):
@@ -1011,8 +1017,10 @@ def _verify_startup_profile_activation(
                 layout, owner, "GET", "/health",
                 timeout=min(STARTUP_HEALTH_REQUEST_TIMEOUT_SECONDS, remaining),
             )
+            last_health_error = None
             activation = _profile_activation(public, health)
         except ContainerClientError as error:
+            last_health_error = error
             health = None
             activation = _profile_activation(
                 public,
@@ -1038,7 +1046,7 @@ def _verify_startup_profile_activation(
         f"{checks} bounded authenticated health checks within "
         f"{STARTUP_HEALTH_TIMEOUT_SECONDS:g} seconds; "
         f"no automatic stop or replacement was attempted. {last_reason}"
-    )
+    ) from last_health_error
 
 
 def stop(layout: Mapping[str, object], owner: str) -> Any:

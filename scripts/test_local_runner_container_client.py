@@ -781,6 +781,55 @@ class ContainerClientTests(unittest.TestCase):
         self.assertIn(["start", CONTAINER_ID], docker.calls)
         self.assertFalse(any(call[0] in {"stop", "rm", "kill", "prune"} for call in docker.calls))
 
+    def test_start_retries_direct_connection_reset_then_requires_exact_profiles(self):
+        self.configure()
+        docker = FakeDocker(self.storage)
+        reset = ConnectionResetError(104, "connection reset during startup")
+        with patch.object(container_client, "_open_url", side_effect=[
+            reset, FakeHTTPResponse(healthy_profiles()),
+        ]) as opened, patch.object(container_client.time, "sleep", return_value=None):
+            result = container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertEqual(2, opened.call_count)
+        self.assertEqual("active", result["profile_activation"]["status"])
+        self.assertEqual(sorted(container_client.ALLOWED_PROFILES),
+                         result["profile_activation"]["observed_allowed_profiles"])
+        self.assertTrue(all(call.args[0].method == "GET" and
+                            call.args[0].full_url.endswith("/health")
+                            for call in opened.call_args_list))
+        self.assertEqual(1, docker.calls.count(["start", CONTAINER_ID]))
+        self.assertFalse(any(call[0] in {"stop", "rm", "kill", "prune"} for call in docker.calls))
+
+    def test_start_persistent_connection_resets_fail_within_existing_bound_and_keep_cause(self):
+        self.configure()
+        docker = FakeDocker(self.storage)
+        reset = ConnectionResetError(104, "persistent reset")
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with patch.object(container_client, "_open_url", side_effect=reset) as opened, \
+                patch.object(container_client.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(container_client.time, "sleep", side_effect=sleep):
+            with self.assertRaisesRegex(container_client.ContainerClientError,
+                                        "remains unverified after 60 bounded authenticated health checks") as caught:
+                container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertEqual(container_client.STARTUP_HEALTH_ATTEMPTS, opened.call_count)
+        self.assertLessEqual(clock[0], container_client.STARTUP_HEALTH_TIMEOUT_SECONDS)
+        self.assertIsInstance(caught.exception.__cause__, container_client.ContainerClientError)
+        self.assertIs(caught.exception.__cause__.__cause__, reset)
+        self.assertFalse(any(call[0] in {"stop", "rm", "kill", "prune"} for call in docker.calls))
+
+    def test_start_clears_old_transport_cause_after_a_successful_unverified_health_response(self):
+        self.configure()
+        docker = FakeDocker(self.storage)
+        responses = [ConnectionResetError(104, "initial reset")] + [
+            FakeHTTPResponse({"ok": True}) for _ in range(container_client.STARTUP_HEALTH_ATTEMPTS - 1)
+        ]
+        with patch.object(container_client, "_open_url", side_effect=responses), \
+                patch.object(container_client.time, "sleep", return_value=None):
+            with self.assertRaises(container_client.ContainerClientError) as caught:
+                container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertIsNone(caught.exception.__cause__)
+
     def test_cold_start_can_confirm_profiles_after_ten_seconds(self):
         self.configure()
         docker = FakeDocker(self.storage)
@@ -926,6 +975,34 @@ class ContainerClientTests(unittest.TestCase):
             with self.assertRaises(container_client.ContainerClientError):
                 container_client.request(self.layout, "alice", "POST", "/jobs", {})
         self.assertEqual(1, failed.call_count)
+
+    def test_request_normalizes_direct_open_and_read_oserror_without_retrying_get_or_post(self):
+        self.configure()
+        for method, path in [("GET", "/health"), ("POST", "/jobs")]:
+            for phase in ["open", "read"]:
+                with self.subTest(method=method, phase=phase):
+                    reset = ConnectionResetError(104, "direct transport reset")
+                    response = FakeHTTPResponse(None)
+                    with patch.object(response, "read", side_effect=reset), patch.object(
+                        container_client, "_open_url", side_effect=reset if phase == "open" else None,
+                        return_value=response,
+                    ) as opened:
+                        with self.assertRaisesRegex(container_client.ContainerClientError,
+                                                    "Runner API request failed") as caught:
+                            container_client.request(self.layout, "alice", method, path,
+                                                     {} if method == "POST" else None)
+                    self.assertIs(caught.exception.__cause__, reset)
+                    self.assertEqual(1, opened.call_count)
+
+    def test_request_preserves_timeout_classification_before_oserror_normalization(self):
+        self.configure()
+        timeout = TimeoutError("transport deadline")
+        with patch.object(container_client, "_open_url", side_effect=timeout) as opened:
+            with self.assertRaisesRegex(container_client.ContainerClientError,
+                                        "Runner API request timed out") as caught:
+                container_client.request(self.layout, "alice", "GET", "/health")
+        self.assertIs(caught.exception.__cause__, timeout)
+        self.assertEqual(1, opened.call_count)
 
     def test_request_rejects_non_get_post_and_path_traversal(self):
         self.configure()
