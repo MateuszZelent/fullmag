@@ -4999,3 +4999,10 @@ Control Room w tym runie przerwał się na missing carrierId dependency, bez dow
 [Managed38956446578](https://github.com/MateuszZelent/fullmag/actions/runs/38956446578), exactc284: fast86PASS, heavy117160577654 terminalFAIL przed submit/worker podczas coordinator-configure-start. Komunikat lifecycle lock unavailable jest nieprecyzyjny: start/status mapują także OSError z ciała sekcji jako lock error, a wrapper nie zachował przyczyny/errno. Nie dowodzi to zajętego flock ani problemu konkretnego socketu. Brak receipt/JUnit/DSO identity; runtime NOT VERIFIED. Trwa ograniczona poprawka klasyfikacji i bounded redacted diagnostyki; blokada pozostaje fail-closed, bez ponownego dispatchu przed review i fast CI.
 
 Native P1 provider zachowuje wcześniejszy dowód2/2CTest. Etap C ABI/Rust immutable snapshot jest w implementacji; routing direct/adaptive/bias, v2 sidecar i cała uwaga4207786265 pozostają otwarte. PR97/102 są zamknięte jak wyżej; późniejsza integracja i cały cel nadal nieukończone.
+
+
+## 2026-10-16 — historyczne cele React Doctor i zamknięta geometria STL
+
+- Rozpatrzono indywidualnie 41 dotąd otwartych pozycji z komentarza 5756853919 na podstawie dokładnych źródeł b349→992ac. Skorygowano błędne robocze mapowania; sześć `already_changed_source` nie było dowodem napraw. Decyzje i hashe: [audyt](../../audits/2026-10-16-pr97-react-doctor-dispositions.md) i [JSON](../../audits/2026-10-16-pr97-react-doctor-dispositions.json). To wyłącznie source review; nie wynik React Doctor/browser/runtime.
+- Commit `37f146417a7fc4c5ba430fd139eb57e5ee4eff09`: pięć plików zamkniętej pomocniczej powierzchni STL z topologii objętości, kontrola incydencji krawędzi, poprawne indeksowanie NumPy, regresje Tet4 i Prism6 1 nm. Bez mutacji fizycznego interfejsu/PBC. Gmsh/runtime/zbieżność wymagają odrębnych wyników GHA.
+- Zatwierdzony kontrakt użytkownika: dodatkowe adaptacyjne Z w powietrzu dozwolone, dokładne warstwy i płaszczyzny w magnetyku zachowane. Implementacja i kwalifikacja adaptive-air pozostają otwarte; nie osłabiać interfejsu/PBC, jakości ani gęstości.

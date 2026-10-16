@@ -1,0 +1,366 @@
+{
+  "source_comment_id": 5756853919,
+  "historical_commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+  "current_commit": "992ac6fdfdfccc7a74927c4a1df46d20f529823c",
+  "scope": "source_review_only",
+  "counts": {
+    "intentional_sequencing": 21,
+    "optional_not_selected": 20
+  },
+  "source_hashes": {
+    "apps/control-room/scripts/audit-chart-performance.mjs": {
+      "historical_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9",
+      "current_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+    },
+    "apps/control-room/scripts/smoke-analysis-plots.mjs": {
+      "historical_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea",
+      "current_sha256": "09e63bccc6922b989135a456965fe9a1c3e9842bc2fd235478721e9297e279d5"
+    },
+    "apps/control-room/scripts/smoke-inspector.mjs": {
+      "historical_sha256": "fe03ff2c055c9bf17da78db170c04ff54f56da8bc77884da0807c6401af96cc6",
+      "current_sha256": "dea58b8edb496682bda27c34e345427884344627f2f35244c752bfd9604ca3da"
+    },
+    "apps/control-room/scripts/smoke-study-authoring-ui.mjs": {
+      "historical_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45",
+      "current_sha256": "45d9e2151a6c7eb218818516960bf649889b1569630e1ca957ca331f27607ff1"
+    },
+    "apps/control-room/scripts/smoke-viewport-3d-explorer-inspector-targets.mjs": {
+      "historical_sha256": "308dac3801db16adf192924dd5a642d53898dfd5fe55a987208a02bf3cfd32b4",
+      "current_sha256": "c366685a07656228ab1360f912598e7ea4046324e06a38bef27e6ebaca09a2b8"
+    },
+    "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.tsx": {
+      "historical_sha256": "286172014618fc9dc06163e22d04a96815af3a68744b25e591be2a267d13b7e3",
+      "current_sha256": "125cb697d27bee5fb411f7b5fe45bc52dc897e92ea2a8f0eb5b94adfe22d77d6"
+    }
+  },
+  "rows": [
+    {
+      "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 231,
+      "current_line": 233,
+      "disposition": "intentional_sequencing",
+      "reason": "Sprawdzenie widoczności i tekstu kolejnych toastów zachowuje czytelną diagnostykę jednej strony; nie wykazano istotnego kosztu tej krótkiej pętli."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 247,
+      "current_line": 249,
+      "disposition": "intentional_sequencing",
+      "reason": "Każda iteracja zmienia motyw tego samego dokumentu, czeka na render i przechwytuje obraz; równoległe iteracje kolidowałyby."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 281,
+      "current_line": 283,
+      "disposition": "intentional_sequencing",
+      "reason": "Każda iteracja ustawia ten sam viewport i sprawdza jego układ; wymagane jest następstwo mutacja–obserwacja."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 523,
+      "current_line": 529,
+      "disposition": "optional_not_selected",
+      "reason": "Dwa niezależne odczyty diagnostyczne w catch można zgrupować, lecz to optymalizacja ścieżki błędu bez wykazanego kosztu lub błędu wyniku."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1300,
+      "current_line": 3164,
+      "disposition": "optional_not_selected",
+      "reason": "Odczyty body, resource key i liczby punktów są diagnostyką nieudanego oczekiwania. Równoległość możliwa, ale nie stanowi wymaganej naprawy zachowania."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+      "rule": "js-set-map-lookups",
+      "historical_line": 1316,
+      "current_line": 3180,
+      "disposition": "optional_not_selected",
+      "reason": "includes dotyczy niewielkiej listy etykiet legendy fixture; Set jest opcjonalny. Historyczna uwaga NIE dotyczy listy żądań HTTP."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1958,
+      "current_line": 3822,
+      "disposition": "intentional_sequencing",
+      "reason": "Oczekiwanie i odczyt tooltipa poprzedzają warunkowy sukces; szczegółowe evidence zbierane jest dopiero po jego niepowodzeniu."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-inspector.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 599,
+      "current_line": 599,
+      "disposition": "intentional_sequencing",
+      "reason": "Kolejne drag/resize mutują jeden Inspector i wymagają pomiaru przed następną zmianą."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-inspector.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 619,
+      "current_line": 619,
+      "disposition": "intentional_sequencing",
+      "reason": "Motywy Light/Dark ustawiane są kolejno na tym samym dokumencie, ze zrzutem każdego stanu."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-inspector.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 843,
+      "current_line": 843,
+      "disposition": "intentional_sequencing",
+      "reason": "Polling wyłączenia Reset ma deadline 3 s i odstęp 100 ms; nie jest zbiorem niezależnych prac."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-inspector.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 1127,
+      "current_line": 1127,
+      "disposition": "intentional_sequencing",
+      "reason": "Iteracje fokusu i mutacji wspólnego Object/Airbox wymagają kontroli stabilności po każdej zmianie."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-inspector.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 4655,
+      "current_line": 4865,
+      "disposition": "intentional_sequencing",
+      "reason": "Polling quiet-window zależy od kolejnych obserwacji liczby żądań i upływu czasu."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 383,
+      "current_line": 1230,
+      "disposition": "intentional_sequencing",
+      "reason": "Wybór algorytmu w jednym Inspectorze poprzedza sprawdzenie kontrolek zależnych od tego wyboru; historyczny cel to selectOption, nie realtime polling."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 556,
+      "current_line": 1424,
+      "disposition": "optional_not_selected",
+      "reason": "Oczekiwania na pięć etykiet metryk mogłyby działać równolegle, ale nie ma pomiaru wskazującego istotny koszt ani błędu poprawności. To nie pętla wyboru algorytmu."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "async-parallel",
+      "historical_line": 1012,
+      "current_line": 3159,
+      "disposition": "optional_not_selected",
+      "reason": "Nadal istnieją odczyty diagnostyk Explorer w catch; można je zgrupować, lecz nie zostały usunięte ani zastąpione synchroniczną obsługą POST."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "async-parallel",
+      "historical_line": 1579,
+      "current_line": 3726,
+      "disposition": "optional_not_selected",
+      "reason": "Nadal istnieją odczyty regionsActive/regionsText/inspectorText w catch. Promise.all jest opcjonalną optymalizacją diagnostyki, nie zakończoną naprawą."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "async-parallel",
+      "historical_line": 2007,
+      "current_line": 4154,
+      "disposition": "optional_not_selected",
+      "reason": "Odczyty Target/Frequency min/max/Operator następują po odtworzeniu Inspectora. Można je grupować, lecz brak wykazanego problemu; nie są synchronicznym resourceForPath."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 2010,
+      "current_line": 4157,
+      "disposition": "optional_not_selected",
+      "reason": "Jak dla historycznej linii 2007: niezależny inputValue w sprawdzeniu round-trip, a nie synchroniczna odpowiedź fixture."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 2016,
+      "current_line": 4163,
+      "disposition": "optional_not_selected",
+      "reason": "Jak dla historycznej linii 2007: niezależny inputValue Operator w round-trip; nie uznajemy ostrzeżenia za usunięte przez przesunięcie linii."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 2409,
+      "current_line": 4556,
+      "disposition": "optional_not_selected",
+      "reason": "Odczyt Inspectora po diagnostyce selectedRows występuje w ścieżce błędu wyboru Explorer. Grupowanie możliwe, lecz nie wykazano potrzeby naprawy."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 2435,
+      "current_line": 4582,
+      "disposition": "intentional_sequencing",
+      "reason": "Bounded polling czeka na liczbę scriptSyncs z 50 ms odstępem. Historyczny cel to waitForRegionScriptSyncCount, nie close handshake obcej sesji."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 3184,
+      "current_line": 5337,
+      "disposition": "intentional_sequencing",
+      "reason": "Bounded polling czeka na liczbę transakcji z 50 ms odstępem; następna obserwacja zależy od czasu i wspólnej kolejki."
+    },
+    {
+      "file": "apps/control-room/scripts/smoke-viewport-3d-explorer-inspector-targets.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 1815,
+      "current_line": 3417,
+      "disposition": "intentional_sequencing",
+      "reason": "Cleanup najpierw zatrzymuje proces Next, następnie usuwa jego izolowane artefakty i odtwarza konfigurację; równoległe operacje mogłyby kolidować z działającym procesem."
+    },
+    {
+      "file": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.tsx",
+      "rule": "no-high-complexity-react-function",
+      "historical_line": 24,
+      "current_line": 23,
+      "disposition": "optional_not_selected",
+      "reason": "Wydzielenie części renderu EigenDispersionInspectorPanel może poprawić czytelność, ale ta uwaga nie wskazuje błędu zachowania ani zmierzonego kosztu renderowania."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "js-set-map-lookups",
+      "historical_line": 384,
+      "current_line": 384,
+      "disposition": "optional_not_selected",
+      "reason": "Membership dotyczy jawnej listy nazw pomiarów przekazanej do browser init script. Set byłby poprawną opcjonalną optymalizacją, ale brak pomiaru bottlenecku i błędu wyniku; nie zmieniamy instrumentacji tylko dla sugestii asymptotycznej."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "async-parallel",
+      "historical_line": 520,
+      "current_line": 520,
+      "disposition": "optional_not_selected",
+      "reason": "Trzy odczyty diagnostyk/DOM są możliwe do grupowania, ale działają w testowej przeglądarce przed następną mutującą próbą izolacji. To opcjonalne skrócenie testu, nie wykazany problem serwera ani poprawności. Zachowana jawna kolejność pomiaru."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 874,
+      "current_line": 874,
+      "disposition": "intentional_sequencing",
+      "reason": "Próbki baseline są pobrane po wyciszeniu żądań i przed odczekaniem idleObserveMs. Sekwencja before/wait/after stanowi definicję okna pomiarowego; nie zrównoleglać całego bloku."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 878,
+      "current_line": 878,
+      "disposition": "intentional_sequencing",
+      "reason": "Odczyt afterLifecycle należy po odczekaniu okna idle i po próbce after, przed porównaniem redraws. Sugestia server-await nie dowodzi błędu w tym pomiarze browserowym."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 960,
+      "current_line": 960,
+      "disposition": "intentional_sequencing",
+      "reason": "Bounded polling: każda iteracja odczekuje100ms, porównuje liczbę żądań i resetuje quietSince. Promise.all dla iteracji usuwałoby temporalny warunek stabilności."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 981,
+      "current_line": 981,
+      "disposition": "intentional_sequencing",
+      "reason": "Bounded polling czeka aż asynchronicznie uzupełnią się responseBytes. Następna iteracja zależy od nowego stanu transportu po50ms; nie jest niezależnym zadaniem."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1027,
+      "current_line": 1027,
+      "disposition": "optional_not_selected",
+      "reason": "Dwa odczyty baseline lifecycle/heap następują po GC i stabilizacji RAF, przed pierwszym przełączeniem modułu. Możliwe równoległe readonly RPC nie jest wymagane do poprawności; zachowany chronologiczny zapis próbki."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1046,
+      "current_line": 1046,
+      "disposition": "optional_not_selected",
+      "reason": "Po zakończeniu cyklu wymusza się GC i stabilizację, a potem pobiera lifecycle i heap do jednej asercji. Brak wykazanego zysku z przeplatania odczytów tego samego CDP/page."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1061,
+      "current_line": 1061,
+      "disposition": "optional_not_selected",
+      "reason": "Readonly odczyty diagnostics oraz liczby powierzchni są po oczekiwaniu na aktywny stabilny chart. Grupowanie jest opcjonalne; wynik kontroli liczby instancji nie wymaga tej zmiany."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1116,
+      "current_line": 1116,
+      "disposition": "optional_not_selected",
+      "reason": "Baseline lifecycle i heap jest pobierany po zamknięciu Quick Chart/GC i przed cyklem. Brak produkcyjnej ścieżki serwera lub udowodnionego problemu opóźnienia."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1139,
+      "current_line": 1139,
+      "disposition": "optional_not_selected",
+      "reason": "Końcowe lifecycle/heap są pobierane po wyciszeniu sieci, GC i stabilizacji. Zachowanie kolejności nie osłabia bramki bounded lifecycle; równoleglenie byłoby wyłącznie opcjonalnym skróceniem audytu."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1246,
+      "current_line": 1246,
+      "disposition": "intentional_sequencing",
+      "reason": "Próbki viewport/lifecycle muszą poprzedzać focus, ArrowRight i eksport CSV. Nie wolno zrównoleglać ich z mutującą akcją; dwa readonly odczyty można kiedyś scalić bez zmiany zakresu bramki."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 1256,
+      "current_line": 1256,
+      "disposition": "intentional_sequencing",
+      "reason": "Próbki after należą po wykonanej akcji i250ms obserwacji. Kolejność before/action/wait/after jest wymagana; uwaga nie wykazuje niezależności całego sąsiedniego bloku."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 1386,
+      "current_line": 1386,
+      "disposition": "intentional_sequencing",
+      "reason": "Każda z3rund robi GC page, następnie CDP GC i odczekuje100ms. Równoległe rundy nie dowodzą stabilizacji po zwolnieniu zasobów i zmieniałyby pomiar retencji."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "async-await-in-loop",
+      "historical_line": 1397,
+      "current_line": 1397,
+      "disposition": "intentional_sequencing",
+      "reason": "Bounded polling sprawdza niezmienną liczbę requestów przez500ms i resetuje quietSince przy zmianie. Warunek opiera się na kolejnych chwilach, nie niezależnych await."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 2288,
+      "current_line": 2288,
+      "disposition": "optional_not_selected",
+      "reason": "Provenance i legend readings są readonly po waitForStableChartDiagnostics w scenariuszu remount/stale revision. Oba są potem niezależnie sprawdzane pod kątem stale data; równoleglenie nie naprawia błędu kontraktu."
+    },
+    {
+      "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+      "rule": "server-sequential-independent-await",
+      "historical_line": 2332,
+      "current_line": 2332,
+      "disposition": "optional_not_selected",
+      "reason": "Odczyt latestValues po provenance następuje po waitForFunction na latestRevision. Możliwy batch readonly jest optymalizacją testu; brak podstaw do zmiany sekwencji wymiany rewizji."
+    }
+  ]
+}
