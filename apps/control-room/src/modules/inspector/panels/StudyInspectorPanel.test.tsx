@@ -1428,6 +1428,33 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain('data-testid="study-stage-authoring-toolbar"');
   });
 
+  it.each<{ name: string; stages: unknown[] }>([
+    { name: "empty", stages: [] },
+    { name: "frequency response", stages: [{ kind: "frequency_response" }] },
+  ])("validates adaptive controls against staged Relax/Eigen instead of the committed $name workflow", ({ stages }) => {
+    const html = renderAdaptiveBoundaryForStagedWorkflow(stages, [
+      createDefaultStudyStageDraft("relax", 0),
+      createDefaultStudyStageDraft("eigenmodes", 1),
+    ]);
+
+    expect(html).not.toContain("Adaptive parallel execution requires a known Relax or Eigen workflow.");
+    expect(html).not.toContain("fm-inspector-validation-list");
+    expect(html).toContain('value="73"');
+    const saveGlobals = [...html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)]
+      .map((match) => match[0]).find((button) => button.includes("Save globals"));
+    expect(saveGlobals).toContain('disabled=""');
+    expect(saveGlobals).toContain('title="Use Apply to save global settings together with the staged workflow."');
+  });
+
+  it("keeps the adaptive workflow guard without a compatible stage draft", () => {
+    for (const pending of [undefined, [createDefaultStudyStageDraft("frequency_response", 0)]]) {
+      const html = renderAdaptiveBoundaryForStagedWorkflow([], pending);
+      expect(html).toContain("Adaptive parallel execution requires a known Relax or Eigen workflow.");
+      expect(html).toContain("fm-inspector-validation-list");
+      expect(html).not.toContain("Use Apply to save global settings together with the staged workflow.");
+    }
+  });
+
   it("renders editable global settings and applies production capability validation", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["boundary"]}>
@@ -1897,3 +1924,52 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("CUDA");
   });
 });
+
+
+function renderAdaptiveBoundaryForStagedWorkflow(
+  stages: unknown[],
+  studyStageDrafts?: Parameters<typeof StudyBoundarySection>[0]["studyStageDrafts"],
+): string {
+  const scene = {
+    study: {
+      requested_backend: "fem",
+      requested_device: "cpu",
+      requested_precision: "double",
+      stages,
+    },
+  };
+  const baseline = createStudyGlobalDraft(scene);
+  const requested = testRequested({ backend: "fem", device: "cpu" });
+  const boundary = testBoundary();
+  return renderToStaticMarkup(
+    <StudyBoundarySection
+      algorithmsAvailable={[]}
+      authoringBusy={false}
+      authoringFeedback={null}
+      draft={{
+        ...baseline,
+        parallelExecution: { ...baseline.parallelExecution, mode: "adaptive", maxCpuPercent: "73" },
+      }}
+      model={{
+        boundary,
+        requested,
+        runtime: {
+          activeStageLabel: "No active stage", commandBadge: "idle", commandError: null,
+          commandId: null, commandLabel: "No queued commands", maxTorque: "unavailable",
+          progressPercent: 0, relaxEnergyStop: null, relaxTimeStop: null, relaxTorqueStop: null,
+          runId: "none", state: "idle",
+        },
+        selectedStage: null,
+        stages: [],
+      }}
+      onCommit={() => undefined}
+      onUpdate={() => undefined}
+      scene={scene}
+      sceneRevision={1}
+      sceneStatus="ready"
+      sessionDiscretization="fem"
+      snapshot={{ boundary, requested, stages: [] }}
+      studyStageDrafts={studyStageDrafts}
+    />,
+  );
+}

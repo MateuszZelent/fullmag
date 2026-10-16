@@ -1741,6 +1741,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           sceneStatus={scene.status}
           sessionDiscretization={resolveSessionDiscretization(runtimeStatus)}
           snapshot={snapshot}
+          studyStageDrafts={stagesDirty ? state.stageDrafts : undefined}
           onCommit={() => void commitGlobalDraft()}
           onUpdate={(patch) =>
             dispatch({ type: "updateGlobalDraft", patch })
@@ -2319,6 +2320,7 @@ export function StudyBoundarySection({
   sceneRevision,
   sceneStatus,
   snapshot,
+  studyStageDrafts,
 }: {
   activeLane?: ActiveLaneCapabilitySnapshot | null;
   algorithmsAvailable?: readonly string[];
@@ -2341,6 +2343,7 @@ export function StudyBoundarySection({
   sceneRevision?: number | string | null;
   sceneStatus?: string;
   snapshot: StudyInspectorSnapshot;
+  studyStageDrafts?: readonly StudyStageDraft[];
 }) {
   const laneRequestedBackend = executionProfileBound
     ? null
@@ -2370,8 +2373,7 @@ export function StudyBoundarySection({
     demagStrategy: demagRealization,
     perMagnet: "",
   };
-  const validation = validateStudyGlobalDraft(draft, {
-    studyStages: rawStudyStages(scene),
+  const validationContext = {
     activeLane,
     algorithmsAvailable,
     executionProfileBound,
@@ -2379,8 +2381,24 @@ export function StudyBoundarySection({
     magneticObjectIds: _magneticObjectIds,
     requestedDiscretization,
     sessionDiscretization,
+  };
+  const validation = validateStudyGlobalDraft(draft, {
+    ...(studyStageDrafts === undefined
+      ? { studyStages: rawStudyStages(scene) }
+      : { studyStageDrafts }),
+    ...validationContext,
   });
+  // Save globals remains an independent mutation; only the shared Apply may
+  // publish a workflow that exists solely in the stage draft.
+  const globalOnlyValidation = studyStageDrafts === undefined
+    ? validation
+    : validateStudyGlobalDraft(draft, {
+        studyStages: rawStudyStages(scene),
+        ...validationContext,
+      });
   const hasErrors = validation.some((issue) => issue.severity === "error");
+  const globalOnlyHasErrors = globalOnlyValidation.some((issue) => issue.severity === "error");
+  const requiresCombinedApply = studyStageDrafts !== undefined && !hasErrors && globalOnlyHasErrors;
   const singleGridUnsupported = explicitFdm && (magneticObjectCount ?? 0) > 1;
   const gridPreview = explicitFdm
     ? resolveFdmGridPreview(scene, draft)
@@ -2388,7 +2406,7 @@ export function StudyBoundarySection({
   const gridApplyDisabled =
     authoringBusy ||
     executionProfileDraftDirty ||
-    hasErrors ||
+    globalOnlyHasErrors ||
     (sceneStatus !== undefined && sceneStatus !== "ready");
   return (
     <InspectorGroup
@@ -2799,7 +2817,9 @@ export function StudyBoundarySection({
           title={
             executionProfileDraftDirty
               ? "Apply or cancel the Study execution profile draft first."
-              : hasErrors
+              : requiresCombinedApply
+                ? "Use Apply to save global settings together with the staged workflow."
+              : globalOnlyHasErrors
               ? "Fix global study validation errors before applying the grid."
               : explicitFdm
                 ? "Apply the FDM grid policy to the canonical scene"
