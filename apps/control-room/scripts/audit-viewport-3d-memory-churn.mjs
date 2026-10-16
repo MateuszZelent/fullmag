@@ -44,6 +44,8 @@ const QUANTITY_SEQUENCE = Array.from(
 );
 const WARM_QUANTITIES = ["m", "H_eff", "H_demag", "H_ex"];
 const FDM_READY_OBJECT_TARGET_ID = "object:fdm-ready-box";
+const FDM_READY_OBJECT_SCOPE_ID = FDM_READY_OBJECT_TARGET_ID.slice("object:".length);
+const FDM_NEUTRAL_SURFACE_COLOR = "#d752a7";
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
 const MAX_GPU_LIFECYCLE_TIMELINE_ENTRIES = 256;
@@ -103,6 +105,9 @@ let auditActive = false;
 let auditPhase = "bootstrap";
 const gpuLifecycleTimeline = [];
 let gpuLifecycleTimelineDropped = 0;
+let fdmSurfaceInstanceColorBeforeStress = null;
+let fdmSurfaceInstanceColorStressDelta = null;
+let fdmNeutralSurfaceColorProof = null;
 
 await installFdmFixtureApi(page, fixture, fixtureRequests);
 await installBrowserAuditInstrumentation(page);
@@ -251,12 +256,15 @@ try {
       `FDM field ${initialQuantityId} has no successful full-field response with a recorded payload ETag.`,
     );
   }
-  const fdmFieldAdoption = await assertInitialFdmFieldAdoption(
+  const neutralSurfaceColorResult = await assertFdmNeutralSurfaceColorPixels(
     page,
+    fixture,
+    viewport,
     initialQuantityId,
     initialFullFieldResponse.etag,
-    FDM_READY_OBJECT_TARGET_ID,
   );
+  fdmNeutralSurfaceColorProof = neutralSurfaceColorResult.pixelProof;
+  const fdmFieldAdoption = neutralSurfaceColorResult.fieldAdoption;
   await captureGpuLifecycleSnapshot(
     page,
     gpuLifecycleTimeline,
@@ -322,6 +330,7 @@ try {
 
   auditActive = true;
   auditPhase = "cached-quantity-switch-stress";
+  fdmSurfaceInstanceColorBeforeStress = await readInstanceColorLifecycleAudit(page);
   const quantitySwitchFieldGetsBefore = fieldRequests.length;
   const quantitySwitchPerformanceBefore = await captureViewportPerformanceSnapshot(
     page,
@@ -385,6 +394,12 @@ try {
     gpuLifecycleTimeline,
     "quantity-stress-stable-end",
     currentFixtureQuantity(fixture),
+  );
+  const fdmSurfaceInstanceColorAfterStress =
+    await readInstanceColorLifecycleAudit(page);
+  fdmSurfaceInstanceColorStressDelta = assertNoFdmSurfaceInstanceColorChurn(
+    fdmSurfaceInstanceColorBeforeStress,
+    fdmSurfaceInstanceColorAfterStress,
   );
   const quantitySwitchPerformanceAfter = await captureViewportPerformanceSnapshot(
     page,
@@ -553,6 +568,7 @@ try {
     afterUnmountRuntime,
     baseline,
     fdmFieldAdoption,
+    fdmNeutralSurfaceColorProof,
     unmountedBaselineRuntime,
     shaderSignatures,
     fixtureRequests,
@@ -566,6 +582,9 @@ try {
     rawPerformanceTrace,
     fidelity,
     instanceColorLifecycle,
+    instanceColorLifecycleBeforeStress:
+      fdmSurfaceInstanceColorBeforeStress?.summary ?? null,
+    instanceColorLifecycleStressDelta: fdmSurfaceInstanceColorStressDelta,
     topologyRequests,
     url,
     warmedFieldPayloads,
@@ -593,6 +612,9 @@ try {
     visualizationAckRequests,
     gpuLifecycleTimeline,
     gpuLifecycleTimelineDropped,
+    fdmSurfaceInstanceColorBeforeStress,
+    fdmSurfaceInstanceColorStressDelta,
+    fdmNeutralSurfaceColorProof,
   });
   throw error;
 } finally {
@@ -601,7 +623,10 @@ try {
   await managedRuntime?.stop();
 }
 
-async function assertCanvasHasFidelity(page) {
+async function assertCanvasHasFidelity(
+  page,
+  { expectedPixelColor = null, includePixelSamples = false } = {},
+) {
   const canvas = page.locator(".fm-viewport-3d canvas");
   const box = await canvas.boundingBox();
   if (!box || box.width <= 0 || box.height <= 0) {
@@ -625,7 +650,11 @@ async function assertCanvasHasFidelity(page) {
       document.querySelector('[data-viewport-audit-isolation="true"]')?.remove();
     });
   }
-  const sample = await page.evaluate(async (encodedPng) => {
+  const sample = await page.evaluate(async ({
+    encodedPng,
+    expectedPixelColor: expectedColor,
+    includePixelSamples: capturePixels,
+  }) => {
     // Decode locally: the application CSP intentionally disallows data: fetches.
     const bytes = Uint8Array.from(atob(encodedPng), (character) => character.charCodeAt(0));
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
@@ -636,13 +665,26 @@ async function assertCanvasHasFidelity(page) {
     const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
     let varied = 0;
     let signature = 2166136261;
+    const pixelSamples = capturePixels ? [] : null;
     const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
     const reference = [pixels[0], pixels[1], pixels[2]];
+    const expectedColorMatches = expectedColor ? [] : null;
     for (let y = 0; y < bitmap.height; y += stride) {
       for (let x = 0; x < bitmap.width; x += stride) {
         const offset = (y * bitmap.width + x) * 4;
         signature ^= pixels[offset] ^ pixels[offset + 1] ^ pixels[offset + 2] ^ pixels[offset + 3];
         signature = Math.imul(signature, 16777619);
+        if (pixelSamples) {
+          pixelSamples.push(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+        }
+        if (
+          expectedColor &&
+          pixels[offset] === expectedColor[0] &&
+          pixels[offset + 1] === expectedColor[1] &&
+          pixels[offset + 2] === expectedColor[2]
+        ) {
+          expectedColorMatches.push([x, y]);
+        }
         if (
           Math.abs(pixels[offset] - reference[0]) > 8 ||
           Math.abs(pixels[offset + 1] - reference[1]) > 8 ||
@@ -650,12 +692,235 @@ async function assertCanvasHasFidelity(page) {
         ) varied += 1;
       }
     }
-    return { height: bitmap.height, signature: String(signature >>> 0), varied, width: bitmap.width };
-  }, screenshot.toString("base64"));
+    return {
+      expectedColorMatches,
+      height: bitmap.height,
+      pixelSamples,
+      signature: String(signature >>> 0),
+      varied,
+      width: bitmap.width,
+    };
+  }, {
+    encodedPng: screenshot.toString("base64"),
+    expectedPixelColor,
+    includePixelSamples,
+  });
   if (!sample || sample.varied === 0) {
     throw new Error("Viewport fidelity gate detected a blank or uniform WebGL drawing buffer.");
   }
   return sample;
+}
+
+async function assertFdmNeutralSurfaceColorPixels(
+  page,
+  fixture,
+  viewport,
+  quantityId,
+  payloadEtag,
+) {
+  if (currentFixtureQuantity(fixture) !== quantityId) {
+    throw new Error("FDM neutral-color proof quantity changed before capture.");
+  }
+  const objectOverride = fixture.visualizationState.overrides.find(
+    (entry) => entry.scope === "object" && entry.scope_id === FDM_READY_OBJECT_SCOPE_ID,
+  );
+  if (!objectOverride || objectOverride.style?.surface_color_source === "solid") {
+    throw new Error("FDM neutral-color proof must begin from a field-derived object color source.");
+  }
+  const originalSurfaceColorSource = objectOverride.style?.surface_color_source ?? null;
+  const originalSurfaceMonoColor = objectOverride.style?.surface_mono_color ?? null;
+  const originalSurfaceOpacity = fixture.visualizationState.layers?.surface?.opacity;
+  if (!Number.isFinite(originalSurfaceOpacity)) {
+    throw new Error("FDM neutral-color proof requires a finite original surface opacity.");
+  }
+  // Use a distinct canonical object material color and opaque pass so exact
+  // screenshot samples identify the surface material, not arbitrary changes.
+  const expectedMaterialColor = parseRgbHex(FDM_NEUTRAL_SURFACE_COLOR);
+  await publishFdmSurfaceColorSource(page, fixture, viewport, "solid", {
+    surfaceMonoColor: FDM_NEUTRAL_SURFACE_COLOR,
+    surfaceOpacity: 1,
+  });
+  const solid = await assertCanvasHasFidelity(page, {
+    expectedPixelColor: expectedMaterialColor,
+    includePixelSamples: true,
+  });
+  const solidRepeat = await assertCanvasHasFidelity(page, {
+    expectedPixelColor: expectedMaterialColor,
+    includePixelSamples: true,
+  });
+  const solidRepeatDelta = compareCanvasPixelSamples(solid, solidRepeat);
+  if (solidRepeatDelta.changedSamples !== 0) {
+    throw new Error("FDM solid surface-color pixels were not stable across repeated captures.");
+  }
+  if (
+    !solid.expectedColorMatches?.length ||
+    JSON.stringify(solid.expectedColorMatches) !==
+      JSON.stringify(solidRepeat.expectedColorMatches)
+  ) {
+    throw new Error(
+      `FDM solid material color ${FDM_NEUTRAL_SURFACE_COLOR} was absent or unstable in sampled canvas pixels.`,
+    );
+  }
+
+  await publishFdmSurfaceColorSource(
+    page,
+    fixture,
+    viewport,
+    originalSurfaceColorSource,
+    {
+      surfaceMonoColor: originalSurfaceMonoColor,
+      surfaceOpacity: 1,
+    },
+  );
+  const fieldAdoption = await assertInitialFdmFieldAdoption(
+    page,
+    quantityId,
+    payloadEtag,
+    FDM_READY_OBJECT_TARGET_ID,
+  );
+  const field = await assertCanvasHasFidelity(page, { includePixelSamples: true });
+  const fieldRepeat = await assertCanvasHasFidelity(page, { includePixelSamples: true });
+  const fieldRepeatDelta = compareCanvasPixelSamples(field, fieldRepeat);
+  if (fieldRepeatDelta.changedSamples !== 0) {
+    throw new Error("FDM field surface-color pixels were not stable across repeated captures.");
+  }
+  const solidToFieldDelta = compareCanvasPixelSamples(solid, field);
+  if (solidToFieldDelta.changedSamples === 0) {
+    throw new Error(
+      "FDM solid mode did not produce a pixel change when field-derived surface colors were restored.",
+    );
+  }
+  await publishFdmSurfaceColorSource(
+    page,
+    fixture,
+    viewport,
+    originalSurfaceColorSource,
+    {
+      surfaceMonoColor: originalSurfaceMonoColor,
+      surfaceOpacity: originalSurfaceOpacity,
+    },
+  );
+  return {
+    fieldAdoption,
+    pixelProof: {
+      field: summarizeCanvasPixelSample(field),
+      fieldRepeatChangedSamples: fieldRepeatDelta.changedSamples,
+      fieldSource: originalSurfaceColorSource ?? "resolved-default",
+      expectedMaterialColor: {
+        css: FDM_NEUTRAL_SURFACE_COLOR,
+        rgb: expectedMaterialColor,
+        sampledCanvasCoordinates: solid.expectedColorMatches,
+        repeatedSampledCanvasCoordinates: solidRepeat.expectedColorMatches,
+      },
+      solid: summarizeCanvasPixelSample(solid),
+      solidRepeatChangedSamples: solidRepeatDelta.changedSamples,
+      solidToFieldChangedSamples: solidToFieldDelta.changedSamples,
+      sampledPixels: solidToFieldDelta.sampledPixels,
+    },
+  };
+}
+
+async function publishFdmSurfaceColorSource(
+  page,
+  fixture,
+  viewport,
+  source,
+  { surfaceMonoColor, surfaceOpacity } = {},
+) {
+  const overrideIndex = fixture.visualizationState.overrides.findIndex(
+    (entry) => entry.scope === "object" && entry.scope_id === FDM_READY_OBJECT_SCOPE_ID,
+  );
+  if (overrideIndex < 0) {
+    throw new Error("FDM surface-color proof is missing its canonical object override.");
+  }
+  const overrides = fixture.visualizationState.overrides.map((entry, index) => {
+    if (index !== overrideIndex) return entry;
+    const nextOverride = { ...entry };
+    const nextStyle = { ...(entry.style ?? {}) };
+    if (source === null) delete nextStyle.surface_color_source;
+    else nextStyle.surface_color_source = source;
+    if (surfaceMonoColor === null) delete nextStyle.surface_mono_color;
+    else if (surfaceMonoColor !== undefined) {
+      nextStyle.surface_mono_color = surfaceMonoColor;
+    }
+    if (Object.keys(nextStyle).length === 0) delete nextOverride.style;
+    else nextOverride.style = nextStyle;
+    return nextOverride;
+  });
+  const nextState = {
+    ...fixture.visualizationState,
+    overrides,
+    revision: fixture.visualizationState.revision + 1,
+  };
+  if (surfaceOpacity !== undefined) {
+    nextState.layers = {
+      ...fixture.visualizationState.layers,
+      surface: {
+        ...fixture.visualizationState.layers?.surface,
+        opacity: surfaceOpacity,
+      },
+    };
+  }
+  fixture.visualizationState = nextState;
+  fixture.status.resources.visualization_state_revision =
+    fixture.visualizationState.revision;
+  const before = await readBrowserAuditCounters(page);
+  await page.evaluate((state) => {
+    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
+    hook.publishVisualizationState(state);
+  }, fixture.visualizationState);
+  await assertPublicationRendered(
+    page,
+    viewport,
+    currentFixtureQuantity(fixture),
+    fixture.visualizationState.revision,
+    before,
+  );
+}
+
+function parseRgbHex(color) {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) throw new Error(`Expected an opaque six-digit material color, got ${color}.`);
+  const value = match[1];
+  return [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
+}
+
+function compareCanvasPixelSamples(left, right) {
+  if (left.width !== right.width || left.height !== right.height) {
+    throw new Error("FDM surface-color pixel captures have different canvas dimensions.");
+  }
+  if (
+    !Array.isArray(left.pixelSamples) ||
+    !Array.isArray(right.pixelSamples) ||
+    left.pixelSamples.length !== right.pixelSamples.length ||
+    left.pixelSamples.length % 3 !== 0
+  ) {
+    throw new Error("FDM surface-color pixel captures have incompatible samples.");
+  }
+  let changedSamples = 0;
+  for (let offset = 0; offset < left.pixelSamples.length; offset += 3) {
+    if (
+      left.pixelSamples[offset] !== right.pixelSamples[offset] ||
+      left.pixelSamples[offset + 1] !== right.pixelSamples[offset + 1] ||
+      left.pixelSamples[offset + 2] !== right.pixelSamples[offset + 2]
+    ) {
+      changedSamples += 1;
+    }
+  }
+  return {
+    changedSamples,
+    sampledPixels: left.pixelSamples.length / 3,
+  };
+}
+
+function summarizeCanvasPixelSample(sample) {
+  return {
+    height: sample.height,
+    signature: sample.signature,
+    varied: sample.varied,
+    width: sample.width,
+  };
 }
 
 async function assertInitialFdmFieldAdoption(
@@ -964,6 +1229,27 @@ async function readInstanceColorLifecycleAudit(page) {
       summary: null,
     };
   }
+}
+
+function assertNoFdmSurfaceInstanceColorChurn(before, after) {
+  const beforeCounts = before?.summary?.objectRoleActionCounts?.["fdm-surface"];
+  const afterCounts = after?.summary?.objectRoleActionCounts?.["fdm-surface"];
+  if (!beforeCounts || !afterCounts) {
+    throw new Error(
+      "FDM surface instance-color lifecycle counters were unavailable during quantity stress.",
+    );
+  }
+  const delta = {
+    attach: afterCounts.attach - beforeCounts.attach,
+    detach: afterCounts.detach - beforeCounts.detach,
+    replace: afterCounts.replace - beforeCounts.replace,
+  };
+  if (delta.attach !== 0 || delta.detach !== 0 || delta.replace !== 0) {
+    throw new Error(
+      `FDM surface instance-color owner changed during quantity stress: ${JSON.stringify(delta)}.`,
+    );
+  }
+  return delta;
 }
 
 async function clearViewportCanvas(page) {
@@ -1583,6 +1869,9 @@ async function reportAuditFailure(
     visualizationAckRequests,
     gpuLifecycleTimeline,
     gpuLifecycleTimelineDropped,
+    fdmSurfaceInstanceColorBeforeStress,
+    fdmSurfaceInstanceColorStressDelta,
+    fdmNeutralSurfaceColorProof,
   },
 ) {
   const instanceColorLifecycle = await readInstanceColorLifecycleAudit(page);
@@ -1642,6 +1931,10 @@ async function reportAuditFailure(
       {
         browser: snapshot,
         instanceColorLifecycle,
+        instanceColorLifecycleBeforeStress:
+          fdmSurfaceInstanceColorBeforeStress?.summary ?? null,
+        instanceColorLifecycleStressDelta: fdmSurfaceInstanceColorStressDelta,
+        fdmNeutralSurfaceColorProof,
         gpuLifecycleTimeline,
         gpuLifecycleTimelineDropped,
         errors: errors.slice(-10),
@@ -1661,7 +1954,13 @@ async function reportAuditFailure(
     await mkdir(auditArtifactsDirectory, { recursive: true });
     await writeFile(
       path.join(auditArtifactsDirectory, "instance-color-lifecycle.failure.json"),
-      `${JSON.stringify({ instanceColorLifecycle }, null, 2)}\n`,
+      `${JSON.stringify({
+        instanceColorLifecycle,
+        fdmNeutralSurfaceColorProof,
+        instanceColorLifecycleBeforeStress:
+          fdmSurfaceInstanceColorBeforeStress?.summary ?? null,
+        instanceColorLifecycleStressDelta: fdmSurfaceInstanceColorStressDelta,
+      }, null, 2)}\n`,
     );
   } catch {
     // Diagnostic artifact failure must not replace the original audit failure.

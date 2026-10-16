@@ -12,6 +12,7 @@ import {
   buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership,
   buildFdmCuboidUploadBatches,
   buildFdmCuboidColorUploadBatchesForView,
+  createFdmCuboidInstanceColorAttribute,
   fdmCuboidUsesInstanceColors,
   fdmCuboidVectorPassCanRenderWithoutCellModel,
   buildFdmVectorSegments,
@@ -28,6 +29,8 @@ import {
   prepareFdmCuboidInstanceMatrices,
   estimateFdmCuboidCarrierPeakBytes,
   uploadFdmCuboidAttribute,
+  uploadFdmCuboidInstanceColorAttribute,
+  neutralizeFdmCuboidInstanceColorAttribute,
   visibleFdmCuboidInspectTargets,
   resolveFdmCuboidColorUploadRevision,
   shouldAttachFdmCuboidInspectListener,
@@ -284,6 +287,89 @@ describe("FdmCuboidLayer model", () => {
     );
     expect(right.array).not.toBe(left.array);
     expect(right.version).toBe(1);
+    expect(() =>
+      uploadFdmCuboidAttribute(
+        left,
+        new Float32Array(source.length / 2),
+        "geometry:short",
+        null,
+      ),
+    ).toThrow("FDM cuboid attribute payload must match attribute length");
+    expect(left.version).toBe(1);
+  });
+
+  it("reuses one owner-bound instance-color attribute across neutral and field payloads", () => {
+    const geometry = new BoxGeometry(1, 1, 1);
+    const material = new MeshBasicMaterial();
+    const surface = new InstancedMesh(geometry, material, 4);
+    try {
+      const instanceColor = createFdmCuboidInstanceColorAttribute(
+        surface.instanceMatrix.count,
+      );
+      surface.instanceColor = instanceColor;
+
+      expect(instanceColor.array.length).toBe(surface.instanceMatrix.count * 3);
+      expect(neutralizeFdmCuboidInstanceColorAttribute(instanceColor)).toBe(true);
+      expect(Array.from(instanceColor.array)).toEqual(Array(12).fill(1));
+      const neutralVersion = instanceColor.version;
+      expect(neutralizeFdmCuboidInstanceColorAttribute(instanceColor)).toBe(false);
+      expect(instanceColor.version).toBe(neutralVersion);
+
+      const firstField = Float32Array.from({ length: 12 }, (_, index) => index / 12);
+      uploadFdmCuboidInstanceColorAttribute(
+        instanceColor,
+        firstField,
+        "field:m",
+        null,
+      );
+      expect(surface.instanceColor).toBe(instanceColor);
+      expect(Array.from(instanceColor.array)).toEqual(Array.from(firstField));
+
+      surface.count = 2;
+      const shorterField = Float32Array.from([0.2, 0.3, 0.4, 0.5, 0.6, 0.7]);
+      uploadFdmCuboidInstanceColorAttribute(
+        instanceColor,
+        shorterField,
+        "field:H_eff",
+        "field:m",
+      );
+      expect(surface.count).toBe(2);
+      expect(surface.instanceColor).toBe(instanceColor);
+      expect(instanceColor.array.length).toBe(surface.instanceMatrix.count * 3);
+      expect(Array.from(instanceColor.array.slice(0, shorterField.length))).toEqual(
+        Array.from(shorterField),
+      );
+
+      surface.count = 4;
+      const largerField = Float32Array.from({ length: 12 }, (_, index) => 1 - index / 12);
+      uploadFdmCuboidInstanceColorAttribute(
+        instanceColor,
+        largerField,
+        "field:H_demag",
+        "field:H_eff",
+      );
+      expect(surface.count).toBe(4);
+      expect(surface.instanceColor).toBe(instanceColor);
+      expect(Array.from(instanceColor.array)).toEqual(Array.from(largerField));
+
+      expect(neutralizeFdmCuboidInstanceColorAttribute(instanceColor)).toBe(true);
+      expect(Array.from(instanceColor.array)).toEqual(Array(12).fill(1));
+      const resetVersion = instanceColor.version;
+      expect(neutralizeFdmCuboidInstanceColorAttribute(instanceColor)).toBe(false);
+      expect(instanceColor.version).toBe(resetVersion);
+      expect(() =>
+        uploadFdmCuboidInstanceColorAttribute(
+          instanceColor,
+          new Float32Array(15),
+          "field:oversized",
+          null,
+        ),
+      ).toThrow("FDM cuboid attribute capacity is smaller than payload");
+    } finally {
+      surface.dispose();
+      geometry.dispose();
+      material.dispose();
+    }
   });
 
   it("keeps the conservative 153600-cell carrier peak below 72 MiB", () => {
@@ -1027,9 +1113,13 @@ describe("FdmCuboidLayer model", () => {
     );
 
     expect(surfaceMeshBlock).not.toContain("key=");
-    expect(layerSource).toContain(
-      "surface.instanceColor = new InstancedBufferAttribute(",
+    expect(surfaceMeshBlock).toContain("args={[geometry, undefined, renderCount]}");
+    expect(layerSource).toContain("surface.instanceColor = instanceColor;");
+    expect(layerSource).toMatch(
+      /createFdmCuboidInstanceColorAttribute\(\s*surface\.instanceMatrix\.count,\s*\)/,
     );
+    expect(layerSource).toContain("neutralizeFdmCuboidInstanceColorAttribute(");
+    expect(layerSource).not.toContain("surface.instanceColor = null;");
   });
 
   it("does not recreate FDM materials for vector-only setting changes", () => {

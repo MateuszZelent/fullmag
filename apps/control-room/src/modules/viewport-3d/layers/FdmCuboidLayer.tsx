@@ -616,15 +616,67 @@ export function uploadFdmCuboidAttribute(
   uploadedRevision: string | null,
 ): string {
   if (uploadedRevision === contentRevision) return uploadedRevision;
-  if (attribute.array.length !== source.length) {
-    throw new Error("FDM cuboid attribute capacity does not match payload");
+  if (attribute.array.length < source.length) {
+    throw new Error("FDM cuboid attribute capacity is smaller than payload");
   }
+  if (attribute.array.length !== source.length) {
+    throw new Error("FDM cuboid attribute payload must match attribute length");
+  }
+  return writeFdmCuboidAttribute(attribute, source, contentRevision);
+}
+
+export function uploadFdmCuboidInstanceColorAttribute(
+  attribute: InstancedBufferAttribute,
+  source: Float32Array,
+  contentRevision: string,
+  uploadedRevision: string | null,
+): string {
+  if (uploadedRevision === contentRevision) return uploadedRevision;
+  if (attribute.array.length < source.length) {
+    throw new Error("FDM cuboid attribute capacity is smaller than payload");
+  }
+  return writeFdmCuboidAttribute(attribute, source, contentRevision);
+}
+
+function writeFdmCuboidAttribute(
+  attribute: InstancedBufferAttribute,
+  source: Float32Array,
+  contentRevision: string,
+): string {
   (attribute.array as Float32Array).set(source);
   attribute.setUsage(DynamicDrawUsage);
   attribute.clearUpdateRanges();
   attribute.addUpdateRange(0, source.length);
   attribute.needsUpdate = true;
   return contentRevision;
+}
+
+export function createFdmCuboidInstanceColorAttribute(
+  instanceMatrixCount: number,
+): InstancedBufferAttribute {
+  const safeCount = Number.isFinite(instanceMatrixCount)
+    ? Math.max(0, Math.floor(instanceMatrixCount))
+    : 0;
+  return new InstancedBufferAttribute(new Float32Array(safeCount * 3), 3);
+}
+
+export function neutralizeFdmCuboidInstanceColorAttribute(
+  attribute: InstancedBufferAttribute,
+): boolean {
+  const colors = attribute.array as Float32Array;
+  let changed = false;
+  for (let index = 0; index < colors.length; index += 1) {
+    if (colors[index] === 1) continue;
+    colors[index] = 1;
+    changed = true;
+  }
+  if (!changed) return false;
+
+  attribute.setUsage(DynamicDrawUsage);
+  attribute.clearUpdateRanges();
+  attribute.addUpdateRange(0, colors.length);
+  attribute.needsUpdate = true;
+  return true;
 }
 
 export function handleFdmCuboidContextLost(
@@ -1202,70 +1254,48 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     }
 
     let colorChanged = false;
-    // Instance colors are enabled by Three.js independently of vertexColors.
-    // Drop the previous quantity's attribute when no compatible buffer exists.
-    if (!usesInstanceColors && surface.instanceColor !== null) {
-      const previousInstanceColor = surface.instanceColor;
-      surface.instanceColor = null;
-      recordViewport3DInstanceColorLifecycleAuditEvent({
-        action: "detach",
-        afterAttribute: null,
-        beforeAttribute: previousInstanceColor,
-        context: {
-          carrierId,
-          fieldBufferId: surfaceColors?.sourceFieldBufferId ?? fieldBufferId,
-          quantityId: surfaceColors?.quantityId ?? null,
-        },
-        objectRole: "fdm-surface",
-        reason: "no-compatible-instance-colors",
-      });
-      colorRevisionRef.current = null;
-      const mountedSurfaceMaterial = surface.material;
-      if (
-        mountedSurfaceMaterial === surfaceMaterial &&
-        mountedSurfaceMaterial instanceof MeshBasicMaterial
-      ) {
-        mountedSurfaceMaterial.needsUpdate = true;
-      }
-      colorChanged = true;
-    }
     if (usesInstanceColors && surfaceColors) {
-      const colorRevision = resolveFdmCuboidColorUploadRevision(
-        preparedInstances,
-        surfaceColors,
-      );
-      if (
-        !surface.instanceColor ||
-        surface.instanceColor.array.length !== surfaceColors.colors.length
-      ) {
-        const previousInstanceColor = surface.instanceColor;
-        const nextInstanceColor = new InstancedBufferAttribute(
-          new Float32Array(surfaceColors.colors.length),
-          3,
+      let instanceColor = surface.instanceColor;
+      if (!instanceColor) {
+        instanceColor = createFdmCuboidInstanceColorAttribute(
+          surface.instanceMatrix.count,
         );
-        surface.instanceColor = nextInstanceColor;
+        surface.instanceColor = instanceColor;
         recordViewport3DInstanceColorLifecycleAuditEvent({
-          action: previousInstanceColor ? "replace" : "attach",
-          afterAttribute: nextInstanceColor,
-          beforeAttribute: previousInstanceColor,
+          action: "attach",
+          afterAttribute: instanceColor,
+          beforeAttribute: null,
           context: {
             carrierId,
             fieldBufferId: surfaceColors.sourceFieldBufferId ?? fieldBufferId,
             quantityId: surfaceColors.quantityId ?? null,
           },
           objectRole: "fdm-surface",
-          reason: previousInstanceColor
-            ? "instance-color-array-length-changed"
-            : "instance-colors-enabled",
+          reason: "instance-colors-enabled",
         });
         colorRevisionRef.current = null;
+      }
+      const minimumInstanceColorCapacity = surface.instanceMatrix.count * 3;
+      if (instanceColor.array.length < minimumInstanceColorCapacity) {
+        throw new Error(
+          "FDM cuboid instance-color attribute is smaller than its InstancedMesh owner capacity",
+        );
+      }
+      const colorRevision = resolveFdmCuboidColorUploadRevision(
+        preparedInstances,
+        surfaceColors,
+      );
+      if (surfaceColors.colors.length > instanceColor.array.length) {
+        throw new Error(
+          "FDM cuboid instance-color payload exceeds its InstancedMesh owner capacity",
+        );
       }
       colorChanged = colorRevisionRef.current !== colorRevision;
       const colorStartMark = colorChanged
         ? markFdmCuboidUpload("fullmag.viewport3d.uploadFdmCuboidColors")
         : null;
-      colorRevisionRef.current = uploadFdmCuboidAttribute(
-        surface.instanceColor,
+      colorRevisionRef.current = uploadFdmCuboidInstanceColorAttribute(
+        instanceColor,
         surfaceColors.colors,
         colorRevision,
         colorRevisionRef.current,
@@ -1287,6 +1317,15 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         previousAdoption?.sessionIdentity?.sessionId !== sessionIdentity?.sessionId;
       if (colorChanged || adoptionIdentityChanged) {
         recordSurfaceAdoption();
+      }
+    } else if (surface.instanceColor) {
+      const neutralRevision = `neutral:${preparedInstances.contentRevision}`;
+      const revisionChanged = colorRevisionRef.current !== neutralRevision;
+      if (revisionChanged) {
+        colorChanged = neutralizeFdmCuboidInstanceColorAttribute(
+          surface.instanceColor,
+        );
+        colorRevisionRef.current = neutralRevision;
       }
     }
     if (matrixChanged || colorChanged) {
@@ -1338,6 +1377,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     <>
       <instancedMesh
         args={[geometry, undefined, renderCount]}
+        // R3F reconstructs the mesh when this capacity argument changes, keeping
+        // its instanceColor attached until the old InstancedMesh is disposed.
         frustumCulled={false}
         onPointerMove={renderPlan.surface.visible ? onPointerMove : undefined}
         onPointerOut={renderPlan.surface.visible ? onPointerOut : undefined}
