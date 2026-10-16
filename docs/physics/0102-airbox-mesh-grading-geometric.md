@@ -267,15 +267,17 @@ production criteria, not claims about the current partial report.
 - Current reports do not yet publish the complete canonical band/growth gate.
 - Linear grading remains compatibility behavior and is not removed here.
 - FMMQ v1 cannot carry mixed topology quality evidence.
-- The scoped exact-layer route has different source strategies for Box and ring
-  geometries. In the scoped Box branch, each precomputed CAD slab calls GEO
-  extrusion with `numElements=[1]`, `heights=[1.0]` and `recombine=True` to
-  request one extrusion mesh layer per slab and avoid Gmsh's native
-  non-recombined prism subdivision. The existing Fullmag converter then gets
-  the first opportunity to split prism elements into the required Tet4 mesh.
-  This is a candidate source strategy only; periodic face matching and the
-  other mesh gates remain runtime `NOT VERIFIED`. The scoped ring branch remains
-  geometry-only and is not covered by this Box experiment.
+- The scoped exact-layer route creates one CAD volume for each precomputed
+  z slab. Under component-scoped sizing fields, both the Box and Ring extrusion
+  branches request exactly one extrusion mesh layer per slab with
+  `numElements=[1]`, `heights=[1.0]`, and `recombine=True`. The Ring branch now
+  follows the same layer-count policy as Box while retaining its existing
+  already-defined slab geometry and shared periodic workflow. Recombined
+  extrusion keeps the existing Fullmag converter responsible for prism-to-Tet4
+  subdivision; source configuration alone does not prove that prism elements
+  reach the converter or that periodic faces match. The unscoped compatibility
+  route is unchanged. Runtime layer, topology, sizing, orientation, and periodic
+  checks remain `NOT VERIFIED` until the hosted regressions pass.
 - A hosted periodic certificate reports equal periodic-face counts. For the
   first failed face, all three nodes of that particular source triangle have
   mapped destination IDs, but no destination face has exactly that mapped
@@ -286,27 +288,25 @@ production criteria, not claims about the current partial report.
 - Gmsh 4.15.2's `meshGRegionExtruded::extrudeMesh` keeps a nondegenerate
   extrusion of each triangular source element as a prism. Its
   `SubdivideExtrudedMesh` pass collects only non-recombined extruded regions;
-  that pass then chooses prism splits and creates tetrahedra. The scoped Box
-  candidate therefore requests `recombine=True` for each one-layer CAD slab,
-  which skips the native `SubdivideExtrudedMesh` pass for non-recombined
-  regions. Gmsh also has an optional recombined `QuadToTri` path, so the flag
-  alone does not prove that prism elements reach Fullmag. The hosted regression
-  checks for actual `prism6` elements immediately before the existing
-  coordinate-ranked `subdivide_layered_prisms` conversion and `tet4` elements
-  after it. That converter does not use Gmsh node IDs or receive the periodic
-  mapping; matching faces still depends on paired prism/quad connectivity and
-  coordinate ordering.
-  Gmsh's alternative native split can compare `getNum()` values, but the
-  available job evidence does not establish that this branch ran in the failed
-  meshes. Source evidence motivates the experiment; it does not prove the
-  produced periodic faces match. See the
+  that pass then chooses prism splits and creates tetrahedra. The scoped Box and
+  Ring candidates therefore request `numElements=[1]`, `heights=[1.0]`, and
+  `recombine=True` for each already-defined CAD slab, avoiding that native
+  non-recombined subdivision path. Gmsh also has an optional recombined
+  `QuadToTri` path, so these flags do not prove that prism elements reach
+  Fullmag. The existing `subdivide_layered_prisms` converter supports vertical
+  prism6/quad4 meshes and replaces them with tet4/tri3 without adding nodes or
+  changing physical regions; it applies a positive-orientation correction to
+  generated tetrahedra. Its coordinate-ranked split does not receive periodic
+  mappings. Periodic face bijection must therefore remain a separate strict
+  acceptance check after extraction. See the
   [Gmsh 4.15.2 extrusion source](https://github.com/live-clones/gmsh/blob/gmsh_4_15_2/src/mesh/meshGRegionExtruded.cpp).
-- Hosted regressions capture bounded Gmsh element-type counts immediately before
-  and after the Fullmag conversion and require an actual `prism6` input to become
-  `tet4` output. Their existing strict checks still decide success: exact body
-  planes and interval occupancy, unchanged body XY, owner-volume and air-volume
-  size behavior, positive cells, and bijective translated periodic face
-  connectivity. The scoped ring remains a separate geometry-only path. This is a
+- Hosted regressions for the scoped one-layer routes must capture bounded Gmsh
+  element-type counts immediately before and after the Fullmag conversion and
+  require actual `prism6` input to become `tet4` output. The existing Ring
+  regression retains its strict checks for requested and resolved layer counts,
+  exact body planes and expected body extents, owner-volume and air-volume size behavior,
+  positive cells, shared-face incidence at body layer seams, periodic node
+  translations, and bijective mapped boundary-face connectivity. This is a
   swept Tet4 generator experiment, not support for general native mixed-prism
   FEM inputs; no native adapter contract changes.
 - Owner-volume and air-volume fields are installed before final
@@ -315,13 +315,11 @@ production criteria, not claims about the current partial report.
   or the prior body XY mesh. Those behaviors must be measured; configured
   field values alone are not evaluated size values.
 - GHA must establish exact magnetic z planes, one nonempty body mesh slab per
-  requested interval, no tetrahedron crossing an internal plane, positive
-  cells, shared-face incidence at body layer seams, mapped periodic node
-  translations and bijective mapped boundary-face connectivity, unchanged body
-  XY under air-cap changes, and measured near-to-far air coarsening before the
-  Box route is runtime-qualified. The
-  geometry-only scoped ring route also remains unqualified until its own
-  existing ring tests pass.
+  requested interval, no tetrahedron crossing an internal plane, positive cells,
+  shared-face incidence at body layer seams, mapped periodic node translations
+  and bijective mapped boundary-face connectivity, unchanged body XY under
+  air-cap changes, and measured near-to-far air coarsening before the scoped Box
+  or Ring route is runtime-qualified.
 - The resolved exact-layer generator cap and the reported `effective_airbox_target`
   are distinct. `_resolve_box_airbox_layer_sizes` keeps the interface target
   `h_inner` at the authored airbox minimum when present, or at `body_hmax`
@@ -361,7 +359,7 @@ production criteria, not claims about the current partial report.
 | Physical model | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:airbox-grading-governing-equations` | source-free exterior equations motivating grading | FEM contract | publication review |
 | Chordal ring volume bound | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:eq-ring-polygon-hole-volume-bound` | conditional geometric bound for a verified common polygonal hole prism | FEM mesh geometry | planned GHA regression |
 | Exact-layer Box extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | requests one extrusion mesh layer per scoped Box CAD slab and leaves prism subdivision to Fullmag's coordinate-ranked Tet4 conversion | FEM meshing | source implemented; runtime NOT VERIFIED, GHA required |
-| Exact-layer ring extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | retains geometry-only scoped ring slabs; ring runtime qualification remains open | FEM meshing | source implemented; runtime NOT VERIFIED, GHA required |
+| Exact-layer ring extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | requests one recombined extrusion mesh layer per already-defined scoped Ring slab and leaves prism subdivision to Fullmag's coordinate-ranked Tet4 conversion | FEM meshing | source implemented; runtime `NOT VERIFIED`, GHA required |
 | Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | verifies body planes, positive tetrahedra, closed boundary geometry, shared body-seam incidence, owner-floor provenance, regional density, and actual periodic node translations | FEM meshing | source regression; GHA pending |
 | Implicit exact-layer cap regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_implicit_airbox_cap_coarsens_far_air` | verifies measured far-air tetrahedral sizes coarsen relative to near-air sizes when only the growth ratio sets the outer cap | FEM meshing | source regression; GHA pending |
 | Pure implicit-cap resolver regression | `packages/fullmag-py/tests/test_meshing.py` | `test_box_airbox_layer_size_resolution_preserves_explicit_targets` | checks that an implicit cap grows from the larger of body target and interface target, while no-limit and explicit-cap behavior stay unchanged | FEM meshing | source test added; GHA pending |

@@ -300,15 +300,22 @@
       "id": "ring-volume-source",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Creates exact-plane Box/ring CAD slabs. The scoped Box branch requests one extrusion mesh layer per slab; the scoped ring branch remains geometry-only. Runtime owner-field and air-sizing behavior remain NOT VERIFIED.",
+      "responsibility": "Creates exact-plane Box/Ring CAD slabs. Under component-scoped sizing fields, both branches request one extrusion mesh layer per already-defined slab. Runtime owner-field and air-sizing behavior remain NOT VERIFIED.",
+      "evidence_status": "source_implemented_runtime_not_verified"
+    },
+    {
+      "id": "scoped-ring-layer-constraint",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "The component-scoped Ring branch requests one recombined extrusion mesh layer per precomputed CAD slab. The existing Fullmag converter subdivides vertical prism6/quad4 elements to tet4/tri3 without adding nodes or changing physical regions; strict periodic recertification remains required.",
       "evidence_status": "source_implemented_runtime_not_verified"
     },
     {
       "id": "ring-volume-regression",
       "path": "packages/fullmag-py/tests/test_meshing.py",
       "symbol": "test_scoped_exact_ring_lower_bound_uses_layer_route_and_report",
-      "responsibility": "Verifies exact body planes, positive tetrahedra, closed body boundary geometry, shared body-seam incidence, owner-floor provenance, body/air size separation in one region, and actual periodic node translations before the conditional chordal volume bound.",
-      "evidence_status": "implemented"
+      "responsibility": "Verifies prism6 input and tet4 output across the existing converter, requested/resolved layer count, exact body planes, positive tetrahedra, closed body boundary geometry, shared body-seam incidence, owner-floor provenance, body/air size separation in one region, and actual periodic node translations. Runtime face bijection remains a strict GHA gate.",
+      "evidence_status": "source_implemented_runtime_not_verified"
     },
     {
       "id": "ring-prism-bound-regression",
@@ -321,7 +328,7 @@
       "id": "scoped-box-layer-constraint",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "The scoped Box branch requests numElements=[1], heights=[1.0], recombine=True per CAD slab, leaving prism subdivision to Fullmag. Exact planes, field behavior, actual prism-to-Tet4 conversion and periodic face bijection remain runtime NOT VERIFIED; the scoped ring branch remains geometry-only.",
+      "responsibility": "The scoped Box branch requests numElements=[1], heights=[1.0], recombine=True per CAD slab, leaving prism subdivision to Fullmag. Exact planes, field behavior, actual prism-to-Tet4 conversion and periodic face bijection remain runtime NOT VERIFIED.",
       "evidence_status": "source_implemented_runtime_not_verified"
     },
     {

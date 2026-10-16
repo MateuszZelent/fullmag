@@ -17,6 +17,7 @@ import numpy as np
 import fullmag as fm
 import fullmag.meshing.asset_pipeline as mesh_asset_pipeline
 import fullmag.model.problem as problem_model
+import fullmag.meshing._gmsh_layered_tetrahedra as gmsh_layered_tetrahedra
 from fullmag.meshing import _gmsh_swept as gmsh_swept
 from meshing_production_fixtures import (
     assert_monotone_p95_growth,
@@ -14476,21 +14477,56 @@ class RegionMeshPolicyTests(unittest.TestCase):
             "airbox_hmax": 20e-9,
             "airbox_hmin": 2e-9,
         }
+        converter_observations = []
+        original_converter = gmsh_layered_tetrahedra.subdivide_layered_prisms
+
+        def observe_converter(gmsh) -> None:
+            def element_type_counts(dimension: int) -> dict[str, int]:
+                element_types, element_tags, _ = gmsh.model.mesh.getElements(dimension)
+                counts: dict[str, int] = {}
+                for element_type, tags in zip(element_types, element_tags):
+                    name = str(
+                        gmsh.model.mesh.getElementProperties(int(element_type))[0]
+                    )
+                    counts[name] = counts.get(name, 0) + len(tags)
+                return counts
+
+            before = (element_type_counts(3), element_type_counts(2))
+            original_converter(gmsh)
+            after = (element_type_counts(3), element_type_counts(2))
+            converter_observations.append((before, after))
+
         with patch.object(
             gmsh_swept,
             "_apply_mixed_source_face_mesh_options",
             wraps=gmsh_swept._apply_mixed_source_face_mesh_options,
         ) as source_face:
-            mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
-                geometries=[geometry],
-                hints=fm.FEM(order=1, hmax=10e-9),
-                study_universe=study_universe,
-                mesh_workflow=mesh_workflow,
-            )
+            with patch.object(
+                gmsh_layered_tetrahedra,
+                "subdivide_layered_prisms",
+                side_effect=observe_converter,
+            ):
+                mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                    geometries=[geometry],
+                    hints=fm.FEM(order=1, hmax=10e-9),
+                    study_universe=study_universe,
+                    mesh_workflow=mesh_workflow,
+                )
         # The exact-cell route's starting face belongs to the airbox, so the
         # owner floor is applied after per-layer volumes exist, never projected
         # onto air merely to change a shared source triangulation.
         source_face.assert_not_called()
+        self.assertEqual(len(converter_observations), 1)
+        (
+            (before_volumes, before_surfaces),
+            (after_volumes, after_surfaces),
+        ) = converter_observations[0]
+        self.assertGreater(before_volumes.get("Prism 6", 0), 0)
+        self.assertGreater(after_volumes.get("Tetrahedron 4", 0), 0)
+        self.assertEqual(after_volumes.get("Prism 6", 0), 0)
+        self.assertGreater(before_surfaces.get("Quadrilateral 4", 0), 0)
+        self.assertEqual(after_surfaces.get("Quadrilateral 4", 0), 0)
+        self.assertGreater(after_surfaces.get("Triangle 3", 0), 0)
         self.assertEqual(report.build_mode, "single_geometry_geo_ring")
         thin_film = next(
             status
@@ -14501,6 +14537,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(thin_film.actual_method, "geo_layer_partitioned_tetrahedral")
         self.assertTrue(thin_film.details["layer_planes_realized"])
         self.assertEqual(thin_film.details["layer_plane_verification"], "verified")
+        self.assertEqual(thin_film.details["requested_layer_partitions"], 3)
         self.assertEqual(thin_film.details["resolved_layer_partitions"], 3)
         floor_records = [
             entry

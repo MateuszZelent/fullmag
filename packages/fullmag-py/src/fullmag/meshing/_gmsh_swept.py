@@ -2468,11 +2468,10 @@ def _generate_coincident_ring_airbox_mesh(
                 [(2, current_hole)] if current_hole is not None else []
             )
             # Keep every requested z interval as a separate CAD volume. The
-            # scoped Box route constrains one mesh layer per slab; its body and
-            # air fields must still resolve in-plane sizing independently when
-            # the final conforming 3D mesh is generated. Other scoped geometry
-            # retains geometry-only extrusion; the unscoped compatibility route
-            # still extrudes its premeshed source triangulation.
+            # scoped Box and Ring routes constrain one mesh layer per slab; their
+            # body and air fields must still resolve in-plane sizing independently
+            # when the final conforming 3D mesh is generated. The unscoped
+            # compatibility route still extrudes its premeshed source triangulation.
             if scoped_layer_partitioning and isinstance(geometry, Box):
                 # Constrain this Box slab to one mesh layer between its exact
                 # CAD planes. The volume-scoped body/air fields remain
@@ -2492,11 +2491,18 @@ def _generate_coincident_ring_airbox_mesh(
                     recombine=True,
                 )
             elif scoped_layer_partitioning:
+                # Match the Box layer constraint for each already-defined Ring
+                # slab. Recombined extrusion leaves prism/quad subdivision to
+                # the existing Fullmag converter; strict periodic recertification
+                # remains the acceptance check.
                 extruded = gmsh.model.geo.extrude(
                     source_entities,
                     0.0,
                     0.0,
                     step,
+                    numElements=[1],
+                    heights=[1.0],
+                    recombine=True,
                 )
             else:
                 extruded = gmsh.model.geo.extrude(
