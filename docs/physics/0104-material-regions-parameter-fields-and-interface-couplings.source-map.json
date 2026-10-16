@@ -735,10 +735,24 @@
       "evidence_status": "implemented"
     },
     {
-      "id": "body-xy-owner-source-regressions",
+      "id": "body-xy-owner-source-selector-regression",
       "path": "packages/fullmag-py/tests/test_meshing.py",
-      "symbol": "test_owner_wide_body_seed_field_selection_excludes_regions_and_other_owners; test_owner_wide_body_seed_options_preserve_authored_mesh_controls; test_exact_layer_body_target_precedence_survives_air_and_local_fields",
-      "responsibility": "Locks owner-only source-field eligibility, preservation of normal authored controls, and the public exact-layer BODY_XY density precedence assertions.",
+      "symbol": "test_owner_wide_body_seed_field_selection_excludes_regions_and_other_owners",
+      "responsibility": "Verifies exact-owner whole-volume field selection and excludes partial regions or other owners from source-face eligibility.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "body-xy-owner-source-options-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_owner_wide_body_seed_options_preserve_authored_mesh_controls",
+      "responsibility": "Verifies source-face projection preserves ordinary authored mesh controls such as hmin.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "body-xy-owner-source-density-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_exact_layer_body_target_precedence_survives_air_and_local_fields",
+      "responsibility": "Locks the public exact-layer BODY_XY density precedence assertions with air and local fields.",
       "evidence_status": "implemented"
     }
   ],
@@ -1451,4 +1465,3 @@
     ]
   }
 }
-

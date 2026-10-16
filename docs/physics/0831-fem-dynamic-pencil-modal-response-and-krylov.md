@@ -177,6 +177,7 @@ normalization.
 | $T$, $T_{\mathrm{src}}$, $T_{\mathrm{dst}}$ | tangent-frame maps from local coefficients to physical perturbations | $1$ |
 | $q$, $q_r$, $q_{\mathrm{src}}$, $q_{\mathrm{dst}}$ | full and reduced tangent-plane coefficient vectors | $1$ |
 | $\mathbf M_T$ | positive geometric tangent-space FEM mass matrix used for modal overlap and candidate deduplication | $\mathrm{m^3}$ |
+| $M_T^{\mathrm{track}}$ | unweighted scalar P1 consistent geometric mass integrated over the selected magnetic domain before vector-component embedding | $\mathrm{m^3}$ |
 | $\eta_M$ | normalized absolute overlap in the geometric tangent-mass metric | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$, $\delta\mathbf h$ | static effective field and RF field phasor | $\mathrm{A\,m^{-1}}$ |
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
