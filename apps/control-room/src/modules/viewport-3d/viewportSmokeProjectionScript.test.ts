@@ -327,7 +327,9 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("verifyHysteresisChartReplaySmoke");
     expect(smokeScript).toContain("verifyHysteresisReplaySmoke");
     expect(smokeScript).toContain("if (hysteresisReplayOnly) {");
-    expect(smokeScript).toContain("enableAuditHooks: hysteresisReplaySmoke");
+    expect(smokeScript).toMatch(
+      /enableAuditHooks:\s*hysteresisReplaySmoke\s*\|\|\s*planarToggleCycles\s*>\s*0\s*\|\|\s*visibleViewportCompanionSmoke/,
+    );
     expect(smokeScript).toContain("loadHysteresisReplaySnapshot");
     expect(smokeScript).toContain(".fm-hysteresis-container");
     expect(smokeScript).toContain("data-hysteresis-point-count");

@@ -91,8 +91,12 @@ const fixtureRequests = [];
 const fieldRequests = [];
 const topologyRequests = [];
 const auditedRequests = [];
+// Failed transport URLs are distinct evidence from the viewport's canonical
+// resource keys; retain the URL Playwright actually requested for fixture review.
+const requestFailureDiagnostics = [];
 const fixture = createFdmFixture();
 let auditActive = false;
+let auditPhase = "bootstrap";
 
 await installFdmFixtureApi(page, fixture, fixtureRequests);
 await installBrowserAuditInstrumentation(page);
@@ -140,6 +144,27 @@ page.on("request", (request) => {
     topologyRequests.push(`${request.method()} ${requestUrl}`);
   }
 });
+page.on("requestfailed", (request) => {
+  let requestUrl;
+  try {
+    requestUrl = new URL(request.url());
+  } catch {
+    return;
+  }
+  if (!requestUrl.pathname.includes("/v2/")) return;
+  requestFailureDiagnostics.push({
+    error: request.failure()?.errorText ?? "unknown request failure",
+    method: request.method(),
+    phase: auditPhase,
+    scope: {
+      component: requestUrl.searchParams.get("component"),
+      maxSamples: requestUrl.searchParams.get("max_samples"),
+      scopeId: requestUrl.searchParams.get("scope_id"),
+      scopeKind: requestUrl.searchParams.get("scope_kind"),
+    },
+    url: requestUrl.toString(),
+  });
+});
 
 try {
   await mkdir(auditArtifactsDirectory, { recursive: true });
@@ -154,6 +179,7 @@ try {
   auditLog("waiting for diagnostics hud");
   await waitForDiagnostics(viewport);
 
+  auditPhase = "quantity-cache-warmup";
   for (const quantity of WARM_QUANTITIES) {
     auditLog("warming quantity", quantity);
     await withTimeout(
@@ -202,6 +228,7 @@ try {
   }
 
   auditActive = true;
+  auditPhase = "cached-quantity-switch-stress";
   const quantitySwitchFieldGetsBefore = fieldRequests.length;
   const quantitySwitchPerformanceBefore = await captureViewportPerformanceSnapshot(
     page,
@@ -414,6 +441,7 @@ try {
     errors,
     fieldRequests,
     fixtureRequests,
+    requestFailureDiagnostics,
     topologyRequests,
   });
   throw error;
@@ -968,7 +996,13 @@ function fieldVectorRequest(quantityId) {
 async function reportAuditFailure(
   page,
   fixture,
-  { errors, fieldRequests, fixtureRequests, topologyRequests },
+  {
+    errors,
+    fieldRequests,
+    fixtureRequests,
+    requestFailureDiagnostics,
+    topologyRequests,
+  },
 ) {
   const snapshot = await page
     .evaluate(() => {
@@ -1026,6 +1060,7 @@ async function reportAuditFailure(
         errors: errors.slice(-10),
         fieldRequests: fieldRequests.slice(-10),
         fixtureRequests: fixtureRequests.slice(-20),
+        requestFailureDiagnostics,
         topologyRequests: topologyRequests.slice(-10),
         visualizationState: fixture.visualizationState,
       },
