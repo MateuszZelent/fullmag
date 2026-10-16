@@ -66,8 +66,44 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
                 "marker": "PASS: fem_tracking_mass_provider_geometric_csr_contract",
                 "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1"],
             },
+            {
+                "name": "fem_tracking_mass_snapshot_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+                "marker": "PASS: fem_tracking_mass_snapshot_cabi_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256",
+                ],
+            },
         ],
         "uses_slepc": False,
+        "timeout": {
+            "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
+            "execution_minutes": BUILD_EXECUTION_TIMEOUT_MINUTES,
+            "dependency_build_seconds": DEPENDENCY_BUILD_TIMEOUT_SECONDS,
+            "native_build_test_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
+        },
+    },
+    "tracking-mass-stub": {
+        "slug": "fem-tracking-mass-stub-contract",
+        "schema": "fullmag.ci.fem.tracking_mass_stub_contract.v1",
+        "preflight_schema": "fullmag.ci.fem.tracking_mass_stub_preflight.v1",
+        "qualification_scope": "no_stack_tracking_mass_abi_unavailable_contract_only",
+        "route_kind": "github_hosted_cpu_no_mfem_abi_contract",
+        "tests": [
+            {
+                "name": "fem_tracking_mass_snapshot_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+                "marker": "PASS: fem_tracking_mass_snapshot_stub_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=0",
+                    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256",
+                ],
+            },
+        ],
+        "uses_slepc": False,
+        "uses_mfem_stack": False,
         "timeout": {
             "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
             "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
@@ -622,6 +658,41 @@ def _assert_source_identity(
         )
 
 
+def _capture_source_snapshot_sha256(output_path: Path) -> str:
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "capture_source_snapshot_identity.py"),
+        "--repo-root",
+        str(REPO_ROOT),
+        "--output",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ContractRunError("could not capture the managed source snapshot identity") from error
+    if result.returncode != 0:
+        raise ContractRunError(
+            "source snapshot identity capture failed: "
+            + (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
+        )
+    try:
+        identity = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractRunError("source snapshot identity output is missing or invalid") from error
+    digest = identity.get("source_snapshot_sha256") if isinstance(identity, dict) else None
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ContractRunError("source snapshot identity lacks a lowercase SHA-256 digest")
+    return digest
+
+
 def _dockerfile_values() -> dict[str, str]:
     text = DOCKERFILE.read_text(encoding="utf-8")
     values: dict[str, str] = {}
@@ -1092,6 +1163,11 @@ def _execute_contract(args: Any) -> int:
             "mfem_compile_gate_observed": False,
             "slepc_compile_gate_observed": False,
             "compile_gates_observed": {},
+            "rust_ffi_test": {
+                "status": "not_started",
+                "marker": "PASS: fem_tracking_mass_snapshot_rust_ffi_contract",
+            },
+            "native_library_identity": {"status": "not_started"},
         },
         "disk_observations": [],
         "observation_errors": [],
@@ -1125,6 +1201,11 @@ def _execute_contract(args: Any) -> int:
             args.git_head, args.github_sha, env=env, stage="before Docker execution"
         )
         receipt["source"]["identity_verified_before_docker"] = True
+        source_snapshot_identity_path = run_dir / "source-snapshot-identity.json"
+        source_snapshot_sha256 = _capture_source_snapshot_sha256(source_snapshot_identity_path)
+        receipt["source"]["source_snapshot_sha256"] = source_snapshot_sha256
+        receipt["source"]["source_snapshot_identity_path"] = str(source_snapshot_identity_path)
+        _write_json(receipt_path, receipt)
 
         dockerfile_pins = _dockerfile_values()
         run_id = env["GITHUB_RUN_ID"]
@@ -1421,13 +1502,15 @@ def _execute_contract(args: Any) -> int:
         container_build_dir = f"/fullmag-storage/{storage_relative_build}/native"
         container_temp_dir = f"/fullmag-storage/{storage_relative_temp}"
         slepc_enabled = "ON" if profile["uses_slepc"] else "OFF"
+        mfem_stack_enabled = "ON" if profile.get("uses_mfem_stack", True) else "OFF"
         cmake_flags = [
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DFULLMAG_ENABLE_CUDA=OFF",
             "-DFULLMAG_ENABLE_FEM_GPU=OFF",
-            "-DFULLMAG_USE_MFEM_STACK=ON",
+            f"-DFULLMAG_USE_MFEM_STACK={mfem_stack_enabled}",
             f"-DFULLMAG_FEM_WITH_SLEPC={slepc_enabled}",
+            f"-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256={source_snapshot_sha256}",
         ]
         if profile["uses_slepc"]:
             cmake_flags.append(f"-DCMAKE_PREFIX_PATH={INSTALL_PREFIX}")
@@ -1442,11 +1525,16 @@ def _execute_contract(args: Any) -> int:
             ("FM_BUILD_DIR", container_build_dir),
             ("FM_TEMP_DIR", container_temp_dir),
             ("CMAKE_BUILD_PARALLEL_LEVEL", str(NATIVE_BUILD_JOBS)),
-            ("FULLMAG_USE_MFEM_STACK", "ON"),
+            ("FULLMAG_USE_MFEM_STACK", mfem_stack_enabled),
             ("FULLMAG_MANAGED_FEM_DEVICE", "cpu"),
             ("FULLMAG_FEM_REQUIRE_GPU", "0"),
             ("FULLMAG_FEM_REQUIRE_CEED", "0"),
             ("FULLMAG_FEM_WITH_SLEPC", slepc_enabled),
+            ("FULLMAG_SOURCE_GIT_COMMIT", args.git_head),
+            ("FULLMAG_SOURCE_WORKTREE_STATE", "clean"),
+            ("FULLMAG_SOURCE_SNAPSHOT_SHA256", source_snapshot_sha256),
+            ("FULLMAG_FEM_LIB_DIR", f"{container_build_dir}/backends/fem"),
+            ("CARGO_TARGET_DIR", f"{container_build_dir}/rust-target"),
         ]
         dense_oracle_enabled = args.contract_profile == "floquet-modal-slepc"
         receipt["diagnostic_configuration"] = {
@@ -1476,19 +1564,43 @@ def _execute_contract(args: Any) -> int:
                 ]
             )
             library_dir += f":{INSTALL_PREFIX}/lib64"
-        inner_script = "\n".join(
-            [
-                "set -euo pipefail",
-                'mkdir -p "$FM_BUILD_DIR" "$FM_TEMP_DIR"',
-                'export TMPDIR="$FM_TEMP_DIR" TEMP="$FM_TEMP_DIR" TMP="$FM_TEMP_DIR"',
-                *provider_environment,
-                cmake_command,
-                f'cmake --build "$FM_BUILD_DIR" --target {target_arguments} --parallel {NATIVE_BUILD_JOBS}',
-                f'export LD_LIBRARY_PATH="$FM_BUILD_DIR/backends/fem:{library_dir}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"',
-                f'ctest --test-dir "$FM_BUILD_DIR/backends/fem" --output-on-failure --verbose --no-tests=error -R {shlex.quote(test_regex)}',
-                "",
-            ]
-        )
+        inner_script_lines = [
+            "set -euo pipefail",
+            'mkdir -p "$FM_BUILD_DIR" "$FM_TEMP_DIR"',
+            'export TMPDIR="$FM_TEMP_DIR" TEMP="$FM_TEMP_DIR" TMP="$FM_TEMP_DIR"',
+            *provider_environment,
+            cmake_command,
+            f'cmake --build "$FM_BUILD_DIR" --target {target_arguments} --parallel {NATIVE_BUILD_JOBS}',
+            f'export LD_LIBRARY_PATH="$FM_BUILD_DIR/backends/fem:{library_dir}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"',
+            f'ctest --test-dir "$FM_BUILD_DIR/backends/fem" --output-on-failure --verbose --no-tests=error -R {shlex.quote(test_regex)}',
+        ]
+        if args.contract_profile == "positive-mass":
+            inner_script_lines.extend(
+                [
+                    'cargo test --manifest-path /workspace/crates/fullmag-runner/Cargo.toml --features fem-native --lib tracking_mass_snapshot_ffi_matches_packed_mesh_identity --no-run --message-format=json > "$FM_TEMP_DIR/tracking-mass-rust-test-build.jsonl"',
+                    'python3 - "$FM_TEMP_DIR/tracking-mass-rust-test-build.jsonl" > "$FM_TEMP_DIR/tracking-mass-rust-test-binary.txt" <<\'PY\'',
+                    "import json",
+                    "import pathlib",
+                    "import sys",
+                    "paths = []",
+                    "for line in pathlib.Path(sys.argv[1]).read_text(encoding=\"utf-8\").splitlines():",
+                    "    if not line.strip():",
+                    "        continue",
+                    "    message = json.loads(line)",
+                    "    target = message.get(\"target\", {})",
+                    "    if message.get(\"reason\") == \"compiler-artifact\" and target.get(\"test\") is True and target.get(\"src_path\", \"\").endswith(\"/src/lib.rs\") and message.get(\"executable\"):",
+                    "        paths.append(message[\"executable\"])",
+                    "if len(paths) != 1:",
+                    "    raise SystemExit(f\"expected one Rust library test executable, found {len(paths)}\")",
+                    "print(paths[0])",
+                    "PY",
+                    'RUST_TEST_BINARY="$(cat "$FM_TEMP_DIR/tracking-mass-rust-test-binary.txt")"',
+                    'python3 /workspace/scripts/fem_modal_library_identity.py pre --manifest "$FM_BUILD_DIR/backends/fem/fullmag-fem-library-path.txt" --runtime-directory "$FM_BUILD_DIR/backends/fem" --output "$FM_TEMP_DIR/tracking-mass-library-identity.json" --binary "$FM_BUILD_DIR/backends/fem/fem_tracking_mass_snapshot_contract" --binary "$RUST_TEST_BINARY"',
+                    'cargo test --manifest-path /workspace/crates/fullmag-runner/Cargo.toml --features fem-native --lib tracking_mass_snapshot_ffi_matches_packed_mesh_identity -- --nocapture',
+                    'python3 /workspace/scripts/fem_modal_library_identity.py post --manifest "$FM_BUILD_DIR/backends/fem/fullmag-fem-library-path.txt" --runtime-directory "$FM_BUILD_DIR/backends/fem" --output "$FM_TEMP_DIR/tracking-mass-library-identity.json" --binary "$FM_BUILD_DIR/backends/fem/fem_tracking_mass_snapshot_contract" --binary "$RUST_TEST_BINARY"',
+                ]
+            )
+        inner_script = "\n".join([*inner_script_lines, ""])
         docker_run_command = [
             "docker",
             "run",
@@ -1533,7 +1645,9 @@ def _execute_contract(args: Any) -> int:
 
         cache = _parse_cache(native_build_dir / "CMakeCache.txt")
         expected_cache = dict(COMMON_CACHE_OPTIONS)
+        expected_cache["FULLMAG_USE_MFEM_STACK"] = mfem_stack_enabled
         expected_cache["FULLMAG_FEM_WITH_SLEPC"] = slepc_enabled
+        expected_cache["FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256"] = source_snapshot_sha256
         if profile["uses_slepc"]:
             expected_cache["CMAKE_PREFIX_PATH"] = INSTALL_PREFIX
         observed_cache = {name: cache.get(name) for name in expected_cache}
@@ -1544,7 +1658,7 @@ def _execute_contract(args: Any) -> int:
             tests=profile["tests"],
         )
         if not all(compile_gates.values()):
-            raise ContractRunError("Contract test source lacks required CPU MFEM/SLEPc compile definitions")
+            raise ContractRunError("Contract test source lacks required profile compile definitions")
         test_log = ctest_log_path.read_text(encoding="utf-8", errors="replace")
         missing_markers = [
             test["marker"]
@@ -1563,8 +1677,34 @@ def _execute_contract(args: Any) -> int:
             raise ContractRunError(
                 f"CTest output does not report exactly {expected_test_count} passing contracts"
             )
+        if args.contract_profile == "positive-mass":
+            rust_marker = "PASS: fem_tracking_mass_snapshot_rust_ffi_contract"
+            if rust_marker not in test_log:
+                raise ContractRunError("Rust FFI test returned without its post-assertion marker")
+            library_identity_path = temp_dir / "tracking-mass-library-identity.json"
+            try:
+                library_identity = json.loads(library_identity_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise ContractRunError("native library identity attestation is missing or invalid") from error
+            if not isinstance(library_identity, dict) or library_identity.get("status") != "pass":
+                raise ContractRunError("native library pre/post attestation did not verify one DSO")
+            receipt["test"]["rust_ffi_test"] = {
+                "status": "passed",
+                "marker": rust_marker,
+                "source_snapshot_sha256": source_snapshot_sha256,
+            }
+            receipt["test"]["native_library_identity"] = {
+                "status": "passed",
+                "path": str(library_identity_path),
+                "source_snapshot_sha256": source_snapshot_sha256,
+            }
+        elif args.contract_profile == "tracking-mass-stub":
+            receipt["test"]["native_library_identity"] = {
+                "status": "not_applicable",
+                "reason": "the no-stack ABI stub creates no snapshot handle or MFEM-backed DSO identity",
+            }
         _assert_source_identity(
-            args.git_head, args.github_sha, env=env, stage="after native build and CTest"
+            args.git_head, args.github_sha, env=env, stage="after native build, CTest, and Rust FFI test"
         )
         receipt["source"]["identity_verified_after_test"] = True
 
@@ -1578,6 +1718,13 @@ def _execute_contract(args: Any) -> int:
                 "ctest_regex": test_regex,
                 "assertion_markers_observed": [test["marker"] for test in profile["tests"]],
                 "slepc_provider_profile": profile["uses_slepc"],
+                "source_snapshot_sha256": source_snapshot_sha256,
+                "rust_ffi_test_marker": (
+                    "PASS: fem_tracking_mass_snapshot_rust_ffi_contract"
+                    if args.contract_profile == "positive-mass"
+                    else None
+                ),
+                "native_library_identity_status": receipt["test"]["native_library_identity"]["status"],
             },
         )
         receipt["test"].update(

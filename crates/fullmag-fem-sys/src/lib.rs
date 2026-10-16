@@ -423,6 +423,8 @@ pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_ID: &str = "fullmag.mfem.m
 pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_SCHEMA_VERSION: &str = "mfem_mesh_space_evidence.v1";
 pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_VERSION: &str = "1";
 pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY: usize = 65;
+pub const FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES: usize = 32;
 pub const FULLMAG_FEM_FE_FAMILY_H1: u32 = 1;
 pub const FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION: u32 = 1;
 pub const FULLMAG_FEM_MESH_ABI_FIELD_COUNT: usize = 30;
@@ -509,6 +511,35 @@ pub struct fullmag_fem_mesh_space_preparation_evidence_v1 {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct fullmag_fem_tracking_mass_snapshot_request_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh: *const fullmag_fem_mesh_desc,
+    pub magnetic_cell_mask: *const u8,
+    pub magnetic_cell_mask_count: u64,
+    pub generation: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct fullmag_fem_tracking_mass_snapshot_info_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub generation: u64,
+    pub canonical_vertex_count: u64,
+    pub nonzero_count: u64,
+    pub magnetic_volume_m3: f64,
+    pub topology_sha256: [u8; FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+    pub marker_map_sha256: [u8; FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+    pub element_mask_sha256: [u8; FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+    pub canonical_dof_map_sha256: [u8; FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+    pub csr_sha256: [u8; FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+    pub source_snapshot_sha256: [u8; FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+    pub identity_sha256: [u8; FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct fullmag_fem_mesh_abi_layout {
     pub abi_version: u32,
@@ -583,6 +614,17 @@ const _: () = {
             fullmag_fem_mesh_space_preparation_evidence_v1,
             topology_fingerprint
         ) == 96
+    );
+    assert!(std::mem::size_of::<fullmag_fem_tracking_mass_snapshot_request_v1>() == 40);
+    assert!(std::mem::align_of::<fullmag_fem_tracking_mass_snapshot_request_v1>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_tracking_mass_snapshot_request_v1, mesh) == 8);
+    assert!(
+        std::mem::offset_of!(fullmag_fem_tracking_mass_snapshot_request_v1, magnetic_cell_mask) == 16
+    );
+    assert!(std::mem::size_of::<fullmag_fem_tracking_mass_snapshot_info_v1>() == 264);
+    assert!(std::mem::align_of::<fullmag_fem_tracking_mass_snapshot_info_v1>() == 8);
+    assert!(
+        std::mem::offset_of!(fullmag_fem_tracking_mass_snapshot_info_v1, topology_sha256) == 40
     );
     assert!(
         std::mem::offset_of!(
@@ -3215,6 +3257,36 @@ extern "C" {
         error_message: *mut c_char,
         error_message_capacity: u64,
     ) -> i32;
+    pub fn fullmag_fem_tracking_mass_snapshot_create_v1(
+        request: *const fullmag_fem_tracking_mass_snapshot_request_v1,
+        out_snapshot: *mut *mut c_void,
+        error_message: *mut c_char,
+        error_message_capacity: u64,
+    ) -> i32;
+    pub fn fullmag_fem_tracking_mass_snapshot_get_info_v1(
+        snapshot: *const c_void,
+        out_info: *mut fullmag_fem_tracking_mass_snapshot_info_v1,
+        error_message: *mut c_char,
+        error_message_capacity: u64,
+    ) -> i32;
+    pub fn fullmag_fem_tracking_mass_snapshot_copy_v1(
+        snapshot: *const c_void,
+        expected_generation: u64,
+        expected_identity_sha256: *const u8,
+        row_offsets_capacity: u64,
+        columns_capacity: u64,
+        values_capacity: u64,
+        canonical_vertices_capacity: u64,
+        scalar_dofs_capacity: u64,
+        row_offsets: *mut u64,
+        columns: *mut u32,
+        values_m3: *mut f64,
+        canonical_vertex_ids: *mut u32,
+        scalar_dof_ids: *mut u32,
+        error_message: *mut c_char,
+        error_message_capacity: u64,
+    ) -> i32;
+    pub fn fullmag_fem_tracking_mass_snapshot_destroy_v1(snapshot: *mut c_void);
     pub fn fullmag_fem_solve_steady_transport_v1(
         request: *const fullmag_fem_steady_transport_request_v1,
         result: *mut fullmag_fem_steady_transport_result_v1,

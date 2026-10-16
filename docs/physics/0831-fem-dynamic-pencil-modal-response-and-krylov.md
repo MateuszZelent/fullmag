@@ -178,6 +178,9 @@ normalization.
 | $q$, $q_r$, $q_{\mathrm{src}}$, $q_{\mathrm{dst}}$ | full and reduced tangent-plane coefficient vectors | $1$ |
 | $\mathbf M_T$ | positive geometric tangent-space FEM mass matrix used for modal overlap and candidate deduplication | $\mathrm{m^3}$ |
 | $M_T^{\mathrm{track}}$ | unweighted scalar P1 consistent geometric mass integrated over the selected magnetic domain before vector-component embedding | $\mathrm{m^3}$ |
+| $\mathcal P(\mathbf k)$ | Exact solver mapping from reduced modal coordinates to the full nodal Cartesian phasor, including its actual PBC prolongation | $1$ |
+| $D_+(\mathbf k)$ | Diagonal nodal phase map with entries $\exp(+\mathrm{i}\mathbf k\cdot\mathbf r_i)$ on each Cartesian component | $1$ |
+| $\mathcal M_{\mathrm{track,full}}$ | Full-node Cartesian mass $M_T^{\mathrm{track}}\otimes I_3$ in canonical node order | $\mathrm{m^3}$ |
 | $\eta_M$ | normalized absolute overlap in the geometric tangent-mass metric | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$, $\delta\mathbf h$ | static effective field and RF field phasor | $\mathrm{A\,m^{-1}}$ |
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
@@ -2667,8 +2670,10 @@ test_dense_certificate_inventory_and_scope_are_strict.
 Dla ścieżki Floqueta przestrzenny mod delta_m zawiera exp(-i k·r).
 Tracker ma porównywać nodalny envelope exp(+i k·r) delta_m, w globalnym
 układzie Cartesian XYZ, zgodnie z wcześniej zdefiniowanym porównaniem profili.
-Zmiana fazy jest postprocessingiem trackingu; publikowane pola, równania
-solvera i temporalny phasor exp(+i omega t) pozostają oddzielnymi kontraktami.
+Jest to transformacja wartości węzłowych; jej interpolacja P1 nie jest
+dokładną ciągłą transformacją exp(+i k·r) interpolowanego pola FE. Zmiana
+fazy jest postprocessingiem trackingu; publikowane pola, równania solvera i
+temporalny phasor exp(+i omega t) pozostają oddzielnymi kontraktami.
 Dla Gamma i niefloquetowych granic nie usuwa się przestrzennej fazy.
 
 Adapter wymaga pełnego indeksowania siatki dla obu tablic real/imag,
@@ -2749,8 +2754,14 @@ równowagi pozostają wymaganiami przed zaliczeniem S06/S07.
 | `source-tracking-consistent-subspace` | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `mass_weighted_subspace_transport` | Consistent-mass orthonormalization, principal angles and recovered branch frames |
 | `source-tracking-consistent-fem-adapter` | `crates/fullmag-runner/src/fem/eigen_path.rs` | `eigen_path_consistent_tracking_metric` | Construct a shared exact metric on every physical magnetic node |
 | `source-tracking-consistent-basis-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass` | Uncompiled analytic regression distinguishes consistent and diagonal mass |
-| `source-native-p1-tracking-mass-provider` | `backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp` | `assemble_consistent_p1_tracking_mass` | Internal full physical-vertex scalar P1 geometric CSR over explicit magnetic attributes; not yet connected to Rust tracking |
+| `source-native-p1-tracking-mass-provider` | `backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp` | `assemble_consistent_p1_tracking_mass` | Internal full physical-vertex scalar P1 geometric CSR over explicit magnetic attributes; the Stage 2 C ABI reuses this assembly without routing it into tracking |
 | `test-native-p1-tracking-mass-provider` | `backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp` | `main` | Real-MFEM analytic Tet4/Wedge6 at 1 m and 1 nm, mixed magnetic/air full-map and degenerate-Tet4 cases; GHA execution pending |
+| `source-native-p1-tracking-mass-snapshot` | `backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp` | `fullmag_fem_tracking_mass_snapshot_create_v1` | Private versioned C ABI imports the exact typed mesh and element mask, builds an immutable owned CSR handle, and binds geometry, mask, map, CSR and compiled source-snapshot digests |
+| `source-native-p1-tracking-mass-snapshot-rust` | `crates/fullmag-runner/src/native_fem/tracking_mass.rs` | `TrackingMassSnapshot::from_mesh` | Safe Rust owner over the private sys ABI; validates metadata, checked buffer sizes, full CSR and canonical map, and releases the native handle on Drop |
+| `test-native-p1-tracking-mass-snapshot` | `backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp` | `main` | Real DSO marker-one/air-zero mapping and Tet4/Prism6 C ABI round trips, source digest binding, all-or-nothing identity/generation/capacity checks, teardown and no-stack unavailable/null-handle ABI; GHA execution pending |
+| `test-native-p1-tracking-mass-snapshot-rust` | `crates/fullmag-runner/src/native_fem/tracking_mass.rs` | `tracking_mass_snapshot_ffi_matches_packed_mesh_identity` | Typed MeshIR/PackedNativeMesh round trip through the compiled FEM DSO; verifies physical rows, canonical order, CSR and source-snapshot identity; GHA execution pending |
+| `source-native-p1-tracking-mass-snapshot-attestation` | `scripts/ci/run_fem_positive_mass_contract.py` | `_execute_contract` | Positive-mass profile passes one captured source-snapshot SHA to the DSO and Rust build, runs both ABI tests, and records loader/SHA attestation; runtime execution pending |
+| `source-tracking-nodal-envelope-metric-contract` | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` | `DOC-ANCHOR:tracking-nodal-envelope-metric` | Future consumer must apply the nodal phase around the consistent mass; this is a contract only and is not implemented by Stage 2 |
 
 ### Natywny geometryczny provider CSR dla trackingu — pierwszy atom
 
@@ -2785,14 +2796,70 @@ $M_s$, regularizacji, tetrahedralizacji pryzm ani zastępowania metryki
 identycznością. Snapshot nie przechowuje uchwytów MFEM i jest niemutowalny
 po zbudowaniu.
 
-Ten atom dostarcza wewnętrzny builder i niezależny test MFEM; nie podłącza go
-jeszcze do `crates/fullmag-runner`, publicznego ABI, selekcji backendu,
-adaptacyjnego sweepu ani GPU. Test analityczny obejmuje Tet4 i affine Wedge6
-przy skali 1 m oraz 1 nm, a także selekcję domeny magnetycznej w sąsiedztwie
-powietrza z zachowanym pustym wierszem fizycznego węzła air-only i odrzucenie
-degenerowanego Tet4. GHA dla
-nowego CTest pozostaje wymagane; bez tego wykonania i późniejszej integracji
-tracking/runtime pozostają **NOT VERIFIED**.
+Pierwszy atom dostarczył wewnętrzny builder i niezależny test MFEM. Drugi
+udostępnia prywatny, wersjonowany adapter C ABI oraz bezpieczny wrapper Rust;
+nie podłącza go jeszcze do macierzy trackingu, publicznego SDK, selekcji
+backendu, direct/path, adaptive, bias ani GPU. C ABI otrzymuje
+`fullmag_fem_mesh_desc` i maskę z jednym bitem na komórkę kanonicznego
+`MeshIR`. Ponownie używa `import_mesh_descriptor` oraz
+`build_mfem_mesh` i wiąże wpis maski z faktycznym atrybutem MFEM po
+translacji markerów IR; marker IR 0 nie jest traktowany jako MFEM attribute 0.
+Jeżeli maska rozdziela komórki o identycznym atrybucie MFEM, operacja kończy
+się jawnym błędem zamiast rozszerzać domenę assembly.
+
+Natywny handle zachowuje tylko własne CSR, canonical vertex/DOF maps,
+generation i digesty; nie przechowuje wskaźników do lokalnego mesh/FES/forma.
+Metadata rozróżnia ABI version/size, liczbę węzłów i wpisów oraz SHA-256
+topologii, marker map, maski elementów, canonical map, CSR i źródłowego
+snapshotu DSO. Kopiowanie wymaga zgody na generation i digest oraz preflight
+wszystkich pojemności przed jakimkolwiek zapisem. Rust kontroluje przepełnienia
+i rozmiary przed alokacją, waliduje kompletne tablice i zwalnia handle na
+każdej ścieżce. SHA źródłowego snapshotu jest wbudowany w DSO i porównywany
+z `fullmag-build-info`; GHA ma dodatkowo sprawdzić dokładny plik DSO,
+loader path i SHA biblioteki przed oraz po testach.
+
+<!-- DOC-ANCHOR:tracking-nodal-envelope-metric -->
+#### Granica PBC dla nodalnego envelope
+
+Istniejący adapter zachowuje znak `exp(+i k·r)` przy nodalnym odfazowaniu.
+Przyszły Stage 3 musi pozostawić tę diagonalną operację po stronie właściwego
+phasora, nie przestawiając jej przez pełną consistent masę. Dla dokładnego
+mapowania solvera \(\mathcal P(\mathbf k)\) z wektora zredukowanego \(q\)
+na pełny nodalny Cartesian phasor, niech
+\(D_+(\mathbf k)=\operatorname{diag}_{i,\alpha}
+\exp(+\mathrm{i}\mathbf k\cdot\mathbf r_i)\) i
+\(\mathcal M_{\mathrm{track,full}}=
+M_T^{\mathrm{track}}\otimes I_3\). Metryka porównywanego nodalnego
+envelope to
+
+```{math}
+:label: eq-tracking-nodal-envelope-metric
+\mathbf u=D_+(\mathbf k)\mathcal P(\mathbf k)q,\qquad
+\mathbf u^\mathsf H\mathcal M_{\mathrm{track,full}}\mathbf u
+=q^\mathsf H\mathcal P(\mathbf k)^\mathsf H
+D_+(\mathbf k)^\mathsf H\mathcal M_{\mathrm{track,full}}
+D_+(\mathbf k)\mathcal P(\mathbf k)q.
+```
+
+Równość \(q^\mathsf H\mathcal P^\mathsf H
+\mathcal M_{\mathrm{track,full}}\mathcal Pq\) byłaby na ogół inna,
+bo consistent mass ma składniki pozadiagonalne. P1 interpolacja nodalnie
+odfazowanych wartości nie jest dokładną ciągłą transformacją
+\(\exp(+\mathrm{i}\mathbf k\cdot\mathbf r)\) interpolowanego pola.
+Stage 2 eksportuje surową macierz geometryczną, bez \(\mathbf k\), PBC
+reduction i fazowej transformacji; zachowuje dotychczasowy artefakt/parser v1.
+Przyszły v2 sidecar powstanie raz na sweep i jego digest będzie wiązać każdy
+rekord modu. Ta architektura nie jest jeszcze zintegrowana ani zweryfikowana.
+
+Test analityczny obejmuje Tet4 i affine Wedge6 przy skali 1 m oraz 1 nm,
+a także selekcję domeny magnetycznej w sąsiedztwie powietrza z zachowanym
+pustym wierszem fizycznego węzła air-only i odrzucenie degenerowanego Tet4.
+Nowe real-DSO CTest i Rust test mają dodatkowo pokryć query/copy, no-partial
+write, stale identity/generation, kompletne canonical map/CSR, source-snapshot
+attestation i RAII teardown. Oba są dołączone do istniejącego profilu
+`positive-mass`; wcześniejszy ważony/operatorowy test pozostaje bez zmian.
+GHA wykonanie pozostaje wymagane; do tego czasu C ABI/Rust/runtime tracking
+pozostają **NOT VERIFIED**.
 
 ### Natywny Floquet tangent-mass assembly foundation
 

@@ -16,10 +16,14 @@ on:
       - 'native/CMakeLists.txt'
       - 'native/cmake/FindFullmagMfem.cmake'
       - 'backends/fem/CMakeLists.txt'
+      - 'native/include/fullmag_fem.h'
       - 'backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp'
       - 'backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.hpp'
+      - 'backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp'
+      - 'backends/fem/src/frequency_domain/tracking_mass_snapshot_stub.cpp'
       - 'backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp'
       - 'backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp'
+      - 'backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp'
       - 'backends/fem/tests/frequency_domain/floquet_bloch_scalar_test.cpp'
       - 'backends/fem/cpu/frequency_domain/floquet_bloch_scalar.cpp'
       - 'backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp'
@@ -28,7 +32,12 @@ on:
       - 'backends/fem/src/frequency_domain/modal_eigen_solver.cpp'
       - 'backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp'
       - 'scripts/ci/run_fem_positive_mass_contract.py'
+      - 'scripts/capture_source_snapshot_identity.py'
+      - 'scripts/fem_modal_library_identity.py'
       - 'scripts/fullmag_storage.py'
+      - 'crates/fullmag-fem-sys/src/lib.rs'
+      - 'crates/fullmag-runner/src/native_fem.rs'
+      - 'crates/fullmag-runner/src/native_fem/tracking_mass.rs'
   workflow_dispatch:
     inputs:
       contract_profile:
@@ -38,6 +47,7 @@ on:
         default: positive-mass
         options:
           - positive-mass
+          - tracking-mass-stub
           - floquet-source-moments
           - floquet-modal-slepc
           - generic-modal-slepc
@@ -81,5 +91,28 @@ jobs:
         with:
           name: fem-cpu-source-contract-${{ inputs.contract_profile || 'positive-mass' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.contract.outputs.evidence_dir }}/**
+          if-no-files-found: warn
+          compression-level: 6
+
+
+  fem-tracking-mass-stub-contract:
+    if: github.event_name == 'pull_request' || inputs.contract_profile == 'positive-mass' || inputs.contract_profile == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      FULLMAG_STORAGE_PROFILE: linux-host
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure without MFEM and verify tracking-mass ABI stub
+        id: stub-contract
+        run: python3 scripts/ci/run_fem_positive_mass_contract.py --contract-profile tracking-mass-stub
+
+      - name: Upload no-stack ABI stub receipt and logs
+        if: always() && steps.stub-contract.outputs.evidence_dir != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: fem-cpu-no-stack-abi-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.stub-contract.outputs.evidence_dir }}/**
           if-no-files-found: warn
           compression-level: 6

@@ -492,6 +492,9 @@ typedef struct {
 #define FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_VERSION "1"
 #define FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY 65u
 
+#define FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_ABI_VERSION 1u
+#define FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES 32u
+
 #define FULLMAG_FEM_FE_FAMILY_H1 1u
 
 typedef struct {
@@ -523,6 +526,36 @@ typedef struct {
     char quality_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
     char space_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
 } fullmag_fem_mesh_space_preparation_evidence_v1;
+
+/* Immutable unweighted scalar H1/P1 geometric mass snapshot.  This is a
+   control-plane handle for one typed mesh/magnetic-cell mask generation; it
+   does not contain a material Ms weighting or alter any solver route. */
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const fullmag_fem_mesh_desc *mesh;
+    const uint8_t *magnetic_cell_mask;
+    uint64_t magnetic_cell_mask_count;
+    uint64_t generation;
+} fullmag_fem_tracking_mass_snapshot_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t generation;
+    uint64_t canonical_vertex_count;
+    uint64_t nonzero_count;
+    double magnetic_volume_m3;
+    uint8_t topology_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES];
+    uint8_t marker_map_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES];
+    uint8_t element_mask_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES];
+    uint8_t canonical_dof_map_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES];
+    uint8_t csr_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES];
+    uint8_t source_snapshot_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES];
+    uint8_t identity_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES];
+} fullmag_fem_tracking_mass_snapshot_info_v1;
+
+typedef struct fullmag_fem_tracking_mass_snapshot_v1 fullmag_fem_tracking_mass_snapshot_v1;
 
 #define FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION 1u
 #define FULLMAG_FEM_MESH_ABI_FIELD_COUNT 30u
@@ -3496,6 +3529,40 @@ FULLMAG_FEM_API int fullmag_fem_prepare_mesh_space_v1(
     fullmag_fem_mesh_space_preparation_evidence_v1 *out_evidence,
     char *error_message,
     uint64_t error_message_capacity
+);
+FULLMAG_FEM_API int fullmag_fem_tracking_mass_snapshot_create_v1(
+    const fullmag_fem_tracking_mass_snapshot_request_v1 *request,
+    fullmag_fem_tracking_mass_snapshot_v1 **out_snapshot,
+    char *error_message,
+    uint64_t error_message_capacity
+);
+FULLMAG_FEM_API int fullmag_fem_tracking_mass_snapshot_get_info_v1(
+    const fullmag_fem_tracking_mass_snapshot_v1 *snapshot,
+    fullmag_fem_tracking_mass_snapshot_info_v1 *out_info,
+    char *error_message,
+    uint64_t error_message_capacity
+);
+/* Copy is all-or-nothing after pointer/capacity/generation/identity preflight.
+   row_offsets_capacity is measured in entries and must cover row_count + 1. */
+FULLMAG_FEM_API int fullmag_fem_tracking_mass_snapshot_copy_v1(
+    const fullmag_fem_tracking_mass_snapshot_v1 *snapshot,
+    uint64_t expected_generation,
+    const uint8_t expected_identity_sha256[FULLMAG_FEM_TRACKING_MASS_SNAPSHOT_DIGEST_BYTES],
+    uint64_t row_offsets_capacity,
+    uint64_t columns_capacity,
+    uint64_t values_capacity,
+    uint64_t canonical_vertices_capacity,
+    uint64_t scalar_dofs_capacity,
+    uint64_t *row_offsets,
+    uint32_t *columns,
+    double *values_m3,
+    uint32_t *canonical_vertex_ids,
+    uint32_t *scalar_dof_ids,
+    char *error_message,
+    uint64_t error_message_capacity
+);
+FULLMAG_FEM_API void fullmag_fem_tracking_mass_snapshot_destroy_v1(
+    fullmag_fem_tracking_mass_snapshot_v1 *snapshot
 );
 FULLMAG_FEM_API int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,

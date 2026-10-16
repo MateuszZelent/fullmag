@@ -919,6 +919,20 @@
       "sources": [
         "source-g6-textured-nodal-probe"
       ]
+    },
+    {
+      "id": "eq-tracking-nodal-envelope-metric",
+      "symbols": [
+        "tracking_nodal_envelope",
+        "tracking_phase_diagonal",
+        "tracking_prolongation",
+        "q",
+        "tracking_geometric_mass",
+        "tracking_vector_mass"
+      ],
+      "sources": [
+        "source-tracking-nodal-envelope-metric-contract"
+      ]
     }
   ],
   "symbols": [
@@ -2169,6 +2183,30 @@
       "latex": "\\eta",
       "meaning": "Punktowa składowa normalna interpolowanej perturbacji",
       "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_nodal_envelope",
+      "latex": "$\\mathbf u$",
+      "meaning": "Full-node Cartesian envelope after applying the positive-k nodal phase convention",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_prolongation",
+      "latex": "$\\mathcal P(\\mathbf k)$",
+      "meaning": "Maps reduced periodic modal coefficients to the full nodal Cartesian phasor",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_phase_diagonal",
+      "latex": "$D_+(\\mathbf k)$",
+      "meaning": "Diagonal positive Bloch phase on full physical nodes",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_vector_mass",
+      "latex": "$\\mathcal M_{\\mathrm{track,full}}$",
+      "meaning": "Full Cartesian tracking mass formed as scalar geometric mass tensor identity",
+      "si_unit": "$\\mathrm{m^3}$"
     }
   ],
   "sources": [
@@ -4645,6 +4683,48 @@
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "void modal_certified_recovery_controlled_breakdown_contract",
       "responsibility": "Test-only false default-convergence scenario with a measured same-attempt strict-progress probe, one injected BREAKDOWN, actual sparse-owner recovery under the original strict rtol/atol and eight-iteration budget, and independent final b-Ax; not evidence of natural FEM breakdown or solver qualification"
+    },
+    {
+      "id": "source-native-p1-tracking-mass-snapshot",
+      "path": "backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp",
+      "symbol": "fullmag_fem_tracking_mass_snapshot_create_v1",
+      "responsibility": "Private versioned C ABI imports the exact typed mesh and element mask, builds an immutable owned CSR handle, and binds geometry, mask, map, CSR and compiled source-snapshot digests; runtime execution pending"
+    },
+    {
+      "id": "source-native-p1-tracking-mass-snapshot-stub",
+      "path": "backends/fem/src/frequency_domain/tracking_mass_snapshot_stub.cpp",
+      "symbol": "fullmag_fem_tracking_mass_snapshot_create_v1",
+      "responsibility": "No-MFEM build exports the same private ABI, clears the output handle and returns an explicit unavailable status without allocating or exposing a fabricated snapshot"
+    },
+    {
+      "id": "source-native-p1-tracking-mass-snapshot-rust",
+      "path": "crates/fullmag-runner/src/native_fem/tracking_mass.rs",
+      "symbol": "TrackingMassSnapshot::from_mesh",
+      "responsibility": "Safe Rust owner over the private sys ABI; validates metadata, checked buffer sizes, full CSR and canonical map, and releases the native handle on Drop; runtime execution pending"
+    },
+    {
+      "id": "test-native-p1-tracking-mass-snapshot",
+      "path": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+      "symbol": "main",
+      "responsibility": "Real DSO C ABI marker-one/air-zero remap and Tet4/Prism6 P1 CSR round trips, source-snapshot digest binding, no-partial-write after capacity/identity/generation failures, and no-stack exported-symbol/unavailable/null-handle contract; GHA execution pending"
+    },
+    {
+      "id": "test-native-p1-tracking-mass-snapshot-rust",
+      "path": "crates/fullmag-runner/src/native_fem/tracking_mass.rs",
+      "symbol": "tracking_mass_snapshot_ffi_matches_packed_mesh_identity",
+      "responsibility": "Typed MeshIR/PackedNativeMesh Tet4 and nanometre-scale Prism6 round trips through the compiled FEM DSO; verifies physical rows, canonical order, analytic CSR and source-snapshot identity; GHA execution pending"
+    },
+    {
+      "id": "source-native-p1-tracking-mass-snapshot-attestation",
+      "path": "scripts/ci/run_fem_positive_mass_contract.py",
+      "symbol": "_execute_contract",
+      "responsibility": "Positive-mass profile passes one captured source-snapshot SHA to the DSO and Rust build and records loader/SHA attestation; a separate no-stack profile configures FULLMAG_USE_MFEM_STACK=OFF and uploads its own ABI-stub receipt; GHA execution pending"
+    },
+    {
+      "id": "source-tracking-nodal-envelope-metric-contract",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:tracking-nodal-envelope-metric",
+      "responsibility": "Future consumer must apply the nodal phase around the consistent mass; this is a contract only and is not implemented by Stage 2"
     }
   ],
   "public_api": {

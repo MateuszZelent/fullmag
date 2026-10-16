@@ -1,17 +1,18 @@
 (native-p1-tracking-mass-provider)=
 # ADR 0060 — natywny geometryczny provider P1 dla metryki trackingu
 
-Status: accepted dla pierwszego wewnętrznego atomu; integracja runtime, managed FEM, GPU i kwalifikacja naukowa **NOT VERIFIED**.
+Status: accepted dla dwóch pierwszych wewnętrznych atomów; wykorzystanie snapshotu przez tracking/sweep, managed FEM, GPU i kwalifikacja naukowa **NOT VERIFIED**.
 
-Data: 16.10.2026. Punkt odniesienia źródeł: `MateuszZelent/fullmag@aa7e20a2924507ac91004f04eea3facbc81e3f91`. Ta decyzja nie rozszerza publicznego ABI ani legalności planner'a.
+Data: 16.10.2026. Punkt odniesienia źródeł: `MateuszZelent/fullmag@40fd62ae39f6e68ac7dcc602c614e12f610cbc46`. Ta decyzja dodaje wyłącznie prywatny, wersjonowany kontrakt C ABI dla `fullmag-fem-sys` i runnera; nie rozszerza wspieranego publicznego SDK ani legalności planner'a.
 
 ## Kontekst
 
 Ścieżka trackingu używa geometrycznej, consistent metryki P1 do porównywania
 nodalnych wektorów. Nie jest to operator dynamiki ani macierz uogólnionego
-pencil. Obecny adapter Rustowy buduje metrykę Tet4 z kanonicznej topologii,
-ale dalszy natywny provider ma udostępnić jeden dokładny, niezależny snapshot
-MFEM do późniejszego połączenia ze sweepem. Macierz wymiany ważona przez
+pencil. Obecny adapter Rustowy buduje metrykę Tet4 z kanonicznej topologii.
+Pierwszy atom dostarcza natywny MFEM assembly, a drugi prywatne C ABI i
+bezpieczny, niemutowalny snapshot Rust do późniejszego połączenia ze sweepem.
+Macierz wymiany ważona przez
 $M_s$, masa lumped i tangent mass Floqueta mają odrębne znaczenie i pozostają
 bez zmian.
 
@@ -39,12 +40,40 @@ Provider odtwarza istniejący sanity check mesh-buildera: kontrolę orientacji
 oraz dodatnie, skończone Jacobiany w punktach reguły rzędu 2. Nie jest to
 pełna certyfikacja Jacobianu w każdym punkcie nieafinicznego Prism6.
 
-Snapshot nie zachowuje wskaźników do siatki, FES ani formy MFEM. Budowa
-pozostaje pojedynczą jawnie żądaną operacją. Późniejszy integrator sweepu
-będzie właścicielem czasu życia i cache jednego snapshotu na niezmienny
-geometric domain; nie składa macierzy osobno dla każdego modu ani punktu.
-Ten ADR nie dodaje jeszcze integratora, publicznego C ABI, Rust FFI,
-wyboru CPU/GPU, planner capability ani fallbacku GPU.
+Drugim atomem jest prywatny kontrakt `fullmag_fem_tracking_mass_snapshot_*_v1`.
+`fullmag_fem_tracking_mass_snapshot_create_v1` przyjmuje istniejący typowany
+`fullmag_fem_mesh_desc` oraz maskę 0/1 z jednym wpisem na kanoniczną komórkę.
+Implementacja ponownie używa `import_mesh_descriptor` i
+`build_mfem_mesh`; porównuje maskę po indeksie komórki z rzeczywistym
+atrybutem MFEM po translacji markerów IR. Nie zakłada, że marker IR równy zero
+jest atrybutem MFEM zero. Maska dzieląca komórki o jednym atrybucie MFEM jest
+jawnie odrzucana, tak aby assembly nie rozszerzyło domeny po cichu.
+
+Deklaracje i symbole tego ABI są obecne także w konfiguracji z
+`FULLMAG_USE_MFEM_STACK=OFF`. W tej konfiguracji mały stub zwraca
+`FULLMAG_FEM_ERR_UNAVAILABLE` i zeruje wyjściowy uchwyt; nie tworzy danych ani
+nie dołącza typów MFEM. Zapytanie lub kopiowanie z nieistniejącym uchwytem
+kończy się jawnym błędem. Oddzielny profil `tracking-mass-stub` sprawdza tę
+granicę bez linkowania MFEM.
+
+Uchwyt zawiera wyłącznie własne tablice CSR/mapowania i metadane; nie zachowuje
+wskaźników do siatki, FES, formy MFEM, kontekstu ani urządzenia. Metadata
+wiąże wersję i rozmiar ABI, generation, pełne wymiary, hash komórkowej maski,
+topologii/markerów, canonical map, CSR oraz SHA-256 źródłowego snapshotu
+osadzonego w DSO. Kopiowanie wymaga oczekiwanej generation i digestu, sprawdza
+wszystkie wskaźniki oraz pojemności przed pierwszym zapisem i nie wykonuje
+częściowego copy. Wrapper Rust sprawdza rozmiary/overflow przed alokacją,
+waliduje cały CSR i mapowanie oraz zwalnia uchwyt przez `Drop`, także gdy
+walidacja albo copy kończą się błędem.
+
+To nadal nie podłącza snapshotu do iloczynu trackingu, solvera, direct/path,
+adaptive ani bias. Następny atom zachowa istniejący Tet4 artifact/parser v1
+i doda odrębny immutable sidecar v2 raz na sweep, z digestem sidecara w
+rekordzie każdego modu; nie będzie tworzyć assembly ani macierzy per punkt
+`k`. Export snapshotu Stage 2 pozostaje surową geometryczną macierzą bez fazy,
+redukcji PBC ani wyboru CPU/GPU. Postprocessing metryki może jawnie wykonać
+się na CPU także po GPU solverze; nie oznacza to solver fallbacku. Planner,
+żądane urządzenie, provenance i wynik GPU pozostają bez zmian.
 
 ## Kontrakt numeryczny
 
@@ -61,6 +90,30 @@ Macierz jest symetryczna i positive semidefinite w pełnym węzłowym scalar P1
 space domeny magnetycznej. Nie jest to dodatnia masa dołożona do dynamicznego
 pencil i nie zastępuje dowolnej macierzy już używanej przez solver.
 
+### Granica fazy Floqueta w przyszłym konsumencie
+
+Dla niezerowego `k` tracker porównuje nodalny envelope, zgodnie ze znakiem
+`exp(+i k·r)` używanym przez istniejący adapter wektorów. Nie wolno
+przestawić diagonalnej transformacji fazy przez consistent masę, która ma
+wyrazy pozadiagonalne. Niech `P(k)` oznacza dokładne mapowanie solvera z
+zredukowanego wektora `q` na pełny nodalny Cartesian phasor `m=P(k)q`,
+`D+(k)=diag_i exp(+i k·r_i)`, a `M_full=M_T^track ⊗ I_3`. Wówczas
+metryka nodalnego envelope wynosi
+
+```{math}
+:label: eq-adr-nodal-envelope-tracking-metric
+u=D_+(\mathbf k)\,\mathcal P(\mathbf k)q,\qquad
+u^\mathsf H M_\mathrm{full}u
+=q^\mathsf H\mathcal P(\mathbf k)^\mathsf H
+D_+(\mathbf k)^\mathsf H M_\mathrm{full}
+D_+(\mathbf k)\mathcal P(\mathbf k)q.
+```
+
+To nie jest na ogół `qᴴ Pᴴ M_full P q`. Operacja działa na nodalnych
+wartościach phasora; interpolacja P1 tych odfazowanych węzłów nie jest
+dokładną ciągłą transformacją `exp(+i k·r)` interpolowanego pola FE.
+Nowa faza nie należy do Stage 2 CSR ani do solvera i nie zmienia v1.
+
 ## Rozważone alternatywy
 
 - **Użyć masy wymiany:** odrzucono, bo wprowadza $M_s$ i zmienia
@@ -72,24 +125,41 @@ pencil i nie zastępuje dowolnej macierzy już używanej przez solver.
   elementy.
 - **Dopasować węzły przez współrzędne:** odrzucono, bo nie zapewnia
   tożsamości; wymagany jest dokładny DOF-to-canonical-vertex map.
-- **Dodać nową publiczną funkcję ABI albo planner capability od razu:**
-  odroczono do osobnego etapu obejmującego lifetime, C ABI/FFI,
-  capability matrix i fallback/fail-closed GPU.
+- **Dodać publiczne SDK/API albo planner capability:** odrzucono w tym ADR.
+  Prywatne, wersjonowane C ABI jest wyłącznie adapterem między natywnym FEM,
+  sys crate i runnerem; publiczna legalność i fallback/fail-closed GPU
+  pozostają osobnym etapem.
 
 ## Weryfikacja i granice
 
-Nowy real-MFEM CTest ma sprawdzić niezależne współczynniki analityczne Tet4
+Real-MFEM CTest sprawdza niezależne współczynniki analityczne Tet4
 i affine Wedge6 przy skalach 1 m i 1 nm, sumy wierszy równe objętości,
 symetrię i mapowanie kanonicznych węzłów. Mieszany fixture z atrybutem
 magnetycznym i powietrznym ma potwierdzać, że powietrzne komórki nie dodają
 wkładu, a wiersz węzła wyłącznie powietrznego pozostaje w snapshotcie pusty
 i zerowy; osobny przypadek odrzuca zdegenerowany Tet4. Osobne cases odrzucają
-vector/P2 spaces i nieprawidłowe maski. Nowy CTest jest dołączony do
-istniejącej bramki `positive-mass`; jej wcześniejszy ważony/operatorowy test
-pozostaje bez zmian. Sam kod źródłowy lub zielony CTest nie dowodzi jeszcze
-użycia providera przez tracking, runtime FEM/GPU ani kwalifikacji fizycznej.
+vector/P2 spaces i nieprawidłowe maski. CTest Stage 2 ma przez rzeczywiste
+DSO sprawdzić query, wszystkie bounded-copy buffers, brak częściowego zapisu,
+stale generation/identity i teardown. Rust test używa typed `MeshIR` oraz
+`PackedNativeMesh`, sprawdza pełny canonical map/CSR i porównuje digest
+źródłowy zwrócony przez DSO z tożsamością buildu. GHA uruchamia oba testy oraz
+przed/po testach attests SHA biblioteki i loader resolution. Są one podpięte do
+istniejącej bramki `positive-mass`; dotychczasowy ważony/operatorowy test
+pozostaje bez zmian. Oddzielny no-stack CTest sprawdza symbole stub ABI,
+jawny status `UNAVAILABLE` i brak uchwytu. Weryfikacja Stage 2 pozostaje
+**NOT VERIFIED** do
+wykonania tej bramki. Nawet zielone CTest/Rust testy nie dowodzą użycia
+providera przez tracking, runtime FEM/GPU ani kwalifikacji fizycznej.
 
-Pliki tego atomu: `backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.hpp/.cpp`,
-`backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp` i
-`backends/fem/CMakeLists.txt`. Naukowy opis i mapowanie źródeł są w
-`docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
+Pliki dwóch atomów: natywny provider w
+`backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.hpp/.cpp`;
+prywatny ABI w `native/include/fullmag_fem.h` i
+`backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp`; bezpieczny
+wrapper w `crates/fullmag-fem-sys/src/lib.rs` oraz
+`crates/fullmag-runner/src/native_fem/tracking_mass.rs` /
+`crates/fullmag-runner/src/native_fem.rs`; rzeczywiste CTest/Rust testy,
+ich profile CMake i wiring GHA pozostają w odpowiadających ścieżkach
+`backends/fem/tests`, `backends/fem/CMakeLists.txt`,
+`scripts/ci/run_fem_positive_mass_contract.py` i
+`.github/workflows/fem-positive-mass-contract.yml`. Naukowy opis i
+mapowanie źródeł są w `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
