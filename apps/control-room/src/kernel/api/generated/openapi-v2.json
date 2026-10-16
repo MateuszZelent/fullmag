@@ -31465,7 +31465,8 @@
           "backend",
           "device",
           "precision",
-          "mode"
+          "mode",
+          "minimum_resources"
         ],
         "type": "object"
       },

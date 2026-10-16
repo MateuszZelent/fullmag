@@ -12762,7 +12762,7 @@ export interface components {
         RequestedExecutionSchema: {
             backend: components["schemas"]["RequestedBackendSchema"];
             device: components["schemas"]["RequestedDeviceSchema"];
-            minimum_resources?: components["schemas"]["RequestedResourceBudgetSchema"];
+            minimum_resources: components["schemas"]["RequestedResourceBudgetSchema"];
             mode: components["schemas"]["RequestedModeSchema"];
             precision: components["schemas"]["RequestedPrecisionSchema"];
         };

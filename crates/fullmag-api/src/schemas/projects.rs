@@ -716,7 +716,7 @@ pub(crate) struct RequestedExecutionSchema {
     pub precision: RequestedPrecisionSchema,
     pub mode: RequestedModeSchema,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(required = false, nullable = false)]
+    #[schema(required = true, nullable = false)]
     pub minimum_resources: Option<RequestedResourceBudgetSchema>,
 }
 
