@@ -872,6 +872,44 @@ async function runCombinedApplyConflictCase(browser) {
     assert.deepEqual(scenario.fixture.unknownMutations, []);
     assert.deepEqual(scenario.pageErrors, []);
 
+    const retryResponsePromise = scenario.page.waitForResponse(
+      (candidate) =>
+        candidate.request().method() === "POST" &&
+        new URL(candidate.url()).pathname === TRANSACTIONS_PATH,
+      { timeout: 30_000 },
+    );
+    await apply.click();
+    const retryResponse = await retryResponsePromise;
+    assert.equal(retryResponse.status(), 200);
+    assert.equal(scenario.fixture.mutations.length, 2);
+    assertCombinedAdaptiveTransaction(scenario.fixture.mutations[1], 2);
+    const retryAck = await retryResponse.json();
+    assert.equal(retryAck.scene_revision, 3);
+    assert.equal(scenario.fixture.scene.revision, 3);
+    assert.deepEqual(
+      retryAck.committed_scene.study.stages.map((stage) => stage.kind),
+      ["relax", "eigenmodes"],
+    );
+    assert.equal(retryAck.committed_scene.study.parallel_execution.mode, "adaptive");
+    assert.equal(retryAck.committed_scene.study.requested_device, "cpu");
+    await scenario.page.getByText(
+      "Committed global study settings and 2 study stages.",
+      { exact: true },
+    ).waitFor({ state: "visible", timeout: 15_000 });
+    assert.equal(await apply.isDisabled(), true);
+    assert.equal(await scenario.page.getByText(
+      "Scene revision conflict. Refetched the canonical scene; both Study drafts were preserved for review and retry.",
+      { exact: true },
+    ).count(), 0);
+    assert.equal(
+      scenario.fixture.requests.filter(
+        (request) => request.method === "POST" && request.path === TRANSACTIONS_PATH,
+      ).length,
+      2,
+    );
+    assert.deepEqual(scenario.fixture.unknownMutations, []);
+    assert.deepEqual(scenario.pageErrors, []);
+
     return {
       attempted_base_revision: scenario.fixture.mutations[0].base_revision,
       attempted_post_count: 1,
@@ -880,6 +918,14 @@ async function runCombinedApplyConflictCase(browser) {
       drafts_preserved: true,
       apply_enabled_after_conflict: true,
       conflict_feedback_visible: true,
+      retry: {
+        base_revision: scenario.fixture.mutations[1].base_revision,
+        response_status: retryResponse.status(),
+        ack_revision: retryAck.scene_revision,
+        total_post_count: 2,
+        apply_disabled_after_success: true,
+        conflict_feedback_cleared: true,
+      },
     };
   } catch (error) {
     try {
