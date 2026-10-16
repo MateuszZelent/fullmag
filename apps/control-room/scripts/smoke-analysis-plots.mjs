@@ -2229,8 +2229,8 @@ async function verifyLegacyModeVisualizationPin(browser, workspaceUrl, baseUrl) 
     const groupInspectorText = (await groupInspector.innerText()).replace(/\s+/g, " ");
     if (
       !groupInspectorText.includes(expectedLabel) ||
-      !/Pinned\s+1/.test(groupInspectorText) ||
-      !new RegExp("Scene revision\\s+" + readback.scene_revision).test(groupInspectorText)
+      !/\bPinned\s+1\b/i.test(groupInspectorText) ||
+      !new RegExp("\\bScene revision\\s+" + readback.scene_revision + "\\b", "i").test(groupInspectorText)
     ) {
       throw new Error("Pinned Visualizations Inspector did not show the stored label, count, and scene revision: " +
         groupInspectorText);

@@ -179,6 +179,7 @@ async function installMissingSessionFastFailRoutes(page) {
         await route.fulfill({
           body: JSON.stringify(resource),
           contentType: "application/json",
+          headers: { "x-api-contract-version": "1.0.0" },
           status: 200,
         });
       },
