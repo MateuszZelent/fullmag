@@ -2168,6 +2168,118 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
   await qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture);
 }
 
+// Resource-load events stay on the in-memory kernel bus. Read the existing
+// recorder and audit resource snapshots without inspecting React or kernel internals.
+function sanitizeInspectorDiagnosticUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return `${url.protocol}[redacted]`;
+    }
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "<unparseable-url>";
+  }
+}
+
+async function readInspectorModalResourceDiagnostics(page) {
+  try {
+    return await page.evaluate(() => {
+      const diagnosticWindow = window;
+      const exportDiagnostics =
+        diagnosticWindow.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__;
+      const auditApi = diagnosticWindow.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      const artifact =
+        typeof exportDiagnostics === "function" ? exportDiagnostics() : null;
+      const requests = Array.isArray(artifact?.streams?.requests)
+        ? artifact.streams.requests
+        : [];
+      const cachedResources = Array.isArray(artifact?.streams?.resources)
+        ? artifact.streams.resources
+        : [];
+      const resourceKeys = new Map();
+      const canonicalResourceKey = (value) => {
+        if (typeof value !== "string" || value.length === 0) return null;
+        return value.split("|", 1)[0].slice(0, 512);
+      };
+      for (const record of [...requests, ...cachedResources]) {
+        const resourceKey =
+          typeof record?.resourceKey === "string"
+            ? record.resourceKey
+            : typeof record?.path === "string"
+              ? record.path
+              : null;
+        if (resourceKey) resourceKeys.set(resourceKey, true);
+      }
+
+      const failedApiRequests = requests
+        .filter(
+          (record) =>
+            record &&
+            ((typeof record.status === "number" && record.status >= 400) ||
+              ["aborted", "error", "network-error"].includes(record.outcome)),
+        )
+        .slice(-100)
+        .map((record) => ({
+          method: typeof record.method === "string" ? record.method : null,
+          outcome: typeof record.outcome === "string" ? record.outcome : null,
+          path:
+            typeof record.path === "string"
+              ? record.path.split("?", 1)[0].slice(0, 512)
+              : null,
+          resourceKey: canonicalResourceKey(record.resourceKey),
+          status: typeof record.status === "number" ? record.status : null,
+        }));
+
+      const resourceErrors = [];
+      const readResource =
+        typeof auditApi?.readViewportAuditResource === "function"
+          ? auditApi.readViewportAuditResource
+          : null;
+      if (readResource) {
+        for (const resourceKey of [...resourceKeys.keys()].slice(-100)) {
+          try {
+            const snapshot = readResource(resourceKey);
+            if (snapshot?.status !== "error" && !snapshot?.error) continue;
+            resourceErrors.push({
+              error:
+                typeof snapshot.error === "string"
+                  ? snapshot.error.slice(0, 512)
+                  : null,
+              resourceKey: canonicalResourceKey(resourceKey),
+              revision:
+                typeof snapshot.revision === "string" ||
+                typeof snapshot.revision === "number"
+                  ? snapshot.revision
+                  : null,
+              status: typeof snapshot.status === "string" ? snapshot.status : null,
+            });
+          } catch {
+            // One stale resource key must not prevent the failure report.
+          }
+        }
+      }
+
+      return {
+        auditResourceReaderAvailable: Boolean(readResource),
+        diagnosticRecorderAvailable: typeof exportDiagnostics === "function",
+        failedApiRequests,
+        resourceErrors,
+        resourceKeyCount: resourceKeys.size,
+      };
+    });
+  } catch {
+    return {
+      auditResourceReaderAvailable: false,
+      captureError: "Existing resource diagnostics could not be read.",
+      diagnosticRecorderAvailable: false,
+      failedApiRequests: [],
+      resourceErrors: [],
+      resourceKeyCount: 0,
+    };
+  }
+}
+
 async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outputDir) {
   const proofFile = "analysis-resonance-leaf-routing-proof.json";
   const cases = [
@@ -2283,6 +2395,34 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
     const consoleErrors = [];
     const missingApiResponses = [];
     const expectedMissingApiResponses = [];
+    const modalNetworkDiagnostics =
+      resultCase.id === "modal-mode-field"
+        ? {
+            failedRequests: [],
+            httpFailures: [],
+            omittedFailedRequests: 0,
+            omittedHttpFailures: 0,
+          }
+        : null;
+    const MAX_MODAL_NETWORK_DIAGNOSTICS = 200;
+    if (modalNetworkDiagnostics) {
+      page.on("requestfailed", (request) => {
+        const failure = {
+          failure: request.failure()?.errorText ?? null,
+          method: request.method(),
+          resourceType: request.resourceType(),
+          url: sanitizeInspectorDiagnosticUrl(request.url()),
+        };
+        if (
+          modalNetworkDiagnostics.failedRequests.length <
+          MAX_MODAL_NETWORK_DIAGNOSTICS
+        ) {
+          modalNetworkDiagnostics.failedRequests.push(failure);
+        } else {
+          modalNetworkDiagnostics.omittedFailedRequests += 1;
+        }
+      });
+    }
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
@@ -2290,6 +2430,24 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       pageErrors.push(error.stack ?? error.message);
     });
     page.on("response", (response) => {
+      if (modalNetworkDiagnostics && response.status() >= 400) {
+        const request = response.request();
+        const failure = {
+          method: request.method(),
+          resourceType: request.resourceType(),
+          status: response.status(),
+          statusText: response.statusText(),
+          url: sanitizeInspectorDiagnosticUrl(response.url()),
+        };
+        if (
+          modalNetworkDiagnostics.httpFailures.length <
+          MAX_MODAL_NETWORK_DIAGNOSTICS
+        ) {
+          modalNetworkDiagnostics.httpFailures.push(failure);
+        } else {
+          modalNetworkDiagnostics.omittedHttpFailures += 1;
+        }
+      }
       if (
         response.status() === 404 &&
         new URL(response.url()).pathname.startsWith("/v2/")
@@ -2309,12 +2467,13 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
 
     let expectedNodeId = null;
     try {
-      await page.addInitScript((baseUrl) => {
+      await page.addInitScript(({ baseUrl, enableDiagnosticRecorder }) => {
         window.__FULLMAG_CONFIG__ = {
           ...(window.__FULLMAG_CONFIG__ ?? {}),
           allowMissingSessionSmoke: true,
           controlRoomApiBase: baseUrl,
           disableRealtime: true,
+          enableDiagnosticRecorder,
         };
         // Analysis has no surface tabs (ADR 0054 stage 3b): start from a stored
         // Dispersion preference so the Results leaf selection must reroute it.
@@ -2326,7 +2485,10 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         } catch {
           // Storage unavailable: the "before" assertion below reports it.
         }
-      }, new URL(workspaceUrl).origin);
+      }, {
+        baseUrl: new URL(workspaceUrl).origin,
+        enableDiagnosticRecorder: resultCase.id === "modal-mode-field",
+      });
       await installInspectorFixtureApi(page, fixture);
       await gotoInspectorDocument(
         page,
@@ -2474,6 +2636,13 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       proof.cases.push({
         id: resultCase.id,
         kind: resultCase.kind,
+        ...(modalNetworkDiagnostics
+          ? {
+              networkDiagnostics: modalNetworkDiagnostics,
+              resourceDiagnostics:
+                await readInspectorModalResourceDiagnostics(page),
+            }
+          : {}),
         fieldId: resultCase.fieldId ?? null,
         fieldSource: resultCase.fieldSource ?? null,
         fixtureEvidence,
@@ -2502,13 +2671,23 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
     } catch (error) {
       // Retain the failed mounted-UI state before closing this isolated context.
       try {
+        const failureState = await inspectorResonanceLeafRoutingState(
+          page,
+          expectedNodeId,
+        );
+        const resourceDiagnostics = modalNetworkDiagnostics
+          ? await readInspectorModalResourceDiagnostics(page)
+          : null;
         const failure = {
           id: resultCase.id,
           kind: resultCase.kind,
           expectedNodeId,
           fixtureEvidence,
           error: String(error?.stack ?? error),
-          state: await inspectorResonanceLeafRoutingState(page, expectedNodeId),
+          state: failureState,
+          toastNotifications: failureState?.notifications ?? [],
+          networkDiagnostics: modalNetworkDiagnostics,
+          resourceDiagnostics,
           ribbonTabs: await page.locator(".fm-ribbon__tab").evaluateAll((tabs) =>
             tabs.map((tab) => ({
               id: tab.id,
@@ -5902,3 +6081,4 @@ async function qualifyFirstRunGuideRouting(page, inspector, screenshotFiles, fix
   assert(!(await guide.getByRole("list", { name: "Model readiness checklist" }).count()), "Hide steps must release workspace space for expert navigation.");
   await assertHealthyViewportCanvas(page, "Collapsed first-run guide");
 }
+

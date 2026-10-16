@@ -602,12 +602,12 @@ async function prepareCombinedAdaptiveDraft(scenario) {
 
   await eigenEditor.getByRole("combobox", { name: "Operator", exact: true })
     .selectOption("full_2x2");
-  await eigenEditor.getByLabel("Mode count", { exact: true }).fill("3");
+  await eigenEditor.getByRole("textbox", { name: "Mode count", exact: true }).fill("3");
   await eigenEditor.getByRole("combobox", { name: "Target", exact: true })
     .selectOption("frequency_window");
-  await eigenEditor.getByLabel("Frequency min").fill("1.5e9");
-  await eigenEditor.getByLabel("Frequency max").fill("2.5e9");
-  await eigenEditor.getByLabel("k path", { exact: true }).fill(LEGAL_EIGEN_K_PATH);
+  await eigenEditor.getByRole("textbox", { name: "Frequency min", exact: true }).fill("1.5e9");
+  await eigenEditor.getByRole("textbox", { name: "Frequency max", exact: true }).fill("2.5e9");
+  await eigenEditor.getByRole("textbox", { name: "k path", exact: true }).fill(LEGAL_EIGEN_K_PATH);
 
   const { mode, maxCpu } = await prepareAdaptiveDraft(scenario);
   const validation = scenario.page.locator(".fm-inspector-validation-list li");
@@ -722,7 +722,7 @@ async function runCombinedApplyRealtimeCase(browser) {
     assert.equal(await editors.count(), 1);
     assert.match(await eigenEditor.innerText(), /Stage 2:\s*Eigenmodes/);
     assert.equal(
-      await eigenEditor.getByLabel("k path", { exact: true }).inputValue(),
+      await eigenEditor.getByRole("textbox", { name: "k path", exact: true }).inputValue(),
       LEGAL_EIGEN_K_PATH,
     );
     assert.equal(await scenario.page.locator(".fm-inspector-validation-list li").count(), 0);
@@ -844,7 +844,7 @@ async function runCombinedApplyConflictCase(browser) {
     assert.equal(await editors.count(), 1);
     assert.match(await eigenEditor.innerText(), /Stage 2:\s*Eigenmodes/);
     assert.equal(
-      await eigenEditor.getByLabel("k path", { exact: true }).inputValue(),
+      await eigenEditor.getByRole("textbox", { name: "k path", exact: true }).inputValue(),
       LEGAL_EIGEN_K_PATH,
     );
     assert.equal(await apply.isEnabled(), true);
