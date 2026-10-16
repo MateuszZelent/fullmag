@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { inflateSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
@@ -361,14 +361,18 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
 
 async function verifyEmptyPartThicknessAverageZ(browser, url) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  const fixture = createEmptyPartColorFixture();
-  const errors = attachBrowserErrors(page);
-  const network = attachBrowserNetworkDiagnostics(page);
-  await installFixtureApi(page, fixture);
-  await installFixtureConfig(page);
   const quantityId = "H_eff";
+  let hasOriginalFailure = false;
   try {
+    const fixture = createEmptyPartColorFixture();
+    const errors = attachBrowserErrors(page);
+    const network = attachBrowserNetworkDiagnostics(page);
+    await installFixtureApi(page, fixture);
+    await installFixtureConfig(page, true);
+    await installFixtureRealtime(page, fixture);
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await waitForFixtureRealtimeConnection(fixture);
+    sendFixtureRealtimeHello(fixture, 1);
     await assertHealthyCanvas(page, "empty-range FEM initial", {
       browserErrors: errors,
       fixture,
@@ -418,21 +422,9 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     });
     const emptyOverride = assertMagnitudeThicknessOverride(fixture, "fem-empty");
     await assertHealthyCanvas(page, "empty-range FEM field-color request");
-    await assertNoViewportPixelDelta(page, emptyBaseline, "empty-range part A field-color no-leak");
-    const emptyDelta = viewportPixelDelta(
-      emptyBaseline,
-      await sampleViewportPixels(page, emptyBaseline.stride),
-    );
-    if (emptyDelta.changed) {
-      throw new Error(`Later-part H_eff values changed empty-range part A pixels: ${JSON.stringify(emptyDelta)}.`);
-    }
 
-    await setObjectDisplayState(page, {
-      colorbar: false,
-      vectors: false,
-      visible: false,
-      wireframe: false,
-    });
+    // Keep A visible in its empty magnitude state while B is enabled and refreshed.
+    // The solid-red snapshot above is only a visibility check, not a no-leak baseline.
     await selectVisualizationNode(page, "fem-visible", null);
     await assertTarget(page, "object:fem-visible");
     await setObjectDisplayState(page, {
@@ -466,11 +458,305 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       { minimumChangedPixels: 20 },
     );
     await assertHealthyCanvas(page, "nonempty FEM positive field-color control");
+
+    // Build an A-only sample mask while B is stable, then perturb only B's
+    // scoped values while both targets remain visible and A's target settings
+    // remain unchanged.
+    await selectVisualizationNode(page, "fem-empty", null);
+    await assertTarget(page, "object:fem-empty");
+    const aVisibleForMask = await sampleViewportPixels(page, null, true);
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: false,
+      wireframe: false,
+    });
+    const aHiddenForMask = await sampleViewportPixels(page, null, true);
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: true,
+      wireframe: false,
+    });
+    await assertHealthyCanvas(page, "empty-range FEM mask restored");
+    const aRestoredForMask = await sampleViewportPixels(page, null, true);
+    await assertViewportSampleGeometryEqual(page, aVisibleForMask, aHiddenForMask, "part A visibility mask");
+    await assertViewportSampleGeometryEqual(page, aVisibleForMask, aRestoredForMask, "part A mask restore");
+    const aPixelMask = await viewportPixelMask(page, aVisibleForMask, aHiddenForMask, "part A", { minimumMaskSamples: 21 });
+    const aTotalSampleCount = Math.floor(aVisibleForMask.signature.length / 3);
+    const aMinimumChangedPixels =
+      Math.min(20, Math.floor((aPixelMask.length * 20) / aTotalSampleCount)) + 1;
+    const aMaskRestoreDelta = await assertViewportPixelDeltaOnMask(
+      page,
+      aVisibleForMask,
+      aRestoredForMask,
+      aPixelMask,
+      "part A empty field visibility restore",
+      { minimumChangedPixels: aMinimumChangedPixels, shouldChange: false },
+    );
+
+    const aFieldBeforeBRefresh = await waitForFdmFieldResource(page, quantityId, {
+      component: "full",
+      partId: "part-empty-range",
+      scopeKind: "part",
+    });
+    if (
+      aFieldBeforeBRefresh.status !== "ready" ||
+      aFieldBeforeBRefresh.hasTargetPart ||
+      aFieldBeforeBRefresh.hasValues
+    ) {
+      await captureViewportComparisonFailure(
+        page,
+        "part A empty field before B refresh",
+        aRestoredForMask,
+        null,
+        { aFieldBeforeBRefresh },
+      );
+      throw new Error("Part A no longer has its empty 204 field resource before perturbing B.");
+    }
+
+    await selectVisualizationNode(page, "fem-visible", null);
+    const bVisibleForMask = await sampleViewportPixels(page, null, true);
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: false,
+      wireframe: false,
+    });
+    const bHiddenForMask = await sampleViewportPixels(page, null, true);
+    await setObjectDisplayState(page, {
+      colorbar: false,
+      vectors: false,
+      visible: true,
+      wireframe: false,
+    });
+    await assertHealthyCanvas(page, "nonempty FEM mask restored");
+    const bRestoredForMask = await sampleViewportPixels(page, null, true);
+    await assertViewportSampleGeometryEqual(page, bVisibleForMask, bHiddenForMask, "part B visibility mask");
+    await assertViewportSampleGeometryEqual(page, bVisibleForMask, bRestoredForMask, "part B mask restore");
+    const bPixelMask = await viewportPixelMask(page, bVisibleForMask, bHiddenForMask, "part B", { minimumMaskSamples: 20 });
+    const bMaskRestoreDelta = await assertViewportPixelDeltaOnMask(
+      page,
+      bVisibleForMask,
+      bRestoredForMask,
+      bPixelMask,
+      "part B field visibility restore",
+      { minimumChangedPixels: 20, shouldChange: false },
+    );
+
+    await selectVisualizationNode(page, "fem-empty", null);
+    await assertTarget(page, "object:fem-empty");
+    const aSettingsBeforeBRefresh = await readObjectVisualizationSettings(page, "fem-empty");
+    const bSettingsBeforeBRefresh = await readObjectVisualizationSettings(page, "fem-visible");
+    if (
+      !aSettingsBeforeBRefresh ||
+      aSettingsBeforeBRefresh.activeQuantityId !== quantityId ||
+      aSettingsBeforeBRefresh.surfaceColorSource !== "magnitude" ||
+      !bSettingsBeforeBRefresh ||
+      bSettingsBeforeBRefresh.activeQuantityId !== quantityId ||
+      bSettingsBeforeBRefresh.surfaceColorSource !== "magnitude"
+    ) {
+      await captureViewportComparisonFailure(
+        page,
+        "empty-range FEM target settings before perturbation",
+        bRestoredForMask,
+        null,
+        { aSettingsBeforeBRefresh, bSettingsBeforeBRefresh },
+      );
+      throw new Error("Both FEM targets must retain H_eff magnitude settings before perturbing B.");
+    }
+    const bFieldBeforeRefresh = await waitForFdmFieldResource(page, quantityId, {
+      component: "full",
+      partId: "part-visible",
+      scopeKind: "part",
+    });
+    if (
+      bFieldBeforeRefresh.status !== "ready" ||
+      !bFieldBeforeRefresh.hasTargetPart ||
+      !bFieldBeforeRefresh.hasValues
+    ) {
+      await captureViewportComparisonFailure(
+        page,
+        "part B field before perturbation",
+        bRestoredForMask,
+        null,
+        { bFieldBeforeRefresh },
+      );
+      throw new Error("Part B field is not ready before perturbation.");
+    }
+
+    const bValuesBeforeExpected = [
+      1_000, 0, 0,
+      10_000, 0, 0,
+      100_000, 0, 0,
+      1_000_000, 0, 0,
+    ];
+    const bPayloadBefore = await waitForFdmPartFieldPayload(
+      page,
+      bFieldBeforeRefresh.key,
+      "part-visible",
+      {
+        etag: '"fixture-part-visible-r1"',
+        values: bValuesBeforeExpected,
+      },
+    );
+    const bBeforePixels = await sampleViewportPixels(page, null, true);
+    await assertViewportSampleGeometryEqual(page, aRestoredForMask, bBeforePixels, "pre-perturbation viewport");
+    const bRequest = {
+      component: "full",
+      quantityId,
+      scopeId: "part-visible",
+      scopeKind: "part",
+    };
+    const bRequestsBefore = countFieldRequests(fixture, bRequest);
+
+    const aFixtureResponseRevisionBefore = fixture.scopedFieldRevisions["part-empty-range"];
+    fixture.scopedFieldRevisions["part-visible"] = 2;
+    fixture.scopedFieldMagnitudes = [1, 2, 3, 4, 1_000_000, 1_000_000, 1_000_000, 1_000_000];
+    const bCanonicalRequest = [...fixture.fieldRequests].reverse().find((entry) =>
+      entry.method === "GET" &&
+      entry.quantityId === quantityId &&
+      entry.component === "full" &&
+      entry.scopeId === "part-visible" &&
+      entry.scopeKind === "part",
+    );
+    if (!bCanonicalRequest) {
+      throw new Error("Could not resolve the canonical H_eff field request for part B.");
+    }
+    const bRecommendedFetch = bCanonicalRequest.url;
+    const bRecommendedFetchUrl = new URL(bRecommendedFetch, apiBase);
+    if (
+      bRecommendedFetchUrl.pathname !== "/v2/sessions/current/data/fields/H_eff/samples/vector" ||
+      bRecommendedFetchUrl.searchParams.get("component") !== "full" ||
+      bRecommendedFetchUrl.searchParams.get("scope_id") !== "part-visible" ||
+      bRecommendedFetchUrl.searchParams.get("scope_kind") !== "part"
+    ) {
+      throw new Error("Part B realtime invalidation did not use its canonical field request URL.");
+    }
+    sendFixtureFieldSamplesInvalidation(fixture, 2, bRecommendedFetch, 2);
+
+    let bPayloadAfter;
+    try {
+      bPayloadAfter = await waitForFdmPartFieldPayload(
+        page,
+        bFieldBeforeRefresh.key,
+        "part-visible",
+        {
+          etag: '"fixture-part-visible-r2"',
+          values: [
+            1_000_000, 0, 0,
+            1_000_000, 0, 0,
+            1_000_000, 0, 0,
+            1_000_000, 0, 0,
+          ],
+        },
+      );
+    } catch (error) {
+      await captureViewportComparisonFailure(
+        page,
+        "part B field revision adoption",
+        bBeforePixels,
+        null,
+        { bRequestsBefore, error: error instanceof Error ? error.message : String(error) },
+      );
+      throw error;
+    }
+
+    const bRequestsAfter = countFieldRequests(fixture, bRequest);
+    const bRevisionResponses = fixture.emptyPartFieldResponses.filter(
+      (entry) => entry.partId === "part-visible" && entry.revision === 2,
+    );
+    const aUnexpectedRevisionResponses = fixture.emptyPartFieldResponses.filter(
+      (entry) =>
+        entry.partId === "part-empty-range" &&
+        entry.revision !== aFixtureResponseRevisionBefore,
+    );
+    const aFixtureResponseRevisionAfter = fixture.scopedFieldRevisions["part-empty-range"];
+    const aFieldAfterBRefresh = await waitForFdmFieldResource(page, quantityId, {
+      component: "full",
+      partId: "part-empty-range",
+      scopeKind: "part",
+    });
+    const aSettingsAfterBRefresh = await readObjectVisualizationSettings(page, "fem-empty");
+    const bSettingsAfterBRefresh = await readObjectVisualizationSettings(page, "fem-visible");
+    if (
+      bRequestsAfter <= bRequestsBefore ||
+      bRevisionResponses.length === 0 ||
+      aFixtureResponseRevisionAfter !== aFixtureResponseRevisionBefore ||
+      aUnexpectedRevisionResponses.length > 0 ||
+      aFieldAfterBRefresh.status !== "ready" ||
+      aFieldAfterBRefresh.hasTargetPart ||
+      aFieldAfterBRefresh.hasValues ||
+      JSON.stringify(aSettingsBeforeBRefresh) !== JSON.stringify(aSettingsAfterBRefresh) ||
+      JSON.stringify(bSettingsBeforeBRefresh) !== JSON.stringify(bSettingsAfterBRefresh)
+    ) {
+      await captureViewportComparisonFailure(
+        page,
+        "part B perturbation contract",
+        bBeforePixels,
+        null,
+        {
+          aFixtureResponseRevisionAfter,
+          aFixtureResponseRevisionBefore,
+          aFieldAfterBRefresh,
+          aUnexpectedRevisionResponses,
+          aSettingsAfterBRefresh,
+          aSettingsBeforeBRefresh,
+          bSettingsAfterBRefresh,
+          bSettingsBeforeBRefresh,
+          bRequestsAfter,
+          bRequestsBefore,
+          bRevisionResponses,
+          bPayloadAfter,
+        },
+      );
+      throw new Error("B perturbation did not preserve A's empty field, target settings, and request/revision contract.");
+    }
+
+    await assertHealthyCanvas(page, "nonempty FEM B field revision adopted");
+    let bPixelDelta;
+    try {
+      bPixelDelta = await waitForViewportPixelDelta(
+        page,
+        bBeforePixels,
+        "nonempty FEM part B updated field color",
+        { minimumChangedPixels: 20 },
+      );
+    } catch (error) {
+      await captureViewportComparisonFailure(
+        page,
+        "part B pixel update",
+        bBeforePixels,
+        null,
+        { bPayloadAfter, error: error instanceof Error ? error.message : String(error) },
+      );
+      throw error;
+    }
+    const bAfterPixels = await sampleViewportPixels(page, null, true);
+    await assertViewportSampleGeometryEqual(page, bBeforePixels, bAfterPixels, "B field refresh");
+    const aLeakDelta = await assertViewportPixelDeltaOnMask(
+      page,
+      bBeforePixels,
+      bAfterPixels,
+      aPixelMask,
+      "later-part H_eff values changed visible empty-range part A",
+      { minimumChangedPixels: aMinimumChangedPixels, shouldChange: false },
+    );
+    const bColorDelta = await assertViewportPixelDeltaOnMask(
+      page,
+      bBeforePixels,
+      bAfterPixels,
+      bPixelMask,
+      "updated nonempty part B did not change its own field colors",
+      { minimumChangedPixels: 20, shouldChange: true },
+    );
     assertNoBrowserErrors(errors);
     await captureBrowserAuditScreenshot(page, "empty-part-thickness-average-z-success.png");
     return {
       emptyPartA: {
-        fieldColorDelta: emptyDelta,
+        fieldColorDelta: aLeakDelta,
+        maskRestoreDelta: aMaskRestoreDelta,
+        maskSamples: aPixelMask.length,
         nodeCount: 0,
         nodeStart: 4,
         redBaselineSamples: emptyRedPixels,
@@ -487,12 +773,47 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
         redBaselineSamples: positiveRedPixels,
         visualizationOverride: positiveOverride,
       },
+      crossPartFieldPerturbation: {
+        aFixtureResponseRevisionUnchanged: aFixtureResponseRevisionAfter === aFixtureResponseRevisionBefore,
+        aPixelDeltaDuringBRefresh: aLeakDelta,
+        aPixelMaskSamples: aPixelMask.length,
+        aTargetSettingsUnchanged: true,
+        bTargetSettingsUnchanged: true,
+        bAcceptedRevisionAfter: bPayloadAfter.etag,
+        bAcceptedRevisionBefore: bPayloadBefore.etag,
+        bColorDeltaDuringRefresh: bColorDelta,
+        bFieldVectorsAfter: bPayloadAfter.values,
+        bFieldVectorsBefore: bPayloadBefore.values,
+        bPixelMaskSamples: bPixelMask.length,
+        bRequestCountAfter: bRequestsAfter,
+        bRequestCountBefore: bRequestsBefore,
+        bResourceRevisionAfter: bPayloadAfter.resourceRevision,
+        bResourceRevisionBefore: bPayloadBefore.resourceRevision,
+        maskRestoreDeltaA: aMaskRestoreDelta,
+        maskRestoreDeltaB: bMaskRestoreDelta,
+      },
       projectionMode: "thickness_average_z",
       topology: "FEM scoped H_eff: empty part 204; nonempty part FMVP v3 explicit node indices",
       qualificationScope: "Scoped empty-support browser behavior; full-domain empty-selection mapper regression is covered separately by unit tests.",
     };
+  } catch (error) {
+    hasOriginalFailure = true;
+    try {
+      await captureViewportDeltaFailure(page, "empty-part-thickness-average-z", {
+        originalError: error instanceof Error
+          ? { message: error.message, name: error.name, stack: error.stack ?? null }
+          : { thrownValue: String(error) },
+      });
+    } catch {
+      // Preserve the scenario failure if the diagnostic fallback also fails.
+    }
+    throw error;
   } finally {
-    await page.close();
+    try {
+      await page.close();
+    } catch (closeError) {
+      if (!hasOriginalFailure) throw closeError;
+    }
   }
 }
 
@@ -547,15 +868,75 @@ function countRedDominantPixels(sample) {
   return count;
 }
 
-async function installFixtureConfig(page) {
-  await page.addInitScript((baseUrl) => {
+async function installFixtureRealtime(page, fixture) {
+  fixture.realtime = { connectionCount: 0, socket: null };
+  await page.routeWebSocket(
+    (url) => new URL(url).pathname === "/v2/sessions/current/events/ws",
+    (websocket) => {
+      if (!websocket.protocols().includes("fullmag.live.v1")) {
+        throw new Error("Empty-part realtime fixture omitted fullmag.live.v1.");
+      }
+      fixture.realtime.connectionCount += 1;
+      fixture.realtime.socket = websocket;
+    },
+  );
+}
+
+async function waitForFixtureRealtimeConnection(fixture) {
+  const deadline = Date.now() + timeoutMs;
+  while (fixture.realtime.connectionCount < 1 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (fixture.realtime.connectionCount < 1 || !fixture.realtime.socket) {
+    throw new Error("Empty-part realtime fixture did not connect.");
+  }
+}
+
+function sendFixtureRealtimeHello(fixture, sequence) {
+  const socket = fixture.realtime?.socket;
+  if (!socket) throw new Error("Empty-part realtime fixture socket is not connected.");
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: {
+      request_scope_epoch: fixture.status.session.request_scope_epoch,
+    },
+    run_id: fixture.status.run?.run_id ?? null,
+    seq: sequence,
+    session_id: fixture.status.session.session_id,
+    type: "hello",
+  }));
+}
+
+function sendFixtureFieldSamplesInvalidation(fixture, sequence, recommendedFetch, revision) {
+  const socket = fixture.realtime?.socket;
+  if (!socket) throw new Error("Empty-part realtime fixture socket is not connected.");
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: {
+      changes: [{
+        quantity_ids: ["H_eff"],
+        recommended_fetch: recommendedFetch,
+        resource: "fields",
+        resource_id: "samples",
+        revision,
+      }],
+    },
+    run_id: fixture.status.run?.run_id ?? null,
+    seq: sequence,
+    session_id: fixture.status.session.session_id,
+    type: "resource.batch_changed",
+  }));
+}
+
+async function installFixtureConfig(page, realtimeEnabled = false) {
+  await page.addInitScript(({ baseUrl, realtimeEnabled: enableRealtime }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
       allowMissingSessionSmoke: true,
       controlRoomApiBase: baseUrl,
-      disableRealtime: true,
+      disableRealtime: !enableRealtime,
     };
-  }, apiBase);
+  }, { baseUrl: apiBase, realtimeEnabled });
 }
 
 async function installFixtureApi(page, fixture) {
@@ -679,14 +1060,18 @@ async function installFixtureApi(page, fixture) {
         const part = fixture.manifest.mesh_parts.find((entry) => entry.id === fieldRequest.scopeId);
         if (!part) throw new Error(`Unknown scoped FEM fixture part ${fieldRequest.scopeId}.`);
         const nodeIndices = part.node_indices ?? Array.from({ length: part.node_count }, (_, index) => part.node_start + index);
+        const revision = fixture.scopedFieldRevisions?.[part.id] ?? 1;
+        const etag = '"fixture-' + part.id + '-r' + revision + '"';
         fixture.emptyPartFieldResponses.push({
+          etag,
           partId: part.id,
           nodeIndices,
+          revision,
           status: nodeIndices.length === 0 ? 204 : 200,
         });
         if (nodeIndices.length === 0) return fulfillEmpty(route, 204);
         const scoped = fdmScopedFieldVectorBuffer({ fieldRequest, fixture, nodeIndices });
-        return fulfillBinary(route, scoped.buffer, scoped.headers);
+        return fulfillBinary(route, scoped.buffer, { ...scoped.headers, etag });
       }
       const scoped = fdmScopedFieldVectorBuffer({ fieldRequest, fixture });
       return fulfillBinary(route, scoped.buffer, scoped.headers);
@@ -795,8 +1180,7 @@ async function setObjectDisplayState(page, expected) {
   const expectedVisible = expected.visible ?? true;
   const currentVisible = await visible.getAttribute("aria-pressed");
   if (expectedVisible && currentVisible !== "true") {
-    await visible.click();
-    await waitForVisualizationMutationSettled(page, panel);
+    await setObjectVisibilityAndWaitForAcknowledgement(page, panel, visible, true);
   }
   const shadedWithEdges = panel.getByRole("radio", { name: "Shaded +" });
   if (expected.wireframe && (await shadedWithEdges.getAttribute("aria-checked")) !== "true") {
@@ -853,10 +1237,50 @@ async function setObjectDisplayState(page, expected) {
   }
   // Hiding is applied last because the Inspector intentionally disables
   // render-mode controls for a hidden target.
-  if (!expectedVisible && (await visible.getAttribute("aria-pressed")) !== "false") await visible.click();
+  if (!expectedVisible && (await visible.getAttribute("aria-pressed")) !== "false") {
+    await setObjectVisibilityAndWaitForAcknowledgement(page, panel, visible, false);
+  }
 }
 
-async function waitForVisualizationMutationSettled(page, panel) {
+async function setObjectVisibilityAndWaitForAcknowledgement(page, panel, visible, expectedVisible) {
+  const selectedTarget = await readTargetId(page);
+  if (!selectedTarget?.startsWith("object:")) {
+    throw new Error(`Target visibility mutation expected an object Inspector, got ${selectedTarget ?? "none"}.`);
+  }
+  const objectId = selectedTarget.slice("object:".length);
+  const previousRevision = await page.evaluate(() => {
+    const state = window.__FULLMAG_CONTROL_ROOM_AUDIT__
+      ?.readViewportAuditResource?.("/v2/sessions/current/visualization/state");
+    return Number.isSafeInteger(state?.data?.revision) ? state.data.revision : null;
+  });
+  const acknowledgementPromise = page.waitForResponse((response) => {
+    const request = response.request();
+    if (request.method() !== "PATCH" ||
+        new URL(response.url()).pathname !== "/v2/sessions/current/visualization/state") return false;
+    try {
+      const patch = request.postDataJSON();
+      return patch?.scope === "object" && patch.scope_id === objectId &&
+        patch.display?.surface?.visible === expectedVisible;
+    } catch {
+      return false;
+    }
+  }, { timeout: timeoutMs });
+  acknowledgementPromise.catch(() => {});
+  await visible.click();
+  const acknowledgement = await acknowledgementPromise;
+  if (!acknowledgement.ok()) {
+    throw new Error(`Target visibility mutation was not acknowledged: HTTP ${acknowledgement.status()}.`);
+  }
+  const acknowledgedState = await acknowledgement.json();
+  if (!Number.isSafeInteger(acknowledgedState?.revision) ||
+      (previousRevision !== null && acknowledgedState.revision <= previousRevision)) {
+    throw new Error(`Target visibility mutation for ${objectId} returned no advancing visualization revision: ${JSON.stringify({ acknowledgedState, previousRevision })}.`);
+  }
+  await waitForVisualizationMutationSettled(page, panel, acknowledgedState.revision);
+  await waitForRenderedViewportFrame(page);
+}
+
+async function waitForVisualizationMutationSettled(page, panel, acknowledgedRevision = null) {
   const panelHandle = await panel.elementHandle();
   if (!panelHandle) throw new Error("Selected visualization Inspector disappeared while saving a display mutation.");
   try {
@@ -883,6 +1307,21 @@ async function waitForVisualizationMutationSettled(page, panel) {
     throw new Error(
       `Visualization mutation did not settle: ${error instanceof Error ? error.message : String(error)} ${JSON.stringify(diagnostic)}`,
     );
+  }
+  if (acknowledgedRevision !== null) {
+    try {
+      await page.waitForFunction((revision) => {
+        const state = window.__FULLMAG_CONTROL_ROOM_AUDIT__
+          ?.readViewportAuditResource?.("/v2/sessions/current/visualization/state");
+        return Number.isSafeInteger(state?.data?.revision) && state.data.revision >= revision;
+      }, acknowledgedRevision, { timeout: timeoutMs });
+    } catch (error) {
+      const diagnostic = await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__
+        ?.readViewportAuditResource?.("/v2/sessions/current/visualization/state") ?? null);
+      throw new Error(
+        `Visualization audit resource did not adopt acknowledged revision ${acknowledgedRevision}: ${error instanceof Error ? error.message : String(error)} ${JSON.stringify(diagnostic)}`,
+      );
+    }
   }
 }
 
@@ -1357,9 +1796,9 @@ async function verifyAnalysisViewportHandoff(page, lane) {
   return { surfaces: workflows.map(({ surface, subview }) => `${surface} / ${subview}`) };
 }
 
-async function sampleViewportPixels(page, explicitStride = null) {
-  const canvas = page.locator(CANVAS_SELECTOR);
-  const box = await canvas.boundingBox();
+async function sampleViewportPixels(page, explicitStride = null, includePng = false) {
+  const canvasLocator = page.locator(CANVAS_SELECTOR);
+  const box = await canvasLocator.boundingBox();
   if (!box || box.width <= 0 || box.height <= 0) {
     throw new Error("Viewport canvas has no screenshot bounds.");
   }
@@ -1373,9 +1812,77 @@ async function sampleViewportPixels(page, explicitStride = null) {
       signature.push(bitmap.rgba[offset], bitmap.rgba[offset + 1], bitmap.rgba[offset + 2]);
     }
   }
-  return { signature, stride };
+  const viewportState = await page.evaluate(() => {
+    const rect = (element) => {
+      if (!element) return null;
+      const bounds = element.getBoundingClientRect();
+      const round = (value) => Math.round(value * 100) / 100;
+      return {
+        bottom: round(bounds.bottom),
+        height: round(bounds.height),
+        left: round(bounds.left),
+        right: round(bounds.right),
+        top: round(bounds.top),
+        width: round(bounds.width),
+        x: round(bounds.x),
+        y: round(bounds.y),
+      };
+    };
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    const viewport = document.querySelector(".fm-viewport-3d");
+    const canvas = viewport?.querySelector("canvas") ?? null;
+    const visualization = audit?.readViewportAuditResource?.("/v2/sessions/current/visualization/state") ?? null;
+    const cameraAttributeNames = [
+      "data-camera-position",
+      "data-camera-projection",
+      "data-camera-target",
+      "data-camera-up",
+    ];
+    const cameraAttributes = Object.fromEntries(
+      cameraAttributeNames.map((name) => [name, viewport?.getAttribute(name) ?? null]),
+    );
+    const sceneAttributeNames = [
+      "data-viewport-bounds",
+      "data-topology-freshness",
+      "data-visual-profile-id",
+      "data-primitive-object-count",
+      "data-primitive-object-ids",
+      "data-primitive-object-kinds",
+      "data-primitive-object-geometry-descriptors",
+    ];
+    const sceneAttributes = Object.fromEntries(
+      sceneAttributeNames.map((name) => [name, viewport?.getAttribute(name) ?? null]),
+    );
+    const gl = canvas instanceof HTMLCanvasElement
+      ? canvas.getContext("webgl2") ?? canvas.getContext("webgl")
+      : null;
+    return {
+      camera: visualization?.data?.camera ?? null,
+      cameraAttributes,
+      canvas: canvas instanceof HTMLCanvasElement
+        ? {
+            contextLost: gl?.isContextLost() ?? true,
+            drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+            drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+            height: canvas.height,
+            width: canvas.width,
+          }
+        : null,
+      canvasRect: rect(canvas),
+      devicePixelRatio: window.devicePixelRatio,
+      sceneAttributes,
+      viewportRect: rect(viewport),
+    };
+  });
+  return {
+    bitmapHeight: bitmap.height,
+    bitmapWidth: bitmap.width,
+    signature,
+    stride,
+    viewportState,
+    ...(includePng ? { png } : {}),
+  };
 }
-
 async function waitForViewportPixelDelta(page, baseline, label, options = {}) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
@@ -1390,10 +1897,56 @@ async function waitForViewportPixelDelta(page, baseline, label, options = {}) {
   throw new Error(`${label} did not change rendered viewport pixels: ${JSON.stringify({ delta: last })}.`);
 }
 
-async function captureViewportDeltaFailure(page, label, payload) {
-  await mkdir(browserAuditArtifactDir, { recursive: true });
+async function resolveViewportFailureArtifactStem(label) {
   const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const diagnostics = await page.evaluate(() => {
+  const baseStem = `target-smoke-${slug}`;
+  let suffix = "";
+  for (;;) {
+    const stem = `${baseStem}${suffix}`;
+    const paths = ["before.png", "after.png", "failure.png", "failure.json"]
+      .map((suffix) => join(browserAuditArtifactDir, `${stem}-${suffix}`));
+    let occupied = false;
+    for (const path of paths) {
+      try {
+        await access(path);
+        occupied = true;
+        break;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+    if (!occupied) return stem;
+    suffix = `-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  }
+}
+
+function failureCaptureError(error) {
+  return error instanceof Error
+    ? { message: error.message, name: error.name }
+    : { thrownValue: String(error) };
+}
+
+async function captureViewportDeltaFailure(page, label, payload, artifactStem = null, initialErrors = {}) {
+  const captureErrors = { ...initialErrors };
+  let stem = artifactStem;
+  if (!stem) {
+    try {
+      stem = await resolveViewportFailureArtifactStem(label);
+    } catch (error) {
+      captureErrors.uniqueArtifactName = failureCaptureError(error);
+      const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      stem = `target-smoke-${slug}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    }
+  }
+  try {
+    await mkdir(browserAuditArtifactDir, { recursive: true });
+  } catch (error) {
+    captureErrors.directory = failureCaptureError(error);
+    return { artifactStem: stem, errors: captureErrors };
+  }
+  let diagnostics = null;
+  try {
+    diagnostics = await page.evaluate(() => {
     function serializeViewportAuditValue(value, depth = 0) {
       if (depth > 4) return "[depth-limit]";
       if (value instanceof Map) {
@@ -1436,7 +1989,7 @@ async function captureViewportDeltaFailure(page, label, payload) {
     const panel = document.querySelectorAll(".fm-inspector-panel").item(
       document.querySelectorAll(".fm-inspector-panel").length - 1,
     );
-    const targetIds = ["object:fdm-left", "object:fdm-right", "fdm-domain", "airbox"];
+    const targetIds = ["object:fem-empty", "object:fem-visible", "object:fdm-left", "object:fdm-right", "fdm-domain", "airbox"];
     const resources = Object.fromEntries(
       Object.keys(audit?.readViewportAuditRuntime?.().listenerCounts ?? {})
         .filter((key) => key.includes("/v2/sessions/current/data/fields/") || key.includes("visualization/state"))
@@ -1477,14 +2030,165 @@ async function captureViewportDeltaFailure(page, label, payload) {
       workers: audit?.readViewportAuditRuntime?.().workers ?? null,
       fieldResources: serializeViewportAuditValue(resources),
     };
+    });
+  } catch (error) {
+    captureErrors.diagnostics = failureCaptureError(error);
+  }
+  const screenshotPath = join(browserAuditArtifactDir, `${stem}-failure.png`);
+  const diagnosticsPath = join(browserAuditArtifactDir, `${stem}-failure.json`);
+  const serializeDiagnostics = () => `${JSON.stringify({
+    artifacts: { diagnostics: diagnosticsPath, screenshot: screenshotPath },
+    captureErrors,
+    diagnostics,
+    label,
+    ...payload,
+  }, null, 2)}\n`;
+  let diagnosticsPersisted = false;
+  try {
+    await writeFile(diagnosticsPath, serializeDiagnostics());
+    diagnosticsPersisted = true;
+  } catch (error) {
+    captureErrors.json = failureCaptureError(error);
+  }
+  try {
+    await page.screenshot({ path: screenshotPath });
+  } catch (error) {
+    captureErrors.screenshot = failureCaptureError(error);
+    if (diagnosticsPersisted) {
+      try {
+        await writeFile(diagnosticsPath, serializeDiagnostics());
+      } catch (writeError) {
+        captureErrors.jsonUpdate = failureCaptureError(writeError);
+      }
+    }
+  }
+  return { artifactStem: stem, diagnosticsPath, errors: captureErrors, screenshotPath };
+}
+
+function summarizeViewportPixelSample(sample) {
+  if (!sample) return null;
+  return {
+    bitmapHeight: sample.bitmapHeight,
+    bitmapWidth: sample.bitmapWidth,
+    stride: sample.stride,
+    viewportState: sample.viewportState,
+  };
+}
+
+async function captureViewportComparisonFailure(page, label, before, after, payload) {
+  let artifactStem = null;
+  const artifactErrors = {};
+  try {
+    artifactStem = await resolveViewportFailureArtifactStem(label);
+  } catch (error) {
+    artifactErrors.uniqueArtifactName = failureCaptureError(error);
+  }
+  if (!artifactStem) {
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    artifactStem = `target-smoke-${slug}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  }
+  try {
+    await mkdir(browserAuditArtifactDir, { recursive: true });
+  } catch (error) {
+    artifactErrors.directory = failureCaptureError(error);
+  }
+  if (before?.png) {
+    try {
+      await writeFile(join(browserAuditArtifactDir, `${artifactStem}-before.png`), before.png);
+    } catch (error) {
+      artifactErrors.beforeScreenshot = failureCaptureError(error);
+    }
+  }
+  if (after?.png) {
+    try {
+      await writeFile(join(browserAuditArtifactDir, `${artifactStem}-after.png`), after.png);
+    } catch (error) {
+      artifactErrors.afterScreenshot = failureCaptureError(error);
+    }
+  }
+  return captureViewportDeltaFailure(page, label, {
+    ...payload,
+    afterSample: summarizeViewportPixelSample(after),
+    beforeSample: summarizeViewportPixelSample(before),
+  }, artifactStem, artifactErrors);
+}
+
+async function assertViewportSampleGeometryEqual(page, before, after, label) {
+  const matches =
+    before.bitmapWidth === after.bitmapWidth &&
+    before.bitmapHeight === after.bitmapHeight &&
+    before.stride === after.stride &&
+    JSON.stringify(before.viewportState) === JSON.stringify(after.viewportState);
+  if (matches) return;
+  await captureViewportComparisonFailure(page, label, before, after, {
+    reason: "viewport geometry, drawing buffer, device scale, or camera state changed",
   });
-  await page.screenshot({
-    path: join(browserAuditArtifactDir, `target-smoke-${slug}-failure.png`),
-  });
-  await writeFile(
-    join(browserAuditArtifactDir, `target-smoke-${slug}-failure.json`),
-    `${JSON.stringify({ diagnostics, label, ...payload }, null, 2)}\n`,
-  );
+  throw new Error(label + " changed viewport geometry, drawing buffer, device scale, or camera state.");
+}
+
+async function viewportPixelMask(page, visible, hidden, label, options = {}) {
+  const length = Math.min(visible.signature.length, hidden.signature.length);
+  const indices = [];
+  for (let offset = 0; offset < length; offset += 3) {
+    const delta =
+      Math.abs(visible.signature[offset] - hidden.signature[offset]) +
+      Math.abs(visible.signature[offset + 1] - hidden.signature[offset + 1]) +
+      Math.abs(visible.signature[offset + 2] - hidden.signature[offset + 2]);
+    if (delta > 18) indices.push(offset / 3);
+  }
+  const minimumMaskSamples = options.minimumMaskSamples ?? 21;
+  if (indices.length < minimumMaskSamples) {
+    await captureViewportComparisonFailure(page, label + " mask construction", visible, hidden, {
+      maskSamples: indices.length,
+      minimumMaskSamples,
+    });
+    throw new Error(label + " visibility toggle did not produce a sufficiently large pixel mask: " + JSON.stringify({
+      maskSamples: indices.length,
+      minimumMaskSamples,
+    }));
+  }
+  return indices;
+}
+
+function viewportPixelDeltaOnMask(before, after, mask, options = {}) {
+  let changedPixels = 0;
+  for (const sampleIndex of mask) {
+    const offset = sampleIndex * 3;
+    const delta =
+      Math.abs(before.signature[offset] - after.signature[offset]) +
+      Math.abs(before.signature[offset + 1] - after.signature[offset + 1]) +
+      Math.abs(before.signature[offset + 2] - after.signature[offset + 2]);
+    if (delta > 18) changedPixels += 1;
+  }
+  const minimumChangedPixels = options.minimumChangedPixels ?? 21;
+  return {
+    changed: changedPixels >= minimumChangedPixels,
+    changedPixels,
+    maskSamples: mask.length,
+    minimumChangedPixels,
+  };
+}
+
+async function assertViewportPixelDeltaOnMask(page, before, after, mask, label, options = {}) {
+  const delta = viewportPixelDeltaOnMask(before, after, mask, options);
+  const shouldChange = options.shouldChange ?? false;
+  const passed = shouldChange ? delta.changed : !delta.changed;
+  if (passed) return delta;
+  await captureViewportComparisonFailure(page, label, before, after, { delta, shouldChange });
+  throw new Error(label + " violated the masked pixel contract: " + JSON.stringify({
+    delta,
+    shouldChange,
+  }));
+}
+
+async function readObjectVisualizationSettings(page, objectId) {
+  return page.evaluate((id) => {
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    return audit?.readVisualizationTargetSettings?.({
+      id: "object:" + id,
+      kind: "object",
+    }) ?? null;
+  }, objectId);
 }
 
 async function assertNoViewportPixelDelta(page, baseline, label) {
@@ -1500,6 +2204,11 @@ async function assertNoViewportPixelDelta(page, baseline, label) {
 
 async function waitForAnimationFrame(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+}
+
+async function waitForRenderedViewportFrame(page) {
+  await waitForAnimationFrame(page);
+  await waitForAnimationFrame(page);
 }
 
 function viewportPixelDelta(before, after, options = {}) {
@@ -1633,14 +2342,36 @@ async function waitForFdmFieldResource(page, quantityId, targetPart = null) {
   }, { quantity: quantityId, targetPart }, { timeout: timeoutMs }).then((handle) => handle.jsonValue());
 }
 
-async function invalidateFieldResource(page, resourceKey) {
-  await page.evaluate((key) => {
+async function waitForFdmPartFieldPayload(page, resourceKey, partId, expected) {
+  return page.waitForFunction(({ key, expectedPartId, etag, values }) => {
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    const snapshot = audit?.readViewportAuditResource?.(key);
+    if (snapshot?.status !== "ready" || !(snapshot.data instanceof Map)) return null;
+    const envelope = snapshot.data.get(expectedPartId);
+    if (!envelope?.data?.values) return null;
+    const actualValues = Array.from(envelope.data.values);
+    if (envelope.etag !== etag || actualValues.length !== values.length) return null;
+    if (!actualValues.every((value, index) => value === values[index])) return null;
+    return {
+      etag: envelope.etag,
+      partId: expectedPartId,
+      resourceKey: key,
+      resourceRevision: snapshot.revision,
+      values: actualValues,
+    };
+  }, { key: resourceKey, expectedPartId: partId, etag: expected.etag, values: expected.values }, {
+    timeout: timeoutMs,
+  }).then((handle) => handle.jsonValue());
+}
+
+async function invalidateFieldResource(page, resourceKey, reason = "smoke-recovery") {
+  await page.evaluate(({ key, reasonPrefix }) => {
     const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
     if (typeof audit?.invalidateResource !== "function") {
       throw new Error("Missing browser-audit resource invalidation hook.");
     }
-    audit.invalidateResource(key, `smoke-recovery:${Date.now()}`);
-  }, resourceKey);
+    audit.invalidateResource(key, reasonPrefix + ":" + Date.now());
+  }, { key: resourceKey, reasonPrefix: reason });
 }
 
 function attachBrowserErrors(page) {
@@ -1805,8 +2536,13 @@ function createEmptyPartColorFixture() {
   fixture.fieldVectorFactory = (fieldQuantityId) =>
     femEmptyPartColorFieldVectorBuffer(fieldQuantityId);
   fixture.emptyPartFieldResponses = [];
+  fixture.scopedFieldRevisions = {
+    "part-empty-range": 1,
+    "part-visible": 1,
+  };
+  fixture.scopedFieldMagnitudes = [1, 2, 3, 4, 1_000, 10_000, 100_000, 1_000_000];
   fixture.scopedNodeValue = (nodeIndex) => [
-    [1, 2, 3, 4, 1_000, 10_000, 100_000, 1_000_000][nodeIndex], 0, 0,
+    fixture.scopedFieldMagnitudes[nodeIndex], 0, 0,
   ];
   fixture.manifest = {
     generation_id: "1",
