@@ -3525,7 +3525,7 @@ Autorytatywny PR97 OPEN na00392a4bacd31a8e378ac1e05a44bc23f2730e85; PR102 CLOSED
 | [4243099642](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243099642) / #97 | `apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions.ts` | implemented_pending_ci_browser | Import/pin/unpin po ACK uniewazniaja scene i definitions z scene_revision odpowiedzi; session fence, no-op i rejected mutation zachowane. Regression checks dla obu zasobow; GHA i browser wymagane. |
 | [4243099648](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243099648) / #97 | `apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts` | duplicate | Ten sam manifest-driven materialization time_domain_spectrum/dynamic_structure_factor bez observation frames. Builder blob 4f0d72c9ccf8085956ae0acfbf2595217a19e937; GHA 38903458613 SUCCESS i browser fixture dowodzi obu produktów, właściwych run/stage/dataset/revision, ECharts, CSV i provenance. Nie dowodzi solvera/backendowej persystencji. |
 | [4243099651](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243099651) / #97 | `apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases.ts` | implemented_verified_source_contract_pending_browser | Aliasowanie Dynamics/observation node kinds do Time-domain owner jest pokryte: analysisNodeKindAliases.ts blob ab646a12c55b5371fc18720e4b789258aed1c5c1; GHA 38891840718/job116942954507 SUCCESS (70 plików/1536 testów/typecheck/architecture). Primary nie ma osobnej sesji browser; pozostaw tę bramkę otwartą dla rzeczywistego contextual-tab routing. |
-| [4243099653](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243099653) / #97 | `apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts` | pending | Osierocony zapisany pin bez opublikowanej rodziny nadal wymaga węzła unavailable, z którego można wykonać Unpin. Builder blob 4f0d72c9ccf8085956ae0acfbf2595217a19e937. Reference node/Remove z 4248159320 nie pokrywa orphan-family case; nie znaleziono osobnej regresji ani dowodu. |
+| [4243099653](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243099653) / #97 | `apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts` | implemented_pending_direct_browser | Commit6693ab641d105da1b337995661151120625f871a zachowuje run-scoped unavailable piny bez published family i exact definitionId dla Unpin; obie ścieżki currentRun/resultContextRunId, bez phantom families. Namespace/run/nodekind guard, siblings, idempotence i published-owner regresje. Fixture kind poprawiony cb80f477cfd7e0f0b4c6b9c3996f6a8e6651a588. GHA38937521109/job117096634898 SUCCESS:75files/1602tests, builder97, nodes39, Unpin74; typecheck/architecture/Doctor PASS. Browser pagination i planar PASS, ale nie orphan-specific Unpin flow; ten scenariusz pozostaje otwarty. |
 | [4243099657](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243099657) / #97 | `apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts` | duplicate | Ten sam import reference → osobny Explorer child/Inspector/Remove flow. Builder blob 4f0d72c9ccf8085956ae0acfbf2595217a19e937; GHA 38903458613 SUCCESS. Browser fixture potwierdza osobny reference node, metadata, scoped DELETE/expected_scene_revision, usunięcie overlayu i zachowanie computed series. Fixture-only, bez backend persistence/solver comparison. |
 | [4243102016](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243102016) / #97 | `packages/fullmag-py/src/fullmag/model/study.py` | implemented | Potwierdzona utrata policy w Eigenmodes.to_ir. Przygotowana korekta istniejącym policy.to_ir i actualPythonStage→loadedIR regression; source review/AST PASS, GHA38232017811 SUCCESS:84 tests/24 subtests PASS, w tym actual scripted stage→IR solver_policy; nauka/native odrębne. RustSceneDocument projection4242140004 to odrębna luka. |
 | [4243102018](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4243102018) / #97 | `apps/control-room/src/modules/inspector/panels/StudyInspectorPanelModel.ts` | already_fixed_verified_source_contract | Aktualny kod zachowuje retained error tylko po dokładnym session_id/session_epoch/run_id match; model i hook filtrują snapshot, UI osobno pokazuje warning/error. Audyt15 przypiętych plików i identyczne bloby na ca70. GHA38934563698/job117086675324 exacte4b5 PASS: StudyInspectorPanel38, studyRuntimeResources60, StudyInspectorPanelModel16, ResourceRuntimeStore22 testy. Nie dodano powielającej poprawki produkcyjnej; połączona browser ścieżka GET rejection→Inspector pozostaje osobnym niezweryfikowanym scenariuszem. |
@@ -4854,3 +4854,30 @@ Koordynator nie ma heartbeat; istnieje5s timeout oczekującego render adoption.
 Rozpoznanie opóźnionych/superseded ACK wobec utraconego render commit pozostaje otwarte.
 Commitca70 dodaje wyłącznie status/error/revision/time/phase diagnostyki i nie osłabia gate.
 Nowy browserCI38935557654 jest w toku; nie należy traktować go jako wyniku PASS.
+
+## Poprawka orphan pin4243099653 — dowody cb80
+
+Commit6693ab zachowuje niedostępne piny w stabilnej grupie pod właściwym Results runem,
+z dokładnym wejściem istniejącej komendy Unpin, bez fikcyjnej rodziny/dataset identity.
+Obie ścieżki budowania drzewa stosują augmentację. Root review wykrył i skorygował
+narrowing stringowego module_id przed publikacją; cb80 poprawia wyłącznie fixture
+ExplorerNodeKind, nie publiczny node_kind definicji.
+
+CI38937521109/job117096634898 exactcb80 zakończyło się SUCCESS:
+75 plików/1602 testy PASS, buildModelTree97, resultsExplorerNodes39,
+postprocessingCommandContributions74; pełny typecheck, architecture i changed-scope
+ReactDoctor PASS (89/100,2 ostrzeżenia). Poprzedni6693 CI miał zielone testy, lecz błędny
+fixturekind blokował typecheck; nie uznaje się go za całkowity sukces.
+
+Artefakt12060519459 ZIP SHA256
+`3246f5fc09e8658d30a7cc37059a4c38065816ee01d8447f6ba97200947ce2ef`
+zweryfikowano względem upload logu. Manifest pnpm wskazuje source_sha=cb80;
+terminalny managed status ma head=cb80/state=completed/exit_code=0,
+source_dirty=true i qualification=not_assessed. Nie deklaruje się clean snapshotu
+ani kwalifikacji wydania/naukowej na podstawie tego statusu.
+
+Rzeczywisty hosted Chrome potwierdził planar canvas400x100 oraz paginację501→502
+rekordów i StageExecution/realtime scope w Explorerze na fixture API.
+Nie ćwiczył osobno orphan-node context menu→Unpin→persisted readback, dlatego ten
+punkt ma implemented_pending_direct_browser. Zielony workflow nie zastępuje tej
+brakującej konkretnej ścieżki ani nadal otwartego viewport render-adoption ACK.
