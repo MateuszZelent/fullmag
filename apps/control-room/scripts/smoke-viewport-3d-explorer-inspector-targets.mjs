@@ -493,16 +493,10 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       { minimumChangedPixels: aMinimumChangedPixels, shouldChange: false },
     );
 
-    const aFieldBeforeBRefresh = await waitForFdmFieldResource(page, quantityId, {
-      component: "full",
-      partId: "part-empty-range",
-      scopeKind: "part",
-    });
-    if (
-      aFieldBeforeBRefresh.status !== "ready" ||
-      aFieldBeforeBRefresh.hasTargetPart ||
-      aFieldBeforeBRefresh.hasValues
-    ) {
+    // The coalesced request unmounts the per-part hook. Verify A's
+    // empty support from the actual manifest used by the renderer instead.
+    const aFieldBeforeBRefresh = await readFEMPartNodeSupport(page, "part-empty-range");
+    if (!aFieldBeforeBRefresh.emptyNodeMembership) {
       await captureViewportComparisonFailure(
         page,
         "part A empty field before B refresh",
@@ -510,7 +504,7 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
         null,
         { aFieldBeforeBRefresh },
       );
-      throw new Error("Part A no longer has its empty 204 field resource before perturbing B.");
+      throw new Error("Part A no longer has empty node membership before perturbing B.");
     }
 
     await selectVisualizationNode(page, "fem-visible", null);
@@ -662,13 +656,8 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
         entry.revision !== aFixtureResponseRevisionBefore,
     );
     const aFixtureResponseRevisionAfter = fixture.scopedFieldRevisions["part-empty-range"];
-    const aPartAfterBRefresh = fixture.manifest.mesh_parts.find(
-      (part) => part.id === "part-empty-range",
-    );
     const aFieldAfterBRefresh = {
-      emptyNodeMembership: aPartAfterBRefresh?.node_count === 0 &&
-        (aPartAfterBRefresh.node_indices === undefined ||
-          (Array.isArray(aPartAfterBRefresh.node_indices) && aPartAfterBRefresh.node_indices.length === 0)),
+      ...await readFEMPartNodeSupport(page, "part-empty-range"),
       fullFieldValuesOutsideBUnchanged:
         JSON.stringify(bPayloadAfter.values.slice(0, 12)) ===
         JSON.stringify(bPayloadBefore.values.slice(0, 12)),
@@ -681,6 +670,7 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       aFixtureResponseRevisionAfter !== aFixtureResponseRevisionBefore ||
       aUnexpectedRevisionResponses.length > 0 ||
       !aFieldAfterBRefresh.emptyNodeMembership ||
+      aFieldAfterBRefresh.manifestRevision !== aFieldBeforeBRefresh.manifestRevision ||
       !aFieldAfterBRefresh.fullFieldValuesOutsideBUnchanged ||
       JSON.stringify(aSettingsBeforeBRefresh) !== JSON.stringify(aSettingsAfterBRefresh) ||
       JSON.stringify(bSettingsBeforeBRefresh) !== JSON.stringify(bSettingsAfterBRefresh)
@@ -2189,6 +2179,25 @@ async function assertViewportPixelDeltaOnMask(page, before, after, mask, label, 
     delta,
     shouldChange,
   }));
+}
+
+async function readFEMPartNodeSupport(page, partId) {
+  return page.evaluate((id) => {
+    const snapshot = window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readViewportAuditResource?.(
+      "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+    );
+    const part = snapshot?.data?.mesh_parts?.find((entry) => entry.id === id);
+    return {
+      emptyNodeMembership: snapshot?.status === "ready" && part?.node_count === 0 &&
+        (part.node_indices === undefined ||
+          (Array.isArray(part.node_indices) && part.node_indices.length === 0)),
+      manifestRevision: snapshot?.revision ?? null,
+      nodeCount: part?.node_count ?? null,
+      nodeIndices: part?.node_indices ?? null,
+      nodeStart: part?.node_start ?? null,
+      partId: id,
+    };
+  }, partId);
 }
 
 async function readObjectVisualizationSettings(page, objectId) {
