@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const apiBase = (
@@ -419,16 +419,20 @@ async function verifyAnalysisSurfaceContract(page, expectedSurface) {
   }
 }
 
-async function seedAnalysisSurfacePreference(page, surface) {
+async function seedAnalysisSurfacePreference(page, surface, overrides = {}) {
   await page.addInitScript(
-    ({ key, activeSurface }) => {
+    ({ key, activeSurface, overrides: preferenceOverrides }) => {
       try {
-        window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 2, activeSurface }));
+        window.localStorage.setItem(key, JSON.stringify({
+          schemaVersion: 2,
+          activeSurface,
+          ...preferenceOverrides,
+        }));
       } catch {
         // Storage unavailable: verifyAnalysisSurfaceContract reports the surface mismatch.
       }
     },
-    { key: ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY, activeSurface: surface },
+    { key: ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY, activeSurface: surface, overrides },
   );
 }
 
@@ -884,8 +888,780 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
   }
   const referenceImportProof = await verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl);
   proofs.push(referenceImportProof);
+  const timeDomainCatalogProofs = await verifyTimeDomainCatalogResultProjection(
+    browser,
+    workspaceUrl,
+    baseUrl,
+  );
+  proofs.push(...timeDomainCatalogProofs);
   persistFixtureProof(false);
   persistFixtureProof(true);
+  return proofs;
+}
+
+function createTimeDomainCatalogFixture() {
+  const runId = "time-domain-catalog-run-9415";
+  const stageId = "time-domain-stage-9415";
+  const resultRunPath = `/v2/sessions/current/analysis/results/runs/${runId}`;
+  const datasetDefinitions = [
+    {
+      axisLabels: { x: "Frequency", y: "Spectral power" },
+      axisMapping: { x: "frequency_hz", y: "power" },
+      axisUnits: { x: "Hz", y: "1" },
+      axes: [
+        { axisId: "frequency_hz", label: "Frequency", role: "x", unit: "Hz" },
+        { axisId: "power", label: "Spectral power", role: "y", unit: "1" },
+      ],
+      datasetId: "time-domain-spectrum-dataset",
+      datasetRevision: "dataset-revision-spectrum-9415",
+      itemKind: "spectral_feature",
+      items: [
+        { itemId: "spectral-feature-0", sampleId: "spectrum-sample-0", x: 1, y: 0.25 },
+        { itemId: "spectral-feature-1", sampleId: "spectrum-sample-1", x: 2, y: 0.5 },
+      ],
+      productKind: "time_domain_spectrum",
+      projectionId: "response-spectrum",
+      projectionRevision: "projection-revision-spectrum-9415",
+      projectionTitle: "Response spectrum",
+      seriesId: "time-domain-spectrum-series",
+      title: "Time-domain spectrum",
+    },
+    {
+      axisLabels: { x: "Wavevector", y: "Frequency" },
+      axisMapping: { x: "k_rad_per_m", y: "frequency_hz" },
+      axisUnits: { x: "rad/m", y: "Hz" },
+      axes: [
+        { axisId: "k_rad_per_m", label: "Wavevector", role: "x", unit: "rad/m" },
+        { axisId: "frequency_hz", label: "Frequency", role: "y", unit: "Hz" },
+      ],
+      datasetId: "dynamic-structure-factor-dataset",
+      datasetRevision: "dataset-revision-dsf-9415",
+      fixedCoordinates: [{
+        axis_id: "bias-field",
+        category: null,
+        entity_ref: null,
+        label: "B = 75 mT",
+        scalar_si: 0.075,
+        token: "bias-field-75mT",
+        vector3_si: null,
+      }],
+      itemKind: "dsf_point",
+      items: [
+        { itemId: "dsf-point-0", sampleId: "dsf-sample-0", x: 0.5, y: 2 },
+        { itemId: "dsf-point-1", sampleId: "dsf-sample-1", x: 1, y: 4 },
+      ],
+      productKind: "dynamic_structure_factor",
+      projectionId: "dsf-map",
+      projectionRevision: "projection-revision-dsf-9415",
+      projectionTitle: "Dynamic structure factor",
+      seriesId: "dynamic-structure-factor-series",
+      title: "Dynamic structure factor",
+    },
+  ];
+  const datasets = datasetDefinitions.map((definition) => {
+    const datasetStatus = {
+      completeness: "complete",
+      execution: "published",
+      qualification: "legacy",
+      resource: "complete",
+    };
+    const catalogItem = {
+      dataset_id: definition.datasetId,
+      dataset_revision: definition.datasetRevision,
+      item_count: definition.items.length,
+      manifest_resource_key: `${resultRunPath}/datasets/${definition.datasetId}`,
+      product_kind: definition.productKind,
+      run_id: runId,
+      sample_count: definition.items.length,
+      stage_id: stageId,
+      status: datasetStatus,
+      title: definition.title,
+    };
+    const projectionPath =
+      `${resultRunPath}/datasets/${definition.datasetId}/projections/${definition.projectionId}`;
+    const manifest = {
+      axes: definition.axes.map((axis) => ({
+        axis_id: axis.axisId,
+        cardinality: definition.items.length,
+        inline_values: null,
+        label: axis.label,
+        ordering: "ascending",
+        preferred_display_units: [axis.unit],
+        projections: [],
+        role: axis.role,
+        semantic_id: axis.axisId,
+        symbol: axis.role === "x" ? "x" : "y",
+        unit_si: axis.unit,
+        value_kind: "scalar",
+        values_resource_key: null,
+      })),
+      capabilities: {
+        branch_tracking: false,
+        comparison: false,
+        export: true,
+        fields: false,
+        item_paging: true,
+        live_partial_results: false,
+        result_meshes: false,
+        sample_paging: true,
+        server_filtering: false,
+        server_sorting: false,
+      },
+      dataset_id: definition.datasetId,
+      dataset_revision: definition.datasetRevision,
+      default_cursor: {
+        item_id: definition.items[0].itemId,
+        sample_id: definition.items[0].sampleId,
+      },
+      item_index_resource: `${resultRunPath}/datasets/${definition.datasetId}/items`,
+      item_kinds: [definition.itemKind],
+      product_kind: definition.productKind,
+      projections: [{
+        kind: "line",
+        projection_id: definition.projectionId,
+        resource_key: projectionPath,
+        selectable: true,
+        title: definition.projectionTitle,
+        x_axis_id: definition.axes[0].axisId,
+        y_axis_id: definition.axes[1].axisId,
+      }],
+      provenance: {
+        fixture: "time-domain-catalog-browser-proof",
+        producer: "typed-analysis-result-catalog",
+      },
+      run_id: runId,
+      sample_index_resource: `${resultRunPath}/datasets/${definition.datasetId}/samples`,
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      source_artifacts: [],
+      stage_id: stageId,
+      status: datasetStatus,
+      title: definition.title,
+      topology_policy: "not_applicable",
+      units_policy: "canonical_si",
+    };
+    const projection = {
+      axis_labels: definition.axisLabels,
+      axis_mapping: definition.axisMapping,
+      axis_units: definition.axisUnits,
+      dataset_id: definition.datasetId,
+      dataset_revision: definition.datasetRevision,
+      fixed_coordinates: definition.fixedCoordinates ?? [],
+      projection_id: definition.projectionId,
+      projection_revision: definition.projectionRevision,
+      run_id: runId,
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      selection_index: definition.items.map((item, ordinal) => ({
+        branch_id: null,
+        item_id: item.itemId,
+        item_kind: definition.itemKind,
+        ordinal,
+        sample_id: item.sampleId,
+      })),
+      series: [{
+        label: definition.title,
+        points: definition.items.map((item, ordinal) => ({
+          branch_id: null,
+          item_id: item.itemId,
+          ordinal,
+          sample_id: item.sampleId,
+          status: "ready",
+          value: item.y,
+          x: item.x,
+          y: item.y,
+        })),
+        series_id: definition.seriesId,
+      }],
+      status: {
+        completeness: "ready",
+        detail: null,
+        execution: "published",
+        qualification: "unvalidated",
+        reason_code: null,
+        resource: "ready",
+      },
+      unsupported_reason: null,
+    };
+    return {
+      ...definition,
+      catalogItem,
+      manifest,
+      projection,
+      projectionPath,
+      renderedSeriesId: `${definition.projectionId}:${definition.seriesId}`,
+    };
+  });
+  const currentRun = {
+    active_stage_index: 0,
+    active_stage_kind: "time_domain",
+    artifact_dir: `/fixture/results/${runId}`,
+    requested_backend: "fdm",
+    requested_device: "cpu",
+    requested_mode: "time_domain",
+    requested_precision: "fp64",
+    resolved_backend: "fdm",
+    resolved_device: "cpu",
+    resolved_engine_id: "browser-fixture",
+    resolved_mode: "time_domain",
+    resolved_precision: "fp64",
+    revision: 731,
+    run_id: runId,
+    session_id: FIXTURE_SESSION_ID,
+    solver_time_seconds: 2,
+    started_at: "2026-10-09T00:00:00.000Z",
+    status: "completed",
+    total_stages: 1,
+    total_steps: 4,
+  };
+  return {
+    catalog: {
+      items: datasets.map((dataset) => dataset.catalogItem),
+      next_cursor: null,
+      revision: "catalog-revision-9415",
+      run_id: runId,
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      status: "ready",
+      total_count: datasets.length,
+      unsupported_reason: null,
+    },
+    currentRun,
+    datasets,
+    resultRunPath,
+    runId,
+    runSummary: {
+      requested_device: "cpu",
+      resolved_device: "cpu",
+      run_id: runId,
+      selection_reason: "Time-domain catalog-only browser fixture.",
+      solver_steps: 4,
+      solver_time: 2,
+      stage_count: 1,
+      stage_index: 0,
+      stage_label: "Time domain",
+      started_at: "2026-10-09T00:00:00.000Z",
+    },
+    stageId,
+  };
+}
+
+async function verifyTimeDomainCatalogResultProjection(browser, workspaceUrl, baseUrl) {
+  const fixture = createTimeDomainCatalogFixture();
+  const proofs = [];
+  const expectedSessionScope = "session=" + encodeURIComponent(FIXTURE_SESSION_ID) +
+    "&epoch=" + encodeURIComponent(FIXTURE_SESSION_EPOCH) +
+    "&request_scope_epoch=" + encodeURIComponent(FIXTURE_REQUEST_SCOPE_EPOCH);
+
+  for (const selectedDataset of fixture.datasets) {
+    const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
+    const fixtureState = await installAnalysisDatasetFixtureRoutes(page, null, fixture);
+    const consoleErrors = [];
+    const pageErrors = [];
+    const failedResponses = [];
+    const failedRequests = [];
+    const resourceRequests = [];
+    const isFeatureRequestPath = (requestPath) => {
+      if (!requestPath) return false;
+      const pathname = new URL(requestPath, baseUrl).pathname;
+      return pathname.startsWith("/v2/sessions/current/analysis/results/") ||
+        pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH;
+    };
+    await seedAnalysisSurfacePreference(page, "dynamics", {
+      activeSubviews: { dynamics: "dynamics.time-traces" },
+      selectedDatasetRef: null,
+    });
+    await page.addInitScript(({ apiBase: configuredApiBase }) => {
+      window.__FULLMAG_CONFIG__ = {
+        ...(window.__FULLMAG_CONFIG__ ?? {}),
+        disableRealtime: true,
+        controlRoomApiBase: configuredApiBase,
+      };
+      window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ = true;
+      window.__FULLMAG_CHART_DIAGNOSTICS__ = {
+        activeInstances: 0,
+        createdInstances: 0,
+        disposedInstances: 0,
+        modelBuilds: 0,
+        plannedPoints: 0,
+        renderedPoints: 0,
+        resizeCalls: 0,
+        setOptionCalls: 0,
+      };
+    }, { apiBase: baseUrl });
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("requestfailed", (request) => {
+      const requestPath = currentSessionPath(request.url());
+      if (!isFeatureRequestPath(requestPath)) return;
+      failedRequests.push({
+        error: request.failure()?.errorText ?? "unknown request failure",
+        method: request.method(),
+        path: requestPath,
+      });
+    });
+    page.on("response", (response) => {
+      if (response.status() < 400) return;
+      const responsePath = currentSessionPath(response.url());
+      if (!isFeatureRequestPath(responsePath)) return;
+      failedResponses.push({
+        path: responsePath,
+        status: response.status(),
+      });
+    });
+    page.on("request", (request) => {
+      const requestPath = currentSessionPath(request.url());
+      if (!requestPath || request.method() === "OPTIONS") return;
+      resourceRequests.push({
+        method: request.method(),
+        path: requestPath,
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+    });
+
+    const resultsRootId = `results:run:${fixture.runId}`;
+    const dynamicsFamilyId = `${resultsRootId}:dynamics`;
+    const selectedNodeId = `${dynamicsFamilyId}:dataset:${selectedDataset.datasetId}`;
+    const selectedNodeSelector = `.fm-explorer [role="treeitem"][data-node-id="${selectedNodeId}"]`;
+    const resultCatalogPath = `${fixture.resultRunPath}/datasets`;
+    const resultManifestPath = `${resultCatalogPath}/${selectedDataset.datasetId}`;
+    const expectedFeaturePathnames = [
+      DATA_OBSERVATION_FRAMES_FIXTURE_PATH,
+      resultCatalogPath,
+      resultManifestPath,
+      selectedDataset.projectionPath,
+    ];
+
+    try {
+      await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+      await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
+      await openAnalysisPlots(page);
+
+      const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger")
+        .filter({ hasText: /^Results$/ })
+        .first();
+      await resultsTab.waitFor({ state: "visible", timeout: timeoutMs });
+      if (await resultsTab.getAttribute("aria-selected") !== "true") {
+        await resultsTab.click({ timeout: timeoutMs });
+      }
+
+      async function expandResultsNode(nodeId) {
+        const selector = `.fm-explorer [role="treeitem"][data-node-id="${nodeId}"]`;
+        const row = page.locator(selector);
+        await row.waitFor({ state: "visible", timeout: timeoutMs });
+        if (await row.getAttribute("aria-expanded") === "false") {
+          const branch = row.locator(".fm-explorer-tree-row__branch");
+          if (await branch.count()) await branch.click({ timeout: timeoutMs });
+          else await row.dblclick({ timeout: timeoutMs });
+        }
+        await page.waitForFunction(
+          (nodeSelector) => document.querySelector(nodeSelector)?.getAttribute("aria-expanded") === "true",
+          selector,
+          { timeout: timeoutMs },
+        );
+      }
+
+      await expandResultsNode(resultsRootId);
+      await expandResultsNode(dynamicsFamilyId);
+      const familyRow = page.locator(
+        `.fm-explorer [role="treeitem"][data-node-id="${dynamicsFamilyId}"]`,
+      );
+      if (await familyRow.count() !== 1 || !(await familyRow.innerText()).includes("Dynamics")) {
+        throw new Error("The run-scoped Dynamics Explorer family is missing or duplicated.");
+      }
+      const catalogNodeRows = await Promise.all(fixture.datasets.map(async (dataset) => {
+        const nodeId = `${dynamicsFamilyId}:dataset:${dataset.datasetId}`;
+        const row = page.locator(`.fm-explorer [role="treeitem"][data-node-id="${nodeId}"]`);
+        if (await row.count() !== 1) {
+          throw new Error(`Expected exactly one Explorer child for ${dataset.productKind}.`);
+        }
+        const label = (await row.innerText()).replace(/\s+/g, " ");
+        if (!label.includes(dataset.title)) {
+          throw new Error(`Explorer child ${dataset.productKind} has the wrong label: ${label}`);
+        }
+        return { datasetId: dataset.datasetId, label, nodeId, productKind: dataset.productKind };
+      }));
+
+      const selectedNode = page.locator(selectedNodeSelector);
+      await selectedNode.click({ timeout: timeoutMs });
+      await page.waitForFunction(
+        (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+        selectedNodeSelector,
+        { timeout: timeoutMs },
+      );
+
+      const inspector = page.locator('.fm-inspector [data-inspector-owner="results.analysis_result"]');
+      await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+      const inspectorText = (await inspector.innerText()).replace(/\s+/g, " ");
+      for (const expected of [
+        fixture.runId,
+        fixture.stageId,
+        selectedDataset.datasetId,
+        selectedDataset.datasetRevision,
+      ]) {
+        if (!inspectorText.includes(expected)) {
+          throw new Error(`Analysis Result Inspector omitted typed owner identity ${expected}: ${inspectorText}`);
+        }
+      }
+      const primaryPanel = page.locator(".fm-analysis-plots__panel--primary");
+      await primaryPanel.waitFor({ state: "visible", timeout: timeoutMs });
+      const primaryPanelText = (await primaryPanel.innerText()).replace(/\s+/g, " ");
+      const primaryPanelCanvasCount = await primaryPanel.locator(".fm-analysis-plots__echarts canvas").count();
+      if (
+        !primaryPanelText.includes("Select a dataset or artifact") ||
+        primaryPanelCanvasCount !== 0
+      ) {
+        throw new Error("The legacy primary surface must remain visible with no selected dynamics dataset or chart: " + JSON.stringify({
+          primaryPanelText,
+          primaryPanelCanvasCount,
+        }));
+      }
+
+      const projectionSection = page.locator(".fm-analysis-plots__subchart--result-projection");
+      await projectionSection.waitFor({ state: "visible", timeout: timeoutMs });
+      const projectionFrame = projectionSection.locator(
+        `[data-result-projection="${selectedDataset.projectionId}"]`,
+      );
+      await projectionFrame.waitFor({ state: "visible", timeout: timeoutMs });
+      const projectionText = (await projectionSection.innerText()).replace(/\s+/g, " ");
+      for (const expected of [
+        selectedDataset.projectionTitle,
+        selectedDataset.datasetId,
+        selectedDataset.projectionRevision,
+        `${selectedDataset.items.length} projection rows`,
+      ]) {
+        if (!projectionText.includes(expected)) {
+          throw new Error(`Canonical projection surface omitted ${expected}: ${projectionText}`);
+        }
+      }
+      if (selectedDataset.fixedCoordinates) {
+        const fixedCoordinateStatus = projectionSection.locator('[aria-label="Fixed coordinates"]');
+        await fixedCoordinateStatus.waitFor({ state: "visible", timeout: timeoutMs });
+        const fixedCoordinateText = (await fixedCoordinateStatus.innerText()).replace(/\s+/g, " ");
+        if (!fixedCoordinateText.includes("bias-field=B = 75 mT")) {
+          throw new Error(`Dynamic structure factor projection omitted its fixed-coordinate provenance: ${fixedCoordinateText}`);
+        }
+      }
+
+      const renderedProjection = await page.waitForFunction(
+        ({ projectionId, seriesId, expectedPoints }) => {
+          const projection = document.querySelector(
+            `.fm-analysis-plots__subchart--result-projection [data-result-projection="${projectionId}"]`,
+          );
+          const surface = projection?.querySelector('.fm-analysis-chart-surface[role="img"]');
+          const chartElement = projection?.querySelector(".fm-analysis-plots__echarts");
+          const canvas = chartElement?.querySelector("canvas");
+          const chartHosts = document.querySelectorAll(".fm-analysis-plots__echarts");
+          const mountedChartHosts = Array.from(chartHosts).filter((host) =>
+            host.querySelector("canvas"),
+          );
+          const chartCanvases = document.querySelectorAll(".fm-analysis-plots__echarts canvas");
+          const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+          const option = typeof diagnostics?.readRenderedOption === "function"
+            ? diagnostics.readRenderedOption()
+            : null;
+          const series = Array.isArray(option?.series)
+            ? option.series.find((entry) => entry && entry.id === seriesId)
+            : null;
+          const data = Array.isArray(series?.data)
+            ? series.data.filter((point) => Array.isArray(point) && point.length >= 3)
+            : [];
+          if (
+            !projection ||
+            !(canvas instanceof HTMLCanvasElement) ||
+            canvas.width <= 0 || canvas.height <= 0 ||
+            mountedChartHosts.length !== 1 || mountedChartHosts[0] !== chartElement ||
+            chartCanvases.length !== 1 || chartCanvases[0] !== canvas ||
+            diagnostics?.activeInstances !== 1 ||
+            !surface ||
+            data.length !== expectedPoints.length
+          ) {
+            return false;
+          }
+          const points = data.map((point) => [point[0], point[1], point[2]]);
+          if (!expectedPoints.every((expected) => points.some((point) =>
+            point[0] === expected.x && point[1] === expected.y && point[2] === expected.ordinal,
+          ))) {
+            return false;
+          }
+          const descriptionId = surface.getAttribute("aria-describedby");
+          const description = descriptionId
+            ? surface.ownerDocument.getElementById(descriptionId)?.textContent ?? ""
+            : "";
+          return {
+            accessibleLabel: surface.getAttribute("aria-label"),
+            activeChartInstances: diagnostics.activeInstances,
+            canvas: { height: canvas.height, width: canvas.width },
+            chartHostCount: chartHosts.length,
+            mountedChartHostCount: mountedChartHosts.length,
+            description,
+            points,
+            seriesId: series.id,
+          };
+        },
+        {
+          expectedPoints: selectedDataset.items.map((item, ordinal) => ({
+            ordinal,
+            x: item.x,
+            y: item.y,
+          })),
+          projectionId: selectedDataset.projectionId,
+          seriesId: selectedDataset.renderedSeriesId,
+        },
+        { timeout: timeoutMs },
+      );
+      const renderedProjectionEvidence = await renderedProjection.jsonValue();
+      if (!renderedProjectionEvidence.description.includes(`${selectedDataset.items.length} plotted points`)) {
+        throw new Error(`Rendered projection accessibility summary omitted its plotted points: ${JSON.stringify(renderedProjectionEvidence)}`);
+      }
+
+      const csvButton = projectionSection.getByRole("button", { name: "CSV", exact: true });
+      let timer;
+      let settled = false;
+      let resolveDownloads;
+      let rejectDownloads;
+      const downloads = [];
+      const downloadsPromise = new Promise((resolve, reject) => {
+        resolveDownloads = (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        rejectDownloads = (error) => {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        };
+      });
+      const handledDownloadsPromise = downloadsPromise.then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      const onDownload = (download) => {
+        downloads.push(download);
+        if (downloads.length === 2) resolveDownloads(downloads);
+      };
+      let capturedDownloads;
+      try {
+        page.on("download", onDownload);
+        timer = setTimeout(() => {
+          rejectDownloads(new Error("Canonical projection did not produce both CSV and provenance downloads."));
+        }, timeoutMs);
+        await csvButton.click({ timeout: timeoutMs });
+        const capture = await handledDownloadsPromise;
+        if (capture.error) throw capture.error;
+        capturedDownloads = capture.value;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        page.off("download", onDownload);
+        rejectDownloads(new Error("Canonical projection download capture was cancelled."));
+      }
+      if (downloads.length !== 2) {
+        throw new Error(`Expected data and provenance downloads, got ${capturedDownloads?.length ?? downloads.length}.`);
+      }
+      mkdirSync(acceptanceDirectory, { recursive: true });
+      const exported = [];
+      for (const download of capturedDownloads) {
+        const suggestedFilename = download.suggestedFilename();
+        const savedPath = path.join(
+          acceptanceDirectory,
+          `${selectedDataset.productKind}-${suggestedFilename}`,
+        );
+        await download.saveAs(savedPath);
+        exported.push({
+          content: readFileSync(savedPath, "utf8"),
+          filename: suggestedFilename,
+        });
+      }
+      const csvExport = exported.find((entry) => entry.filename.endsWith(".csv"));
+      const provenanceExport = exported.find((entry) => entry.filename.endsWith(".provenance.json"));
+      if (!csvExport || !provenanceExport) {
+        throw new Error(`Projection export produced unexpected files: ${exported.map((entry) => entry.filename).join(", ")}`);
+      }
+      const csvLines = csvExport.content.trim().split(/\r?\n/);
+      const csvHeaders = csvLines[0]?.split(",") ?? [];
+      const csvRows = csvLines.slice(1).map((line) => line.split(","));
+      const columnIndex = (columnName) => csvHeaders.indexOf(columnName);
+      const requiredCsvColumns = [
+        "series_id",
+        "dataset_id",
+        "dataset_revision",
+        "projection_id",
+        "projection_revision",
+        "sample_id",
+        "item_id",
+      ];
+      if (
+        csvRows.length !== selectedDataset.items.length ||
+        requiredCsvColumns.some((column) => columnIndex(column) < 0)
+      ) {
+        throw new Error(`Projection CSV omitted expected result rows or provenance columns: ${csvExport.content}`);
+      }
+      const exportedRows = csvRows.map((row, index) => {
+        const expectedItem = selectedDataset.items[index];
+        if (
+          row[columnIndex("dataset_id")] !== selectedDataset.datasetId ||
+          row[columnIndex("series_id")] !== selectedDataset.renderedSeriesId ||
+          row[columnIndex("dataset_revision")] !== selectedDataset.datasetRevision ||
+          row[columnIndex("projection_id")] !== selectedDataset.projectionId ||
+          row[columnIndex("projection_revision")] !== selectedDataset.projectionRevision ||
+          row[columnIndex("sample_id")] !== expectedItem.sampleId ||
+          row[columnIndex("item_id")] !== expectedItem.itemId ||
+          row[columnIndex("x")] !== String(expectedItem.x) ||
+          row[columnIndex("y")] !== String(expectedItem.y)
+        ) {
+          throw new Error(`Projection CSV row ${index} lost data or dataset provenance: ${row.join(",")}`);
+        }
+        return {
+          datasetId: row[columnIndex("dataset_id")],
+          datasetRevision: row[columnIndex("dataset_revision")],
+          itemId: row[columnIndex("item_id")],
+          projectionId: row[columnIndex("projection_id")],
+          projectionRevision: row[columnIndex("projection_revision")],
+          sampleId: row[columnIndex("sample_id")],
+          seriesId: row[columnIndex("series_id")],
+          x: row[columnIndex("x")],
+          y: row[columnIndex("y")],
+        };
+      });
+      const exportProvenance = JSON.parse(provenanceExport.content);
+      if (
+        exportProvenance.runId !== fixture.runId ||
+        exportProvenance.stageId !== fixture.stageId ||
+        exportProvenance.datasetId !== selectedDataset.datasetId ||
+        exportProvenance.datasetRevision !== selectedDataset.datasetRevision ||
+        exportProvenance.projectionId !== selectedDataset.projectionId ||
+        exportProvenance.projectionRevision !== selectedDataset.projectionRevision ||
+        exportProvenance.dataRevision !== selectedDataset.projectionRevision ||
+        exportProvenance.datasetRevision === String(fixture.currentRun.revision)
+      ) {
+        throw new Error(`Projection export provenance did not preserve the exact catalog identity: ${provenanceExport.content}`);
+      }
+      if (
+        selectedDataset.fixedCoordinates &&
+        exportProvenance.fixedCoordinates?.[0]?.token !== "bias-field-75mT"
+      ) {
+        throw new Error(`Projection export provenance lost the dynamic structure factor coordinate: ${provenanceExport.content}`);
+      }
+
+      const pathnames = resourceRequests.map((request) => ({
+        ...request,
+        pathname: request.path ? new URL(request.path, baseUrl).pathname : null,
+      }));
+      const expectedFeaturePathnameSet = new Set(expectedFeaturePathnames);
+      const unexpectedFeatureGets = pathnames.filter((request) =>
+        request.method === "GET" &&
+        request.pathname &&
+        (
+          request.pathname.startsWith("/v2/sessions/current/analysis/results/") ||
+          request.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH
+        ) &&
+        !expectedFeaturePathnameSet.has(request.pathname)
+      );
+      const missingFeatureGets = expectedFeaturePathnames.filter((pathname) =>
+        !pathnames.some((request) => request.method === "GET" && request.pathname === pathname),
+      );
+      const scopedFeatureGets = pathnames.filter((request) =>
+        request.method === "GET" &&
+        request.pathname &&
+        expectedFeaturePathnameSet.has(request.pathname),
+      );
+      if (
+        missingFeatureGets.length > 0 ||
+        unexpectedFeatureGets.length > 0 ||
+        scopedFeatureGets.some((request) => request.sessionScope !== expectedSessionScope) ||
+        fixtureState.timeDomainState.unexpectedAnalysisResultGets.length > 0 ||
+        fixtureState.timeDomainState.observationFrameReads.length === 0 ||
+        fixtureState.timeDomainState.observationFrameReads.some((entry) => entry.frameCount !== 0)
+      ) {
+        throw new Error("Time-domain catalog request audit failed: " + JSON.stringify({
+          missingFeatureGets,
+          unexpectedFeatureGets,
+          unexpectedAnalysisResultGets: fixtureState.timeDomainState.unexpectedAnalysisResultGets,
+          observationFrameReads: fixtureState.timeDomainState.observationFrameReads,
+          scopedFeatureGets,
+        }));
+      }
+      if (
+        consoleErrors.length > 0 ||
+        pageErrors.length > 0 ||
+        failedResponses.length > 0 ||
+        failedRequests.length > 0
+      ) {
+        throw new Error("Time-domain catalog page reported console, page, or request failures: " + JSON.stringify({
+          consoleErrors,
+          pageErrors,
+          failedResponses,
+          failedRequests,
+        }));
+      }
+
+      const proof = {
+        fixture: "time-domain-catalog-only-no-observation-frames",
+        selectedNode: {
+          kind: "analysis.time-domain.overview",
+          nodeId: selectedNodeId,
+          productKind: selectedDataset.productKind,
+        },
+        owner: {
+          runId: fixture.runId,
+          stageId: fixture.stageId,
+          datasetId: selectedDataset.datasetId,
+          datasetRevision: selectedDataset.datasetRevision,
+          currentRunRevision: fixture.currentRun.revision,
+        },
+        explorer: {
+          familyId: dynamicsFamilyId,
+          familyCount: await page.locator(
+            `.fm-explorer [role="treeitem"][data-node-id="${dynamicsFamilyId}"]`,
+          ).count(),
+          catalogNodes: catalogNodeRows,
+        },
+        inspector: {
+          owner: await inspector.getAttribute("data-inspector-owner"),
+          identityVisible: true,
+          text: inspectorText,
+        },
+        primaryPanel: {
+          visible: true,
+          emptyDatasetPromptVisible: true,
+          chartCanvasCount: primaryPanelCanvasCount,
+        },
+        projection: {
+          productKind: selectedDataset.productKind,
+          projectionId: selectedDataset.projectionId,
+          projectionRevision: selectedDataset.projectionRevision,
+          seriesId: selectedDataset.renderedSeriesId,
+          title: selectedDataset.projectionTitle,
+          rendered: renderedProjectionEvidence,
+          export: {
+            csvFilename: csvExport.filename,
+            rowCount: csvRows.length,
+            rows: exportedRows,
+            provenanceFilename: provenanceExport.filename,
+            provenance: exportProvenance,
+          },
+        },
+        observationFrames: {
+          reads: fixtureState.timeDomainState.observationFrameReads,
+          frameCount: 0,
+        },
+        requests: resourceRequests,
+        unexpectedFeatureGets,
+        consoleErrors,
+        pageErrors,
+        failedResponses,
+        failedRequests,
+      };
+      writeFileSync(
+        path.join(acceptanceDirectory, `analysis-time-domain-catalog-${selectedDataset.productKind}-proof.json`),
+        `${JSON.stringify(proof, null, 2)}\n`,
+        "utf8",
+      );
+      proofs.push(proof);
+    } finally {
+      await page.close();
+    }
+  }
   return proofs;
 }
 
@@ -2446,14 +3222,24 @@ function targetOrTrackedModeId(isTarget, targetModeId, sampleIndex) {
   return isTarget ? targetModeId : `tracked-mode-${sampleIndex}`;
 }
 
-async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture = null) {
+async function installAnalysisDatasetFixtureRoutes(
+  page,
+  frequencyDomainFixture = null,
+  timeDomainFixture = null,
+) {
   const referenceImportEnabled = frequencyDomainFixture?.referenceImport === true;
+  const timeDomainCatalogEnabled = timeDomainFixture !== null;
   const referenceImportState = {
     definitionListResponses: [],
     definitions: [],
     referenceCreateRequests: [],
     referenceDeleteRequests: [],
     sceneRevision: 0,
+  };
+  const timeDomainState = {
+    analysisResultReads: [],
+    observationFrameReads: [],
+    unexpectedAnalysisResultGets: [],
   };
   const datasetRef = "analysis-fixture";
   const revision = 17;
@@ -2543,13 +3329,18 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       "access-control-allow-origin": "*",
       "x-api-contract-version": "1.0.0",
     };
-    if (referenceImportEnabled && request.method() === "OPTIONS") {
+    if (
+      (referenceImportEnabled || timeDomainCatalogEnabled) &&
+      request.method() === "OPTIONS"
+    ) {
       await route.fulfill({
         body: "",
         headers: {
           ...cors,
           "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "content-type",
-          "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+          "access-control-allow-methods": referenceImportEnabled
+            ? "GET, POST, DELETE, OPTIONS"
+            : "GET, OPTIONS",
         },
         status: 204,
       });
@@ -2672,9 +3463,57 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       await route.fulfill({ body: "", headers: cors, status: 204 });
       return;
     }
-    if (referenceImportEnabled && url.pathname === CURRENT_RUN_FIXTURE_PATH) {
+    if (
+      timeDomainCatalogEnabled &&
+      url.pathname.startsWith("/v2/sessions/current/analysis/results/")
+    ) {
+      const catalogPath = `${timeDomainFixture.resultRunPath}/datasets`;
+      const matchingDataset = timeDomainFixture.datasets.find((dataset) =>
+        url.pathname === `${catalogPath}/${dataset.datasetId}` ||
+        url.pathname === dataset.projectionPath,
+      );
+      let resultResource = null;
+      if (url.pathname === catalogPath) {
+        resultResource = timeDomainFixture.catalog;
+      } else if (matchingDataset && url.pathname === `${catalogPath}/${matchingDataset.datasetId}`) {
+        resultResource = matchingDataset.manifest;
+      } else if (matchingDataset && url.pathname === matchingDataset.projectionPath) {
+        resultResource = matchingDataset.projection;
+      }
+      timeDomainState.analysisResultReads.push({
+        method: request.method(),
+        path: currentSessionPath(request.url()),
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+      if (!resultResource) {
+        timeDomainState.unexpectedAnalysisResultGets.push({
+          path: currentSessionPath(request.url()),
+          sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+        });
+        await route.fulfill({
+          body: JSON.stringify({ error: "Unexpected analysis-result GET in time-domain fixture." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 404,
+        });
+        return;
+      }
       await route.fulfill({
-        body: JSON.stringify(referenceCurrentRunFixture()),
+        body: JSON.stringify(resultResource),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (
+      (referenceImportEnabled || timeDomainCatalogEnabled) &&
+      url.pathname === CURRENT_RUN_FIXTURE_PATH
+    ) {
+      await route.fulfill({
+        body: JSON.stringify(timeDomainCatalogEnabled
+          ? timeDomainFixture.currentRun
+          : referenceCurrentRunFixture()),
         contentType: "application/json",
         headers: cors,
         status: 200,
@@ -2734,9 +3573,23 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       await route.fulfill({ body: "[]", contentType: "application/json", headers: cors, status: 200 });
       return;
     }
-    if (referenceImportEnabled && url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH) {
+    if (
+      (referenceImportEnabled || timeDomainCatalogEnabled) &&
+      url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH
+    ) {
+      const frames = { frames: [], next_cursor: null, run_id: timeDomainCatalogEnabled
+        ? timeDomainFixture.runId
+        : REFERENCE_FIXTURE_RUN_ID };
+      if (timeDomainCatalogEnabled) {
+        timeDomainState.observationFrameReads.push({
+          frameCount: frames.frames.length,
+          path: currentSessionPath(request.url()),
+          runId: frames.run_id,
+          sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+        });
+      }
       await route.fulfill({
-        body: JSON.stringify({ frames: [], next_cursor: null, run_id: REFERENCE_FIXTURE_RUN_ID }),
+        body: JSON.stringify(frames),
         contentType: "application/json",
         headers: cors,
         status: 200,
@@ -2744,12 +3597,14 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       return;
     }
     if (url.pathname === "/v2/sessions/current/status") {
+      const status = analysisStatusFixture({
+        frequencyDomainPublished: Boolean(frequencyDomainFixture),
+        eigenModesPublished: frequencyDomainFixture?.calculationMode !== "frequency_response",
+        currentRunPublished: referenceImportEnabled || timeDomainCatalogEnabled,
+      });
+      if (timeDomainCatalogEnabled) status.run = timeDomainFixture.runSummary;
       await route.fulfill({
-        body: JSON.stringify(analysisStatusFixture({
-          frequencyDomainPublished: Boolean(frequencyDomainFixture),
-          eigenModesPublished: frequencyDomainFixture?.calculationMode !== "frequency_response",
-          currentRunPublished: referenceImportEnabled,
-        })),
+        body: JSON.stringify(status),
         contentType: "application/json",
         headers: cors,
         status: 200,
@@ -2848,6 +3703,7 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     }
     await fulfillMissingFixtureResource(route, cors);
   });
+  referenceImportState.timeDomainState = timeDomainState;
   return referenceImportState;
 }
 
