@@ -48879,14 +48879,9 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert!(!payload
         .to_string()
         .contains(&artifact_dir.to_string_lossy().to_string()));
-    assert_eq!(
-        payload["path_metadata"]["sampling"]["points"][1]["label"],
-        "X"
-    );
-    assert_eq!(
-        payload["path_metadata"]["sampling"]["samples_per_segment"][0],
-        1
-    );
+    assert!(payload["generation_id"].is_null());
+    assert_eq!(payload["generation_status"], "legacy_unverified");
+    assert!(payload["path_metadata"].is_null());
     assert!(payload["text"]
         .as_str()
         .expect("dispersion text should be present")
@@ -49336,9 +49331,242 @@ async fn frequency_domain_artifact_set_fence_rejects_root_appearing_after_captur
     fs::remove_dir_all(artifact_root).expect("temporary artifact root should be removed");
 }
 
+fn dispersion_path_metadata_for_test(
+    start_label: &str,
+    end_label: &str,
+    end_kx_rad_per_m: f64,
+) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "sampling": {
+            "kind": "path",
+            "closed": false,
+            "points": [
+                {"label": start_label, "k_vector": [0.0, 0.0, 0.0]},
+                {"label": end_label, "k_vector": [end_kx_rad_per_m, 0.0, 0.0]}
+            ],
+            "samples_per_segment": [1]
+        }
+    }))
+    .expect("dispersion path fixture should serialize")
+}
+
+fn publish_immutable_dispersion_generation_for_test(
+    artifact_dir: &Path,
+    csv_bytes: &[u8],
+    path_metadata_bytes: Option<&[u8]>,
+) -> fullmag_runner::artifact_generation::GenerationCapture {
+    let mut members = vec![(
+        "eigen/dispersion.csv".to_string(),
+        csv_bytes.to_vec(),
+    )];
+    if let Some(path_metadata_bytes) = path_metadata_bytes {
+        members.push((
+            "eigen/dispersion/path.json".to_string(),
+            path_metadata_bytes.to_vec(),
+        ));
+    }
+    super::handlers::analysis::results::write_immutable_result_generation_for_test(
+        artifact_dir,
+        members,
+        None,
+    )
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_legacy_csv_ignores_uncommitted_path_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let csv = b"sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,0,0,G,0,0,1000000000\n";
+    let dispersion_dir = artifact_dir.join("eigen").join("dispersion");
+    fs::create_dir_all(&dispersion_dir).expect("dispersion directory should be created");
+    fs::write(artifact_dir.join("eigen").join("dispersion.csv"), csv)
+        .expect("legacy dispersion CSV should be written");
+    fs::write(dispersion_dir.join("path.json"), b"{ malformed legacy sidecar")
+        .expect("malformed legacy sidecar should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    let expected_digest = format!("sha256:{:x}", Sha256::digest(csv));
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(
+        payload["text"].as_str(),
+        Some(std::str::from_utf8(csv).unwrap())
+    );
+    assert_eq!(payload["revision"].as_str(), Some(expected_digest.as_str()));
+    assert_eq!(payload["content_digest"].as_str(), Some(expected_digest.as_str()));
+    assert!(payload["generation_id"].is_null());
+    assert_eq!(payload["generation_status"], "legacy_unverified");
+    assert!(payload["path_metadata"].is_null());
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_committed_generation_joins_csv_and_path_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let committed_csv = b"sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,0,0,G,0,0,1000000000\n";
+    let root_csv = b"sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,4,0,0,R,0,0,2000000000\n";
+    let dispersion_dir = artifact_dir.join("eigen").join("dispersion");
+    fs::create_dir_all(&dispersion_dir).expect("dispersion directory should be created");
+    fs::write(artifact_dir.join("eigen").join("dispersion.csv"), root_csv)
+        .expect("root alias CSV should be written");
+    fs::write(
+        dispersion_dir.join("path.json"),
+        dispersion_path_metadata_for_test("root-G", "root-X", 12.0),
+    )
+    .expect("conflicting root path alias should be written");
+    let committed_path = dispersion_path_metadata_for_test("G", "X", 78_539_816.33974482);
+    let generation = publish_immutable_dispersion_generation_for_test(
+        &artifact_dir,
+        committed_csv,
+        Some(committed_path.as_slice()),
+    );
+    let expected_generation_id = generation.commit.generation_id.clone();
+    let expected_digest = format!("sha256:{:x}", Sha256::digest(committed_csv));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(
+        payload["text"].as_str(),
+        Some(std::str::from_utf8(committed_csv).unwrap())
+    );
+    assert_eq!(payload["revision"].as_str(), Some(expected_digest.as_str()));
+    assert_eq!(payload["content_digest"].as_str(), Some(expected_digest.as_str()));
+    assert_eq!(
+        payload["generation_id"].as_str(),
+        Some(expected_generation_id.as_str())
+    );
+    assert_eq!(payload["generation_status"], "member_verified_unbound");
+    assert_eq!(payload["path_metadata"]["sampling"]["points"][0]["label"], "G");
+    assert_eq!(payload["path_metadata"]["sampling"]["points"][1]["label"], "X");
+    assert_eq!(payload["path_metadata"]["sampling"]["samples_per_segment"][0], 1);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_generation_without_path_member_does_not_use_legacy_alias() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let committed_csv = b"sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,0,0,G,0,0,1000000000\n";
+    let dispersion_dir = artifact_dir.join("eigen").join("dispersion");
+    fs::create_dir_all(&dispersion_dir).expect("dispersion directory should be created");
+    fs::write(
+        dispersion_dir.join("path.json"),
+        dispersion_path_metadata_for_test("root-G", "root-X", 12.0),
+    )
+    .expect("conflicting root path alias should be written");
+    let generation = publish_immutable_dispersion_generation_for_test(
+        &artifact_dir,
+        committed_csv,
+        None,
+    );
+    let expected_generation_id = generation.commit.generation_id.clone();
+    let expected_digest = format!("sha256:{:x}", Sha256::digest(committed_csv));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(
+        payload["text"].as_str(),
+        Some(std::str::from_utf8(committed_csv).unwrap())
+    );
+    assert_eq!(payload["revision"].as_str(), Some(expected_digest.as_str()));
+    assert_eq!(payload["content_digest"].as_str(), Some(expected_digest.as_str()));
+    assert_eq!(
+        payload["generation_id"].as_str(),
+        Some(expected_generation_id.as_str())
+    );
+    assert_eq!(payload["generation_status"], "member_verified_unbound");
+    assert!(payload["path_metadata"].is_null());
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_corrupt_committed_path_member_is_rejected() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let committed_csv = b"sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,0,0,G,0,0,1000000000\n";
+    let dispersion_dir = artifact_dir.join("eigen").join("dispersion");
+    fs::create_dir_all(&dispersion_dir).expect("dispersion directory should be created");
+    fs::write(
+        dispersion_dir.join("path.json"),
+        dispersion_path_metadata_for_test("root-G", "root-X", 12.0),
+    )
+    .expect("conflicting root path alias should be written");
+    let committed_path = dispersion_path_metadata_for_test("G", "X", 78_539_816.33974482);
+    let generation = publish_immutable_dispersion_generation_for_test(
+        &artifact_dir,
+        committed_csv,
+        Some(committed_path.as_slice()),
+    );
+    let generation_name = generation
+        .commit
+        .generation_id
+        .strip_prefix("sha256:")
+        .expect("generation id should use its sha256 prefix");
+    let committed_path_file = artifact_dir
+        .join("frequency_domain")
+        .join("generations")
+        .join(generation_name)
+        .join("eigen")
+        .join("dispersion")
+        .join("path.json");
+    fs::write(&committed_path_file, b"{").expect("committed path member should be corrupted");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let error = payload["error"].as_str().expect("error should be present");
+    assert!(error.contains(
+        "failed to read committed result artifact 'eigen/dispersion/path.json'"
+    ));
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
 #[tokio::test]
 async fn frequency_domain_dispersion_missing_resource_has_no_artifact_identity() {
-    let (app, _state, _artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let (app, _state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let orphan_path_dir = artifact_dir.join("eigen").join("dispersion");
+    fs::create_dir_all(&orphan_path_dir).expect("orphan path directory should be created");
+    fs::write(orphan_path_dir.join("path.json"), b"{ malformed path-only sidecar")
+        .expect("path-only sidecar should be written");
     let response = app
         .oneshot(
             Request::builder()
@@ -49364,6 +49592,7 @@ async fn frequency_domain_dispersion_missing_resource_has_no_artifact_identity()
     ] {
         assert!(payload[field].is_null(), "missing resource has {field}");
     }
+    let _ = fs::remove_dir_all(&artifact_dir);
 }
 
 #[tokio::test]
@@ -49393,6 +49622,15 @@ async fn frequency_domain_dispersion_resource_rejects_invalid_path_metadata() {
         .expect("dispersion path fixture should serialize"),
     )
     .expect("dispersion path fixture should be written");
+    let csv_bytes = fs::read(eigen_dir.join("dispersion.csv"))
+        .expect("dispersion CSV should be readable");
+    let path_metadata_bytes = fs::read(eigen_dir.join("dispersion").join("path.json"))
+        .expect("dispersion path metadata should be readable");
+    let _generation = publish_immutable_dispersion_generation_for_test(
+        &artifact_dir,
+        &csv_bytes,
+        Some(path_metadata_bytes.as_slice()),
+    );
 
     let response = app
         .oneshot(
@@ -49441,6 +49679,15 @@ async fn frequency_domain_dispersion_resource_rejects_path_metadata_csv_drift() 
         .expect("dispersion path fixture should serialize"),
     )
     .expect("dispersion path fixture should be written");
+    let csv_bytes = fs::read(eigen_dir.join("dispersion.csv"))
+        .expect("dispersion CSV should be readable");
+    let path_metadata_bytes = fs::read(eigen_dir.join("dispersion").join("path.json"))
+        .expect("dispersion path metadata should be readable");
+    let _generation = publish_immutable_dispersion_generation_for_test(
+        &artifact_dir,
+        &csv_bytes,
+        Some(path_metadata_bytes.as_slice()),
+    );
 
     let response = app
         .oneshot(

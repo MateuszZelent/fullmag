@@ -14,6 +14,8 @@ Czytelnik pobiera marker, weryfikuje canonical serialization i ID, sprawdza dok�
 
 Bez markera historyczny solo read pozostaje dostępny jako legacy_unverified. Producer null to unbound, nigdy bieżący request owner. Joins potrzebują zgodnej generacji i prawdziwego owner/member binding. SHA256 nie uwierzytelnia producenta i nie stanowi dowodu fizyki.
 
+Dla eigen/dispersion.csv bez captured generation pozostaje dostępny wyłącznie solo read CSV ze statusem legacy_unverified; rootowy eigen/dispersion/path.json nie jest do niego dołączany i resource zwraca path_metadata: null. Path metadata dołączamy tylko wtedy, gdy ta sama captured generation deklaruje oba członki: eigen/dispersion.csv oraz eigen/dispersion/path.json. Brak członka path oznacza null bez fallbacku do rootowego aliasu, a błąd odczytu deklarowanego członka pozostaje błędem. Path metadata nie jest odczytywane, gdy CSV nie istnieje.
+
 Zachowujemy pliki w ich dotychczasowych lokalizacjach, bez podwajania wielkich pól. Po przerwaniu zapisu stary marker może istnieć, ale zmienione pod nim dane muszą dać stale/conflict; nie obiecujemy zachowania czytelności poprzedniego snapshotu. To celowy odpowiednik fail-closed, a nie immutable history. Recovery lease po awarii wymaga odrębnego sprawdzenia aktywnego właściciela; ten patch nie usuwa danych ani lease automatycznie.
 
 ## Bramki i rollback

@@ -1271,12 +1271,24 @@ pub async fn get_frequency_domain_eigen_dispersion(
             .map_err(|error| ApiError::internal(format!("failed to read text artifact: {error}")))
     })
     .transpose()?;
-    captured.bind_artifact_path("eigen/dispersion/path.json")?;
-    let path_metadata = read_dispersion_path_metadata_resource(
-        &captured.artifact_dir,
-        "eigen/dispersion/path.json",
-        captured.generation.as_ref(),
-    )?;
+    let path_metadata = if csv_snapshot.is_some()
+        && captured.generation.as_ref().is_some_and(|generation| {
+            generation
+                .commit
+                .content
+                .members
+                .contains_key("eigen/dispersion/path.json")
+        })
+    {
+        captured.bind_artifact_path("eigen/dispersion/path.json")?;
+        read_dispersion_path_metadata_resource(
+            &captured.artifact_dir,
+            "eigen/dispersion/path.json",
+            captured.generation.as_ref(),
+        )?
+    } else {
+        None
+    };
     captured.bind_artifact_path("eigen/dispersion.csv")?;
     if let (Some((text, _)), Some(path_metadata)) = (csv_snapshot.as_ref(), path_metadata.as_ref())
     {

@@ -111,6 +111,21 @@ jobs:
           grep -F "router_v2::tests::topological_charge_uses_fdm_field_topology_with_retained_fem_mesh ... ok" "$RUNNER_TEMP/topological-charge-field-topology.log"
           cargo test --locked -p fullmag-api --bin fullmag-api script::tests::scene_pbc_overrides_roundtrip_via_python_helper -- --exact --nocapture | tee "$RUNNER_TEMP/scene-pbc-python-roundtrip.log"
           grep -F "script::tests::scene_pbc_overrides_roundtrip_via_python_helper ... ok" "$RUNNER_TEMP/scene-pbc-python-roundtrip.log"
+      - name: Verify dispersion CSV and path-metadata generation joins
+        run: |
+          set -o pipefail
+          for test_name in \
+            router_v2::tests::frequency_domain_artifact_resources_report_ready_and_missing_states \
+            router_v2::tests::frequency_domain_dispersion_missing_resource_has_no_artifact_identity \
+            router_v2::tests::frequency_domain_dispersion_legacy_csv_ignores_uncommitted_path_metadata \
+            router_v2::tests::frequency_domain_dispersion_committed_generation_joins_csv_and_path_metadata \
+            router_v2::tests::frequency_domain_dispersion_generation_without_path_member_does_not_use_legacy_alias \
+            router_v2::tests::frequency_domain_dispersion_corrupt_committed_path_member_is_rejected \
+            router_v2::tests::frequency_domain_dispersion_resource_rejects_invalid_path_metadata \
+            router_v2::tests::frequency_domain_dispersion_resource_rejects_path_metadata_csv_drift; do
+            cargo test --locked -p fullmag-api --bin fullmag-api "$test_name" -- --exact --nocapture | tee "$RUNNER_TEMP/$test_name.log"
+            grep -F "$test_name ... ok" "$RUNNER_TEMP/$test_name.log"
+          done
       - name: Compile integration callers and API CLI binaries
         run: |
           cargo check --locked -p fullmag-runner --tests
