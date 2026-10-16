@@ -104,6 +104,27 @@ interface KernelProviderProps {
   children: ReactNode;
 }
 
+const viewportMainAuditScenarios = {
+  "chart-primary-3d-companion-beside": {
+    activeViewportMainModuleId: "analysis-plots",
+    viewportCompanion: { moduleId: "viewport-3d", placement: "beside" },
+  },
+  "3d-primary-chart-companion-beside": {
+    activeViewportMainModuleId: "viewport-3d",
+    viewportCompanion: { moduleId: "analysis-plots", placement: "beside" },
+  },
+  "3d-primary-chart-companion-below": {
+    activeViewportMainModuleId: "viewport-3d",
+    viewportCompanion: { moduleId: "analysis-plots", placement: "below" },
+  },
+  "chart-primary-3d-companion-below": {
+    activeViewportMainModuleId: "analysis-plots",
+    viewportCompanion: { moduleId: "viewport-3d", placement: "below" },
+  },
+} as const;
+
+type ViewportMainAuditScenario = keyof typeof viewportMainAuditScenarios;
+
 function createKernel(options: DevelopmentKernelFactoryOptions, developmentWorkspace: DevelopmentKernelHost): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const diagnostics = new RequestDiagnosticsController();
@@ -557,6 +578,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         queueGlobalQuantity: (quantityId: string) => void;
         flushVisualization: () => Promise<void>;
         setActiveViewportModule: (moduleId: "field-map" | "viewport-3d") => void;
+        setViewportMainAuditScenario: (scenario: ViewportMainAuditScenario) => void;
         patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
         patchFdmVisualization: (patch: VisualizationTargetPatch) => void;
         readFdmVisualizationSettings: () => ReturnType<
@@ -674,6 +696,13 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       setActiveViewportModule: (moduleId: "field-map" | "viewport-3d") => {
         kernel.layout.setActiveViewportMainModule(moduleId);
         kernel.layout.setFocusedSlot("viewport-main");
+      },
+      setViewportMainAuditScenario: (scenario: ViewportMainAuditScenario) => {
+        kernel.layout.replace({
+          ...kernel.layout.get(),
+          ...viewportMainAuditScenarios[scenario],
+          focusedSlot: "viewport-main",
+        });
       },
       patchVisualization: async (patch: VisualizationStatePatch) => {
         kernel.visualizationSync.queuePatch(patch);

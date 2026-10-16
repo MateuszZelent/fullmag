@@ -28,6 +28,8 @@ const allowMissingSession =
 const requireGeometryFlow =
   !allowMissingSession && process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
 const cameraOnlySmoke = process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1";
+const visibleViewportCompanionSmoke =
+  process.env.CONTROL_ROOM_SMOKE_VISIBLE_VIEWPORT_COMPANION === "1";
 const hysteresisReplaySmoke =
   process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY === "1";
 const hysteresisReplayOnly =
@@ -312,6 +314,9 @@ try {
         ...(await verifyCameraGesturesStayLocal({ page })),
       );
     }
+    if (visibleViewportCompanionSmoke) {
+      await verifyVisibleViewportCompanionLifecycle(page);
+    }
     if (cameraOnlySmoke) {
       const finalWebGL = await assertFinalViewportWebGLState(
         page,
@@ -413,6 +418,336 @@ async function collectViewportStartupFailureEvidence(page, browserErrors) {
     ...pageState,
     errors: [...browserErrors],
   };
+}
+
+async function verifyVisibleViewportCompanionLifecycle(page) {
+  await page.waitForFunction(
+    () =>
+      typeof window.__FULLMAG_CONTROL_ROOM_AUDIT__
+        ?.setViewportMainAuditScenario === "function",
+    null,
+    { timeout: 15_000 },
+  );
+
+  const setScenario = async (scenario) => {
+    await page.evaluate((nextScenario) => {
+      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      if (typeof audit?.setViewportMainAuditScenario !== "function") {
+        throw new Error("Visible companion smoke requires the opt-in viewport audit setter.");
+      }
+      audit.setViewportMainAuditScenario(nextScenario);
+    }, scenario);
+  };
+  const waitForComposition = async (activeModuleId, companionModuleId) => {
+    await page.waitForFunction(
+      ({ active, companion }) => {
+        const host = document.querySelector('[data-slot-id="viewport-main"]');
+        return (
+          host?.getAttribute("data-active-module-id") === active &&
+          (host?.getAttribute("data-companion-module-id") ?? null) === companion
+        );
+      },
+      { active: activeModuleId, companion: companionModuleId },
+      { timeout: 15_000 },
+    );
+    await waitForBrowserPaint(page);
+  };
+  const waitForPanelIds = async (expectedIds) => {
+    await page.waitForFunction(
+      (ids) => {
+        const group = document.querySelector(
+          '[data-slot-id="viewport-main"] .fm-viewport-tabs__surface .fm-resizable-group',
+        );
+        const actualIds = Array.from(group?.querySelectorAll("[data-panel-id]") ?? [])
+          .map((panel) => panel.getAttribute("data-panel-id"));
+        return (
+          actualIds.length === ids.length &&
+          ids.every((id, index) => actualIds[index] === id)
+        );
+      },
+      expectedIds,
+      { timeout: 15_000 },
+    );
+  };
+  const assertVisibleCanvas = async (label) => {
+    const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
+    const count = await canvas.count();
+    if (count !== 1) {
+      throw new Error(`${label}: expected exactly one 3D canvas, found ${count}.`);
+    }
+    await canvas.waitFor({ state: "visible", timeout: 15_000 });
+    const bounds = await readCanvasClipBox(page);
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      throw new Error(`${label}: the visible 3D canvas has empty bounds.`);
+    }
+    await assertFinalViewportWebGLState(page, label);
+    return canvas;
+  };
+  const assertSameCanvas = async (label, expectedSame = true) => {
+    const canvas = await assertVisibleCanvas(label);
+    const sameNode = await canvas.evaluate((node) =>
+      node === window.__FULLMAG_VISIBLE_COMPANION_CANVAS__,
+    );
+    if (sameNode !== expectedSame) {
+      throw new Error(
+        `${label}: expected canvas identity ${expectedSame ? "to remain" : "to change"}.`,
+      );
+    }
+    return canvas;
+  };
+  const readSplitLayout = async () =>
+    page.locator(
+      '[data-slot-id="viewport-main"] .fm-viewport-tabs__surface',
+    ).evaluate((surface) => {
+      const group = surface.querySelector(".fm-resizable-group");
+      if (!group) return null;
+      const groupRect = group.getBoundingClientRect();
+      const panels = Array.from(group.querySelectorAll("[data-panel-id]")).map(
+        (panel) => {
+          const rect = panel.getBoundingClientRect();
+          return {
+            height: rect.height,
+            id: panel.getAttribute("data-panel-id"),
+            width: rect.width,
+          };
+        },
+      );
+      const separators = Array.from(group.querySelectorAll('[role="separator"]')).map(
+        (separator) => {
+          const rect = separator.getBoundingClientRect();
+          return { height: rect.height, width: rect.width };
+        },
+      );
+      return {
+        group: { height: groupRect.height, width: groupRect.width },
+        panels,
+        separators,
+      };
+    });
+  const assertSplitBounds = (layout, placement, label) => {
+    if (!layout || layout.panels.length !== 2 || layout.separators.length !== 1) {
+      throw new Error(`${label}: expected two registered panels and one separator.`);
+    }
+    const axis = placement === "beside" ? "width" : "height";
+    const availableSize = layout.group[axis] - layout.separators[0][axis];
+    if (availableSize <= 0) {
+      throw new Error(`${label}: split group has no usable ${axis}.`);
+    }
+    for (const panel of layout.panels) {
+      if (panel[axis] + 1 < availableSize * 0.25) {
+        throw new Error(
+          `${label}: panel ${panel.id} is below its 25% ${axis} minimum (${panel[axis]}px of ${availableSize}px).`,
+        );
+      }
+      if (panel.width <= 0 || panel.height <= 0) {
+        throw new Error(`${label}: panel ${panel.id} has empty visible bounds.`);
+      }
+    }
+    return layout;
+  };
+  const assertKeyboardResize = async (placement, direction, label) => {
+    const before = assertSplitBounds(await readSplitLayout(), placement, `${label} before`);
+    const separator = page.locator(
+      '[data-slot-id="viewport-main"] .fm-viewport-tabs__surface [role="separator"]',
+    );
+    if ((await separator.count()) !== 1) {
+      throw new Error(`${label}: expected one visible split separator.`);
+    }
+    await separator.press(direction);
+    const axis = placement === "beside" ? "width" : "height";
+    const crossAxis = placement === "beside" ? "height" : "width";
+    const after = await waitForCondition(`${label} resizes along ${axis}`, async () => {
+      const current = assertSplitBounds(await readSplitLayout(), placement, label);
+      const firstDelta = current.panels[0][axis] - before.panels[0][axis];
+      const secondDelta = current.panels[1][axis] - before.panels[1][axis];
+      if (firstDelta > 1 && secondDelta < -1) return current;
+      throw new Error(
+        `Arrow ${direction} changed ${axis} by ${firstDelta.toFixed(2)}px/${secondDelta.toFixed(2)}px.`,
+      );
+    });
+    for (let index = 0; index < 2; index += 1) {
+      if (Math.abs(after.panels[index][crossAxis] - before.panels[index][crossAxis]) > 1) {
+        throw new Error(`${label}: arrow ${direction} changed the cross-axis ${crossAxis}.`);
+      }
+    }
+    return after;
+  };
+  const assertCameraUnchanged = async (baseline, label) => {
+    await waitForBrowserPaint(page);
+    const current = await readViewportCameraSignature(page);
+    if (current !== baseline) {
+      throw new Error(`${label}: camera changed unexpectedly: ${baseline} -> ${current}.`);
+    }
+  };
+  const clickRealOpenCommand = async () => {
+    await page.getByRole("tab", { name: "View" }).first().click();
+    const openCommand = page.locator(
+      '[data-action-id="ribbon.analysis.show-chart-and-field"]',
+    );
+    await openCommand.waitFor({ state: "visible", timeout: 15_000 });
+    if (!(await openCommand.isEnabled())) {
+      throw new Error("The real chart-and-3D companion ribbon command is disabled.");
+    }
+    await openCommand.click();
+  };
+
+  await page.evaluate(() => {
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (typeof audit?.setActiveViewportModule !== "function") {
+      throw new Error("Visible companion smoke requires the opt-in viewport audit hook.");
+    }
+    audit.setActiveViewportModule("viewport-3d");
+  });
+  await waitForComposition("viewport-3d", null);
+  await assertVisibleCanvas("3D primary before opening companion");
+  const initialCamera = await readViewportCameraSignature(page);
+  if (!initialCamera || initialCamera.split("|").some((part) => !part)) {
+    throw new Error(`3D primary did not expose a complete camera signature: ${initialCamera}.`);
+  }
+  await page.evaluate((selector) => {
+    const canvas = document.querySelector(selector);
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      throw new Error("Cannot retain the initial 3D canvas identity for the smoke.");
+    }
+    window.__FULLMAG_VISIBLE_COMPANION_CANVAS__ = canvas;
+  }, VIEWPORT_3D_CANVAS_SELECTOR);
+
+  await clickRealOpenCommand();
+  await waitForComposition("analysis-plots", "viewport-3d");
+  await waitForPanelIds([
+    "viewport-main:analysis-plots:primary",
+    "viewport-main:viewport-3d:companion",
+  ]);
+  await assertSameCanvas("3D canvas after real companion open");
+  assertSplitBounds(await readSplitLayout(), "beside", "visible chart and 3D companion");
+  await assertCameraUnchanged(initialCamera, "opening the visible 3D companion");
+
+  const companionBounds = await readCanvasClipBox(page);
+  await assertCameraGestureDoesNotFetch(page, "visible companion wheel zoom", async () => {
+    await page.mouse.move(
+      companionBounds.x + companionBounds.width / 2,
+      companionBounds.y + companionBounds.height / 2,
+    );
+    await page.mouse.wheel(0, -240);
+  });
+  const zoomedCamera = await waitForCameraSignatureChange(
+    page,
+    initialCamera,
+    "wheel zoom while 3D is the visible companion",
+    "Visible companion wheel did not change the 3D camera",
+  );
+  await assertFinalViewportWebGLState(page, "visible companion wheel zoom");
+
+  // The audit setter is limited to atomic layout states; opening and closing use real UI.
+  await setScenario("3d-primary-chart-companion-beside");
+  await waitForComposition("viewport-3d", "analysis-plots");
+  await waitForPanelIds([
+    "viewport-main:viewport-3d:primary",
+    "viewport-main:analysis-plots:companion",
+  ]);
+  await assertSameCanvas("3D canvas after atomic primary/companion role swap");
+  assertSplitBounds(await readSplitLayout(), "beside", "beside split after role swap");
+  await assertCameraUnchanged(zoomedCamera, "primary/companion role swap");
+  await assertKeyboardResize("beside", "ArrowRight", "horizontal split keyboard resize");
+  await assertSameCanvas("3D canvas after horizontal separator resize");
+  await assertCameraUnchanged(zoomedCamera, "horizontal split resize");
+
+  await setScenario("3d-primary-chart-companion-below");
+  await waitForComposition("viewport-3d", "analysis-plots");
+  await waitForPanelIds([
+    "viewport-main:viewport-3d:primary",
+    "viewport-main:analysis-plots:companion",
+  ]);
+  await assertSameCanvas("3D canvas after vertical placement change");
+  assertSplitBounds(await readSplitLayout(), "below", "below split placement");
+  await assertCameraUnchanged(zoomedCamera, "vertical split placement");
+  await assertKeyboardResize("below", "ArrowDown", "vertical split keyboard resize");
+  await assertSameCanvas("3D canvas after vertical separator resize");
+  await assertCameraUnchanged(zoomedCamera, "vertical split resize");
+
+  await setScenario("chart-primary-3d-companion-below");
+  await waitForComposition("analysis-plots", "viewport-3d");
+  await waitForPanelIds([
+    "viewport-main:analysis-plots:primary",
+    "viewport-main:viewport-3d:companion",
+  ]);
+  await assertSameCanvas("3D canvas after companion role swap below");
+  assertSplitBounds(await readSplitLayout(), "below", "below split after role swap");
+  await assertCameraUnchanged(zoomedCamera, "companion role swap below");
+
+  const closeCompanion = page.locator(
+    '[data-slot-id="viewport-main"] button[aria-label^="Close "]',
+  );
+  if ((await closeCompanion.count()) !== 1) {
+    throw new Error("Expected one real close button for the visible 3D companion.");
+  }
+  await closeCompanion.click();
+  await waitForComposition("analysis-plots", null);
+  await page.waitForFunction(
+    (selector) => document.querySelector(selector) === null,
+    VIEWPORT_3D_CANVAS_SELECTOR,
+    { timeout: 15_000 },
+  );
+  const initialNodeConnected = await page.evaluate(
+    () => window.__FULLMAG_VISIBLE_COMPANION_CANVAS__?.isConnected ?? null,
+  );
+  if (initialNodeConnected !== false) {
+    throw new Error("Closing the 3D companion did not unmount its original canvas node.");
+  }
+
+  await clickRealOpenCommand();
+  await waitForComposition("analysis-plots", "viewport-3d");
+  await waitForPanelIds([
+    "viewport-main:analysis-plots:primary",
+    "viewport-main:viewport-3d:companion",
+  ]);
+  const reopenedCanvas = await assertVisibleCanvas("reopened 3D companion");
+  const isNewCanvas = await reopenedCanvas.evaluate(
+    (node) => node !== window.__FULLMAG_VISIBLE_COMPANION_CANVAS__,
+  );
+  if (!isNewCanvas) {
+    throw new Error("Reopening the closed 3D companion reused its unmounted canvas node.");
+  }
+  await reopenedCanvas.evaluate((node) => {
+    window.__FULLMAG_VISIBLE_COMPANION_CANVAS__ = node;
+  });
+  const reopenedCamera = await readViewportCameraSignature(page);
+  if (!reopenedCamera || reopenedCamera.split("|").some((part) => !part)) {
+    throw new Error(`Reopened 3D companion has no complete camera signature: ${reopenedCamera}.`);
+  }
+  const reopenedBounds = await readCanvasClipBox(page);
+  await assertCameraGestureDoesNotFetch(page, "reopened companion wheel zoom", async () => {
+    await page.mouse.move(
+      reopenedBounds.x + reopenedBounds.width / 2,
+      reopenedBounds.y + reopenedBounds.height / 2,
+    );
+    await page.mouse.wheel(0, -240);
+  });
+  const reopenedZoomedCamera = await waitForCameraSignatureChange(
+    page,
+    reopenedCamera,
+    "wheel zoom after reopening the 3D companion",
+    "Reopened companion wheel did not change the 3D camera",
+  );
+  await assertFinalViewportWebGLState(page, "reopened companion wheel zoom");
+
+  await page.evaluate(() => {
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (typeof audit?.setActiveViewportModule !== "function") {
+      throw new Error("Visible companion smoke lost its opt-in viewport audit hook.");
+    }
+    audit.setActiveViewportModule("viewport-3d");
+  });
+  await waitForComposition("viewport-3d", null);
+  await assertSameCanvas("3D canvas promoted after companion reopen");
+  await assertCameraUnchanged(reopenedZoomedCamera, "promoting reopened 3D to primary");
+  await assertFinalViewportWebGLState(page, "visible companion lifecycle completion");
+  await page.evaluate(() => {
+    delete window.__FULLMAG_VISIBLE_COMPANION_CANVAS__;
+  });
+  console.log(
+    "Visible viewport companion browser smoke passed: real ribbon open/close, stable visible canvas across role and placement changes, horizontal/vertical keyboard resizing, unmount on close, and healthy reopened WebGL canvas.",
+  );
 }
 
 async function verifyPlanarViewportToggleLifecycle(page, cycles) {

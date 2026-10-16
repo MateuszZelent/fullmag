@@ -561,6 +561,11 @@ jobs:
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
             pnpm --dir apps/control-room run smoke:analysis-plots || inspector_regression_status=1
+          CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1 \
+            CONTROL_ROOM_SMOKE_CAMERA_ONLY=1 \
+            CONTROL_ROOM_SMOKE_VISIBLE_VIEWPORT_COMPANION=1 \
+            CONTROL_ROOM_AUDIT_ARTIFACTS_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR" \
+            pnpm --dir apps/control-room run smoke:viewport-3d || inspector_regression_status=1
           exit "$inspector_regression_status"
 
       - name: Run start screen stylesheet browser check
