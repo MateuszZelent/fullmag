@@ -482,7 +482,7 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     await assertViewportSampleGeometryEqual(page, aVisibleForMask, aRestoredForMask, "part A mask restore");
     const aPixelMask = await viewportPixelMask(page, aVisibleForMask, aHiddenForMask, "part A", { minimumMaskSamples: 21 });
     const aTotalSampleCount = Math.floor(aVisibleForMask.signature.length / 3);
-    const aMinimumChangedPixels =
+    const aMaskRestoreMinimumChangedPixels =
       Math.min(20, Math.floor((aPixelMask.length * 20) / aTotalSampleCount)) + 1;
     const aMaskRestoreDelta = await assertViewportPixelDeltaOnMask(
       page,
@@ -490,7 +490,7 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       aRestoredForMask,
       aPixelMask,
       "part A empty field visibility restore",
-      { minimumChangedPixels: aMinimumChangedPixels, shouldChange: false },
+      { minimumChangedPixels: aMaskRestoreMinimumChangedPixels, shouldChange: false },
     );
 
     // The coalesced request unmounts the per-part hook. Verify A's
@@ -527,6 +527,68 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     await assertViewportSampleGeometryEqual(page, bVisibleForMask, bHiddenForMask, "part B visibility mask");
     await assertViewportSampleGeometryEqual(page, bVisibleForMask, bRestoredForMask, "part B mask restore");
     const bPixelMask = await viewportPixelMask(page, bVisibleForMask, bHiddenForMask, "part B", { minimumMaskSamples: 20 });
+    // A and B can share projected edge, antialias, or occlusion samples. A
+    // changed pixel in A∩B is not evidence that B's field leaked into A.
+    // Keep both raw masks and their intersection for every diagnostic.
+    const aPixelMaskSet = new Set(aPixelMask);
+    const bPixelMaskSet = new Set(bPixelMask);
+    const aExclusivePixelMask = aPixelMask.filter((sampleIndex) =>
+      !bPixelMaskSet.has(sampleIndex),
+    );
+    const bExclusivePixelMask = bPixelMask.filter((sampleIndex) =>
+      !aPixelMaskSet.has(sampleIndex),
+    );
+    const intersectionPixelMask = aPixelMask.filter((sampleIndex) =>
+      bPixelMaskSet.has(sampleIndex),
+    );
+    const minimumAExclusiveMaskSamples = 21;
+    const minimumBExclusiveMaskSamples = 20;
+    const aMinimumChangedPixels =
+      Math.min(20, Math.floor((aExclusivePixelMask.length * 20) / aTotalSampleCount)) + 1;
+    if (
+      aExclusivePixelMask.length < minimumAExclusiveMaskSamples ||
+      bExclusivePixelMask.length < minimumBExclusiveMaskSamples
+    ) {
+      let exclusiveMaskFailureDiagnostics;
+      try {
+        exclusiveMaskFailureDiagnostics = buildViewportMaskFailureDiagnostics(
+          bVisibleForMask,
+          bHiddenForMask,
+          aPixelMask,
+          bPixelMask,
+        );
+      } catch (error) {
+        exclusiveMaskFailureDiagnostics = {
+          captureError: error instanceof Error ? error.message : String(error),
+          masks: {
+            a: aPixelMask,
+            aExclusive: aExclusivePixelMask,
+            b: bPixelMask,
+            bExclusive: bExclusivePixelMask,
+            intersection: intersectionPixelMask,
+          },
+          rawMasks: { a: aPixelMask, b: bPixelMask },
+        };
+      }
+      const maskCounts = {
+        aExclusiveSamples: aExclusivePixelMask.length,
+        bExclusiveSamples: bExclusivePixelMask.length,
+        minimumAExclusiveMaskSamples,
+        minimumBExclusiveMaskSamples,
+      };
+      await captureViewportComparisonFailure(
+        page,
+        "part A/B exclusive visibility mask size",
+        bVisibleForMask,
+        bHiddenForMask,
+        {
+          ...maskCounts,
+          pixelMaskDiagnostics: exclusiveMaskFailureDiagnostics,
+        },
+      );
+      throw new Error("Exclusive part masks are too small for the pixel contract: " + JSON.stringify(maskCounts));
+    }
+
     const bMaskRestoreDelta = await assertViewportPixelDeltaOnMask(
       page,
       bVisibleForMask,
@@ -730,14 +792,31 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     } catch (error) {
       maskFailureDiagnostics = {
         captureError: error instanceof Error ? error.message : String(error),
+        masks: {
+          a: aPixelMask,
+          aExclusive: aExclusivePixelMask,
+          b: bPixelMask,
+          bExclusive: bExclusivePixelMask,
+          intersection: intersectionPixelMask,
+        },
         rawMasks: { a: aPixelMask, b: bPixelMask },
       };
+    }
+    if (maskFailureDiagnostics?.captureError) {
+      await captureViewportComparisonFailure(
+        page,
+        "part A/B pixel mask diagnostics",
+        bBeforePixels,
+        bAfterPixels,
+        { pixelMaskDiagnostics: maskFailureDiagnostics },
+      );
+      throw new Error("Could not capture complete A/B pixel mask diagnostics: " + maskFailureDiagnostics.captureError);
     }
     const aLeakDelta = await assertViewportPixelDeltaOnMask(
       page,
       bBeforePixels,
       bAfterPixels,
-      aPixelMask,
+      aExclusivePixelMask,
       "later-part H_eff values changed visible empty-range part A",
       {
         failureDiagnostics: maskFailureDiagnostics,
@@ -749,7 +828,7 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       page,
       bBeforePixels,
       bAfterPixels,
-      bPixelMask,
+      bExclusivePixelMask,
       "updated nonempty part B did not change its own field colors",
       {
         failureDiagnostics: maskFailureDiagnostics,
@@ -771,6 +850,15 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       },
       fieldRequests: fixture.fieldRequests,
       fieldResource,
+      exclusivePixelMaskContract: {
+        aMinimumChangedPixels,
+        aMinimumMaskSamples: minimumAExclusiveMaskSamples,
+        aMaskSamples: aExclusivePixelMask.length,
+        bMinimumChangedPixels: 20,
+        bMinimumMaskSamples: minimumBExclusiveMaskSamples,
+        bMaskSamples: bExclusivePixelMask.length,
+      },
+      pixelMaskDiagnostics: maskFailureDiagnostics,
       scopedFieldResponses: fixture.emptyPartFieldResponses,
       fullDomainFieldResponses: fixture.fullDomainFieldResponses,
       positiveFieldResource,
