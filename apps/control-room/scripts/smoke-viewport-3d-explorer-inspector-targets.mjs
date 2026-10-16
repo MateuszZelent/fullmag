@@ -719,13 +719,31 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
     }
     const bAfterPixels = await sampleViewportPixels(page, null, true);
     await assertViewportSampleGeometryEqual(page, bBeforePixels, bAfterPixels, "B field refresh");
+    let maskFailureDiagnostics = null;
+    try {
+      maskFailureDiagnostics = buildViewportMaskFailureDiagnostics(
+        bBeforePixels,
+        bAfterPixels,
+        aPixelMask,
+        bPixelMask,
+      );
+    } catch (error) {
+      maskFailureDiagnostics = {
+        captureError: error instanceof Error ? error.message : String(error),
+        rawMasks: { a: aPixelMask, b: bPixelMask },
+      };
+    }
     const aLeakDelta = await assertViewportPixelDeltaOnMask(
       page,
       bBeforePixels,
       bAfterPixels,
       aPixelMask,
       "later-part H_eff values changed visible empty-range part A",
-      { minimumChangedPixels: aMinimumChangedPixels, shouldChange: false },
+      {
+        failureDiagnostics: maskFailureDiagnostics,
+        minimumChangedPixels: aMinimumChangedPixels,
+        shouldChange: false,
+      },
     );
     const bColorDelta = await assertViewportPixelDeltaOnMask(
       page,
@@ -733,7 +751,11 @@ async function verifyEmptyPartThicknessAverageZ(browser, url) {
       bAfterPixels,
       bPixelMask,
       "updated nonempty part B did not change its own field colors",
-      { minimumChangedPixels: 20, shouldChange: true },
+      {
+        failureDiagnostics: maskFailureDiagnostics,
+        minimumChangedPixels: 20,
+        shouldChange: true,
+      },
     );
     assertNoBrowserErrors(errors);
     await captureBrowserAuditScreenshot(page, "empty-part-thickness-average-z-success.png");
@@ -2150,6 +2172,111 @@ async function viewportPixelMask(page, visible, hidden, label, options = {}) {
   return indices;
 }
 
+function buildViewportMaskFailureDiagnostics(before, after, aPixelMask, bPixelMask) {
+  const beforeBitmap = parsePng(before.png);
+  const afterBitmap = parsePng(after.png);
+  if (
+    beforeBitmap.width !== afterBitmap.width ||
+    beforeBitmap.height !== afterBitmap.height ||
+    beforeBitmap.width !== before.bitmapWidth ||
+    beforeBitmap.height !== before.bitmapHeight ||
+    afterBitmap.width !== after.bitmapWidth ||
+    afterBitmap.height !== after.bitmapHeight ||
+    before.stride !== after.stride ||
+    before.signature.length !== after.signature.length
+  ) {
+    throw new Error("Cannot map viewport mask diagnostics across different bitmap geometry.");
+  }
+  const stride = before.stride;
+  const sampleColumns = Math.ceil(beforeBitmap.width / stride);
+  const sampleRows = Math.ceil(beforeBitmap.height / stride);
+  const sampleCount = sampleColumns * sampleRows;
+  if (sampleCount !== Math.floor(before.signature.length / 3)) {
+    throw new Error("Viewport mask diagnostics do not match the sampled pixel signature.");
+  }
+  const aIndices = aPixelMask.slice();
+  const bIndices = bPixelMask.slice();
+  const bIndexSet = new Set(bIndices);
+  const aIndexSet = new Set(aIndices);
+  const intersection = aIndices.filter((index) => bIndexSet.has(index));
+  const aExclusive = aIndices.filter((index) => !bIndexSet.has(index));
+  const bExclusive = bIndices.filter((index) => !aIndexSet.has(index));
+  const canvasRect = before.viewportState?.canvasRect ?? null;
+  const canvas = {
+    bitmapWidth: beforeBitmap.width,
+    bitmapHeight: beforeBitmap.height,
+    cssRect: canvasRect,
+    devicePixelRatio: before.viewportState?.devicePixelRatio ?? null,
+  };
+  const changedEntries = (indices) => {
+    const entries = [];
+    for (const sampleIndex of indices) {
+      if (!Number.isInteger(sampleIndex) || sampleIndex < 0 || sampleIndex >= sampleCount) {
+        throw new Error(`Viewport mask contains an invalid sample index: ${sampleIndex}.`);
+      }
+      const column = sampleIndex % sampleColumns;
+      const row = Math.floor(sampleIndex / sampleColumns);
+      const bitmapX = column * stride;
+      const bitmapY = row * stride;
+      const offset = (bitmapY * beforeBitmap.width + bitmapX) * 4;
+      const rgbaBefore = Array.from(beforeBitmap.rgba.slice(offset, offset + 4));
+      const rgbaAfter = Array.from(afterBitmap.rgba.slice(offset, offset + 4));
+      const deltaL1 =
+        Math.abs(rgbaBefore[0] - rgbaAfter[0]) +
+        Math.abs(rgbaBefore[1] - rgbaAfter[1]) +
+        Math.abs(rgbaBefore[2] - rgbaAfter[2]);
+      // Match the existing RGB sample-delta cutoff; this records pixels without changing the assertion.
+      if (deltaL1 <= 18) continue;
+      entries.push({
+        bitmapPixel: { x: bitmapX, y: bitmapY },
+        canvasCssPixel: canvasRect
+          ? {
+              x: canvasRect.left + ((bitmapX + 0.5) / beforeBitmap.width) * canvasRect.width,
+              y: canvasRect.top + ((bitmapY + 0.5) / beforeBitmap.height) * canvasRect.height,
+            }
+          : null,
+        column,
+        deltaL1,
+        rgbaAfter,
+        rgbaBefore,
+        row,
+        sampleIndex,
+      });
+    }
+    return entries;
+  };
+  const allSamples = Array.from({ length: sampleCount }, (_, sampleIndex) => sampleIndex);
+  return {
+    canvas,
+    coordinateMapping: [
+      "sampleIndex = row * sampleColumns + column;",
+      "bitmap x/y = column/row * stride;",
+      "CSS pixel maps the bitmap pixel center through canvas cssRect.",
+    ].join(" "),
+    masks: {
+      a: aIndices,
+      aExclusive,
+      b: bIndices,
+      bExclusive,
+      intersection,
+    },
+    sampleGrid: {
+      columns: sampleColumns,
+      rows: sampleRows,
+      stride,
+      totalSamples: sampleCount,
+    },
+    changedSamples: {
+      allViewport: changedEntries(allSamples),
+      a: changedEntries(aIndices),
+      aExclusive: changedEntries(aExclusive),
+      b: changedEntries(bIndices),
+      bExclusive: changedEntries(bExclusive),
+      intersection: changedEntries(intersection),
+    },
+  };
+}
+
 function viewportPixelDeltaOnMask(before, after, mask, options = {}) {
   let changedPixels = 0;
   for (const sampleIndex of mask) {
@@ -2174,7 +2301,11 @@ async function assertViewportPixelDeltaOnMask(page, before, after, mask, label, 
   const shouldChange = options.shouldChange ?? false;
   const passed = shouldChange ? delta.changed : !delta.changed;
   if (passed) return delta;
-  await captureViewportComparisonFailure(page, label, before, after, { delta, shouldChange });
+  await captureViewportComparisonFailure(page, label, before, after, {
+    delta,
+    shouldChange,
+    ...(options.failureDiagnostics ? { pixelMaskDiagnostics: options.failureDiagnostics } : {}),
+  });
   throw new Error(label + " violated the masked pixel contract: " + JSON.stringify({
     delta,
     shouldChange,
