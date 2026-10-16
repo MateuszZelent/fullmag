@@ -249,12 +249,17 @@ wyników; restart usługi zachowuje kolejkę i nie powtarza ukończonych przypad
 ### E6 — kilka węzłów / adapter klastra
 
 **Właściciel:** istniejący runtime owner z node providerami; application i UI
-korzystają z tych samych request/allocation/receipt.
+korzystają z tych samych request/allocation/receipt. Pierwszym providerem HPC
+Fullmaga jest MicroLab; Slurm jest adapterem brokera, nie adapterem Fullmaga.
+E6 pozostaje zablokowane do ukończenia granicy H0, allocation envelope H1,
+portable artifacts H2 i przyjęcia kontraktu brokera H3.
 
 - Dodać autoryzowane dołączanie node, identity/epoch, runtime compatibility,
   transfer CAS z digest/resume, własny scratch i staging state.
-- Zewnętrzny scheduler przyznaje zasoby adapterowi; Fullmag widzi wyłącznie
-  ten przydział. Persistować provider job ID i uzgadniać timeout/ACK/requeue.
+- MicroLab przyznaje zasoby adapterowi; Fullmag widzi wyłącznie dokładny
+  przydział i jego generację. Persistować provider allocation ID i uzgadniać
+  timeout/ACK/requeue przez broker contract, bez bezpośredniego sbatch,
+  squeue, sacct, slurmrestd ani SSH.
 - UI wybiera pool/requirements, nie arbitralną komendę SSH. Utrata node
   nie zwalnia automatycznie urządzeń i nie uruchamia zdublowanej próby.
 

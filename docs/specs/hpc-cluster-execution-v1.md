@@ -24,7 +24,7 @@ Fullmag must support HPC execution without creating a second product model.
 The most important architectural assumption is:
 
 - **Fullmag is not required to be the cluster orchestrator**
-- Fullmag may be launched by an external dispatch system such as **Microlab**
+- Fullmag may be launched headlessly by MicroLab; the integrated Fullmag HPC provider also connects only to the MicroLab broker, never directly to a cluster scheduler
 - one allocated node may receive one task that simply runs:
   - `fullmag task1.py`
 
@@ -38,12 +38,12 @@ The user still thinks in terms of:
 
 - one Python script,
 - one `fullmag` launcher,
-- one session,
-- one run,
-- one control room,
+- multiple project/document contexts within one private deployment,
+- independent Run/Task/Attempt lifecycles,
+- one product UI with separately scoped project views,
 - one artifact/provenance model.
 
-What changes is the execution target and dispatch path.
+A Control Room session is a view/attachment context, not an authenticated principal or provider allocation. A shared multi-user API requires authenticated principals and resource authorization under ADR 0060. What changes is the execution target and dispatch path.
 
 The canonical HPC path is now **external-dispatch-first**:
 
@@ -60,13 +60,13 @@ An HPC execution typically spans four environments:
 1. **user workstation**
    - where the user writes the Python script
    - may also host the browser control room
-2. **dispatch / control system**
-   - e.g. Microlab or a site scheduler wrapper
-   - decides which task goes to which node
-   - may run outside Fullmag entirely
-3. **scheduler / site allocation layer**
-   - Slurm first when scheduler details matter
-   - PBS / LSF / Flux / site-specific adapters later
+2. **MicroLab broker / dispatch system**
+   - authenticates the user and owns VM/allocation lifecycle, connection grants and artifact transfer
+   - decides which task goes to which broker-managed execution scope
+   - is the only HPC endpoint used by the Fullmag provider
+3. **scheduler / site allocation layer behind MicroLab**
+   - Slurm is the first scheduler adapter selected for the broker
+   - PBS / LSF / Flux remain future MicroLab-side choices, not Fullmag client adapters
 4. **compute nodes**
    - where the heavy backend runtime actually executes
 
@@ -88,7 +88,7 @@ or more realistically on a compute node:
 fullmag task1.py --headless
 ```
 
-where `task1.py` is dispatched to one allocated node by an external system such as Microlab.
+where `task1.py` is dispatched to a broker-managed execution scope by MicroLab.
 
 Expected behavior on the node:
 
@@ -103,7 +103,7 @@ Optional control-plane features may later add richer remote monitoring, but they
 for the basic HPC contract.
 
 The user should not need to manually manage solver ABI details or backend library details.
-The external dispatcher may still manage placement, queueing, stage-in, and stage-out.
+MicroLab manages placement, queueing, stage-in, and stage-out; the scheduler-specific details stay behind the broker.
 
 ---
 
@@ -113,33 +113,35 @@ The external dispatcher may still manage placement, queueing, stage-in, and stag
 
 The canonical HPC assumption is:
 
-- job dispatch belongs to the external system,
-- Fullmag is the simulation executable inside the allocated task.
+- job dispatch and allocation lifecycle belong to MicroLab,
+- Fullmag is the simulation executable inside the broker-issued task scope,
+- Fullmag does not submit/query/cancel Slurm jobs or accept scheduler credentials directly.
 
-This means Fullmag does **not** require:
+This means the basic headless Fullmag runtime does not require:
 
-- a built-in orchestrator,
-- a mandatory scheduler adapter,
-- a mandatory `submit` command,
-- ownership of cluster queue lifecycle.
+- a Fullmag-operated cluster orchestrator,
+- a direct Fullmag scheduler adapter or scheduler credential,
+- a built-in `submit` command for node-local execution,
+- ownership of the cluster queue lifecycle.
 
-These may be added later as convenience features, but they are not required for architectural
-correctness.
+The optional integrated Control Room path may submit a typed intent to MicroLab. That broker owns
+allocation lifecycle and scheduler interaction; Fullmag does not expose scheduler credentials or
+client adapters. Basic external dispatch remains valid without an active Fullmag API.
 
-## 5.2 Initial scheduler target when scheduler metadata matters
+## 5.2 Initial Fullmag provider when scheduler metadata matters
 
-The first-class scheduler target should be:
+The first-class Fullmag HPC provider target is:
 
-- **Slurm**
+- **MicroLab**
 
-Later adapters may include:
+MicroLab's first scheduler adapter is Slurm. Later broker-side adapters may include:
 
 - PBS Pro / Torque
 - LSF
 - Flux
 - site-specific wrapper systems
 
-When scheduler-aware metadata is available, it must stay behind the control plane/runtime layer.
+These are not direct Fullmag provider targets. Scheduler-aware metadata exposed to Fullmag must be broker-authenticated, scoped, and versioned; it does not itself grant access or resources.
 
 ## 5.3 Scheduler-owned concepts
 
@@ -161,13 +163,13 @@ These must become provenance fields, not hidden log trivia.
 
 ## 6. Session model on HPC
 
-Local and remote execution must share the same session-first model.
+Local and remote execution share the canonical Run/Task/Attempt lifecycle. A Control Room session attaches to a private Fullmag deployment; it is not an HPC allocation or authenticated principal. Every remote task/attempt binds server-side to the exact broker allocation generation. Headless external dispatch remains valid without a Control Room session.
 
 However, HPC may require more detailed lifecycle states.
 
 ### 6.1 Additional canonical remote states
 
-Remote-capable session states may extend the existing model with:
+Remote-capable run/attempt states may extend the existing execution model with:
 
 - `staging_input`
 - `submitting`
@@ -192,9 +194,9 @@ In the external-dispatch-first model, a node-local Fullmag task may begin direct
 
 without Fullmag ever owning `queued` or `submitting`.
 
-### 6.2 Remote identity fields
+### 6.2 Remote execution provenance
 
-Remote sessions should additionally track:
+Remote runs/attempts may additionally track:
 
 - `target_id`
 - `scheduler`

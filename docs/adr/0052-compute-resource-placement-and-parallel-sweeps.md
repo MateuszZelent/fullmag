@@ -41,6 +41,19 @@ kilka GPU/socketów CPU, równoległe sweeps oraz docelowo distributed solve.
    collective lifecycle i lane/workflow-specific kwalifikacji numerycznej.
    UI nie otwiera tej możliwości na podstawie samej liczby wykrytych GPU.
 
+## Granica host ledgeru względem deploymentów i providera HPC (2026-10-16)
+
+Wspólny HostResourceLedger bilansuje lokalną pojemność fizycznego hosta
+między podłączonymi store'ami. To współdzielenie jest wyłącznie rachunkiem
+zasobów: nie nadaje principalu, ACL ani prawa do odczytu lub zapisu innego
+SessionStore.
+
+Dla HPC Fullmag przyjmuje dokładny allocation envelope z MicroLab i nie
+rezerwuje całego hosta klastra ani zasobów poza tym przydziałem. Ewentualne
+subalokacje workerów wewnątrz VM muszą pozostać ograniczone envelope i
+allocation generation wydanym przez brokera. Slurm pozostaje adapterem
+MicroLab; Fullmag go bezpośrednio nie submituje, nie odpytuje ani nie anuluje.
+
 ## Relacja z istniejącymi decyzjami
 
 Rozwijamy [ADR 0049](0049-native-runtime-owner-control.md), zachowując jednego

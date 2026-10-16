@@ -607,13 +607,130 @@ pub(crate) struct ProjectRunIntentRequest {
     pub archive_base64: String,
     /// Revision of the exact archived definition observed by the author.
     pub expected_revision: u64,
-    /// Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,
-    /// dependencies, scheduling_priority and requested_execution. No defaults
-    /// or identities are inferred from a live session.
+    /// Structured RunIntentAuthoring input; invalid fields are rejected with 400.
+    #[schema(value_type = RunIntentAuthoringSchema)]
     pub run_authoring: BTreeMap<String, serde_json::Value>,
     pub study_plan: BTreeMap<String, serde_json::Value>,
     pub study_problem_catalog: BTreeMap<String, serde_json::Value>,
     pub asset_paths: BTreeMap<String, String>,
+}
+
+/// OpenAPI schema matching the canonical RunIntentAuthoring JSON shape. The
+/// handler performs semantic validation and reports invalid fields as 400.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RunIntentAuthoringSchema {
+    pub run_id: String,
+    pub idempotency_key: String,
+    pub parameters: serde_json::Value,
+    pub seeds: BTreeMap<String, u64>,
+    pub dependencies: Vec<RunDependencySchema>,
+    pub scheduling_priority: i32,
+    pub requested_execution: RequestedExecutionSchema,
+    /// Omission defaults to `local` for compatibility with pre-v3 clients.
+    /// A MicroLab target pins a configured profile, never principal or secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false, nullable = false)]
+    pub execution_target: Option<ExecutionTargetReferenceSchema>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+pub(crate) enum ExecutionTargetSchemaVersion {
+    #[serde(rename = "execution_target.v1")]
+    V1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "provider", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ExecutionTargetReferenceSchema {
+    Local {
+        schema_version: ExecutionTargetSchemaVersion,
+    },
+    #[serde(rename = "microlab")]
+    MicroLab {
+        schema_version: ExecutionTargetSchemaVersion,
+        profile_id: String,
+        #[schema(minimum = 1)]
+        profile_revision: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum RunDependencySchema {
+    AuthoredInitialState {
+        reference: String,
+    },
+    PinnedArtifact {
+        artifact_id: String,
+        content_sha256: String,
+    },
+    StepOutput {
+        study_id: String,
+        step_id: String,
+        port: String,
+        case_id: String,
+    },
+    ExplicitContinuation {
+        run_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestedBackendSchema {
+    Auto,
+    Fdm,
+    Fem,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestedDeviceSchema {
+    Auto,
+    Cpu,
+    Gpu,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestedPrecisionSchema {
+    Single,
+    Double,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestedModeSchema {
+    Strict,
+    Extended,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestedExecutionSchema {
+    pub backend: RequestedBackendSchema,
+    pub device: RequestedDeviceSchema,
+    pub precision: RequestedPrecisionSchema,
+    pub mode: RequestedModeSchema,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = true, nullable = false)]
+    pub minimum_resources: Option<RequestedResourceBudgetSchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestedResourceBudgetSchema {
+    #[schema(minimum = 1)]
+    pub cpu_millis: u64,
+    #[schema(minimum = 1)]
+    pub memory_bytes: u64,
+    #[schema(minimum = 0)]
+    pub gpu_memory_bytes: u64,
+    #[schema(minimum = 1)]
+    pub storage_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

@@ -77,6 +77,7 @@ fn prepared_submission(project_id: &ProjectId, request: Value, prepared: Value) 
         dependencies: specification.dependencies.clone(),
         scheduling_priority: specification.scheduling_priority,
         requested_execution: specification.requested_execution.clone(),
+        execution_target: specification.resolved_execution_target(),
     };
     let fingerprint = intent.payload_fingerprint()?;
     if prepared.get("project_id").and_then(Value::as_str) != Some(project_id.as_str())
@@ -294,6 +295,7 @@ mod tests {
             dependencies: specification.dependencies.clone(),
             scheduling_priority: specification.scheduling_priority,
             requested_execution: specification.requested_execution.clone(),
+            execution_target: specification.resolved_execution_target(),
         };
         let request = json!({
             "archive_base64": submission["archive_base64"],

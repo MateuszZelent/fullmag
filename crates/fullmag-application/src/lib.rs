@@ -7,6 +7,7 @@
 //! Close semantics.
 
 mod application;
+mod artifact_transfer_manifest;
 mod batch_expansion;
 mod coordinator;
 mod declared_execution;
@@ -27,6 +28,10 @@ mod study_artifact;
 mod study_execution_materialization;
 mod task_execution;
 
+pub use artifact_transfer_manifest::{
+    ArtifactTransferDirectionV1, ArtifactTransferEntryV1, ArtifactTransferManifestV1,
+    ArtifactTransferProvenanceV1, ARTIFACT_TRANSFER_MANIFEST_V1,
+};
 pub use application::{
     ActiveExecution, ActiveExecutionPolicy, ApplicationError, CloseRequest, CloseResult,
     CreateProjectRequest, DirtyClosePolicy, DocumentMode, DocumentView, OpenProjectResult,
@@ -80,9 +85,11 @@ pub use repository::{
     RepositoryOpenResult,
 };
 pub use run_spec::{
-    ImmutableAssetReference, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
-    RunDependency, RunId, RunIntent, RunIntentLedger, RunSpecError, RunSpecification, StudyId,
-    StudyReference, SubmitDisposition, SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
+    ExecutionTargetReference, ImmutableAssetReference, ProjectSnapshot, RequestedExecution,
+    RequestedResourceBudget, RunDependency, RunId, RunIntent, RunIntentLedger, RunSpecError,
+    RunSpecification, StudyId, StudyReference, SubmitDisposition, SubmitReceipt,
+    EXECUTION_TARGET_REFERENCE_SCHEMA, LEGACY_RUN_SPEC_SCHEMA, RESOURCE_RUN_SPEC_SCHEMA,
+    RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };
 pub use run_intent_materialization::{materialize_run_intent, RunIntentAuthoring};
 pub use script_antenna_inspection_planning::plan_script_antenna_inspection;

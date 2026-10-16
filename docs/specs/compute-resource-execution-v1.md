@@ -356,15 +356,23 @@ nie kopią requested value. Nie kopiujemy tajnych env ani lokalnych tokenów.
 ### 5.1 Granica hosta
 
 Obecne blokady/pule w store nie dowodzą wyłączności fizycznego GPU między
-dwoma różnymi store'ami, natywnym procesem i kontenerem. Docelowo jeden
-właściciel zasobów hosta, rozszerzający usługę runtime, utrzymuje ledger
-CPU/RAM/GPU/scratch dla wszystkich podłączonych store'ów i obu faz.
-Build runner może publikować do tego ledgeru własną rezerwację pojemności
-na czas ciężkiego buildu, zachowując swoją kolejkę i storage locks. Brak
-takiej integracji wymaga konserwatywnego admission/rozłącznej puli; UI nie
-anuluje builda ani symulacji w celu zwolnienia zasobów.
-Jeśli operator nie uruchamia takiego właściciela, pule muszą być jawnie
-rozłączne; konfiguracja bez dowodu rozłączności nie uruchamia multi-worker.
+dwoma różnymi store'ami, natywnym procesem i kontenerem. Dla lokalnego
+wykonania jeden zaufany właściciel zasobów hosta, rozszerzający usługę
+runtime, utrzymuje ledger CPU/RAM/GPU/scratch dla lokalnych store'ów i obu
+faz. Wspólny ledger bilansuje pojemność fizycznego hosta; nie jest principal
+auth, ACL ani zgodą na dostęp do innego deploymentu/store.
+Build runner może publikować do tego lokalnego ledgeru własną rezerwację
+pojemności na czas ciężkiego buildu, zachowując swoją kolejkę i storage locks.
+Jeśli operator nie uruchamia takiego właściciela, lokalne pule muszą być
+jawnie rozłączne; konfiguracja bez dowodu rozłączności nie uruchamia
+multi-worker.
+
+Dla targetu MicroLab Fullmag używa wyłącznie allocation envelope oraz
+identyfikatora/generacji przydziału przekazanego przez brokera. Nie rezerwuje
+ponownie hosta HPC ani zasobów poza tym envelope w lokalnym ledgerze hosta.
+Runtime działający wewnątrz przydzielonej VM może koordynować taski tylko
+w granicach przydziału, którego enforcementowi podlega. Tożsamość użytkownika,
+uprawnienia i miejsce w schedulerze pozostają odpowiedzialnością MicroLab.
 
 Rezerwacja węzła i claim taska są dwoma trwałymi zapisami. Stosujemy
 fenced prepare/commit, nie fikcyjną atomową transakcję między bazami:
@@ -669,13 +677,19 @@ runtime oraz immutable inputy; API użytkownika nie uruchamia arbitralnego
 SSH/shell z formularza. Transfer CAS weryfikuje digest, ma resume i osobny
 status staging. Ścieżka Windows klienta nie staje się ścieżką scratch Linuksa.
 
-Adapter np. Slurm/HPC otrzymuje jeden konkretny przydział zewnętrzny i
-publikuje ograniczone nim zasoby. Fullmag nie rezerwuje całego hosta obok
-tego przydziału. Provider job ID wiąże się z admission/attempt; utrata ACK
-powoduje lookup tego samego joba. Requeue zewnętrzny jest nowym uzgodnionym
-attemptem, nie równoległą drugą próbą. Polityka CPU/GPU/RAM jest przecięciem
-limitu klastra, operatora i requestu. Pierwsza integracja wielowęzłowa powinna
-przenosić niezależne cases; pojedynczy distributed solve ma dodatkową §11.
+W Fullmag adapterem HPC jest MicroLab broker, który tworzy/uzgadnia konkretny
+przydział VM i publikuje skuteczne, ograniczone nim zasoby. Slurm jest pierwszym
+schedulerem wyłącznie za MicroLab. Fullmag nie uruchamia sbatch/squeue/sacct,
+SSH ani slurmrestd, nie łączy się z login node i nie przechowuje scheduler
+credentials. Fullmag nie rezerwuje całego hosta obok alokacji brokera.
+Provider allocation ID wiąże się z idempotent intent, Task/Attempt i
+generation; utrata ACK uzgadnia ten sam intent, nigdy nie tworzy w ciemno
+drugiego joba. Requeue/zastąpienie VM jest nowym fenced attemptem, nie
+równoległą drugą próbą. Polityka CPU/GPU/RAM jest przecięciem limitu
+przyznanego przez MicroLab, polityki operatora i requestu. Pierwsza integracja
+wielowęzłowa powinna przenosić niezależne cases; pojedynczy distributed solve
+ma dodatkową §11. Pełny identity/scope contract opisuje [ADR 0060](../adr/0060-principal-scoped-deployments-and-multi-project-execution.md);
+API MicroLab pozostaje propozycją wymagającą akceptacji właścicieli brokera.
 
 ## 11. Jeden solve na wielu GPU/CPU — pełny kontrakt docelowy
 

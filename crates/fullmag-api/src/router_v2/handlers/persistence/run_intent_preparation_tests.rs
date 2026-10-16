@@ -40,6 +40,7 @@ fn request() -> (ProjectId, ProjectRunIntentRequest) {
     fixture["study_problem_catalog"]["entries"][0]["problem"]["study"]["dynamics"]
         ["fixed_timestep"] = serde_json::json!(1e-15);
     let original: RunIntent = serde_json::from_value(fixture["run_intent"].clone()).unwrap();
+    let execution_target = original.specification.resolved_execution_target();
     let authored = RunIntentAuthoring {
         run_id: original.specification.run_id,
         idempotency_key: original.idempotency_key,
@@ -48,6 +49,7 @@ fn request() -> (ProjectId, ProjectRunIntentRequest) {
         dependencies: original.specification.dependencies,
         scheduling_priority: original.specification.scheduling_priority,
         requested_execution: original.specification.requested_execution,
+        execution_target,
     };
     let project_id = ProjectId::parse("project-submit").unwrap();
     let envelope = ProjectEnvelope::blank(project_id.clone(), "Fixture").unwrap();
@@ -128,6 +130,23 @@ fn preparation_rejects_invalid_archive_and_missing_asset_binding() {
         prepare_identity(project_id, request).unwrap_err().status,
         StatusCode::BAD_REQUEST
     );
+}
+
+#[test]
+fn preparation_rejects_unconfigured_microlab_target_before_submit() {
+    let (project_id, mut request) = request();
+    request.run_authoring.insert(
+        "execution_target".into(),
+        serde_json::json!({
+            "provider": "microlab",
+            "schema_version": "execution_target.v1",
+            "profile_id": "site-primary",
+            "profile_revision": 1
+        }),
+    );
+    let error = prepare_identity(project_id, request)
+        .expect_err("no configured MicroLab provider may accept a remote target");
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
 }
 
 #[test]
