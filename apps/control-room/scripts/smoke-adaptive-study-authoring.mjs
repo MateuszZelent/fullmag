@@ -576,21 +576,28 @@ async function publishSceneThroughRealtime(scenario, nextScene) {
 
 async function prepareCombinedAdaptiveDraft(scenario) {
   const toolbar = scenario.inspector.getByTestId("study-stage-authoring-toolbar");
+  const draftPanel = scenario.inspector.locator("[data-stage-draft-count]");
+  const editors = scenario.inspector.locator(".fm-study-stage-editor");
   await toolbar.getByRole("button", { name: "Relax", exact: true }).click();
+  await scenario.page.waitForFunction(
+    () => document.querySelector("[data-stage-draft-count]")?.getAttribute("data-stage-draft-count") === "1",
+    undefined,
+    { timeout: 15_000 },
+  );
+  assert.equal(await editors.count(), 1);
+  assert.match(await editors.first().innerText(), /Stage 1:\s*Relax/);
   await toolbar.getByRole("button", {
     name: "Modal eigenmodes",
     exact: true,
   }).click();
-
-  const editors = scenario.inspector.locator(".fm-study-stage-editor");
   await scenario.page.waitForFunction(
-    () => document.querySelectorAll(".fm-study-stage-editor").length === 2,
+    () => document.querySelector("[data-stage-draft-count]")?.getAttribute("data-stage-draft-count") === "2",
     undefined,
     { timeout: 15_000 },
   );
-  const relaxEditor = editors.nth(0);
-  const eigenEditor = editors.nth(1);
-  assert.match(await relaxEditor.innerText(), /Stage 1:\s*Relax/);
+  // The pipeline retains both drafts and renders only the selected draft editor.
+  assert.equal(await editors.count(), 1);
+  const eigenEditor = editors.first();
   assert.match(await eigenEditor.innerText(), /Stage 2:\s*Eigenmodes/);
 
   await eigenEditor.getByRole("combobox", { name: "Operator", exact: true })
@@ -615,7 +622,7 @@ async function prepareCombinedAdaptiveDraft(scenario) {
     exact: true,
   });
   assert.equal(await apply.isEnabled(), true);
-  return { apply, editors, eigenEditor, maxCpu, mode };
+  return { apply, draftPanel, editors, eigenEditor, maxCpu, mode };
 }
 
 async function captureCombinedApplyFailure(scenario, error) {
@@ -696,7 +703,7 @@ async function runCombinedApplyRealtimeCase(browser) {
     assert.equal(scenario.fixture.scene.revision, 1);
     assert.deepEqual(scenario.fixture.scene.study.stages, []);
     const panelHandle = await scenario.inspector.elementHandle();
-    const { apply, editors, eigenEditor, maxCpu, mode } =
+    const { apply, draftPanel, editors, eigenEditor, maxCpu, mode } =
       await prepareCombinedAdaptiveDraft(scenario);
 
     await new Promise((resolveReady) => setTimeout(resolveReady, 150));
@@ -711,9 +718,9 @@ async function runCombinedApplyRealtimeCase(browser) {
     assert.equal(freshScene.study.stages[0].kind, "frequency_response");
     assert.equal(await mode.inputValue(), "adaptive");
     assert.equal(await maxCpu.inputValue(), "73");
-    assert.equal(await editors.count(), 2);
-    assert.match(await editors.nth(0).innerText(), /Stage 1:\s*Relax/);
-    assert.match(await editors.nth(1).innerText(), /Stage 2:\s*Eigenmodes/);
+    assert.equal(await draftPanel.getAttribute("data-stage-draft-count"), "2");
+    assert.equal(await editors.count(), 1);
+    assert.match(await eigenEditor.innerText(), /Stage 2:\s*Eigenmodes/);
     assert.equal(
       await eigenEditor.getByLabel("k path", { exact: true }).inputValue(),
       LEGAL_EIGEN_K_PATH,
@@ -794,7 +801,7 @@ async function runCombinedApplyConflictCase(browser) {
     stage: null,
   });
   try {
-    const { apply, editors, eigenEditor, maxCpu, mode } =
+    const { apply, draftPanel, editors, eigenEditor, maxCpu, mode } =
       await prepareCombinedAdaptiveDraft(scenario);
     const freshSceneResponsePromise = scenario.page.waitForResponse(
       (response) =>
@@ -833,9 +840,9 @@ async function runCombinedApplyConflictCase(browser) {
     assertCombinedAdaptiveTransaction(scenario.fixture.mutations[0], 1);
     assert.equal(await mode.inputValue(), "adaptive");
     assert.equal(await maxCpu.inputValue(), "73");
-    assert.equal(await editors.count(), 2);
-    assert.match(await editors.nth(0).innerText(), /Stage 1:\s*Relax/);
-    assert.match(await editors.nth(1).innerText(), /Stage 2:\s*Eigenmodes/);
+    assert.equal(await draftPanel.getAttribute("data-stage-draft-count"), "2");
+    assert.equal(await editors.count(), 1);
+    assert.match(await eigenEditor.innerText(), /Stage 2:\s*Eigenmodes/);
     assert.equal(
       await eigenEditor.getByLabel("k path", { exact: true }).inputValue(),
       LEGAL_EIGEN_K_PATH,
