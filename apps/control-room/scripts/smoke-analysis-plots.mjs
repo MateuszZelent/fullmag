@@ -954,11 +954,13 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
   const runId = REFERENCE_FIXTURE_RUN_ID;
   const stageId = REFERENCE_FIXTURE_STAGE_ID;
   const rootId = "results:run:" + runId;
+  const comparisonId = rootId + ":comparison";
   const groupId = rootId + ":k-resolved";
   const stageNodeId = groupId + ":stage:" + stageId + ":modal_eigen";
   const dispersionNodeId = stageNodeId + ":dispersion";
   const dispersionSelector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + dispersionNodeId + "\"]";
   const oversizeFileName = "oversized-reference.csv";
+  const importedReferenceLabel = "Precision browser reference";
 
   await seedAnalysisSurfacePreference(page, "dispersion");
   await page.addInitScript(({ apiBase: configuredApiBase }) => {
@@ -1070,7 +1072,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       throw new Error("Reference column defaults do not select the uploaded path/frequency columns.");
     }
     const labelInput = page.getByLabel("Reference label");
-    await labelInput.fill("Precision browser reference");
+    await labelInput.fill(importedReferenceLabel);
     const importButton = page.getByRole("button", { name: "Import as reference", exact: true });
     if (await importButton.isDisabled()) {
       throw new Error("Valid two-row reference data did not enable the real Import as reference command.");
@@ -1114,12 +1116,12 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
     ];
     const scopedOwnerResources = scopedOwnerPaths.map((resourcePath) => {
       const request = resourceRequests.find((candidate) =>
-        candidate.method === "GET" && candidate.path === resourcePath,
+        candidate.method === "GET" && new URL(candidate.path, baseUrl).pathname === resourcePath,
       );
       if (!request || request.sessionScope !== expectedSessionScope) {
         throw new Error("Results owner resource was not read through the scoped v2 facade: " + resourcePath);
       }
-      return resourcePath;
+      return request.path;
     });
 
     await page.evaluate((invalidFileName) => {
@@ -1212,6 +1214,173 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       });
     }
 
+    const comparisonSelector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + comparisonId + "\"]";
+    const comparisonRow = page.locator(comparisonSelector);
+    await comparisonRow.waitFor({ state: "visible", timeout: timeoutMs });
+    await expandResultsNode(comparisonId);
+    const referenceNodeId = comparisonId + ":reference:" + encodeURIComponent(definition.definition_id);
+    const referenceNodeSelector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + referenceNodeId + "\"]";
+    const referenceNode = page.locator(referenceNodeSelector);
+    await referenceNode.waitFor({ state: "visible", timeout: timeoutMs });
+    if (!(await referenceNode.innerText()).includes(importedReferenceLabel)) {
+      throw new Error("Comparison did not expose the separately addressable imported reference child.");
+    }
+    await referenceNode.click({ timeout: timeoutMs });
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+      referenceNodeSelector,
+      { timeout: timeoutMs },
+    );
+
+    const referenceInspector = page.locator(
+      '.fm-inspector [data-inspector-owner="analysis.dispersion.reference"]',
+    );
+    await referenceInspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const referencePointMetric = referenceInspector.locator('[data-slot="inspector-metric"]')
+      .filter({ has: page.getByText("Points", { exact: true }) });
+    const referencePointCount = await referencePointMetric.locator(".fm-inspector-metric-card__value").innerText();
+    if (referencePointCount.trim() !== String(expectedPoints.length)) {
+      throw new Error("Selected reference Inspector did not show the imported point count.");
+    }
+    const referenceInspectorText = (await referenceInspector.innerText()).replace(/\s+/g, " ");
+    for (const expected of [
+      "Imported · not qualified",
+      "precision-reference.csv",
+      importedReferenceLabel,
+      "rad/um",
+      "GHz",
+      runId,
+      stageId,
+    ]) {
+      if (!referenceInspectorText.includes(expected)) {
+        throw new Error("Selected reference Inspector is missing " + expected + ": " + referenceInspectorText);
+      }
+    }
+
+    const referenceSeriesId = "analysis.reference:" + definition.definition_id;
+    const overlayBeforeHandle = await page.waitForFunction(
+      (seriesId) => {
+        const readRenderedOption = window.__FULLMAG_CHART_DIAGNOSTICS__?.readRenderedOption;
+        if (typeof readRenderedOption !== "function") return false;
+        const option = readRenderedOption();
+        const series = option && typeof option === "object" && Array.isArray(option.series)
+          ? option.series
+          : [];
+        const overlay = series.find((entry) => entry && typeof entry === "object" && entry.id === seriesId);
+        if (!overlay) return false;
+        return {
+          computedSeriesIds: series
+            .filter((entry) => entry && typeof entry === "object" && typeof entry.id === "string" && entry.id !== seriesId)
+            .map((entry) => entry.id),
+          id: overlay.id,
+          label: typeof overlay.name === "string" ? overlay.name : null,
+          pointCount: Array.isArray(overlay.data) ? overlay.data.length : 0,
+        };
+      },
+      referenceSeriesId,
+      { timeout: timeoutMs },
+    );
+    const overlayBeforeRemove = await overlayBeforeHandle.jsonValue();
+    if (
+      overlayBeforeRemove.pointCount !== expectedPoints.length ||
+      !overlayBeforeRemove.label?.includes(importedReferenceLabel) ||
+      overlayBeforeRemove.computedSeriesIds.length === 0
+    ) {
+      throw new Error("The rendered chart option did not contain the imported reference overlay with its computed series.");
+    }
+
+    const expectedDeleteSceneRevision = validCreate.body.expected_scene_revision + 1;
+    const currentDefinitionList = fixtureState.definitionListResponses.at(-1);
+    if (
+      !currentDefinitionList ||
+      currentDefinitionList.sceneRevision !== expectedDeleteSceneRevision ||
+      currentDefinitionList.count !== 1 ||
+      !currentDefinitionList.definitionIds.includes(definition.definition_id)
+    ) {
+      throw new Error("Current typed definitions list did not contain the imported reference at its committed revision.");
+    }
+    const expectedDeletePath = POSTPROCESSING_DEFINITIONS_FIXTURE_PATH + "/" +
+      encodeURIComponent(definition.definition_id);
+    const deleteResponsePromise = page.waitForResponse((response) =>
+      response.request().method() === "DELETE" && new URL(response.url()).pathname === expectedDeletePath,
+    { timeout: timeoutMs });
+    const expectedPostDeleteCollectionRevision = expectedDeleteSceneRevision + 1;
+    const postDeleteListResponsePromise = page.waitForResponse(async (response) => {
+      if (
+        response.request().method() !== "GET" ||
+        new URL(response.url()).pathname !== POSTPROCESSING_DEFINITIONS_FIXTURE_PATH ||
+        fixtureState.referenceDeleteRequests.length !== 1
+      ) {
+        return false;
+      }
+      const body = await response.json().catch(() => null);
+      return body?.scene_revision === expectedPostDeleteCollectionRevision &&
+        Array.isArray(body?.definitions) && body.definitions.length === 0;
+    }, { timeout: timeoutMs });
+    const removeReferenceButton = referenceInspector.getByRole("button", {
+      name: "Remove reference",
+      exact: true,
+    });
+    await removeReferenceButton.waitFor({ state: "visible", timeout: timeoutMs });
+    await removeReferenceButton.click({ timeout: timeoutMs });
+
+    const deleteResponse = await deleteResponsePromise;
+    if (deleteResponse.status() !== 200) {
+      throw new Error("Typed reference DELETE failed with HTTP " + deleteResponse.status() + ".");
+    }
+    const removedCollection = await deleteResponse.json();
+    const postDeleteListResponse = await postDeleteListResponsePromise;
+    const postDeleteCollection = await postDeleteListResponse.json();
+    const deleteRequest = fixtureState.referenceDeleteRequests[0];
+    const observedDeleteRequests = resourceRequests.filter((request) => request.method === "DELETE");
+    if (
+      fixtureState.referenceDeleteRequests.length !== 1 ||
+      observedDeleteRequests.length !== 1 ||
+      new URL(deleteRequest.path, baseUrl).pathname !== expectedDeletePath ||
+      deleteRequest.definitionId !== definition.definition_id ||
+      deleteRequest.sessionScope !== expectedSessionScope ||
+      deleteRequest.body?.expected_scene_revision !== expectedDeleteSceneRevision ||
+      removedCollection.scene_revision !== expectedPostDeleteCollectionRevision ||
+      postDeleteCollection.scene_revision !== expectedPostDeleteCollectionRevision ||
+      postDeleteCollection.definitions.length !== 0 ||
+      fixtureState.sceneRevision !== expectedPostDeleteCollectionRevision ||
+      fixtureState.definitions.length !== 0
+    ) {
+      throw new Error("Reference DELETE did not make exactly one scoped CAS mutation and refresh the current collection.");
+    }
+
+    await referenceNode.waitFor({ state: "detached", timeout: timeoutMs });
+    const overlayAfterHandle = await page.waitForFunction(
+      ({ seriesId, computedSeriesIds }) => {
+        const readRenderedOption = window.__FULLMAG_CHART_DIAGNOSTICS__?.readRenderedOption;
+        if (typeof readRenderedOption !== "function") return false;
+        const option = readRenderedOption();
+        const series = option && typeof option === "object" && Array.isArray(option.series)
+          ? option.series
+          : [];
+        const seriesIds = series
+          .filter((entry) => entry && typeof entry === "object" && typeof entry.id === "string")
+          .map((entry) => entry.id);
+        if (seriesIds.includes(seriesId) || !computedSeriesIds.some((id) => seriesIds.includes(id))) return false;
+        return { remainingSeriesIds: seriesIds, removedReferenceSeriesId: seriesId };
+      },
+      {
+        computedSeriesIds: overlayBeforeRemove.computedSeriesIds,
+        seriesId: referenceSeriesId,
+      },
+      { timeout: timeoutMs },
+    );
+    const overlayAfterRemove = await overlayAfterHandle.jsonValue();
+    const latestDefinitionList = fixtureState.definitionListResponses.at(-1);
+    if (
+      !latestDefinitionList ||
+      latestDefinitionList.sceneRevision !== expectedPostDeleteCollectionRevision ||
+      latestDefinitionList.count !== 0 ||
+      latestDefinitionList.definitionIds.includes(definition.definition_id)
+    ) {
+      throw new Error("Post-delete typed definitions list did not retain the advanced empty collection revision.");
+    }
+
     await assertNoVisibleResourceErrors(page, errors);
     return {
       artifactRevision: publishedArtifactRevision,
@@ -1222,6 +1391,27 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
         expectedSiPoints: expectedPoints,
         requestedSessionScope: expectedSessionScope,
         scopedOwnerResources,
+        referenceLifecycle: {
+          comparisonNodeId: comparisonId,
+          deleteRequest: {
+            definitionId: deleteRequest.definitionId,
+            expectedSceneRevision: deleteRequest.body.expected_scene_revision,
+            path: deleteRequest.path,
+            sessionScope: deleteRequest.sessionScope,
+          },
+          inspector: {
+            fileName: "precision-reference.csv",
+            label: importedReferenceLabel,
+            points: expectedPoints.length,
+            sourceUnits: definition.settings.source_units,
+            status: "Imported · not qualified",
+          },
+          overlayAfterRemove,
+          overlayBeforeRemove,
+          postDeleteCollectionRevision: postDeleteCollection.scene_revision,
+          referenceNodeId,
+          removedDefinitionCount: postDeleteCollection.count,
+        },
         validCreateRequestCount: fixtureState.referenceCreateRequests.length,
         validSourceUnits: definition.settings.source_units,
       },
@@ -2230,7 +2420,13 @@ function targetOrTrackedModeId(isTarget, targetModeId, sampleIndex) {
 
 async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture = null) {
   const referenceImportEnabled = frequencyDomainFixture?.referenceImport === true;
-  const referenceImportState = { referenceCreateRequests: [], definitions: [] };
+  const referenceImportState = {
+    definitionListResponses: [],
+    definitions: [],
+    referenceCreateRequests: [],
+    referenceDeleteRequests: [],
+    sceneRevision: 0,
+  };
   const datasetRef = "analysis-fixture";
   const revision = 17;
   const columns = [
@@ -2325,7 +2521,7 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
         headers: {
           ...cors,
           "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "content-type",
-          "access-control-allow-methods": "GET, POST, OPTIONS",
+          "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
         },
         status: 204,
       });
@@ -2350,11 +2546,94 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
         body,
         sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
       });
-      const sceneRevision = referenceImportState.definitions.length + 1;
+      if (body.expected_scene_revision !== referenceImportState.sceneRevision) {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Fixture scene revision conflict during reference creation." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 409,
+        });
+        return;
+      }
+      const sceneRevision = referenceImportState.sceneRevision + 1;
       const definition = { ...body.definition, revision: sceneRevision };
       referenceImportState.definitions.push(definition);
+      referenceImportState.sceneRevision = sceneRevision;
       await route.fulfill({
         body: JSON.stringify({ definition, scene_revision: sceneRevision }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    const definitionPathPrefix = POSTPROCESSING_DEFINITIONS_FIXTURE_PATH + "/";
+    if (
+      referenceImportEnabled &&
+      request.method() === "DELETE" &&
+      url.pathname.startsWith(definitionPathPrefix)
+    ) {
+      let definitionId = null;
+      try {
+        definitionId = decodeURIComponent(url.pathname.slice(definitionPathPrefix.length));
+      } catch {
+        definitionId = null;
+      }
+      let body = null;
+      try {
+        body = request.postDataJSON();
+      } catch {
+        body = null;
+      }
+      referenceImportState.referenceDeleteRequests.push({
+        body,
+        definitionId,
+        path: currentSessionPath(request.url()),
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+      if (
+        !definitionId ||
+        url.pathname !== definitionPathPrefix + encodeURIComponent(definitionId) ||
+        !body || typeof body !== "object" || typeof body.expected_scene_revision !== "number"
+      ) {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Fixture received an invalid definition-delete request." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 400,
+        });
+        return;
+      }
+      const definitionIndex = referenceImportState.definitions.findIndex(
+        (definition) => definition.definition_id === definitionId,
+      );
+      if (definitionIndex < 0) {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Fixture definition was not found." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 404,
+        });
+        return;
+      }
+      if (body.expected_scene_revision !== referenceImportState.sceneRevision) {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Fixture scene revision conflict during reference deletion." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 409,
+        });
+        return;
+      }
+      referenceImportState.definitions.splice(definitionIndex, 1);
+      referenceImportState.sceneRevision += 1;
+      const removedCollection = {
+        count: referenceImportState.definitions.length,
+        definitions: referenceImportState.definitions,
+        scene_revision: referenceImportState.sceneRevision,
+      };
+      await route.fulfill({
+        body: JSON.stringify(removedCollection),
         contentType: "application/json",
         headers: cors,
         status: 200,
@@ -2375,12 +2654,18 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       return;
     }
     if (referenceImportEnabled && url.pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH) {
+      const definitionCollection = {
+        count: referenceImportState.definitions.length,
+        definitions: referenceImportState.definitions,
+        scene_revision: referenceImportState.sceneRevision,
+      };
+      referenceImportState.definitionListResponses.push({
+        count: definitionCollection.count,
+        definitionIds: definitionCollection.definitions.map((definition) => definition.definition_id),
+        sceneRevision: definitionCollection.scene_revision,
+      });
       await route.fulfill({
-        body: JSON.stringify({
-          count: referenceImportState.definitions.length,
-          definitions: referenceImportState.definitions,
-          scene_revision: referenceImportState.definitions.length,
-        }),
+        body: JSON.stringify(definitionCollection),
         contentType: "application/json",
         headers: cors,
         status: 200,
