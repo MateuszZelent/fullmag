@@ -225,7 +225,26 @@ try {
       response.quantityId === quantityId && response.status === 200,
     ),
   );
-  await page.waitForTimeout(500);
+  const initialQuantityId = currentFixtureQuantity(fixture);
+  const initialFullFieldResponse = fixture.fieldVectorResponses
+    .slice()
+    .reverse()
+    .find((response) =>
+      response.quantityId === initialQuantityId &&
+      response.status === 200 &&
+      response.query?.component === "full" &&
+      response.query?.scope_kind === "full",
+    );
+  if (!initialFullFieldResponse?.etag) {
+    throw new Error(
+      `FDM field ${initialQuantityId} has no successful full-field response with a recorded payload ETag.`,
+    );
+  }
+  const fdmFieldAdoption = await assertInitialFdmFieldAdoption(
+    page,
+    initialQuantityId,
+    initialFullFieldResponse.etag,
+  );
 
   auditLog("reading baseline diagnostics");
   const baseline = {
@@ -443,6 +462,7 @@ try {
     afterUnmount,
     afterUnmountRuntime,
     baseline,
+    fdmFieldAdoption,
     unmountedBaselineRuntime,
     shaderSignatures,
     fixtureRequests,
@@ -541,6 +561,129 @@ async function assertCanvasHasFidelity(page) {
     throw new Error("Viewport fidelity gate detected a blank or uniform WebGL drawing buffer.");
   }
   return sample;
+}
+
+async function assertInitialFdmFieldAdoption(page, quantityId, payloadEtag) {
+  let trace = [];
+  let adoption = null;
+  let lastCheck = null;
+  try {
+    await waitForCondition(
+      async () => {
+        trace = await page.evaluate(() =>
+          window.__FM_VIEWPORT_BROWSER_AUDIT__?.viewportAckTrace?.slice(-512) ?? [],
+        );
+        try {
+          adoption = resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag);
+          lastCheck = null;
+          return true;
+        } catch (error) {
+          lastCheck = error instanceof Error ? error.message : String(error);
+          return false;
+        }
+      },
+      QUANTITY_SWITCH_TIMEOUT_MS,
+      `Timed out waiting for the current FDM field ${quantityId} buffer to be adopted.`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${message} Last check: ${lastCheck ?? "no complete browser acknowledgement trace"}; latest trace entries: ${JSON.stringify(trace.slice(-3))}.`,
+    );
+  }
+  return adoption;
+}
+
+function resolveInitialFdmFieldAdoption(trace, quantityId, payloadEtag) {
+  if (!Array.isArray(trace) || trace.length === 0) {
+    throw new Error("The browser acknowledgement trace is empty.");
+  }
+  let frameIndex = -1;
+  for (let index = trace.length - 1; index >= 0; index -= 1) {
+    const entry = trace[index];
+    if (
+      entry.event === "frame-commit" &&
+      entry.currentFullBuffer?.fieldBufferId &&
+      entry.latestActiveAdoption?.fieldBufferId
+    ) {
+      frameIndex = index;
+      break;
+    }
+  }
+  const frame = frameIndex >= 0 ? trace[frameIndex] : null;
+  const identity = frame?.currentFullBuffer ?? null;
+  if (
+    !identity?.fieldBufferId ||
+    !identity.fieldRevision ||
+    !identity.resourceKey ||
+    !identity.sessionId ||
+    !identity.sessionEpoch
+  ) {
+    throw new Error(
+      `FDM field ${quantityId} did not publish a complete current full-field buffer identity before churn: ${JSON.stringify(identity)}.`,
+    );
+  }
+  if (identity.fieldRevision !== payloadEtag) {
+    throw new Error(
+      `FDM field ${quantityId} buffer revision ${identity.fieldRevision} did not match recorded payload ETag ${payloadEtag}.`,
+    );
+  }
+  const resourceUrl = new URL(
+    identity.resourceKey.slice(identity.resourceKey.lastIndexOf("|") + 1),
+    "http://localhost",
+  );
+  if (
+    resourceUrl.pathname !==
+      `/v2/sessions/current/data/fields/${encodeURIComponent(quantityId)}/samples/vector` ||
+    resourceUrl.searchParams.get("component") !== "full" ||
+    resourceUrl.searchParams.get("scope_kind") !== "full"
+  ) {
+    throw new Error(
+      `FDM field identity did not refer to the requested full-domain ${quantityId} vector resource: ${identity.resourceKey}.`,
+    );
+  }
+
+  const receipt = frame.latestActiveAdoption;
+  if (
+    !frame.requestScopeEpoch ||
+    !frame.latestActiveAdoption.requestScopeEpoch ||
+    receipt.fieldBufferId !== identity.fieldBufferId ||
+    receipt.resourceKey !== identity.resourceKey ||
+    receipt.sessionId !== identity.sessionId ||
+    receipt.sessionEpoch !== identity.sessionEpoch ||
+    receipt.requestScopeEpoch !== frame.requestScopeEpoch
+  ) {
+    throw new Error(
+      `FDM field ${quantityId} full buffer did not have a matching active adoption receipt: ${JSON.stringify(receipt)}.`,
+    );
+  }
+
+  const surfaceEvent = trace.slice().reverse().find((entry) => {
+    const adoption = entry.surfaceAdoption;
+    return (
+      entry.event === "surface-adoption" &&
+      adoption?.result?.status === "adopted" &&
+      adoption.fieldBufferId === identity.fieldBufferId &&
+      adoption.resourceKey === identity.resourceKey &&
+      adoption.sessionId === identity.sessionId &&
+      adoption.sessionEpoch === identity.sessionEpoch &&
+      adoption.requestScopeEpoch === frame.requestScopeEpoch
+    );
+  });
+  if (!surfaceEvent) {
+    throw new Error(
+      `FDM field ${quantityId} had no successful surface-adoption event for its current full-field buffer ${identity.fieldBufferId}.`,
+    );
+  }
+  return {
+    fieldBufferId: identity.fieldBufferId,
+    fieldRevision: identity.fieldRevision,
+    quantityId,
+    resourceKey: identity.resourceKey,
+    sessionEpoch: identity.sessionEpoch,
+    sessionId: identity.sessionId,
+    surfaceAdoption: surfaceEvent.surfaceAdoption,
+  };
 }
 
 async function assertPublicationRendered(page, viewport, quantityId, revision, beforeGpu) {

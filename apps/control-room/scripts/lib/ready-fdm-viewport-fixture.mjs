@@ -596,6 +596,9 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
           revision === 1
             ? `"fdm-memory-${quantityId}"`
             : `"fdm-memory-${quantityId}-r${revision}"`;
+        const responseIdentityHeaders = isSupportedFullFieldVectorUrl(requestUrl)
+          ? fdmFullFieldVectorResponseHeaders(fixture, quantityId, revision)
+          : {};
         const requestEtag = request.headers()["if-none-match"] ?? null;
         if (requestEtag === etag) {
           if (fixture.trackFieldResponses) {
@@ -611,7 +614,7 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
               status: 304,
             });
           }
-          await fulfillEmpty(route, 304, { etag });
+          await fulfillEmpty(route, 304, { etag, ...responseIdentityHeaders });
           return;
         }
         const payload = makeFdmFieldVectorBuffer(quantityId, revision);
@@ -631,7 +634,10 @@ export async function installFdmFixtureApi(page, fixture, requests = []) {
             status: 200,
           });
         }
-        await fulfillBinary(route, payload, 200, { etag });
+        await fulfillBinary(route, payload, 200, {
+          etag,
+          ...responseIdentityHeaders,
+        });
         return;
       }
       if (
@@ -689,6 +695,21 @@ function isSupportedFullFieldVectorUrl(url) {
     url.searchParams.get("component") === "full" &&
     url.searchParams.get("scope_kind") === "full"
   );
+}
+
+function fdmFullFieldVectorResponseHeaders(fixture, quantityId, revision) {
+  const pointCount = FIELD_GRID.reduce((product, count) => product * count, 1);
+  return {
+    "x-fullmag-field-revision": String(revision),
+    "x-fullmag-domain-generation-id": String(fixture.status.domain.generation_id),
+    "x-fullmag-quantity-id": quantityId,
+    "x-fullmag-component": "full",
+    "x-fullmag-encoding": "FMVP;version=2",
+    "x-fullmag-point-count": String(pointCount),
+    "x-fullmag-value-count": String(pointCount * 3),
+    "x-fullmag-n-comp": "3",
+    "x-fullmag-payload-state": "legacy_unverified",
+  };
 }
 
 function isSupportedLayerFieldVectorUrl(url) {
@@ -774,8 +795,29 @@ function fixtureHeaders(extra = {}) {
     "access-control-allow-headers": "*",
     "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
     "access-control-allow-origin": "*",
-    "access-control-expose-headers":
-      "x-api-contract-version,etag,x-request-id,x-fullmag-domain-generation-id,x-fullmag-grid-fingerprint,x-fullmag-region-membership-revision",
+    "access-control-expose-headers": [
+      "x-api-contract-version",
+      "x-fullmag-api-instance",
+      "etag",
+      "content-range",
+      "x-request-id",
+      "x-fullmag-field-revision",
+      "x-fullmag-domain-generation-id",
+      "x-fullmag-quantity-id",
+      "x-fullmag-component",
+      "x-fullmag-encoding",
+      "x-fullmag-point-count",
+      "x-fullmag-value-count",
+      "x-fullmag-n-comp",
+      "x-fullmag-scope-kind",
+      "x-fullmag-scope-id",
+      "x-fullmag-snapshot-id",
+      "x-fullmag-mesh-topology-hash",
+      "x-fullmag-field-indexing",
+      "x-fullmag-node-index-count",
+      "x-fullmag-grid-fingerprint",
+      "x-fullmag-region-membership-revision",
+    ].join(","),
     "x-api-contract-version": "1.0.0",
     ...extra,
   };
