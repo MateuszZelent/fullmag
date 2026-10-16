@@ -14527,6 +14527,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         mesh_workflow = {
             "mesh_options": {
                 "mesh_strategy": "thin_film_tetrahedral",
+                "hmin": 2e-9,
                 "through_thickness_elements": 3,
                 "periodic_pair_ids": ["x_faces", "y_faces"],
                 "size_fields": [

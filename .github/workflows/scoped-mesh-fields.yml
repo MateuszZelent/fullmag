@@ -25,6 +25,8 @@ jobs:
   actual-gmsh:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PYTHONFAULTHANDLER: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
