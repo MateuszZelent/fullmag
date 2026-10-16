@@ -690,7 +690,7 @@ def _build_mesh_operation_statuses(
                     requested_method=requested_thin_film,
                     actual_method=(
                         "geo_layer_partitioned_tetrahedral" if scoped_layer_partitioning else
-                        ("geo_layered_tetrahedral" if exact_box_layers else
+                        ("geo_layered_tetrahedral" if exact_box_layers or exact_ring_layers else
                          ("feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral"))
                     ),
                     reason=(

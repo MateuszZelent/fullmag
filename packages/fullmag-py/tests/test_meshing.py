@@ -14338,6 +14338,60 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 coordinate_tolerance_m=tolerance,
             )
 
+    def test_unscoped_exact_ring_and_box_report_layered_tetrahedral_method(self) -> None:
+        ring = fm.Difference(
+            base=fm.Box(40e-9, 40e-9, 10e-9, name="unscoped_ring_box"),
+            tool=fm.Cylinder(
+                radius=8e-9,
+                height=10e-9,
+                name="unscoped_ring_hole",
+            ),
+            name="unscoped_ring",
+        )
+        box = fm.Box(40e-9, 40e-9, 10e-9, name="unscoped_box")
+        airbox = AirboxOptions(
+            size=(40e-9, 40e-9, 410e-9),
+            center=(0.0, 0.0, 0.0),
+            maximum_element_size=20e-9,
+            minimum_element_size=2e-9,
+            grading_mode="geometric",
+        )
+        options = MeshOptions(
+            mesh_strategy="thin_film_tetrahedral",
+            through_thickness_elements=3,
+        )
+
+        def thin_film_status(geometry: Geometry, *, build_mode: str):
+            return next(
+                status
+                for status in mesh_asset_pipeline._build_mesh_operation_statuses(
+                    [geometry],
+                    options,
+                    airbox=airbox,
+                    build_mode=build_mode,
+                    fallbacks_triggered=[],
+                )
+                if status.kind == "thin_film"
+            )
+
+        ring_status = thin_film_status(
+            ring,
+            build_mode="single_geometry_geo_ring",
+        )
+        self.assertEqual(ring_status.status, "applied")
+        self.assertEqual(ring_status.actual_method, "geo_layered_tetrahedral")
+        self.assertIsNone(ring_status.reason)
+        self.assertEqual(ring_status.details["resolved_sweep_direction"], "z")
+
+        box_status = thin_film_status(
+            box,
+            build_mode="single_geometry_geo_layered_box",
+        )
+        self.assertEqual(box_status.status, "applied")
+        self.assertEqual(box_status.actual_method, "geo_layered_tetrahedral")
+        self.assertIsNone(box_status.reason)
+        self.assertEqual(box_status.details["resolved_sweep_direction"], "z")
+
     def test_scoped_exact_ring_lower_bound_uses_layer_route_and_report(self) -> None:
         try:
             import gmsh  # noqa: F401
