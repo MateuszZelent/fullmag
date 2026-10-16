@@ -1219,14 +1219,31 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
   });
   await page.getByRole("tab", { name: "Geometry", exact: true }).click();
   await inspector.getByRole("button", { name: "Fit view", exact: true }).click();
-  await page.waitForFunction((maximumDistance) => {
-    const viewport = document.querySelector(".fm-viewport-3d");
-    const position = viewport?.getAttribute("data-camera-position")?.trim().split(/\s+/).map(Number);
-    const target = viewport?.getAttribute("data-camera-target")?.trim().split(/\s+/).map(Number);
-    if (position?.length !== 3 || target?.length !== 3) return false;
-    const distance = Math.hypot(...position.map((value, index) => value - target[index]));
-    return Number.isFinite(distance) && distance > 0 && distance < maximumDistance;
-  }, axisLength * 100, { timeout: 10_000 });
+  const maximumDistance = axisLength * 100;
+  try {
+    await page.waitForFunction((distanceLimit) => {
+      const viewport = document.querySelector(".fm-viewport-3d");
+      const position = viewport?.getAttribute("data-camera-position")?.trim().split(/\s+/).map(Number);
+      const target = viewport?.getAttribute("data-camera-target")?.trim().split(/\s+/).map(Number);
+      if (position?.length !== 3 || target?.length !== 3) return false;
+      const distance = Math.hypot(...position.map((value, index) => value - target[index]));
+      return Number.isFinite(distance) && distance > 0 && distance < distanceLimit;
+    }, maximumDistance, { timeout: 10_000 });
+  } catch (error) {
+    const cameraAfterFit = await captureViewportProjectionDiagnostics(page);
+    const diagnostics = JSON.stringify({
+      axisLength,
+      cameraAfterFit,
+      geometrySize,
+      maximumDistance,
+    }, null, 2);
+    if (error instanceof Error) {
+      error.message = `${error.message}\nFit view camera diagnostics: ${diagnostics}`;
+    } else {
+      console.error(`Fit view camera diagnostics: ${diagnostics}`);
+    }
+    throw error;
+  }
   const moveAction = page.locator('button[data-action-id="builder-tool-move"]');
   await moveAction.waitFor({ state: "visible", timeout: 60_000 });
   await moveAction.click();
@@ -1618,9 +1635,9 @@ async function readMovePointerStats(page, statsKey) {
   }, statsKey);
 }
 
-async function readViewportProjectionDiagnostics(page) {
+async function readViewportProjectionDiagnostics(page, timeout = 60_000) {
   const viewport = page.locator(".fm-viewport-3d");
-  await viewport.waitFor({ state: "visible", timeout: 60_000 });
+  await viewport.waitFor({ state: "visible", timeout });
   const diagnostics = await viewport.evaluate((section) => {
     const canvas = section.querySelector("canvas");
     if (!canvas) return null;
@@ -1653,6 +1670,16 @@ async function readViewportProjectionDiagnostics(page) {
     cameraTarget: parseViewportVector(diagnostics.cameraTarget, "camera target"),
     cameraUp: parseViewportVector(diagnostics.cameraUp, "camera up"),
   };
+}
+
+async function captureViewportProjectionDiagnostics(page) {
+  try {
+    return await readViewportProjectionDiagnostics(page, 1_000);
+  } catch (error) {
+    return {
+      captureError: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function parseViewportVector(value, label) {
@@ -3982,6 +4009,7 @@ function createInspectorFixture() {
       size: [1e-6, 1e-6, 1e-6],
     },
   };
+  const topologyFixture = inspectorTopologyFixture(scene);
   const requestBudget = createInspectorRequestBudgetState();
   return {
     fdmBuildGridMode,
@@ -3990,9 +4018,9 @@ function createInspectorFixture() {
       generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
       mesh_name: "Inspector fixture mesh",
       mesh_parts: [
-        inspectorMeshPart("airbox", "airbox", null, 0),
-        inspectorMeshPart("film-part", "magnetic", "film", 1),
-        inspectorMeshPart("orphan-part", "volume", null, 2),
+        inspectorMeshPart("airbox", "airbox", null, 0, topologyFixture.partBounds.airbox),
+        inspectorMeshPart("film-part", "magnetic", "film", 1, topologyFixture.partBounds.film),
+        inspectorMeshPart("orphan-part", "volume", null, 2, topologyFixture.partBounds.orphan),
       ],
       object_segments: [
         {
@@ -4024,7 +4052,7 @@ function createInspectorFixture() {
     unknownGetPaths: [],
     revision,
     scene,
-    topology: inspectorTopologyBuffer(),
+    topology: topologyFixture.buffer,
     texturePatchDelayMs: 0,
     geometryPatchDelayMs: 0,
     geometryPatchPending: false,
@@ -4037,13 +4065,13 @@ function createInspectorFixture() {
   };
 }
 
-function inspectorMeshPart(id, role, objectId, ordinal) {
+function inspectorMeshPart(id, role, objectId, ordinal, bounds) {
   return {
     boundary_face_count: 4,
     boundary_face_indices: [0, 1, 2, 3].map((index) => index + ordinal * 4),
     boundary_face_start: ordinal * 4,
-    bounds_max: [1 + ordinal, 1 + ordinal, 1 + ordinal],
-    bounds_min: [-1 + ordinal, -1 + ordinal, -1 + ordinal],
+    bounds_max: bounds.max,
+    bounds_min: bounds.min,
     element_count: 1,
     element_start: ordinal,
     id,
@@ -5541,10 +5569,43 @@ async function fulfillTopology(route, topology, manifest) {
   });
 }
 
-function inspectorTopologyBuffer() {
+function inspectorTopologyFixture(scene) {
   const nodeCount = 12;
   const elementCount = 3;
   const boundaryFaceCount = 12;
+  const universeSize = scene.universe.size;
+  const universeHalfSize = universeSize.map((size) => size / 2);
+  const universeQuarterSize = universeSize.map((size) => size / 4);
+  const film = scene.objects.find((object) => object.id === "film");
+  assert(film, "The Inspector topology fixture requires the Film object.");
+  const filmHalfSize = film.geometry.geometry_params.size.map((size) => size / 2);
+  const [halfX, halfY, halfZ] = universeHalfSize;
+  const [quarterX, quarterY, quarterZ] = universeQuarterSize;
+  const [filmHalfX, filmHalfY, filmHalfZ] = filmHalfSize;
+  // Retain positive tet4 node ordering while expressing coordinates in scene meters.
+  const nodePositions = [
+    [-halfX, -halfY, -halfZ],
+    [halfX, -halfY, halfZ],
+    [halfX, halfY, -halfZ],
+    [-halfX, halfY, halfZ],
+    [-filmHalfX, -filmHalfY, -filmHalfZ],
+    [filmHalfX, -filmHalfY, -filmHalfZ],
+    [-filmHalfX, filmHalfY, -filmHalfZ],
+    [-filmHalfX, -filmHalfY, filmHalfZ],
+    [quarterX, quarterY, quarterZ],
+    [halfX, quarterY, quarterZ],
+    [quarterX, halfY, quarterZ],
+    [quarterX, quarterY, halfZ],
+  ];
+  const boundsForNodePositions = (positions) => ({
+    max: [0, 1, 2].map((axis) => Math.max(...positions.map((position) => position[axis]))),
+    min: [0, 1, 2].map((axis) => Math.min(...positions.map((position) => position[axis]))),
+  });
+  const partBounds = {
+    airbox: boundsForNodePositions(nodePositions.slice(0, 4)),
+    film: boundsForNodePositions(nodePositions.slice(4, 8)),
+    orphan: boundsForNodePositions(nodePositions.slice(8, 12)),
+  };
   const buffer = new ArrayBuffer(
     32 + nodeCount * 3 * 8 + elementCount * 4 * 4 + boundaryFaceCount * 3 * 4 + elementCount * 4 * 2,
   );
@@ -5558,11 +5619,7 @@ function inspectorTopologyBuffer() {
   view.setUint32(20, elementCount, true);
   view.setUint32(24, elementCount, true);
   let offset = 32;
-  new Float64Array(buffer, offset, nodeCount * 3).set([
-    0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
-    -1, -1, -1, 2, -1, -1, -1, 2, -1, -1, -1, 2,
-    0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 2,
-  ]);
+  new Float64Array(buffer, offset, nodeCount * 3).set(nodePositions.flat());
   offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, elementCount * 4).set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
@@ -5575,7 +5632,7 @@ function inspectorTopologyBuffer() {
   new Uint32Array(buffer, offset, elementCount).set([1, 0, 2]);
   offset += elementCount * Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, elementCount).set([1, 0, 2]);
-  return buffer;
+  return { buffer, partBounds };
 }
 
 function inspectorFrequencyCapability(status) {
