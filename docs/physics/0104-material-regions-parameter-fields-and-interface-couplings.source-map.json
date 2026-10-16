@@ -796,6 +796,48 @@
       "symbol": "_mesh_stl_surface_once",
       "responsibility": "Opt-in existing STL surface mesh constraint for frozen magnetic-air generation, with process-global option restoration; topology/PBC/convergence must be verified separately.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "frozen-stl-closed-cell-boundary",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_frozen_surface.py",
+      "symbol": "_frozen_boundary_triangles",
+      "responsibility": "Derives outward-oriented closed geometry triangles from canonical mixed-cell adjacency and requires two oppositely directed incidences per non-degenerate boundary edge; this is not a vertex-manifold or no-intersection proof.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "frozen-stl-complete-boundary-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_frozen_boundary_stl_uses_full_cell_boundary_and_preserves_mesh",
+      "responsibility": "Checks that two Tet4 cells sharing a face export six outward external triangles despite partial stored facet metadata, without mutating the source mesh.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "frozen-stl-invalid-topology-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_frozen_boundary_stl_rejects_nonmanifold_and_unknown_topology",
+      "responsibility": "Checks fail-closed rejection of faces with more than two cell owners and unknown cell families.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "frozen-stl-edge-incidence-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_frozen_boundary_stl_rejects_edge_nonmanifold_surface",
+      "responsibility": "Checks fail-closed rejection when two Tet4 cells meet only at an edge, producing four boundary-triangle incidences there.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "frozen-stl-prism6-quad-split-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_frozen_boundary_stl_triangulates_prism_quad_faces_and_is_closed",
+      "responsibility": "Checks a single Prism6 surface exports eight outward triangles, preserves the independent 0-2 splits of its three quads, and has paired directed edge incidences.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "frozen-stl-closed-boundary-documentation",
+      "path": "docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md",
+      "symbol": "DOC-ANCHOR:material-regions-frozen-body-stl-boundary",
+      "responsibility": "Defines full closed geometry-only frozen STL boundary and separates it from interface metadata, PBC identity and scientific qualification.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {

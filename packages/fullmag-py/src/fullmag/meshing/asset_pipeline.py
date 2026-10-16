@@ -53,6 +53,7 @@ from ._gmsh_swept import (
 )
 from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
 from ._frozen_interface import _validate_frozen_magnetic_air_interface
+from ._frozen_surface import _frozen_boundary_triangles
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -577,18 +578,16 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
 
 
 def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:
+    triangles = _frozen_boundary_triangles(mesh)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii") as handle:
         handle.write("solid frozen_magnetic_boundary\n")
-        triangles: list[np.ndarray] = []
-        for ordinal, facet_type in enumerate(mesh.facet_types):
-            facet = mesh.facet_node_ids(ordinal)
-            if facet_type == "tri3":
-                triangles.append(facet)
-            else:
-                triangles.extend((facet[[0, 1, 2]], facet[[0, 2, 3]]))
         for face in triangles:
-            v0, v1, v2 = np.asarray(mesh.nodes[face], dtype=np.float64)
+            vertices = np.asarray(
+                mesh.nodes[np.asarray(face, dtype=np.int64)],
+                dtype=np.float64,
+            )
+            v0, v1, v2 = vertices
             normal = np.cross(v1 - v0, v2 - v0)
             norm = float(np.linalg.norm(normal))
             if norm > 0.0:

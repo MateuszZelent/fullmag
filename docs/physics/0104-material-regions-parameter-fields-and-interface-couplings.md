@@ -1040,6 +1040,48 @@ Opcja Gmsh `Mesh.MeshOnlyEmpty` ogranicza generowanie do encji bez istniejącej
 siatki ([dokumentacja Gmsh](https://gmsh.info/doc/texinfo/#Mesh-options));
 nie zastępuje kontroli wyniku ani nie gwarantuje poprawności komórki PBC.
 
+(material-regions-frozen-body-stl-boundary)=
+<!-- DOC-ANCHOR:material-regions-frozen-body-stl-boundary -->
+#### Zamknięta powierzchnia dla pomocniczego STL zamrożonego magnetyku
+
+Pomocniczy STL używany do utworzenia powietrza opisuje pełną granicę komórek
+objętościowych wybranego zamrożonego podmesha. Zapisana lista
+`facet_types`/`facet_nodes` pozostaje listą jawnych faset wynikowego mesha i
+może zawierać wyłącznie deklarowany interfejs magnetyk–powietrze; nie jest
+źródłem pełnej powierzchni zamkniętej geometrii.
+
+Granicę wyprowadza się z rzeczywistego connectivity przez kanoniczną tabelę
+lokalnych faset `_MIXED_CELL_LOCAL_FACETS` i `_mixed_face_adjacency`. Faseta
+z jednym właścicielem komórkowym jest fasetą powierzchni, a faseta z dwoma
+różnymi właścicielami jest wewnętrzna i nie trafia do STL. Więcej niż dwóch
+właścicieli, powtórzony właściciel lub nieznana rodzina komórek blokuje
+eksport zamiast po cichu tworzyć otwarty albo niejednoznaczny kształt.
+
+Tri3 zachowuje trzy wierzchołki. Cykliczny Quad4 jest dzielony po przekątnej
+0–2, a obie trójkątne normalne są skierowane na zewnątrz względem środka
+właścicielskiej komórki. Niepoprawna, zdegenerowana lub niejednoznacznie
+orientowalna faseta blokuje eksport. Jest to wyłącznie triangulacja
+geometrycznego wejścia Gmsh: nie zmienia tablic komórek i faset, markerów,
+identyfikatorów węzłów ani par/seamów PBC. Seamy PBC, które są granicą
+jednej komórki, mogą należeć do zamkniętej powierzchni geometrii, ale nie są
+dodawane do metadanych interfejsu magnetyk–powietrze.
+
+Po triangulacji każda niezerowej długości krawędź powierzchni musi wystąpić
+dwa razy z przeciwnymi kierunkami. Otwarta krawędź, więcej niż dwie incydencje
+lub niezgodna orientacja blokuje eksport. Jest to kontrola incydencji krawędzi,
+nie certyfikat manifoldowości wierzchołków ani braku przecięć powierzchni.
+
+Regresja powinna wykazać, że dwa Tet4 współdzielące jedną ścianę dają sześć
+zewnętrznych trójkątów bez ściany wewnętrznej, także gdy wejściowa lista
+faset jest celowo niepełna; powinna też sprawdzić orientację normalnych,
+niezmienność danych źródłowych, rozkład quadów Prism6 po przekątnej 0–2,
+zamknięcie krawędzi oraz odrzucenie nie-manifoldowego face/edge connectivity
+i nieznanej topologii. Istniejący test ekstrakcji nadal wymaga wykluczenia
+faset PBC z jawnej listy interfejsu. Testy źródłowe tego kontraktu nie
+kwalifikują generatora Gmsh, poprawności PBC, manifoldowości wierzchołków,
+braku wszystkich przecięć ani zbieżności fizycznej; wykonanie GHA pozostaje
+osobnym dowodem.
+
 (material-regions-round-trip-and-failure-semantics)=
 ### 4.6 Round-trip and failure semantics
 
@@ -1176,6 +1218,10 @@ must include:
 | Exact-layer BODY_XY source mesh | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_apply_owner_wide_body_seed_mesh_options` | tylko owner-wide upper/lower na dokładnym wspólnym planformie; bez projekcji partial-Z |
 | Frozen magnetic-air interface | `packages/fullmag-py/src/fullmag/meshing/_frozen_interface.py` | `_validate_frozen_magnetic_air_interface` | incydencja i przeciwni właściciele rzeczywistych ścian; nie pełna kwalifikacja przecięć/PBC |
 | Frozen STL surface constraint | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_mesh_stl_surface_once` | jawne zachowanie istniejącej siatki powierzchni tylko dla frozen-air; bez kwalifikacji PBC/zbieżności |
+| Frozen STL closed cell boundary | `packages/fullmag-py/src/fullmag/meshing/_frozen_surface.py` | `_frozen_boundary_triangles` | wyznacza zamkniętą granicę z kanonicznego adjacency komórek; bez mutacji metadata mesha i bez kwalifikacji Gmsh/PBC |
+| Frozen STL complete-boundary regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_boundary_stl_uses_full_cell_boundary_and_preserves_mesh` | dwa Tet4 ze wspólną ścianą dają sześć skierowanych na zewnątrz faset przy niepełnym wejściowym spisie faset |
+| Frozen STL invalid-topology regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_boundary_stl_rejects_nonmanifold_and_unknown_topology` | odrzuca więcej niż dwóch właścicieli fasety oraz nieznaną rodzinę komórek |
+| Frozen extraction periodic exclusion | `packages/fullmag-py/tests/test_meshing.py` | `test_extract_frozen_magnetic_submesh_excludes_periodic_boundary_faces` | zachowuje PBC poza jawną listą interfejsu magnetyk–powietrze |
 | Frozen interface prefix regression | `packages/fullmag-py/tests/test_meshing.py` | `test_merge_frozen_magnetic_submesh_with_air_mesh_preserves_magnetic_indices` | Preserves exact magnetic connectivity and nodes in a valid nanometer Tet4 air shell. |
 | Frozen interface neighbor regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_interface_merge_rejects_missing_displaced_or_duplicate_air_neighbors` | Rejects absent, displaced and nonmanifold air neighbors at the frozen interface. |
 | Frozen interface side regression | `packages/fullmag-py/tests/test_meshing.py` | `test_frozen_interface_merge_rejects_same_side_air_neighbor_at_nanometer_scale` | Rejects positive-orientation cells occupying the same side of a shared interface face. |

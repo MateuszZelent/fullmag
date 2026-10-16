@@ -7700,6 +7700,290 @@ class MeshScaffoldTests(unittest.TestCase):
                         air_mesh,
                     )
 
+    def test_frozen_boundary_stl_uses_full_cell_boundary_and_preserves_mesh(self) -> None:
+        scale = 1.0e-9
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [scale, 0.0, 0.0],
+                [0.0, scale, 0.0],
+                [0.0, 0.0, scale],
+                [0.0, 0.0, -scale],
+            ],
+            dtype=np.float64,
+        )
+        elements = np.asarray(
+            [
+                [0, 1, 2, 3],
+                [0, 2, 1, 4],
+            ],
+            dtype=np.int32,
+        )
+        mesh = MeshData.from_legacy_tet4(
+            nodes=nodes,
+            elements=elements,
+            element_markers=np.asarray([1, 1], dtype=np.int32),
+            boundary_faces=np.asarray([[0, 1, 3]], dtype=np.int32),
+            boundary_markers=np.asarray([10], dtype=np.int32),
+        )
+        self.assertEqual(mesh.n_boundary_faces, 1)
+        array_fields = (
+            "nodes",
+            "cell_types",
+            "cell_offsets",
+            "cell_nodes",
+            "element_markers",
+            "facet_types",
+            "facet_roles",
+            "facet_offsets",
+            "facet_nodes",
+            "boundary_markers",
+            "cell_global_ordinals",
+            "facet_global_ordinals",
+        )
+        source_arrays = {name: getattr(mesh, name).copy() for name in array_fields}
+        source_periodic_boundary_pairs = [dict(pair) for pair in mesh.periodic_boundary_pairs]
+        source_periodic_node_pairs = [dict(pair) for pair in mesh.periodic_node_pairs]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            stl_path = Path(tmp_dir) / "closed_frozen_body.stl"
+            mesh_asset_pipeline._write_frozen_boundary_ascii_stl(mesh, stl_path)
+            lines = stl_path.read_text(encoding="ascii").splitlines()
+
+        records: list[
+            tuple[
+                tuple[float, float, float],
+                tuple[tuple[float, float, float], ...],
+            ]
+        ] = []
+        normal: tuple[float, float, float] | None = None
+        vertices: list[tuple[float, float, float]] = []
+        for line in lines:
+            parts = line.split()
+            if len(parts) == 5 and parts[:2] == ["facet", "normal"]:
+                normal = tuple(float(value) for value in parts[2:5])
+            elif len(parts) == 4 and parts[0] == "vertex":
+                vertices.append(tuple(float(value) for value in parts[1:4]))
+                if len(vertices) == 3:
+                    if normal is None:
+                        raise AssertionError("STL triangle is missing its facet normal")
+                    records.append((normal, tuple(vertices)))
+                    normal = None
+                    vertices = []
+
+        expected_boundary = {
+            tuple(sorted(tuple(float(value) for value in nodes[node]) for node in face)): owner
+            for owner, face in (
+                (0, (0, 1, 3)),
+                (0, (0, 2, 3)),
+                (0, (1, 2, 3)),
+                (1, (0, 1, 4)),
+                (1, (0, 2, 4)),
+                (1, (1, 2, 4)),
+            )
+        }
+        shared_face = tuple(
+            sorted(tuple(float(value) for value in nodes[node]) for node in (0, 1, 2))
+        )
+        actual_boundary = {tuple(sorted(face_vertices)) for _normal, face_vertices in records}
+        self.assertEqual(len(records), 6)
+        self.assertEqual(actual_boundary, set(expected_boundary))
+        self.assertNotIn(shared_face, actual_boundary)
+        self.assertEqual(vertices, [])
+        self.assertIsNone(normal)
+
+        edge_counts: dict[tuple[tuple[float, float, float], ...], int] = {}
+        for _face_normal, face_vertices in records:
+            for start, end in ((0, 1), (1, 2), (2, 0)):
+                edge = tuple(sorted((face_vertices[start], face_vertices[end])))
+                edge_counts[edge] = edge_counts.get(edge, 0) + 1
+        self.assertTrue(edge_counts)
+        self.assertEqual(set(edge_counts.values()), {2})
+
+        for face_normal, face_vertices in records:
+            face_key = tuple(sorted(face_vertices))
+            owner = expected_boundary[face_key]
+            owner_center = np.mean(nodes[elements[owner]], axis=0)
+            face_center = np.mean(np.asarray(face_vertices, dtype=np.float64), axis=0)
+            self.assertLess(
+                float(
+                    np.dot(
+                        np.asarray(face_normal, dtype=np.float64),
+                        owner_center - face_center,
+                    )
+                ),
+                0.0,
+            )
+
+        for name, before in source_arrays.items():
+            np.testing.assert_array_equal(getattr(mesh, name), before)
+        self.assertEqual(mesh.periodic_boundary_pairs, source_periodic_boundary_pairs)
+        self.assertEqual(mesh.periodic_node_pairs, source_periodic_node_pairs)
+
+    def test_frozen_boundary_stl_triangulates_prism_quad_faces_and_is_closed(self) -> None:
+        scale = 1.0e-9
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [scale, 0.0, 0.0],
+                [0.0, scale, 0.0],
+                [0.0, 0.0, scale],
+                [scale, 0.0, scale],
+                [0.0, scale, scale],
+            ],
+            dtype=np.float64,
+        )
+        mesh = MeshData(
+            nodes=nodes,
+            cell_types=np.asarray(["prism6"], dtype=np.str_),
+            cell_offsets=np.asarray([0, 6], dtype=np.int64),
+            cell_nodes=np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            facet_types=np.asarray([], dtype=np.str_),
+            facet_roles=np.asarray([], dtype=np.str_),
+            facet_offsets=np.asarray([0], dtype=np.int64),
+            facet_nodes=np.asarray([], dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+            cell_global_ordinals=np.asarray([0], dtype=np.int64),
+            facet_global_ordinals=np.asarray([], dtype=np.int64),
+        )
+        expected_triangles = {
+            tuple(sorted(tuple(float(value) for value in nodes[index]) for index in face))
+            for face in (
+                (0, 1, 2),
+                (3, 4, 5),
+                (0, 1, 4),
+                (0, 4, 3),
+                (1, 2, 5),
+                (1, 5, 4),
+                (2, 0, 3),
+                (2, 3, 5),
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            stl_path = Path(tmp_dir) / "prism_frozen_body.stl"
+            mesh_asset_pipeline._write_frozen_boundary_ascii_stl(mesh, stl_path)
+            lines = stl_path.read_text(encoding="ascii").splitlines()
+
+        records: list[
+            tuple[
+                tuple[float, float, float],
+                tuple[tuple[float, float, float], ...],
+            ]
+        ] = []
+        normal: tuple[float, float, float] | None = None
+        vertices: list[tuple[float, float, float]] = []
+        for line in lines:
+            parts = line.split()
+            if len(parts) == 5 and parts[:2] == ["facet", "normal"]:
+                normal = tuple(float(value) for value in parts[2:5])
+            elif len(parts) == 4 and parts[0] == "vertex":
+                vertices.append(tuple(float(value) for value in parts[1:4]))
+                if len(vertices) == 3:
+                    if normal is None:
+                        raise AssertionError("STL triangle is missing its facet normal")
+                    records.append((normal, tuple(vertices)))
+                    normal = None
+                    vertices = []
+
+        actual_triangles = {tuple(sorted(face_vertices)) for _normal, face_vertices in records}
+        self.assertEqual(len(records), 8)
+        self.assertEqual(actual_triangles, expected_triangles)
+        self.assertEqual(vertices, [])
+        self.assertIsNone(normal)
+
+        edge_incidence: dict[tuple[tuple[float, float, float], ...], int] = {}
+        for _normal, face_vertices in records:
+            for start, end in ((0, 1), (1, 2), (2, 0)):
+                edge = tuple(sorted((face_vertices[start], face_vertices[end])))
+                edge_incidence[edge] = edge_incidence.get(edge, 0) + 1
+        self.assertEqual(set(edge_incidence.values()), {2})
+
+        owner_center = np.mean(nodes, axis=0)
+        for face_normal, face_vertices in records:
+            face_center = np.mean(np.asarray(face_vertices, dtype=np.float64), axis=0)
+            self.assertLess(
+                float(
+                    np.dot(
+                        np.asarray(face_normal, dtype=np.float64),
+                        owner_center - face_center,
+                    )
+                ),
+                0.0,
+            )
+
+    def test_frozen_boundary_stl_rejects_nonmanifold_and_unknown_topology(self) -> None:
+        scale = 1.0e-9
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [scale, 0.0, 0.0],
+                [0.0, scale, 0.0],
+                [0.0, 0.0, scale],
+                [0.0, 0.0, -scale],
+                [0.0, 0.0, 2.0 * scale],
+            ],
+            dtype=np.float64,
+        )
+        nonmanifold = MeshData.from_legacy_tet4(
+            nodes=nodes,
+            elements=np.asarray(
+                [
+                    [0, 1, 2, 3],
+                    [0, 2, 1, 4],
+                    [0, 1, 2, 5],
+                ],
+                dtype=np.int32,
+            ),
+            element_markers=np.asarray([1, 1, 1], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+        )
+        unknown_topology = MeshData.from_legacy_tet4(
+            nodes=nodes[:4],
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+        )
+        unknown_topology.cell_types[0] = "myst"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            stl_path = Path(tmp_dir) / "invalid_frozen_body.stl"
+            with self.assertRaisesRegex(ValueError, "non-manifold face"):
+                mesh_asset_pipeline._write_frozen_boundary_ascii_stl(nonmanifold, stl_path)
+            with self.assertRaisesRegex(ValueError, "unsupported cell family"):
+                mesh_asset_pipeline._write_frozen_boundary_ascii_stl(unknown_topology, stl_path)
+
+    def test_frozen_boundary_stl_rejects_edge_nonmanifold_surface(self) -> None:
+        scale = 1.0e-9
+        edge_only_shared = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [scale, 0.0, 0.0],
+                    [0.0, scale, 0.0],
+                    [0.0, 0.0, scale],
+                    [0.0, -scale, 0.0],
+                    [0.0, 0.0, -scale],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3], [0, 1, 4, 5]], dtype=np.int32),
+            element_markers=np.asarray([1, 1], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            stl_path = Path(tmp_dir) / "edge_nonmanifold_frozen_body.stl"
+            with self.assertRaisesRegex(ValueError, r"boundary edge .*count=4"):
+                mesh_asset_pipeline._write_frozen_boundary_ascii_stl(
+                    edge_only_shared,
+                    stl_path,
+                )
+
     def test_generate_air_mesh_for_frozen_submesh_drops_periodic_pairs_without_kept_elements(self) -> None:
         frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
