@@ -42,6 +42,142 @@ class UnixDockerTests(unittest.TestCase):
         self.assertTrue(config['HostConfig']['ReadonlyRootfs'])
         self.assertTrue(config['HostConfig']['Mounts'][0]['ReadOnly'])
 
+    def test_coordinator_create_options_map_to_exact_engine_fields(self):
+        from local_runner.container_client import CONTAINER_NAME
+        from local_runner.unix_docker import create_payload
+
+        name, config = create_payload([
+            '--name', CONTAINER_NAME,
+            '--hostname', CONTAINER_NAME,
+            '--restart', 'unless-stopped',
+            '--publish', '127.0.0.1:48765:48765',
+            'sha256:' + 'a' * 64,
+        ])
+
+        self.assertEqual(CONTAINER_NAME, name)
+        self.assertEqual(CONTAINER_NAME, config['Hostname'])
+        self.assertEqual({'Name': 'unless-stopped'}, config['HostConfig']['RestartPolicy'])
+        self.assertEqual({'48765/tcp': {}}, config['ExposedPorts'])
+        self.assertEqual(
+            {'48765/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '48765'}]},
+            config['HostConfig']['PortBindings'],
+        )
+
+    def test_coordinator_create_options_reject_unsafe_values(self):
+        from local_runner.unix_docker import create_payload
+
+        invalid_options = (
+            ['--hostname', 'bad hostname'],
+            ['--hostname', '../runner'],
+            ['--restart', 'always'],
+            ['--publish', '0.0.0.0:48765:48765'],
+            ['--publish', '127.0.0.1:0:48765'],
+            ['--publish', '127.0.0.1:48765:65536'],
+            ['--publish', '127.0.0.1:048765:48765'],
+        )
+        for options in invalid_options:
+            with self.subTest(options=options):
+                with self.assertRaises(ValueError):
+                    create_payload([*options, 'sha256:' + 'a' * 64])
+
+    def test_container_client_start_uses_unix_engine_create_contract(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from local_runner import container_client, unix_docker
+
+        image_id = 'sha256:' + 'a' * 64
+        container_id = 'b' * 64
+        owner = 'managed-modal-test'
+        started = False
+        create_payloads = []
+        engine_calls = []
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = Path(temporary_directory) / 'storage'
+            layout = {'storage_root': str(storage)}
+            public = container_client.configure(
+                layout, image_id=image_id, owner=owner, enable_slepc_modal=True,
+            )
+            secret_path = storage / 'index' / 'local-runner-container-secret.json'
+            port = public['port']
+
+            def inspected_container():
+                return {
+                    'Id': container_id,
+                    'Name': '/' + container_client.CONTAINER_NAME,
+                    'Image': image_id,
+                    'Config': {
+                        'Hostname': container_client.CONTAINER_NAME,
+                        'Labels': container_client._container_labels(owner),
+                    },
+                    'HostConfig': {
+                        'RestartPolicy': {'Name': 'unless-stopped'},
+                        'PortBindings': {
+                            f'{port}/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(port)}],
+                        },
+                    },
+                    'Mounts': [
+                        {'Type': 'bind', 'Source': str(storage), 'Destination': '/storage', 'RW': True},
+                        {
+                            'Type': 'bind', 'Source': str(secret_path),
+                            'Destination': '/control/config.json', 'RW': False,
+                        },
+                        {
+                            'Type': 'bind', 'Source': '/var/run/docker.sock',
+                            'Destination': '/var/run/docker.sock', 'RW': True,
+                        },
+                    ],
+                    'State': {
+                        'Status': 'running' if started else 'created',
+                        'Running': started,
+                        'ExitCode': 0,
+                    },
+                }
+
+            def fake_engine(method, path, payload=None):
+                nonlocal started
+                engine_calls.append((method, path))
+                if method == 'GET' and path.startswith('/images/') and path.endswith('/json'):
+                    return json.dumps({'Id': image_id}).encode('utf-8')
+                if method == 'GET' and path.startswith('/containers/json?'):
+                    return b'[]'
+                if method == 'POST' and path.startswith('/containers/create?'):
+                    create_payloads.append(payload)
+                    return json.dumps({'Id': container_id}).encode('utf-8')
+                if method == 'GET' and path == f'/containers/{container_id}/json':
+                    return json.dumps(inspected_container()).encode('utf-8')
+                if method == 'POST' and path == f'/containers/{container_id}/start':
+                    started = True
+                    return b''
+                self.fail(f'Unexpected Docker Engine request: {method} {path}')
+
+            with patch('local_runner.unix_docker.engine', side_effect=fake_engine):
+                with patch(
+                    'local_runner.container_client._verify_startup_profile_activation',
+                    return_value=(None, {'status': 'active'}),
+                ):
+                    status = container_client.start(layout, owner=owner, call=unix_docker.docker)
+
+        self.assertTrue(started)
+        self.assertEqual(container_id, status['container_id'])
+        self.assertTrue(status['running'])
+        self.assertEqual(1, len(create_payloads))
+        created = create_payloads[0]
+        self.assertEqual(container_client.CONTAINER_NAME, created['Hostname'])
+        self.assertEqual({'Name': 'unless-stopped'}, created['HostConfig']['RestartPolicy'])
+        self.assertEqual(
+            {f'{port}/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(port)}]},
+            created['HostConfig']['PortBindings'],
+        )
+        self.assertEqual(
+            [
+                ('POST', f'/containers/create?name={container_client.CONTAINER_NAME}'),
+                ('POST', f'/containers/{container_id}/start'),
+            ],
+            [call for call in engine_calls if call[0] == 'POST'],
+        )
+
     def test_log_frames(self):
         self.assertEqual('hello', decode_logs(b'\x01\0\0\0' + struct.pack('>I', 5) + b'hello'))
         with self.assertRaises(ValueError):

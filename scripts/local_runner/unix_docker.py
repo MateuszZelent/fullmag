@@ -51,6 +51,30 @@ def create_payload(argv):
         value = argv[index]
         index += 1
         if option == '--name': name = value
+        elif option == '--hostname':
+            if ('Hostname' in config or not isinstance(value, str)
+                    or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', value) is None):
+                raise ValueError('Invalid or duplicate Docker hostname')
+            config['Hostname'] = value
+        elif option == '--restart':
+            if 'RestartPolicy' in host or value != 'unless-stopped':
+                raise ValueError('Only the unless-stopped restart policy is supported')
+            host['RestartPolicy'] = {'Name': 'unless-stopped'}
+        elif option == '--publish':
+            match = re.fullmatch(r'127\.0\.0\.1:([0-9]{1,5}):([0-9]{1,5})', value)
+            if match is None or 'PortBindings' in host:
+                raise ValueError('Only one loopback IPv4 port publication is supported')
+            host_port_text, container_port_text = match.groups()
+            host_port = int(host_port_text)
+            container_port = int(container_port_text)
+            if (not 1 <= host_port <= 65535 or not 1 <= container_port <= 65535
+                    or str(host_port) != host_port_text or str(container_port) != container_port_text):
+                raise ValueError('Published ports must be canonical decimal values from 1 to 65535')
+            port = f'{container_port}/tcp'
+            config['ExposedPorts'] = {port: {}}
+            host['PortBindings'] = {
+                port: [{'HostIp': '127.0.0.1', 'HostPort': str(host_port)}],
+            }
         elif option == '--label':
             key, value = value.split('=', 1)
             config['Labels'][key] = value
