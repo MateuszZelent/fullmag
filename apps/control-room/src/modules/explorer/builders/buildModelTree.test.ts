@@ -23,6 +23,7 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
+import { UNPIN_POSTPROCESSING_DEFINITION_COMMAND } from "@/kernel/analysis-modules/postprocessingCommandContributions";
 import {
   createObjectExtensionActivationState,
   resolveActiveObjectExtensionExplorerItems,
@@ -39,7 +40,10 @@ import {
 } from "./buildModelTree";
 import { createExplorerNode } from "./explorerNodeContract";
 import { frozenSpinsSelectorOwner } from "./objectExplorerNodes";
-import { withCatalogAnalysisFamilies } from "./resultsExplorerNodes";
+import {
+  withCatalogAnalysisFamilies,
+  withPinnedAnalysisDefinitions,
+} from "./resultsExplorerNodes";
 import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithStageExecution,
@@ -4291,6 +4295,242 @@ function dispersionReference(runId: string): PostprocessingDefinition {
     },
   };
 }
+
+function modeVisualizationDefinition(
+  runId: string,
+  moduleId: "analysis.dispersion" | "analysis.resonance",
+  definitionId: string,
+): PostprocessingDefinition {
+  return {
+    definition_id: definitionId,
+    revision: 0,
+    module_id: moduleId,
+    module_version: "0.1.0",
+    definition_schema: `${moduleId}.mode_visualization.v1`,
+    node_kind: `${moduleId}.mode_visualization`,
+    label: `Saved ${moduleId} mode`,
+    data_ref: {
+      run_id: runId,
+      dataset_id: `saved-dataset-${definitionId}`,
+      dataset_revision: "dataset-r7",
+      field_id: "m",
+      sample_id: "saved-sample",
+      item_id: "saved-mode",
+    },
+    settings: {},
+  };
+}
+
+describe("orphan saved analysis pins", () => {
+  const runId = "run-with-orphan-pins";
+  const definitions = [
+    modeVisualizationDefinition(runId, "analysis.dispersion", "pin-dispersion"),
+    modeVisualizationDefinition(runId, "analysis.resonance", "pin-resonance"),
+    modeVisualizationDefinition("run-foreign", "analysis.dispersion", "pin-foreign-run"),
+    {
+      ...modeVisualizationDefinition(runId, "analysis.dispersion", "pin-wrong-kind"),
+      node_kind: "analysis.dispersion.unrecognized",
+    },
+    {
+      ...modeVisualizationDefinition(runId, "analysis.dispersion", "pin-wrong-module"),
+      module_id: "analysis.resonance",
+    },
+    {
+      ...modeVisualizationDefinition(runId, "analysis.dispersion", "pin-foreign-namespace"),
+      module_id: "visualization.dispersion",
+      node_kind: "visualization.dispersion.mode_visualization",
+    },
+  ] satisfies PostprocessingDefinition[];
+
+  function expectOrphanPins(tree: readonly ExplorerNode[]) {
+    const resultsRoot = tree.find((node) => node.kind === "results.root");
+    expect(resultsRoot).toBeDefined();
+    expect(resultsRoot?.analysisRunId).toBe(runId);
+    const groups = resultsRoot?.children?.filter(
+      (node) => node.analysisPinnedGroup,
+    ) ?? [];
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.analysisModuleId).sort()).toEqual([
+      "analysis.dispersion",
+      "analysis.resonance",
+    ]);
+    expect(
+      resultsRoot?.children?.some((node) =>
+        node.kind === "results.dispersion.root" ||
+        node.kind === "results.resonance.root",
+      ),
+    ).toBe(false);
+
+    const expected = definitions.slice(0, 2);
+    for (const definition of expected) {
+      const group = groups.find((node) => node.analysisModuleId === definition.module_id);
+      const pin = group?.children?.find((node) => node.label === definition.label);
+      expect(group).toMatchObject({
+        analysisModuleId: definition.module_id,
+        analysisPinnedGroup: true,
+        analysisRunId: runId,
+        kind: "results.pinned_visualizations.root",
+      });
+      expect(pin).toMatchObject({
+        analysisModuleId: definition.module_id,
+        availability: "unavailable",
+        badge: "not published",
+        executionState: "not_started",
+        resourceState: "idle",
+        status: "unavailable",
+        kind: "results.pinned_visualizations.root",
+      });
+      expect(pin?.contextCommands).toEqual([
+        UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
+      ]);
+      expect(pin?.contextCommandInputs).toEqual({
+        [UNPIN_POSTPROCESSING_DEFINITION_COMMAND]: {
+          definitionId: definition.definition_id,
+        },
+      });
+      for (const identityField of [
+        "datasetId",
+        "datasetRevision",
+        "analysisStageId",
+        "fieldId",
+        "sampleId",
+        "modeId",
+      ]) {
+        expect(pin).not.toHaveProperty(identityField);
+      }
+    }
+
+    return { groups, resultsRoot };
+  }
+
+  it("keeps a published pin on its exact owner when augmentation repeats", () => {
+    const definition = modeVisualizationDefinition(
+      runId,
+      "analysis.dispersion",
+      "pin-published",
+    );
+    const rootId = `results:run:${runId}`;
+    const familyId = `${rootId}:dispersion`;
+    const publishedMode: ExplorerNode = {
+      analysisModuleId: "analysis.dispersion",
+      analysisRunId: runId,
+      datasetId: `saved-dataset-${definition.definition_id}`,
+      datasetRevision: "dataset-r7",
+      fieldId: "m",
+      id: "published-mode",
+      kind: "analysis.dispersion.mode_visualization",
+      label: "Published mode",
+      modeId: "saved-mode",
+      parentId: familyId,
+      sampleId: "saved-sample",
+    };
+    const initial: ExplorerNode[] = [{
+      analysisRunId: runId,
+      children: [{
+        analysisModuleId: "analysis.dispersion",
+        analysisRunId: runId,
+        children: [publishedMode],
+        id: familyId,
+        kind: "results.dispersion.root",
+        label: "Dispersion",
+        parentId: rootId,
+      }],
+      id: rootId,
+      kind: "results.root",
+      label: "Results",
+      parentId: null,
+    }];
+
+    const once = withPinnedAnalysisDefinitions(initial, [definition]);
+    const twice = withPinnedAnalysisDefinitions(once, [definition]);
+    const family = twice[0]?.children?.find(
+      (node) => node.kind === "results.dispersion.root",
+    );
+    const group = family?.children?.find((node) => node.analysisPinnedGroup);
+    const pin = group?.children?.[0];
+
+    expect(pin).toMatchObject({
+      analysisModuleId: "analysis.dispersion",
+      analysisRunId: runId,
+      datasetId: `saved-dataset-${definition.definition_id}`,
+      datasetRevision: "dataset-r7",
+      fieldId: "m",
+      modeId: "saved-mode",
+      sampleId: "saved-sample",
+      label: definition.label,
+    });
+    expect(group?.children).toHaveLength(1);
+    expect(twice).toEqual(once);
+    expect(twice[0]?.children?.some((node) => node.analysisPinnedGroup)).toBe(false);
+  });
+
+  it("keeps unavailable pins under the current Results run without inventing families", () => {
+    const baseline = buildExplorerTree("results", {
+      currentRun: currentRun(runId, 9),
+    });
+    const tree = buildExplorerTree("results", {
+      analysisDefinitions: definitions,
+      currentRun: currentRun(runId, 9),
+    });
+    const { groups, resultsRoot } = expectOrphanPins(tree);
+    const baselineRoot = baseline.find((node) => node.kind === "results.root");
+
+    expect(
+      resultsRoot?.children
+        ?.filter((node) => !node.analysisPinnedGroup)
+        .map((node) => node.id),
+    ).toEqual(baselineRoot?.children?.map((node) => node.id));
+
+    const once = withPinnedAnalysisDefinitions(baseline, definitions);
+    const twice = withPinnedAnalysisDefinitions(once, definitions);
+    const onceGroups = once[0]?.children?.filter((node) => node.analysisPinnedGroup) ?? [];
+    const twiceGroups = twice[0]?.children?.filter((node) => node.analysisPinnedGroup) ?? [];
+    expect(twice).toEqual(once);
+    expect(twiceGroups.map((group) => group.id)).toEqual(
+      onceGroups.map((group) => group.id),
+    );
+    expect(new Set(twiceGroups.map((group) => group.id)).size).toBe(2);
+    expect(groups).toHaveLength(2);
+  });
+
+  it("rejects mode-visualization definitions outside the analysis namespace", () => {
+    const foreignNamespaceDefinition: PostprocessingDefinition = {
+      ...modeVisualizationDefinition(runId, "analysis.dispersion", "pin-foreign-namespace"),
+      module_id: "visualization.dispersion",
+      node_kind: "visualization.dispersion.mode_visualization",
+    };
+    const tree = buildExplorerTree("results", {
+      analysisDefinitions: [foreignNamespaceDefinition],
+      currentRun: currentRun(runId, 9),
+    });
+    const resultsRoot = tree.find((node) => node.kind === "results.root");
+
+    expect(resultsRoot?.children?.filter((node) => node.analysisPinnedGroup)).toEqual([]);
+  });
+
+  it("keeps the same run-scoped pins when only a Results context is selected", () => {
+    const tree = buildExplorerTree("results", {
+      analysisDefinitions: definitions,
+      resultContextRunId: runId,
+    });
+    const { resultsRoot } = expectOrphanPins(tree);
+    const baselineRoot = buildExplorerTree("results", {
+      resultContextRunId: runId,
+    })[0];
+
+    expect(resultsRoot).toMatchObject({
+      availability: "unavailable",
+      executionState: "not_started",
+      resourceState: "idle",
+      status: "unavailable",
+    });
+    expect(
+      resultsRoot?.children
+        ?.filter((node) => !node.analysisPinnedGroup)
+        .map((node) => node.id),
+    ).toEqual(baselineRoot?.children?.map((node) => node.id));
+  });
+});
 
 describe("time-domain catalog Results family", () => {
   it("publishes both standalone products in Dynamics without observation frames", () => {

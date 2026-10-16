@@ -897,30 +897,64 @@ function kResolvedStage(
 }
 
 /**
- * Adds a "Pinned visualizations" group to each analysis family for the
- * user-created definitions it owns (ADR 0054, spec 32 §8). A pinned node is a
- * copy of the published mode node with the same run, dataset, revision, field,
- * and optional sample/item identity, so selecting it reopens that exact mode.
- * An unpublished or ambiguous owner stays visible as unavailable.
+ * Adds saved visualization definitions to their published analysis family,
+ * or keeps them in a run-scoped orphan group when the family was not published.
+ * A resolved pin copies the exact published mode identity; an unpublished or
+ * ambiguous owner stays visible and removable without inventing a dataset.
  */
 export function withPinnedAnalysisDefinitions(
   tree: readonly ExplorerNode[],
   definitions: readonly AnalysisPostprocessingDefinition[],
 ): ExplorerNode[] {
   if (definitions.length === 0) return [...tree];
-  return tree.map((resultsRoot) => ({
-    ...resultsRoot,
-    children: resultsRoot.children?.map((family) => {
+  return tree.map((resultsRoot) => {
+    const runId = resultsRoot.analysisRunId;
+    if (resultsRoot.kind !== "results.root" || !runId) {
+      return resultsRoot;
+    }
+
+    const orphanGroupPrefix = `${resultsRoot.id}:pinned-orphans:`;
+    const existingChildren = (resultsRoot.children ?? []).filter(
+      (child) =>
+        !(
+          child.kind === "results.pinned_visualizations.root" &&
+          child.analysisPinnedGroup &&
+          child.parentId === resultsRoot.id &&
+          child.id.startsWith(orphanGroupPrefix)
+        ),
+    );
+    const runDefinitions = definitions.filter(
+      (
+        definition,
+      ): definition is AnalysisPostprocessingDefinition & {
+        module_id: AnalysisModuleId;
+      } =>
+        definition.data_ref.run_id === runId &&
+        isAnalysisModuleId(definition.module_id) &&
+        definition.node_kind === `${definition.module_id}.mode_visualization`,
+    );
+    const existingModules = new Set(
+      existingChildren
+        .map((child) => child.analysisModuleId)
+        .filter((moduleId): moduleId is AnalysisModuleId => Boolean(moduleId)),
+    );
+
+    const families = existingChildren.map((family) => {
       const moduleId = family.analysisModuleId;
       if (!moduleId) return family;
-      const owned = definitions.filter(
-        (definition) =>
-          definition.module_id === moduleId &&
-          definition.node_kind === `${moduleId}.mode_visualization` &&
-          definition.data_ref.run_id === resultsRoot.analysisRunId,
+      const owned = runDefinitions.filter(
+        (definition) => definition.module_id === moduleId,
       );
-      if (owned.length === 0) return family;
       const groupId = `${family.id}:pinned`;
+      const familyChildren = (family.children ?? []).filter(
+        (child) => child.id !== groupId,
+      );
+      if (owned.length === 0) {
+        return familyChildren.length === (family.children ?? []).length
+          ? family
+          : { ...family, children: familyChildren };
+      }
+
       const publishedByBaseOwner = new Map<
         string,
         { identity: ModeVisualizationOwnerIdentity; node: ExplorerNode }[]
@@ -950,7 +984,7 @@ export function withPinnedAnalysisDefinitions(
           collect(candidate.children);
         }
       };
-      collect(family.children);
+      collect(familyChildren);
       const pinned = owned.map((definition): ExplorerNode => {
         const id = `${groupId}:${key(definition.definition_id)}`;
         const dataRef = definition.data_ref;
@@ -1005,9 +1039,79 @@ export function withPinnedAnalysisDefinitions(
         children: pinned,
         icon: "wave",
       });
-      return { ...family, children: [...(family.children ?? []), group] };
-    }),
-  }));
+      return { ...family, children: [...familyChildren, group] };
+    });
+
+    const orphanDefinitions = runDefinitions.filter(
+      (definition) => !existingModules.has(definition.module_id),
+    );
+    const orphanDefinitionsByModule = new Map<
+      AnalysisModuleId,
+      AnalysisPostprocessingDefinition[]
+    >();
+    for (const definition of [...orphanDefinitions].sort(
+      (left, right) =>
+        left.module_id.localeCompare(right.module_id) ||
+        left.definition_id.localeCompare(right.definition_id),
+    )) {
+      const moduleDefinitions = orphanDefinitionsByModule.get(definition.module_id) ?? [];
+      moduleDefinitions.push(definition);
+      orphanDefinitionsByModule.set(definition.module_id, moduleDefinitions);
+    }
+    const orphanGroups = [...orphanDefinitionsByModule]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([moduleId, owned]) => {
+        const groupId = `${orphanGroupPrefix}${key(moduleId)}`;
+        const pinned = owned.map((definition): ExplorerNode => {
+          const id = `${groupId}:${key(definition.definition_id)}`;
+          return node(
+            id,
+            "results.pinned_visualizations.root",
+            definition.label,
+            groupId,
+            {
+              contextCommandInputs: {
+                [UNPIN_POSTPROCESSING_DEFINITION_COMMAND]: {
+                  definitionId: definition.definition_id,
+                },
+              },
+              contextCommands: [UNPIN_POSTPROCESSING_DEFINITION_COMMAND],
+              analysisModuleId: moduleId,
+              availability: "unavailable",
+              badge: "not published",
+              executionState: "not_started",
+              resourceState: "idle",
+              status: "unavailable",
+            },
+          );
+        });
+        const moduleLabel =
+          moduleId === "analysis.dispersion"
+            ? "Dispersion"
+            : moduleId === "analysis.resonance"
+              ? "Resonance & FMR"
+              : moduleId;
+        return node(
+          groupId,
+          "results.pinned_visualizations.root",
+          `Pinned visualizations · ${moduleLabel}`,
+          resultsRoot.id,
+          {
+            analysisModuleId: moduleId,
+            analysisPinnedGroup: true,
+            analysisRunId: resultsRoot.analysisRunId,
+            badge: String(pinned.length),
+            children: pinned,
+            icon: "wave",
+          },
+        );
+      });
+
+    return {
+      ...resultsRoot,
+      children: [...families, ...orphanGroups],
+    };
+  });
 }
 
 const TIME_DOMAIN_ANALYSIS_MODULE_ID: AnalysisModuleId = "analysis.time-domain";
@@ -1015,6 +1119,10 @@ const TIME_DOMAIN_OVERVIEW_KIND: ExplorerNodeKind = "analysis.time-domain.overvi
 
 function catalogIdentityString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function isAnalysisModuleId(moduleId: string): moduleId is AnalysisModuleId {
+  return moduleId.startsWith("analysis.");
 }
 
 function isTimeDomainProductKind(

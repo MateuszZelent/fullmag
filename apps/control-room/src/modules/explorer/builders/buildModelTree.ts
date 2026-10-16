@@ -175,15 +175,18 @@ export function buildExplorerTree(
   if (tabId === "resources") return buildRuntimeResourceTree(runtime?.resources);
   if (tabId === "results") {
     if (!resources.currentRun && resources.resultContextRunId) {
-      return buildPhysicsFirstResultsTree({
-        contractGaps: resources.resultContextContractGaps,
-        entries: [],
-        ...(resources.observationFrames
-          ? { observationFrames: resources.observationFrames }
-          : {}),
-        pinnedObservationFrameId: resources.pinnedObservationFrameId,
-        resultContextRunId: resources.resultContextRunId,
-      });
+      return withPinnedAnalysisDefinitions(
+        buildPhysicsFirstResultsTree({
+          contractGaps: resources.resultContextContractGaps,
+          entries: [],
+          ...(resources.observationFrames
+            ? { observationFrames: resources.observationFrames }
+            : {}),
+          pinnedObservationFrameId: resources.pinnedObservationFrameId,
+          resultContextRunId: resources.resultContextRunId,
+        }),
+        resources.analysisDefinitions ?? [],
+      );
     }
     if (!resources.currentRun) {
       return [{
