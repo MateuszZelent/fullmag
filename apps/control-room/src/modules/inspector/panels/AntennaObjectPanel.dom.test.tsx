@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   invalidate: vi.fn(),
   replaceFieldDrive: vi.fn(),
   refetch: vi.fn(),
+  sessionScopeKey: null as string | null,
   sceneResource: {
     data: {
       field_drives: {
@@ -57,6 +58,9 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
         commitTransaction: mocks.commitTransaction,
         replaceFieldDrive: mocks.replaceFieldDrive,
       },
+    },
+    commands: {
+      getSessionScopeKey: () => mocks.sessionScopeKey,
     },
     resources: { invalidate: mocks.invalidate },
   }),
@@ -100,6 +104,7 @@ describe("AntennaObjectPanel authoring stability", () => {
     mocks.invalidate.mockReset();
     mocks.replaceFieldDrive.mockReset();
     mocks.refetch.mockReset();
+    mocks.sessionScopeKey = sessionRequestOptions.sessionScopeKey;
     mocks.sceneResource.data = {
       field_drives: {
         drives: [
@@ -179,6 +184,49 @@ describe("AntennaObjectPanel authoring stability", () => {
       }
       replaceResolution.resolve({ scene_revision: 13 });
       await act(async () => undefined);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not apply a save acknowledgement after the session scope changes", async () => {
+    const replaceResolution: {
+      resolve: ((response: { scene_revision: number }) => void) | null;
+    } = { resolve: null };
+    mocks.replaceFieldDrive.mockImplementation(
+      () =>
+        new Promise<{ scene_revision: number }>((resolve) => {
+          replaceResolution.resolve = resolve;
+        }),
+    );
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      await act(async () => changeInput(container, "Amplitude", "0.002"));
+      await act(async () => findButton(container, "Save field drive").click());
+
+      expect(mocks.replaceFieldDrive).toHaveBeenCalledOnce();
+      expect(mocks.replaceFieldDrive).toHaveBeenCalledWith(
+        "antenna-drive",
+        expect.objectContaining({ base_revision: 12 }),
+        sessionRequestOptions,
+      );
+
+      mocks.sessionScopeKey = "session=next-antenna-session&epoch=2&request_scope_epoch=next-request";
+      if (!replaceResolution.resolve) {
+        throw new Error("field drive save did not become pending");
+      }
+      replaceResolution.resolve({ scene_revision: 13 });
+      await act(async () => undefined);
+
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Antenna field drive committed.");
+      expect(findElement(container, "Amplitude").value).toBe("0.002");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
