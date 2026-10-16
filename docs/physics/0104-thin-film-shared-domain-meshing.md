@@ -1,7 +1,7 @@
 # Thin-film shared-domain meshing
 
 - Status: terminal contract
-- Ostatnia aktualizacja: 2026-10-09
+- Ostatnia aktualizacja: 2026-10-16
 - Decyzje: [ADR 0021](../adr/0021-native-mixed-p1-fem-topology.md), [ADR 0027](../adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md)
 - Gate produkcyjny: [0105](0105-fem-meshing-production-acceptance.md)
 
@@ -198,6 +198,28 @@ Source review/AST PASS; świeże actualGmsh density/plane/periodicity CI oraz
 managed runtime pozostają **NOT VERIFIED**. Model regresji i threshold12nm
 nie zostały zmienione. Jest to metoda wspólnego mesha FEM CPU/GPU; solver GPU
 wymaga oddzielnej kwalifikacji. Nie zmienia równań ani FDM CPU/GPU.
+
+(thin-film-ring-source-preservation)=
+### Zachowanie siatki źródłowej Ring podczas meshowania 3D
+
+Jeżeli trasa Ring wygenerowała już przekrój 2D według pól właściciela,
+końcowe meshowanie 3D musi go zachować. Górny cel airboxu nie może ponownie
+triangulować ani przesuwać punktów tego przekroju. W
+[GHA38942830834](https://github.com/MateuszZelent/fullmag/actions/runs/38942830834)
+oba warianty airboxu 30 i 50 nm miały identyczne 25 punktów XY po `generate(2)`,
+lecz po `generate(3)` siedem punktów się różniło. Było to sprzężenie końcowego
+meshowania ze zmianą celu powietrza, nie brak pola źródłowego właściciela.
+
+Korekta wykorzystuje `Mesh.MeshOnlyEmpty` podczas końcowego `generate(3)`
+wyłącznie wtedy, gdy przekrój został uprzednio wygenerowany. Opcja ogranicza
+generowanie do encji bez istniejącej siatki, zgodnie z
+[manualem Gmsh](https://www.gmsh.info/doc/texinfo/gmsh.html#Mesh-options).
+Poprzednia wartość jest przywracana także po błędzie. Pola powietrza pozostają
+aktywne dla niesiatkowanych encji; liczba i położenie warstw Z nie zmieniają się.
+Ta korekta nie realizuje brakującego niezależnego zagęszczenia powietrza ani
+skończonego regionalnego ROI. Regresje niezmienności XY, exact layers, jakości
+i periodyczności wymagają nowego rzeczywistego Gmsh CI. FEM CPU/GPU, demag,
+zbieżność fizyczna i kwalifikacja produkcyjna pozostają osobnymi bramkami.
 
 (thin-film-mesh-python-api)=
 ## Python API

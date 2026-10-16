@@ -15304,6 +15304,61 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     "reason": f"{type(error).__name__}: {error}",
                 }
 
+        def ring_phase_source_xy(
+            evidence: dict[str, object],
+            dimension: int,
+            airbox_label: str,
+        ) -> tuple[list[object], str]:
+            observations = evidence.get("generate_phase_observations")
+            self.assertIsInstance(
+                observations,
+                list,
+                msg=f"{airbox_label} Ring is missing generate-phase observations",
+            )
+            matching = (
+                [
+                    item
+                    for item in observations
+                    if isinstance(item, dict) and item.get("dimension") == dimension
+                ]
+                if isinstance(observations, list)
+                else []
+            )
+            self.assertTrue(
+                matching,
+                msg=f"{airbox_label} Ring has no generate({dimension}) snapshot",
+            )
+            observation = matching[-1] if matching else {}
+            self.assertEqual(
+                observation.get("status"),
+                "available",
+                msg=f"{airbox_label} Ring generate({dimension}) snapshot is unavailable",
+            )
+            plane = observation.get("outer_source_plane_xy")
+            self.assertIsInstance(
+                plane,
+                dict,
+                msg=f"{airbox_label} Ring generate({dimension}) lacks source-plane XY",
+            )
+            plane = plane if isinstance(plane, dict) else {}
+            projected_xy = plane.get("projected_xy_m")
+            projected_xy_sha256 = plane.get("projected_xy_sha256")
+            self.assertIsInstance(
+                projected_xy,
+                list,
+                msg=f"{airbox_label} Ring generate({dimension}) has no XY set",
+            )
+            self.assertIsInstance(
+                projected_xy_sha256,
+                str,
+                msg=f"{airbox_label} Ring generate({dimension}) has no XY digest",
+            )
+            self.assertTrue(projected_xy_sha256)
+            return (
+                projected_xy if isinstance(projected_xy, list) else [],
+                projected_xy_sha256 if isinstance(projected_xy_sha256, str) else "",
+            )
+
         def realize(
             geometry: Geometry,
             *,
@@ -15557,6 +15612,36 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 self.assertEqual(
                     manual_owner_xy, far_air_xy, msg=precedence_diagnostic_message
                 )
+
+                if geometry.geometry_name == "owner_target_ring":
+                    for airbox_label, ring_evidence in (
+                        ("30 nm airbox", resolved_evidence),
+                        ("50 nm airbox", far_air_evidence),
+                    ):
+                        source_xy_2d, source_hash_2d = ring_phase_source_xy(
+                            ring_evidence, 2, airbox_label
+                        )
+                        source_xy_3d, source_hash_3d = ring_phase_source_xy(
+                            ring_evidence, 3, airbox_label
+                        )
+                        self.assertEqual(
+                            source_xy_2d,
+                            source_xy_3d,
+                            msg=(
+                                f"{airbox_label} Ring source XY set changed from "
+                                "generate(2) to generate(3): "
+                                f"{precedence_diagnostic_message}"
+                            ),
+                        )
+                        self.assertEqual(
+                            source_hash_2d,
+                            source_hash_3d,
+                            msg=(
+                                f"{airbox_label} Ring source XY digest changed from "
+                                "generate(2) to generate(3): "
+                                f"{precedence_diagnostic_message}"
+                            ),
+                        )
 
                 if isinstance(geometry, fm.Box):
                     localized_xy, localized_report, _localized_evidence = realize(

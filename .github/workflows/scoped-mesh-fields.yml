@@ -8,6 +8,7 @@ on:
       - 'packages/fullmag-py/tests/test_meshing.py'
       - 'scripts/test_box_layered_airbox_mesh.py'
       - 'scripts/test_box_body_only_thin_film_mesh.py'
+      - 'docs/physics/0104-thin-film-shared-domain-meshing*'
       - '.github/workflows/scoped-mesh-fields.yml'
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - 'packages/fullmag-py/tests/test_meshing.py'
       - 'scripts/test_box_layered_airbox_mesh.py'
       - 'scripts/test_box_body_only_thin_film_mesh.py'
+      - 'docs/physics/0104-thin-film-shared-domain-meshing*'
       - '.github/workflows/scoped-mesh-fields.yml'
   workflow_dispatch:
 
@@ -32,6 +34,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
+      - name: Validate thin-film meshing scientific source map
+        run: python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0104-thin-film-shared-domain-meshing.source-map.json --repo-root .
       - name: Install Gmsh system dependency
         run: |
           sudo apt-get update

@@ -297,6 +297,20 @@
       "symbol": "subdivide_layered_prisms",
       "responsibility": "Converts vertical prism6/quad4 layers into conforming tet4/tri3 without adding nodes; coordinate-ranked columns give translated periodic faces the same diagonals and each tet positive orientation.",
       "evidence_status": "verified_github_actions_fixture"
+    },
+    {
+      "id": "ring-existing-source-preservation",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Preserve an already generated owner-sized 2D source while generating the remaining 3D entities; restore the previous Gmsh MeshOnlyEmpty option on success and failure. Does not qualify independent air grading or finite regional density.",
+      "evidence_status": "implemented_pending_actual_gmsh_regression"
+    },
+    {
+      "id": "ring-source-preservation-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_exact_layer_body_target_precedence_survives_air_and_local_fields",
+      "responsibility": "Assert source-plane XY identity before and after 3D generation for both Ring airbox targets, in addition to unchanged owner precedence and far-air invariance checks.",
+      "evidence_status": "implemented_pending_actual_gmsh_regression"
     }
   ],
   "public_api": {
