@@ -51,6 +51,7 @@ const MAX_NEUTRAL_PIXEL_HISTOGRAM_ENTRIES = 16;
 const MAX_NEUTRAL_PIXEL_MATCH_COORDINATES = 32;
 const MAX_NEUTRAL_PIXEL_CHANGED_COORDINATES = 32;
 const MAX_NEUTRAL_PIXEL_NEAREST_COLORS = 8;
+const MAX_NEUTRAL_PNG_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
 const MAX_GPU_LIFECYCLE_TIMELINE_ENTRIES = 256;
@@ -632,7 +633,11 @@ try {
 
 async function assertCanvasHasFidelity(
   page,
-  { expectedPixelColor = null, includePixelSamples = false } = {},
+  {
+    expectedPixelColor = null,
+    includePixelSamples = false,
+    pngArtifactName = null,
+  } = {},
 ) {
   const canvas = page.locator(".fm-viewport-3d canvas");
   const box = await canvas.boundingBox();
@@ -650,8 +655,13 @@ async function assertCanvasHasFidelity(
   });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
   let screenshot;
+  let screenshotArtifact = null;
   try {
     screenshot = await page.screenshot({ clip: box });
+    screenshotArtifact = await writeBoundedCanvasPngArtifact(
+      screenshot,
+      pngArtifactName,
+    );
   } finally {
     await canvas.evaluate(() => {
       document.querySelector('[data-viewport-audit-isolation="true"]')?.remove();
@@ -661,6 +671,7 @@ async function assertCanvasHasFidelity(
     encodedPng,
     expectedPixelColor: expectedColor,
     includePixelSamples: capturePixels,
+    maxExpectedColorMatchCoordinates,
   }) => {
     // Decode locally: the application CSP intentionally disallows data: fetches.
     const bytes = Uint8Array.from(atob(encodedPng), (character) => character.charCodeAt(0));
@@ -676,6 +687,30 @@ async function assertCanvasHasFidelity(
     const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
     const reference = [pixels[0], pixels[1], pixels[2]];
     const expectedColorMatches = expectedColor ? [] : null;
+    let expectedColorFullResolutionMatchCount = expectedColor ? 0 : null;
+    const expectedColorFullResolutionMatchCoordinates = expectedColor ? [] : null;
+    if (expectedColor) {
+      for (let offset = 0; offset + 3 < pixels.length; offset += 4) {
+        if (
+          pixels[offset] !== expectedColor[0] ||
+          pixels[offset + 1] !== expectedColor[1] ||
+          pixels[offset + 2] !== expectedColor[2]
+        ) {
+          continue;
+        }
+        expectedColorFullResolutionMatchCount += 1;
+        if (
+          expectedColorFullResolutionMatchCoordinates.length <
+          maxExpectedColorMatchCoordinates
+        ) {
+          const pixelIndex = offset / 4;
+          expectedColorFullResolutionMatchCoordinates.push([
+            pixelIndex % bitmap.width,
+            Math.floor(pixelIndex / bitmap.width),
+          ]);
+        }
+      }
+    }
     for (let y = 0; y < bitmap.height; y += stride) {
       for (let x = 0; x < bitmap.width; x += stride) {
         const offset = (y * bitmap.width + x) * 4;
@@ -701,6 +736,8 @@ async function assertCanvasHasFidelity(
     }
     return {
       expectedColorMatches,
+      expectedColorFullResolutionMatchCount,
+      expectedColorFullResolutionMatchCoordinates,
       height: bitmap.height,
       pixelSamples,
       sampleStride: stride,
@@ -712,11 +749,40 @@ async function assertCanvasHasFidelity(
     encodedPng: screenshot.toString("base64"),
     expectedPixelColor,
     includePixelSamples,
+    maxExpectedColorMatchCoordinates: MAX_NEUTRAL_PIXEL_MATCH_COORDINATES,
   });
   if (!sample || sample.varied === 0) {
     throw new Error("Viewport fidelity gate detected a blank or uniform WebGL drawing buffer.");
   }
-  return sample;
+  return { ...sample, screenshotArtifact };
+}
+
+async function writeBoundedCanvasPngArtifact(screenshot, fileName) {
+  if (!fileName) return null;
+  const byteLength = screenshot?.byteLength ?? null;
+  if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+    return { fileName, status: "invalid-screenshot-buffer" };
+  }
+  if (byteLength > MAX_NEUTRAL_PNG_ARTIFACT_BYTES) {
+    return {
+      byteLength,
+      fileName,
+      maxBytes: MAX_NEUTRAL_PNG_ARTIFACT_BYTES,
+      status: "skipped-size-limit",
+    };
+  }
+  try {
+    await writeFile(path.join(auditArtifactsDirectory, fileName), screenshot);
+    return { byteLength, fileName, status: "written" };
+  } catch (error) {
+    return {
+      byteLength,
+      errorCode:
+        typeof error?.code === "string" ? error.code.slice(0, 64) : "unknown",
+      fileName,
+      status: "write-failed",
+    };
+  }
 }
 
 async function assertFdmNeutralSurfaceColorPixels(
@@ -751,6 +817,7 @@ async function assertFdmNeutralSurfaceColorPixels(
   const solid = await assertCanvasHasFidelity(page, {
     expectedPixelColor: expectedMaterialColor,
     includePixelSamples: true,
+    pngArtifactName: "fdm-neutral-solid-first.png",
   });
   fdmNeutralSurfaceColorDiagnostics = {
     expectedMaterialColor: {
@@ -763,6 +830,7 @@ async function assertFdmNeutralSurfaceColorPixels(
   const solidRepeat = await assertCanvasHasFidelity(page, {
     expectedPixelColor: expectedMaterialColor,
     includePixelSamples: true,
+    pngArtifactName: "fdm-neutral-solid-repeat.png",
   });
   const solidRepeatDelta = compareCanvasPixelSamples(solid, solidRepeat);
   fdmNeutralSurfaceColorDiagnostics = {
@@ -1011,12 +1079,20 @@ function summarizeNeutralSurfaceColorSample(sample, expectedColor) {
     exactExpectedColorMatchCoordinates:
       sample.expectedColorMatches?.slice(0, MAX_NEUTRAL_PIXEL_MATCH_COORDINATES) ??
       null,
+    exactExpectedColorFullResolutionMatchCount:
+      sample.expectedColorFullResolutionMatchCount ?? null,
+    exactExpectedColorFullResolutionMatchCoordinates:
+      sample.expectedColorFullResolutionMatchCoordinates?.slice(
+        0,
+        MAX_NEUTRAL_PIXEL_MATCH_COORDINATES,
+      ) ?? null,
     height: sample.height,
     nearestColors,
     sampleCount: pixelSamples.length / 3,
     samplePrefix,
     sampleStride: sample.sampleStride,
     signature: sample.signature,
+    screenshotArtifact: sample.screenshotArtifact ?? null,
     topColorHistogram: histogram,
     uniqueSampledColorCount: colorEntries.length,
     varied: sample.varied,
