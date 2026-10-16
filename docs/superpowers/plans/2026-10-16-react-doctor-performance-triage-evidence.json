@@ -1,0 +1,2202 @@
+{
+  "title": "Triage 40 performance diagnostics React Doctor PR97",
+  "repository": "MateuszZelent/fullmag",
+  "source_commits": {
+    "historical_review": "b34953c8616684901c187b368b1d1c069b5fd43f",
+    "current_ledger_base": "152ad2e1fe7830536bd195db73c396f9f6ac5121"
+  },
+  "scope": "Tylko 40 pozycji performance. Pominięto EigenDispersionInspectorPanel.tsx:L24 (complexity) zgodnie z poleceniem. Pozostałe cztery nie-performance diagnostics były już covered w inventory.",
+  "disposition_definitions_pl": {
+    "valid_candidate": "Źródło pokazuje ograniczoną możliwość współbieżności albo jednego snapshotu do sprawdzenia. To nie jest potwierdzony bottleneck ani dowód poprawy.",
+    "sequential_required": "Kolejność jest częścią obserwacji UI/zdarzeń, granicy pomiaru, polling/ACK albo cleanup contract.",
+    "superseded": "Składnia pętli nie tworzy powtarzanego obciążenia w aktualnym kontekście źródła; dotyczy wyłącznie stałej listy jednoelementowej.",
+    "unresolved": "Brakuje dowodu wolumenu/kosztu albo zbiorczy odczyt mógłby zmienić obserwowaną semantykę."
+  },
+  "counts": {
+    "total": 40,
+    "by_disposition": {
+      "unresolved": 3,
+      "valid_candidate": 17,
+      "sequential_required": 19,
+      "superseded": 1
+    },
+    "by_rule": {
+      "js-set-map-lookups": {
+        "unresolved": 2
+      },
+      "async-parallel": {
+        "valid_candidate": 3,
+        "sequential_required": 1
+      },
+      "server-sequential-independent-await": {
+        "valid_candidate": 12,
+        "sequential_required": 5
+      },
+      "async-await-in-loop": {
+        "sequential_required": 13,
+        "unresolved": 1,
+        "valid_candidate": 2,
+        "superseded": 1
+      }
+    }
+  },
+  "source_files": {
+    "apps/control-room/scripts/audit-chart-performance.mjs": {
+      "old_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9",
+      "current_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9",
+      "old_bytes": 89759,
+      "current_bytes": 89759
+    },
+    "apps/control-room/scripts/smoke-analysis-plots.mjs": {
+      "old_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea",
+      "current_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b",
+      "old_bytes": 123259,
+      "current_bytes": 137656
+    },
+    "apps/control-room/scripts/smoke-inspector.mjs": {
+      "old_sha256": "fe03ff2c055c9bf17da78db170c04ff54f56da8bc77884da0807c6401af96cc6",
+      "current_sha256": "dea58b8edb496682bda27c34e345427884344627f2f35244c752bfd9604ca3da",
+      "old_bytes": 237017,
+      "current_bytes": 245989
+    },
+    "apps/control-room/scripts/smoke-study-authoring-ui.mjs": {
+      "old_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45",
+      "current_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552",
+      "old_bytes": 111370,
+      "current_bytes": 175392
+    },
+    "apps/control-room/scripts/smoke-viewport-3d-explorer-inspector-targets.mjs": {
+      "old_sha256": "308dac3801db16adf192924dd5a642d53898dfd5fe55a987208a02bf3cfd32b4",
+      "current_sha256": "c366685a07656228ab1360f912598e7ea4046324e06a38bef27e6ebaca09a2b8",
+      "old_bytes": 89066,
+      "current_bytes": 152130
+    }
+  },
+  "warnings": [
+    {
+      "warning_id": "W01",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 384,
+        "rule": "js-set-map-lookups",
+        "description": "Array lookup inside a loop",
+        "snippet": {
+          "start_line": 382,
+          "end_line": 386,
+          "lines": [
+            "      const observer = new PerformanceObserver((list) => {",
+            "        for (const entry of list.getEntries()) {",
+            "          if (uploadMeasureNames.includes(entry.name)) {",
+            "            runtime.viewportUploads += 1;",
+            "          }"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 384,
+        "symbol": "page.addInitScript / PerformanceObserver callback",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 382,
+          "end_line": 386,
+          "lines": [
+            "      const observer = new PerformanceObserver((list) => {",
+            "        for (const entry of list.getEntries()) {",
+            "          if (uploadMeasureNames.includes(entry.name)) {",
+            "            runtime.viewportUploads += 1;",
+            "          }"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "unresolved",
+      "rationale_pl": "Observer porównuje wpisy z dwiema stałymi nazwami. Źródło nie podaje liczby wpisów ani pomiaru kosztu liniowego includes przy kardynalności 2; samo zastąpienie tablicy przez Set nie dowodzi poprawy.",
+      "safe_followup_pl": "Wrócić do tego tylko po zmierzeniu wolumenu wpisów lub kosztu callbacku."
+    },
+    {
+      "warning_id": "W02",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 520,
+        "rule": "async-parallel",
+        "description": "Independent awaits run sequentially",
+        "snippet": {
+          "start_line": 518,
+          "end_line": 522,
+          "lines": [
+            "      }",
+            "    }",
+            "    const diagnostics = await collectChartDiagnostics(page);",
+            "    const analysisDataSnapshot = await collectChartDataSnapshot(page);",
+            "    const analysisSurfaceCount = await collectChartSurfaceCount(page);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 520,
+        "symbol": "główna sekwencja audit w try",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 518,
+          "end_line": 522,
+          "lines": [
+            "      }",
+            "    }",
+            "    const diagnostics = await collectChartDiagnostics(page);",
+            "    const analysisDataSnapshot = await collectChartDataSnapshot(page);",
+            "    const analysisSurfaceCount = await collectChartSurfaceCount(page);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po scenariuszach idle i opcjonalnym abort code pobiera trzy niemutujące wartości: liczniki chartu, tekstowy snapshot danych i liczbę canvasów. Można odczytać je jednym page.evaluate, zachowując pola i wspólny punkt obserwacji. Promise.all na trzech wywołaniach tego samego page nie gwarantuje spójnego snapshotu.",
+      "safe_followup_pl": "Kandydat: jeden snapshot przeglądarki zachowujący dotychczasowe wyniki."
+    },
+    {
+      "warning_id": "W03",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 874,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 872,
+          "end_line": 876,
+          "lines": [
+            "  const requestStart = sessionRequests.length;",
+            "  const beforeSnapshot = await collectChartDataSnapshot(page);",
+            "  const before = await collectChartDiagnostics(page);",
+            "  const beforeLifecycle = await collectLifecycleSnapshot(page);",
+            "  await page.waitForTimeout(idleObserveMs);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 874,
+        "symbol": "verifyIdleChartBudget",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 872,
+          "end_line": 876,
+          "lines": [
+            "  const requestStart = sessionRequests.length;",
+            "  const beforeSnapshot = await collectChartDataSnapshot(page);",
+            "  const before = await collectChartDiagnostics(page);",
+            "  const beforeLifecycle = await collectLifecycleSnapshot(page);",
+            "  await page.waitForTimeout(idleObserveMs);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po wyciszeniu requestów i RAF pobierane są trzy próbki bazowe przed idleObserveMs. Mogą wejść do jednego page.evaluate w zachowanej kolejności, w tym z wywołaniem sweepActiveListeners, i nadal poprzedzać okno obserwacji.",
+      "safe_followup_pl": "Kandydat: wspólny pre-idle snapshot; oddzielony od próbek po idle."
+    },
+    {
+      "warning_id": "W04",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 878,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 876,
+          "end_line": 880,
+          "lines": [
+            "  await page.waitForTimeout(idleObserveMs);",
+            "  const after = await collectChartDiagnostics(page);",
+            "  const afterLifecycle = await collectLifecycleSnapshot(page);",
+            "  const afterSnapshot = await collectChartDataSnapshot(page);",
+            "  const redraws = after.setOptionCalls - before.setOptionCalls;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 878,
+        "symbol": "verifyIdleChartBudget",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 876,
+          "end_line": 880,
+          "lines": [
+            "  await page.waitForTimeout(idleObserveMs);",
+            "  const after = await collectChartDiagnostics(page);",
+            "  const afterLifecycle = await collectLifecycleSnapshot(page);",
+            "  const afterSnapshot = await collectChartDataSnapshot(page);",
+            "  const redraws = after.setOptionCalls - before.setOptionCalls;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po idleObserveMs pobierane są trzy próbki końcowe. Można zebrać je jednym page.evaluate, zachowując kolejność diag → lifecycle → data oraz koniec okna pomiaru; Promise.all mógłby rozsunąć punkt obserwacji.",
+      "safe_followup_pl": "Kandydat: wspólny post-idle snapshot, nie łączyć z próbką bazową."
+    },
+    {
+      "warning_id": "W05",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 960,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 958,
+          "end_line": 962,
+          "lines": [
+            "",
+            "  while (Date.now() < deadline) {",
+            "    await page.waitForTimeout(100);",
+            "    if (rowsBinRequests.length !== lastCount) {",
+            "      lastCount = rowsBinRequests.length;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 960,
+        "symbol": "waitForQuietRowsBinRequests",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 958,
+          "end_line": 962,
+          "lines": [
+            "",
+            "  while (Date.now() < deadline) {",
+            "    await page.waitForTimeout(100);",
+            "    if (rowsBinRequests.length !== lastCount) {",
+            "      lastCount = rowsBinRequests.length;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Pętla czeka po 100 ms, porównuje liczbę obserwowanych rows.bin i resetuje quietSince po nowym zdarzeniu. To warunek zakończenia obserwacji requestów, a nie niezależna praca.",
+      "safe_followup_pl": "Zachować polling i obserwację zdarzeń."
+    },
+    {
+      "warning_id": "W06",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 981,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 979,
+          "end_line": 983,
+          "lines": [
+            "    );",
+            "    if (!missingSize) return;",
+            "    await page.waitForTimeout(50);",
+            "  }",
+            "  const missingSize = rowsBinRequests.find("
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 981,
+        "symbol": "waitForRowsTransportSizes",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 979,
+          "end_line": 983,
+          "lines": [
+            "    );",
+            "    if (!missingSize) return;",
+            "    await page.waitForTimeout(50);",
+            "  }",
+            "  const missingSize = rowsBinRequests.find("
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Pętla ponownie przegląda requesty szukając brakującego responseBytes i kończy się po uzupełnieniu asynchronicznych danych albo timeoutcie. Kolejna obserwacja zależy od napływu odpowiedzi.",
+      "safe_followup_pl": "Zachować polling oraz timeout."
+    },
+    {
+      "warning_id": "W07",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1027,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1025,
+          "end_line": 1029,
+          "lines": [
+            "  await waitForAnimationFrameOwnershipStable(page);",
+            "  const analysisLifecycleBaseline = await collectLifecycleSnapshot(page);",
+            "  const baselineHeapBytes = await readJsHeapBytes(cdp);",
+            "",
+            "  for (let index = 0; index < switchCount; index += 1) {"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1027,
+        "symbol": "verifyChartInstanceLifecycle",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1025,
+          "end_line": 1029,
+          "lines": [
+            "  await waitForAnimationFrameOwnershipStable(page);",
+            "  const analysisLifecycleBaseline = await collectLifecycleSnapshot(page);",
+            "  const baselineHeapBytes = await readJsHeapBytes(cdp);",
+            "",
+            "  for (let index = 0; index < switchCount; index += 1) {"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Lifecycle snapshot wywołuje sweepActiveListeners, który usuwa odłączone węzły z rejestru i aktualizuje runtime.listeners; następnie CDP pobiera JSHeapUsedSize. Kolejność utrwala pomiar heapu po aktualizacji instrumentacji i GC/RAF.",
+      "safe_followup_pl": "Zachować lifecycle → heap dla bazowego pomiaru."
+    },
+    {
+      "warning_id": "W08",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1046,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1044,
+          "end_line": 1048,
+          "lines": [
+            "  await waitForAnimationFrameOwnershipStable(page);",
+            "  const analysisLifecycleAfterClose = await collectLifecycleSnapshot(page);",
+            "  const retainedHeapBytes = await readJsHeapBytes(cdp);",
+            "  assertBoundedLifecycle(",
+            "    analysisLifecycleBaseline,"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1046,
+        "symbol": "verifyChartInstanceLifecycle",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1044,
+          "end_line": 1048,
+          "lines": [
+            "  await waitForAnimationFrameOwnershipStable(page);",
+            "  const analysisLifecycleAfterClose = await collectLifecycleSnapshot(page);",
+            "  const retainedHeapBytes = await readJsHeapBytes(cdp);",
+            "  assertBoundedLifecycle(",
+            "    analysisLifecycleBaseline,"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Po zamknięciu chartu lifecycle snapshot wykonuje sweep listenerów, a potem odczytywany jest heap użyty przez assertBoundedLifecycle. Współbieżność mogłaby zmierzyć heap przed lub podczas aktualizacji rejestru listenerów.",
+      "safe_followup_pl": "Zachować lifecycle → heap po GC i stabilizacji RAF."
+    },
+    {
+      "warning_id": "W09",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1061,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1059,
+          "end_line": 1063,
+          "lines": [
+            "",
+            "  const diagnostics = await collectChartDiagnostics(page);",
+            "  const chartSurfaceCount = await collectChartSurfaceCount(page);",
+            "  if (chartSurfaceCount < 1) {",
+            "    throw new Error(\"chart instance leak: no active chart surfaces\");"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1061,
+        "symbol": "verifyChartInstanceLifecycle",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1059,
+          "end_line": 1063,
+          "lines": [
+            "",
+            "  const diagnostics = await collectChartDiagnostics(page);",
+            "  const chartSurfaceCount = await collectChartSurfaceCount(page);",
+            "  if (chartSurfaceCount < 1) {",
+            "    throw new Error(\"chart instance leak: no active chart surfaces\");"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po waitForStableChartDiagnostics kod odczytuje licznik z window i liczbę canvasów DOM, by je porównać. Obie wartości można zwrócić z jednego page.evaluate i porównać z tego samego stanu.",
+      "safe_followup_pl": "Kandydat: jeden odczyt window + DOM aktywnego chartu."
+    },
+    {
+      "warning_id": "W10",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1116,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1114,
+          "end_line": 1118,
+          "lines": [
+            "",
+            "  const lifecycleBaseline = await collectLifecycleSnapshot(page);",
+            "  const baselineHeapBytes = await readJsHeapBytes(cdp);",
+            "  const requestStart = sessionRequests.length;",
+            "  let peakEchartsCanvases = lifecycleBaseline.echartsCanvases;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1116,
+        "symbol": "verifyQuickChartViewportIsolation",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1114,
+          "end_line": 1118,
+          "lines": [
+            "",
+            "  const lifecycleBaseline = await collectLifecycleSnapshot(page);",
+            "  const baselineHeapBytes = await readJsHeapBytes(cdp);",
+            "  const requestStart = sessionRequests.length;",
+            "  let peakEchartsCanvases = lifecycleBaseline.echartsCanvases;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Baseline Quick Chart powstaje po GC i stabilizacji RAF. Lifecycle snapshot aktualizuje runtime.listeners przez sweep; odczyt heapu powinien pozostać po tej aktualizacji, aby para opisująca baseline miała stałą kolejność.",
+      "safe_followup_pl": "Zachować lifecycle → heap po GC i stabilizacji RAF."
+    },
+    {
+      "warning_id": "W11",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1139,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1137,
+          "end_line": 1141,
+          "lines": [
+            "  await waitForAnimationFrameOwnershipStable(page);",
+            "  const lifecycleAfterClose = await collectLifecycleSnapshot(page);",
+            "  const retainedHeapBytes = await readJsHeapBytes(cdp);",
+            "  assertBoundedLifecycle(",
+            "    lifecycleBaseline,"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1139,
+        "symbol": "verifyQuickChartViewportIsolation",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1137,
+          "end_line": 1141,
+          "lines": [
+            "  await waitForAnimationFrameOwnershipStable(page);",
+            "  const lifecycleAfterClose = await collectLifecycleSnapshot(page);",
+            "  const retainedHeapBytes = await readJsHeapBytes(cdp);",
+            "  assertBoundedLifecycle(",
+            "    lifecycleBaseline,"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Lifecycle snapshot końcowy wykonuje sweep listenerów przed pomiarem heapu; oba wyniki tworzą parę przekazywaną do assertBoundedLifecycle.",
+      "safe_followup_pl": "Zachować lifecycle → heap po GC i stabilizacji RAF."
+    },
+    {
+      "warning_id": "W12",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1246,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1244,
+          "end_line": 1248,
+          "lines": [
+            "  const requestStart = sessionRequests.length;",
+            "  const beforeViewport = await collectViewport3DIsolationSnapshot(page);",
+            "  const beforeLifecycle = await collectLifecycleSnapshot(page);",
+            "  const cursor = page.getByRole(\"application\", { name: /^Quick Chart cursor/ });",
+            "  await cursor.focus();"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1246,
+        "symbol": "verifyLocalQuickChartActionBudget",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1244,
+          "end_line": 1248,
+          "lines": [
+            "  const requestStart = sessionRequests.length;",
+            "  const beforeViewport = await collectViewport3DIsolationSnapshot(page);",
+            "  const beforeLifecycle = await collectLifecycleSnapshot(page);",
+            "  const cursor = page.getByRole(\"application\", { name: /^Quick Chart cursor/ });",
+            "  await cursor.focus();"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Baseline przed akcją Quick Chart pobiera stan viewport/WebGL oraz lifecycle. Można połączyć je w jednym page.evaluate z zachowaniem dotychczasowej kolejności; oba odczyty muszą zakończyć się przed focus/press/export.",
+      "safe_followup_pl": "Kandydat ograniczony do pre-action snapshotu; zachować osobną granicę przed akcją."
+    },
+    {
+      "warning_id": "W13",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1256,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1254,
+          "end_line": 1258,
+          "lines": [
+            "  await page.waitForTimeout(250);",
+            "  const afterLifecycle = await collectLifecycleSnapshot(page);",
+            "  const afterViewport = await collectViewport3DIsolationSnapshot(page);",
+            "  const actionRequests = sessionRequests.slice(requestStart);",
+            "  const requestSummary = summarizeViewportRequests(actionRequests);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1256,
+        "symbol": "verifyLocalQuickChartActionBudget",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1254,
+          "end_line": 1258,
+          "lines": [
+            "  await page.waitForTimeout(250);",
+            "  const afterLifecycle = await collectLifecycleSnapshot(page);",
+            "  const afterViewport = await collectViewport3DIsolationSnapshot(page);",
+            "  const actionRequests = sessionRequests.slice(requestStart);",
+            "  const requestSummary = summarizeViewportRequests(actionRequests);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po akcji i 250-ms oknie kod pobiera lifecycle oraz viewport do porównania z baseline. Można zrobić wspólny odczyt po tym oknie; nie uruchamiać go równolegle z akcją ani przed jej zakończeniem.",
+      "safe_followup_pl": "Kandydat ograniczony do post-action snapshotu po wait."
+    },
+    {
+      "warning_id": "W14",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1386,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 1384,
+          "end_line": 1388,
+          "lines": [
+            "async function forceGarbageCollection(page, cdp) {",
+            "  for (let round = 0; round < 3; round += 1) {",
+            "    await page.evaluate(() => globalThis.gc?.());",
+            "    await cdp.send(\"HeapProfiler.collectGarbage\").catch(() => undefined);",
+            "    await page.waitForTimeout(100);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1386,
+        "symbol": "forceGarbageCollection",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1384,
+          "end_line": 1388,
+          "lines": [
+            "async function forceGarbageCollection(page, cdp) {",
+            "  for (let round = 0; round < 3; round += 1) {",
+            "    await page.evaluate(() => globalThis.gc?.());",
+            "    await cdp.send(\"HeapProfiler.collectGarbage\").catch(() => undefined);",
+            "    await page.waitForTimeout(100);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Każda z trzech rund wykonuje page.gc, CDP HeapProfiler.collectGarbage, a następnie 100-ms przerwę. To sekwencja serializująca GC i dająca runtime czas na uspokojenie.",
+      "safe_followup_pl": "Zachować trzy uporządkowane rundy GC + settle."
+    },
+    {
+      "warning_id": "W15",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1397,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 1395,
+          "end_line": 1399,
+          "lines": [
+            "  let quietSince = Date.now();",
+            "  while (Date.now() < deadline) {",
+            "    await page.waitForTimeout(100);",
+            "    if (sessionRequests.length !== previousCount) {",
+            "      previousCount = sessionRequests.length;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 1397,
+        "symbol": "waitForSessionRequestQuiet",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1395,
+          "end_line": 1399,
+          "lines": [
+            "  let quietSince = Date.now();",
+            "  while (Date.now() < deadline) {",
+            "    await page.waitForTimeout(100);",
+            "    if (sessionRequests.length !== previousCount) {",
+            "      previousCount = sessionRequests.length;"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Pętla obserwuje sessionRequests co 100 ms i wymaga 500 ms stabilnej liczby przed zwrotem. To zamierzony pomiar ciszy zdarzeń.",
+      "safe_followup_pl": "Zachować polling i okno ciszy."
+    },
+    {
+      "warning_id": "W16",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 2288,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 2286,
+          "end_line": 2290,
+          "lines": [
+            "    .first()",
+            "    .innerText({ timeout: timeoutMs });",
+            "  const remountValues = await collectAnalysisLegendReadings(page);",
+            "  const remountStaleRevisionVisible = remountProvenance.includes(",
+            "    `revision ${sourceRevision}`,"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 2288,
+        "symbol": "verifyPendingRequestAbort",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 2286,
+          "end_line": 2290,
+          "lines": [
+            "    .first()",
+            "    .innerText({ timeout: timeoutMs });",
+            "  const remountValues = await collectAnalysisLegendReadings(page);",
+            "  const remountStaleRevisionVisible = remountProvenance.includes(",
+            "    `revision ${sourceRevision}`,"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po remount i waitach chartu provenance oraz wartości legendy są niemutującymi odczytami tej samej prezentacji. Jeden snapshot DOM po istniejących wait gate może zachować wspólną rewizję.",
+      "safe_followup_pl": "Kandydat: snapshot provenance + legendy po waitForAnalysisChart i waitForStableChartDiagnostics."
+    },
+    {
+      "warning_id": "W17",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 2332,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 2330,
+          "end_line": 2334,
+          "lines": [
+            "    .first()",
+            "    .innerText({ timeout: timeoutMs });",
+            "  const latestValues = await collectAnalysisLegendReadings(page);",
+            "  const staleRevisionVisible =",
+            "    remountStaleRevisionVisible || provenance.includes(`revision ${sourceRevision}`);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/audit-chart-performance.mjs",
+        "line": 2332,
+        "symbol": "verifyPendingRequestAbort",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 2330,
+          "end_line": 2334,
+          "lines": [
+            "    .first()",
+            "    .innerText({ timeout: timeoutMs });",
+            "  const latestValues = await collectAnalysisLegendReadings(page);",
+            "  const staleRevisionVisible =",
+            "    remountStaleRevisionVisible || provenance.includes(`revision ${sourceRevision}`);"
+          ]
+        },
+        "source_sha256": "73d4da388772f33fc01d06e251f755287e457fcd1b117a1e4824c073462709a9"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po dispatch nowego zakresu waitForFunction potwierdza rewizję N+1. Provenance i legenda są potem odczytywane z tego samego UI; wspólny snapshot po wait gate poprawia spójność odczytów.",
+      "safe_followup_pl": "Kandydat: snapshot provenance + legendy po potwierdzeniu rewizji N+1."
+    },
+    {
+      "warning_id": "W18",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 231,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 229,
+          "end_line": 233,
+          "lines": [
+            "  for (let index = 0; index < await errorNotifications.count(); index += 1) {",
+            "    const notification = errorNotifications.nth(index);",
+            "    if (await notification.isVisible()) visibleErrors.push(await notification.innerText());",
+            "  }",
+            "  if (visibleErrors.length > 0) {"
+          ]
+        },
+        "source_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 231,
+        "symbol": "assertNoVisibleResourceErrors",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 229,
+          "end_line": 233,
+          "lines": [
+            "  for (let index = 0; index < await errorNotifications.count(); index += 1) {",
+            "    const notification = errorNotifications.nth(index);",
+            "    if (await notification.isVisible()) visibleErrors.push(await notification.innerText());",
+            "  }",
+            "  if (visibleErrors.length > 0) {"
+          ]
+        },
+        "source_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b"
+      },
+      "disposition": "unresolved",
+      "rationale_pl": "Pętla przechodzi po dynamicznym zbiorze toastów: count jest odczytywany w warunku każdej iteracji, a innerText zależy od isVisible. Źródło nie ogranicza liczby toastów; jednorazowe evaluateAll może zmienić semantykę widoczności lub pominąć toast pojawiający się podczas sprawdzenia.",
+      "safe_followup_pl": "Bez danych o wolumenie i równoważnego testu widoczności nie zastępować pętli Promise.all/evaluateAll."
+    },
+    {
+      "warning_id": "W19",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 247,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 245,
+          "end_line": 249,
+          "lines": [
+            "    [\"light\", \"analysis-latte.png\"],",
+            "  ]) {",
+            "    await page.evaluate((theme) => {",
+            "      document.documentElement.dataset.theme = theme;",
+            "    }, theme);"
+          ]
+        },
+        "source_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 247,
+        "symbol": "captureAnalysisAcceptanceScreenshots",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 245,
+          "end_line": 249,
+          "lines": [
+            "    [\"light\", \"analysis-latte.png\"],",
+            "  ]) {",
+            "    await page.evaluate((theme) => {",
+            "      document.documentElement.dataset.theme = theme;",
+            "    }, theme);"
+          ]
+        },
+        "source_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Każda iteracja zmienia theme, czeka na render i wykonuje screenshot. To kolejne stany tego samego dokumentu, więc nie są niezależne.",
+      "safe_followup_pl": "Zachować theme → settle → screenshot."
+    },
+    {
+      "warning_id": "W20",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 281,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 279,
+          "end_line": 283,
+          "lines": [
+            "  const widths = [360, 640, 900, 1280];",
+            "  for (const width of widths) {",
+            "    await page.setViewportSize({ height: 1000, width });",
+            "    await page.waitForTimeout(150);",
+            "    const fixture = await page.evaluate(() => {"
+          ]
+        },
+        "source_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 281,
+        "symbol": "verifyResponsiveAnalysisFixtures",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 279,
+          "end_line": 283,
+          "lines": [
+            "  const widths = [360, 640, 900, 1280];",
+            "  for (const width of widths) {",
+            "    await page.setViewportSize({ height: 1000, width });",
+            "    await page.waitForTimeout(150);",
+            "    const fixture = await page.evaluate(() => {"
+          ]
+        },
+        "source_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Każda iteracja zmienia viewport, czeka na layout i sprawdza fixture dla nowej szerokości. To różne stany jednego page.",
+      "safe_followup_pl": "Zachować viewport → settle → assert dla każdej szerokości."
+    },
+    {
+      "warning_id": "W21",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 523,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 521,
+          "end_line": 525,
+          "lines": [
+            "  ).catch(async () => {",
+            "    const body = await page.locator(\".fm-analysis-plots\").innerText();",
+            "    const items = await page.locator(\".fm-chart-legend__item\").evaluateAll((nodes) =>",
+            "      nodes.map((node) => ({",
+            "        ariaLabel: node.getAttribute(\"aria-label\"),"
+          ]
+        },
+        "source_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 523,
+        "symbol": "verifySeriesLegend",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 521,
+          "end_line": 525,
+          "lines": [
+            "  ).catch(async () => {",
+            "    const body = await page.locator(\".fm-analysis-plots\").innerText();",
+            "    const items = await page.locator(\".fm-chart-legend__item\").evaluateAll((nodes) =>",
+            "      nodes.map((node) => ({",
+            "        ariaLabel: node.getAttribute(\"aria-label\"),"
+          ]
+        },
+        "source_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po timeoutcie asercji legendy catch zbiera tekst body i szczegóły itemów. Są to niezależne, niemutujące dane diagnostyczne; można pobrać je jednym snapshotem. Dotyczy wyłącznie failure path, nie sukcesu smoke.",
+      "safe_followup_pl": "Niskopriorytetowy kandydat wyłącznie dla diagnostyki błędu."
+    },
+    {
+      "warning_id": "W22",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 1300,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1298,
+          "end_line": 1302,
+          "lines": [
+            "  ).catch(async () => {",
+            "    const body = await page.locator(\".fm-analysis-plots\").innerText();",
+            "    const chartResource = await page",
+            "      .locator(\".fm-analysis-plots__chart-frame\")",
+            "      .first()"
+          ]
+        },
+        "source_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 1522,
+        "symbol": "waitForFrequencyChart",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1520,
+          "end_line": 1524,
+          "lines": [
+            "  ).catch(async () => {",
+            "    const body = await page.locator(\".fm-analysis-plots\").innerText();",
+            "    const chartResource = await page",
+            "      .locator(\".fm-analysis-plots__chart-frame\")",
+            "      .first()"
+          ]
+        },
+        "source_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po niepowodzeniu waitForFrequencyChart catch zbiera body, resource key i renderedPoints. To niezależne dane diagnostyczne; można zebrać je jednym odczytem po zachowaniu pierwotnego wait/timeout.",
+      "safe_followup_pl": "Niskopriorytetowy kandydat wyłącznie dla diagnostyki błędu."
+    },
+    {
+      "warning_id": "W23",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 1316,
+        "rule": "js-set-map-lookups",
+        "description": "Array lookup inside a loop",
+        "snippet": {
+          "start_line": 1314,
+          "end_line": 1318,
+          "lines": [
+            "  const normalizedLabels = labels.map((label) => label.trim()).filter(Boolean);",
+            "  for (const requiredLabel of fixture.requiredLegendLabels ?? []) {",
+            "    if (!normalizedLabels.includes(requiredLabel)) {",
+            "      throw new Error(",
+            "        `${fixture.id} is missing chart series ${requiredLabel}: ${normalizedLabels.join(\" | \")}`,"
+          ]
+        },
+        "source_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 1538,
+        "symbol": "waitForFrequencyChart",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1536,
+          "end_line": 1540,
+          "lines": [
+            "  const normalizedLabels = labels.map((label) => label.trim()).filter(Boolean);",
+            "  for (const requiredLabel of fixture.requiredLegendLabels ?? []) {",
+            "    if (!normalizedLabels.includes(requiredLabel)) {",
+            "      throw new Error(",
+            "        `${fixture.id} is missing chart series ${requiredLabel}: ${normalizedLabels.join(\" | \")}`,"
+          ]
+        },
+        "source_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b"
+      },
+      "disposition": "unresolved",
+      "rationale_pl": "Aktualny fixture wymaga dwóch stałych etykiet. Nie ma dowodu, że normalizedLabels lub requiredLegendLabels osiągają liczbę uzasadniającą Set; pętla przebiega raz, a porównuje dwie nazwy.",
+      "safe_followup_pl": "Bez pomiaru lub kontraktu na znacznie większy zbiór etykiet nie zmieniać."
+    },
+    {
+      "warning_id": "W24",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 1958,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 1956,
+          "end_line": 1960,
+          "lines": [
+            "  }, expectedTerms, { timeout: 1_000 }).catch(() => null);",
+            "",
+            "  const tooltipTexts = await readFrequencyDomainTooltip(host);",
+            "  const matchingTooltip = tooltipTexts.find((entry) =>",
+            "    entry.visible && tooltipIncludesTerms(entry.text, expectedTerms),"
+          ]
+        },
+        "source_sha256": "7127d939fba6713bebc46818841c76b8564f2f0cfdf075ee8c91d6137208e1ea"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-analysis-plots.mjs",
+        "line": 2180,
+        "symbol": "waitForFrequencyDomainTooltip",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 2178,
+          "end_line": 2182,
+          "lines": [
+            "  }, expectedTerms, { timeout: 1_000 }).catch(() => null);",
+            "",
+            "  const tooltipTexts = await readFrequencyDomainTooltip(host);",
+            "  const matchingTooltip = tooltipTexts.find((entry) =>",
+            "    entry.visible && tooltipIncludesTerms(entry.text, expectedTerms),"
+          ]
+        },
+        "source_sha256": "97f8015e3c65445ca4fbd30986ad1a7a8ef7604fdc383d6afe0e0abffa304a4b"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "waitForFunction obserwuje pojawienie się tooltipu z wymaganymi terms, a następnie odczytywany jest tekst tooltipu. Odczyt przed waitem mógłby zwrócić stary albo nieobecny element.",
+      "safe_followup_pl": "Zachować wait gate przed odczytem tooltipu i evidence."
+    },
+    {
+      "warning_id": "W25",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 599,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 597,
+          "end_line": 601,
+          "lines": [
+            "  );",
+            "  for (const width of [360, 416, 560]) {",
+            "    const handleBox = await resizeHandle.boundingBox();",
+            "    const panelBox = await panel.boundingBox();",
+            "    assert(handleBox && panelBox, \"Inspector resize geometry is unavailable.\");"
+          ]
+        },
+        "source_sha256": "fe03ff2c055c9bf17da78db170c04ff54f56da8bc77884da0807c6401af96cc6"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 599,
+        "symbol": "capture",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 597,
+          "end_line": 601,
+          "lines": [
+            "  );",
+            "  for (const width of [360, 416, 560]) {",
+            "    const handleBox = await resizeHandle.boundingBox();",
+            "    const panelBox = await panel.boundingBox();",
+            "    assert(handleBox && panelBox, \"Inspector resize geometry is unavailable.\");"
+          ]
+        },
+        "source_sha256": "dea58b8edb496682bda27c34e345427884344627f2f35244c752bfd9604ca3da"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Przed drag pobierane są boundingBox uchwytu i panelu. Obie geometrie są potrzebne do obliczenia celu, ale nie zależą od siebie; można odczytać parę współbieżnie lub jednym DOM snapshotem. Iteracje i sam drag muszą pozostać sekwencyjne.",
+      "safe_followup_pl": "Kandydat ograniczony do dwóch odczytów pre-drag; zachować sekwencję resize."
+    },
+    {
+      "warning_id": "W26",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 619,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 617,
+          "end_line": 621,
+          "lines": [
+            "    );",
+            "    for (const theme of [\"light\", \"dark\"]) {",
+            "      await page.evaluate((nextTheme) => {",
+            "        document.documentElement.dataset.theme = nextTheme;",
+            "      }, theme);"
+          ]
+        },
+        "source_sha256": "fe03ff2c055c9bf17da78db170c04ff54f56da8bc77884da0807c6401af96cc6"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 619,
+        "symbol": "capture",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 617,
+          "end_line": 621,
+          "lines": [
+            "    );",
+            "    for (const theme of [\"light\", \"dark\"]) {",
+            "      await page.evaluate((nextTheme) => {",
+            "        document.documentElement.dataset.theme = nextTheme;",
+            "      }, theme);"
+          ]
+        },
+        "source_sha256": "dea58b8edb496682bda27c34e345427884344627f2f35244c752bfd9604ca3da"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Zmiana theme, 100-ms settle i screenshot muszą pozostać uporządkowane, bo zrzut ma pokazać konkretny theme i szerokość.",
+      "safe_followup_pl": "Zachować theme → settle → screenshot oraz kolejność szerokości."
+    },
+    {
+      "warning_id": "W27",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 843,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 841,
+          "end_line": 845,
+          "lines": [
+            "  const resetDeadline = Date.now() + 3_000;",
+            "  while (!(await resetButton.isDisabled()) && Date.now() < resetDeadline) {",
+            "    await page.waitForTimeout(100);",
+            "  }",
+            "  const resetState = await resetButton.evaluate((button) => ({"
+          ]
+        },
+        "source_sha256": "fe03ff2c055c9bf17da78db170c04ff54f56da8bc77884da0807c6401af96cc6"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 843,
+        "symbol": "capture",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 841,
+          "end_line": 845,
+          "lines": [
+            "  const resetDeadline = Date.now() + 3_000;",
+            "  while (!(await resetButton.isDisabled()) && Date.now() < resetDeadline) {",
+            "    await page.waitForTimeout(100);",
+            "  }",
+            "  const resetState = await resetButton.evaluate((button) => ({"
+          ]
+        },
+        "source_sha256": "dea58b8edb496682bda27c34e345427884344627f2f35244c752bfd9604ca3da"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Po akcji pętla odczytuje isDisabled resetu, czekając aż kontrolka osiągnie stan settled; dopiero potem pobiera atrybuty resetu.",
+      "safe_followup_pl": "Zachować obserwację stanu po akcji."
+    },
+    {
+      "warning_id": "W28",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 1127,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 1125,
+          "end_line": 1129,
+          "lines": [
+            "",
+            "      for (let iteration = 0; iteration < target.iterations; iteration += 1) {",
+            "        await focusControl.focus();",
+            "        if (target.label === \"Object\") {",
+            "          const nextValue = iteration % 2 === 0 ? \"component_x\" : \"solid\";"
+          ]
+        },
+        "source_sha256": "fe03ff2c055c9bf17da78db170c04ff54f56da8bc77884da0807c6401af96cc6"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 1127,
+        "symbol": "qualifyVisualizationMutationStability",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1125,
+          "end_line": 1129,
+          "lines": [
+            "",
+            "      for (let iteration = 0; iteration < target.iterations; iteration += 1) {",
+            "        await focusControl.focus();",
+            "        if (target.label === \"Object\") {",
+            "          const nextValue = iteration % 2 === 0 ? \"component_x\" : \"solid\";"
+          ]
+        },
+        "source_sha256": "dea58b8edb496682bda27c34e345427884344627f2f35244c752bfd9604ca3da"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Każda iteracja ustawia focus, mutuje kontrolkę, czeka 40 ms i obserwuje remount/focus/animacje. Współbieżność zmieniłaby kolejność mutacji i pomiaru.",
+      "safe_followup_pl": "Zachować focus → mutacja → settle → obserwacja."
+    },
+    {
+      "warning_id": "W29",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 4655,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 4653,
+          "end_line": 4657,
+          "lines": [
+            "  let quietSince = Date.now();",
+            "  while (Date.now() < deadline) {",
+            "    await page.waitForTimeout(100);",
+            "    if (fixture.requests.length !== previousCount) {",
+            "      previousCount = fixture.requests.length;"
+          ]
+        },
+        "source_sha256": "fe03ff2c055c9bf17da78db170c04ff54f56da8bc77884da0807c6401af96cc6"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-inspector.mjs",
+        "line": 4865,
+        "symbol": "waitForInspectorRequestQuiet",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 4863,
+          "end_line": 4867,
+          "lines": [
+            "  let quietSince = Date.now();",
+            "  while (Date.now() < deadline) {",
+            "    await page.waitForTimeout(100);",
+            "    if (fixture.requests.length !== previousCount) {",
+            "      previousCount = fixture.requests.length;"
+          ]
+        },
+        "source_sha256": "dea58b8edb496682bda27c34e345427884344627f2f35244c752bfd9604ca3da"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "waitForInspectorRequestQuiet obserwuje rosnącą tablicę requestów i wymaga okresu bez nowych wpisów. To polling zdarzeń.",
+      "safe_followup_pl": "Zachować polling i quiet window."
+    },
+    {
+      "warning_id": "W30",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 383,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 381,
+          "end_line": 385,
+          "lines": [
+            "  }",
+            "  for (const directAlgorithm of [\"nonlinear_cg\"]) {",
+            "    await algorithm.selectOption(directAlgorithm);",
+            "    if (await inspector.locator('[aria-label=\"Integrator\"]').isVisible()) {",
+            "      throw new Error(`${directAlgorithm} exposed LLG-only integrator controls.`);"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 1091,
+        "symbol": "LLG-only algorithm assertion block",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1089,
+          "end_line": 1093,
+          "lines": [
+            "  }",
+            "  for (const directAlgorithm of [\"nonlinear_cg\"]) {",
+            "    await algorithm.selectOption(directAlgorithm);",
+            "    if (await inspector.locator('[aria-label=\"Integrator\"]').isVisible()) {",
+            "      throw new Error(`${directAlgorithm} exposed LLG-only integrator controls.`);"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "superseded",
+      "rationale_pl": "Kod iteruje po stałej, jednoelementowej liście [nonlinear_cg]. Nie ma tu powtarzanego workloadu do równoleglenia, więc ostrzeżenie syntaktyczne nie wskazuje praktycznej pracy performance.",
+      "safe_followup_pl": "Brak działania performance; ewentualne usunięcie pętli byłoby osobnym uproszczeniem."
+    },
+    {
+      "warning_id": "W31",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 556,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 554,
+          "end_line": 558,
+          "lines": [
+            "    \"maximum t_sampling for fc\",",
+            "  ]) {",
+            "    await inspector.getByText(metric, { exact: true }).first().waitFor({",
+            "      state: \"visible\",",
+            "      timeout: timeoutMs,"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 1285,
+        "symbol": "verifyWorkflowActionInspectors",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 1283,
+          "end_line": 1287,
+          "lines": [
+            "    \"maximum t_sampling for fc\",",
+            "  ]) {",
+            "    await inspector.getByText(metric, { exact: true }).first().waitFor({",
+            "      state: \"visible\",",
+            "      timeout: timeoutMs,"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po otwarciu inspectora pięć waitFor sprawdza widoczność niezależnych metryk w tym samym stabilnym widoku. Między locatorami nie ma mutacji, więc waitery można uruchomić wspólnie, zachowując komplet etykiet i timeoutów.",
+      "safe_followup_pl": "Kandydat: Promise.all pięciu waiterów z zachowaniem listy i timeoutów."
+    },
+    {
+      "warning_id": "W32",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 1012,
+        "rule": "async-parallel",
+        "description": "Independent awaits run sequentially",
+        "snippet": {
+          "start_line": 1010,
+          "end_line": 1014,
+          "lines": [
+            "    await node.waitFor({ state: \"visible\", timeout: timeoutMs });",
+            "  } catch (error) {",
+            "    const visibleNodes = await page",
+            "      .locator(\".fm-explorer [data-node-id]\")",
+            "      .evaluateAll((nodes) =>"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 2772,
+        "symbol": "expandExplorerNode",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 2770,
+          "end_line": 2774,
+          "lines": [
+            "    await node.waitFor({ state: \"visible\", timeout: timeoutMs });",
+            "  } catch (error) {",
+            "    const visibleNodes = await page",
+            "      .locator(\".fm-explorer [data-node-id]\")",
+            "      .evaluateAll((nodes) =>"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "expandExplorerNode najpierw czeka na wskazany node. Dopiero catch po timeoutcie pobiera widoczne IDs, by wyjaśnić brak elementu; diagnostyka zależy od wyniku pierwszego wait.",
+      "safe_followup_pl": "Zachować wait i warunkową diagnostykę w catch."
+    },
+    {
+      "warning_id": "W33",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 1579,
+        "rule": "async-parallel",
+        "description": "Independent awaits run sequentially",
+        "snippet": {
+          "start_line": 1577,
+          "end_line": 1581,
+          "lines": [
+            "    });",
+            "  } catch (error) {",
+            "    const regionsActive = await regionsNode.getAttribute(\"data-active\");",
+            "    const regionsText = await regionsNode.textContent().catch(() => \"\");",
+            "    const inspectorText = await inspector.textContent().catch(() => \"\");"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 3339,
+        "symbol": "createObjectRegionAndAssertScriptSync",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 3337,
+          "end_line": 3341,
+          "lines": [
+            "    });",
+            "  } catch (error) {",
+            "    const regionsActive = await regionsNode.getAttribute(\"data-active\");",
+            "    const regionsText = await regionsNode.textContent().catch(() => \"\");",
+            "    const inspectorText = await inspector.textContent().catch(() => \"\");"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po timeoutcie nagłówka panelu catch odczytuje data-active, tekst wiersza i tekst inspectora. To niezależne dane błędu, które można pobrać jednym snapshotem DOM. Tylko failure path.",
+      "safe_followup_pl": "Niskopriorytetowy kandydat dla spójnej diagnostyki błędu."
+    },
+    {
+      "warning_id": "W34",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 2007,
+        "rule": "async-parallel",
+        "description": "Independent awaits run sequentially",
+        "snippet": {
+          "start_line": 2005,
+          "end_line": 2009,
+          "lines": [
+            "  }",
+            "",
+            "  const savedTarget = await inspector",
+            "    .getByRole(\"combobox\", { name: \"Target\", exact: true })",
+            "    .inputValue();"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 3767,
+        "symbol": "addEigenmodesAndEditFrequencyWindow",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 3765,
+          "end_line": 3769,
+          "lines": [
+            "  }",
+            "",
+            "  const savedTarget = await inspector",
+            "    .getByRole(\"combobox\", { name: \"Target\", exact: true })",
+            "    .inputValue();"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Po ACK transakcji i walidacji zapisanej sceny, bez kolejnej mutacji, odczytywane są cztery wartości formularza: Target, Frequency min/max i Operator. To read-only odczyty niezależne od siebie.",
+      "safe_followup_pl": "Kandydat: wspólny readback czterech wartości po ACK; nie łączyć go z Save ani waitForTransactionCount."
+    },
+    {
+      "warning_id": "W35",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 2010,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 2008,
+          "end_line": 2012,
+          "lines": [
+            "    .getByRole(\"combobox\", { name: \"Target\", exact: true })",
+            "    .inputValue();",
+            "  const savedFrequencyMin = await inspector",
+            "    .getByRole(\"textbox\", { name: \"Frequency min\", exact: true })",
+            "    .inputValue();"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 3770,
+        "symbol": "addEigenmodesAndEditFrequencyWindow",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 3768,
+          "end_line": 3772,
+          "lines": [
+            "    .getByRole(\"combobox\", { name: \"Target\", exact: true })",
+            "    .inputValue();",
+            "  const savedFrequencyMin = await inspector",
+            "    .getByRole(\"textbox\", { name: \"Frequency min\", exact: true })",
+            "    .inputValue();"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Frequency min należy do tej samej grupy czterech readbacków po ACK co Target, Frequency max i Operator; nie zależy od ich wartości.",
+      "safe_followup_pl": "Kandydat: zebrać wraz z W34/W36 i zachować asercję wszystkich pól."
+    },
+    {
+      "warning_id": "W36",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 2016,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 2014,
+          "end_line": 2018,
+          "lines": [
+            "    .getByRole(\"textbox\", { name: \"Frequency max\", exact: true })",
+            "    .inputValue();",
+            "  const savedOperator = await inspector",
+            "    .getByRole(\"combobox\", { name: \"Operator\", exact: true })",
+            "    .inputValue();"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 3776,
+        "symbol": "addEigenmodesAndEditFrequencyWindow",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 3774,
+          "end_line": 3778,
+          "lines": [
+            "    .getByRole(\"textbox\", { name: \"Frequency max\", exact: true })",
+            "    .inputValue();",
+            "  const savedOperator = await inspector",
+            "    .getByRole(\"combobox\", { name: \"Operator\", exact: true })",
+            "    .inputValue();"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Frequency max i Operator należą do tej samej grupy czterech readbacków po ACK; nie mutują formularza i nie wymagają kolejności.",
+      "safe_followup_pl": "Kandydat: zebrać wraz z W34/W35 i zachować asercję wszystkich pól."
+    },
+    {
+      "warning_id": "W37",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 2409,
+        "rule": "server-sequential-independent-await",
+        "description": "Sequential independent awaits",
+        "snippet": {
+          "start_line": 2407,
+          "end_line": 2411,
+          "lines": [
+            "      { nodeId: \"unavailable\", text: error instanceof Error ? error.message : String(error) },",
+            "    ]);",
+            "  const inspectorText = await page",
+            "    .locator(\".fm-inspector\")",
+            "    .textContent()"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 4169,
+        "symbol": "assertExplorerRowSelected",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 4167,
+          "end_line": 4171,
+          "lines": [
+            "      { nodeId: \"unavailable\", text: error instanceof Error ? error.message : String(error) },",
+            "    ]);",
+            "  const inspectorText = await page",
+            "    .locator(\".fm-inspector\")",
+            "    .textContent()"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "valid_candidate",
+      "rationale_pl": "Dopiero po wyczerpaniu pollingu selection timeout failure path zbiera selected rows i tekst inspectora. To niezależne dane diagnostyczne do wspólnego snapshotu; warunek wyboru pozostaje bez zmian.",
+      "safe_followup_pl": "Niskopriorytetowy kandydat tylko dla timeout diagnostics."
+    },
+    {
+      "warning_id": "W38",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 2435,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 2433,
+          "end_line": 2437,
+          "lines": [
+            "  const deadline = Date.now() + timeoutMs;",
+            "  while (scriptSyncs.length < count && Date.now() < deadline) {",
+            "    await page.waitForTimeout(50);",
+            "  }",
+            "  if (scriptSyncs.length < count) {"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 4195,
+        "symbol": "waitForRegionScriptSyncCount",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 4193,
+          "end_line": 4197,
+          "lines": [
+            "  const deadline = Date.now() + timeoutMs;",
+            "  while (scriptSyncs.length < count && Date.now() < deadline) {",
+            "    await page.waitForTimeout(50);",
+            "  }",
+            "  if (scriptSyncs.length < count) {"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Pętla czeka, aż event-driven scriptSyncs osiągnie wymagany count albo upłynie deadline. Kolejne odczyty zależą od nadchodzących synców.",
+      "safe_followup_pl": "Zachować polling i count gate."
+    },
+    {
+      "warning_id": "W39",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 3184,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 3182,
+          "end_line": 3186,
+          "lines": [
+            "  const deadline = Date.now() + timeoutMs;",
+            "  while (transactions.length < count && Date.now() < deadline) {",
+            "    await page.waitForTimeout(50);",
+            "  }",
+            "  if (transactions.length < count) {"
+          ]
+        },
+        "source_sha256": "56094c485cfabad8cb706a7fb020fc36471c8d90492e6fd69c3f6924e98c9e45"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-study-authoring-ui.mjs",
+        "line": 4950,
+        "symbol": "waitForTransactionCount",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 4948,
+          "end_line": 4952,
+          "lines": [
+            "  const deadline = Date.now() + timeoutMs;",
+            "  while (transactions.length < count && Date.now() < deadline) {",
+            "    await page.waitForTimeout(50);",
+            "  }",
+            "  if (transactions.length < count) {"
+          ]
+        },
+        "source_sha256": "5b5252c0930dbf54cde644172e4b90fb2d335e909657079ad5cb0155d6cfb552"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Pętla czeka na wymaganą liczbę transactions zarejestrowanych przez fixture, czyli synchronizuje test z faktycznymi POST/ACK.",
+      "safe_followup_pl": "Zachować transactions count gate i timeout."
+    },
+    {
+      "warning_id": "W40",
+      "source": {
+        "pr": 97,
+        "collection": "issue_comment",
+        "comment_id": 5756853919,
+        "aggregate_body_sha256": "fa446743658d12c61e826a2445957418dcc1cc019ce6b342299bee30b7ccd744",
+        "inventory_classification": "pending_source_review",
+        "ledger_match": null
+      },
+      "historical": {
+        "commit": "b34953c8616684901c187b368b1d1c069b5fd43f",
+        "file": "apps/control-room/scripts/smoke-viewport-3d-explorer-inspector-targets.mjs",
+        "line": 1815,
+        "rule": "async-await-in-loop",
+        "description": "await inside a loop",
+        "snippet": {
+          "start_line": 1813,
+          "end_line": 1817,
+          "lines": [
+            "    ]) {",
+            "      try {",
+            "        await operation();",
+            "      } catch (error) {",
+            "        cleanupFailures.push(new Error(`${label}: ${error instanceof Error ? error.message : String(error)}`));"
+          ]
+        },
+        "source_sha256": "308dac3801db16adf192924dd5a642d53898dfd5fe55a987208a02bf3cfd32b4"
+      },
+      "current": {
+        "commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+        "file": "apps/control-room/scripts/smoke-viewport-3d-explorer-inspector-targets.mjs",
+        "line": 3417,
+        "symbol": "stop",
+        "line_mapping": "identical source line matched by stdlib SequenceMatcher",
+        "snippet": {
+          "start_line": 3415,
+          "end_line": 3419,
+          "lines": [
+            "    ]) {",
+            "      try {",
+            "        await operation();",
+            "      } catch (error) {",
+            "        cleanupFailures.push(new Error(`${label}: ${error instanceof Error ? error.message : String(error)}`));"
+          ]
+        },
+        "source_sha256": "c366685a07656228ab1360f912598e7ea4046324e06a38bef27e6ebaca09a2b8"
+      },
+      "disposition": "sequential_required",
+      "rationale_pl": "Cleanup zatrzymuje proces przed usunięciem jego artefaktów, a potem odtwarza konfigurację. Catch gromadzi błędy, ale kontynuuje kolejne operacje. Współbieżność mogłaby usunąć zasoby przed stop albo przywrócić config za wcześnie.",
+      "safe_followup_pl": "Zachować serialne stop → remove → restore i agregowanie błędów."
+    }
+  ],
+  "verification_boundary_pl": "Wyłącznie odczyt hash-bound snapshotów źródła, JSON i porównanie linii biblioteką standardową. Bez testów, buildu, Node, przeglądarki, importów projektu, Git mutation lub edycji kodu.",
+  "excluded_diagnostics": [
+    {
+      "file": "apps/control-room/src/modules/inspector/panels/analysis-results/PinnedVisualizationsInspectorPanel.tsx",
+      "line": 41,
+      "rule": "no-high-complexity-react-function",
+      "inventory_classification": "covered_by_inline_review_and_later_source_change",
+      "scope_note_pl": "Poza 40 performance. Cztery wpisy są oznaczone w inventory jako covered_by_inline_review_and_later_source_change; EigenDispersion L24 complexity pozostaje wyłączony z tej triage zgodnie z poleceniem rodzica."
+    },
+    {
+      "file": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel.tsx",
+      "line": 68,
+      "rule": "only-export-components",
+      "inventory_classification": "covered_by_inline_review_and_later_source_change",
+      "scope_note_pl": "Poza 40 performance. Cztery wpisy są oznaczone w inventory jako covered_by_inline_review_and_later_source_change; EigenDispersion L24 complexity pozostaje wyłączony z tej triage zgodnie z poleceniem rodzica."
+    },
+    {
+      "file": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel.tsx",
+      "line": 102,
+      "rule": "only-export-components",
+      "inventory_classification": "covered_by_inline_review_and_later_source_change",
+      "scope_note_pl": "Poza 40 performance. Cztery wpisy są oznaczone w inventory jako covered_by_inline_review_and_later_source_change; EigenDispersion L24 complexity pozostaje wyłączony z tej triage zgodnie z poleceniem rodzica."
+    },
+    {
+      "file": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.tsx",
+      "line": 24,
+      "rule": "no-high-complexity-react-function",
+      "inventory_classification": "pending_source_review",
+      "scope_note_pl": "Jedyny EigenDispersion complexity warning został jawnie pominięty w tym zadaniu."
+    },
+    {
+      "file": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.tsx",
+      "line": 205,
+      "rule": "only-export-components",
+      "inventory_classification": "covered_by_inline_review_and_later_source_change",
+      "scope_note_pl": "Poza 40 performance. Cztery wpisy są oznaczone w inventory jako covered_by_inline_review_and_later_source_change; EigenDispersion L24 complexity pozostaje wyłączony z tej triage zgodnie z poleceniem rodzica."
+    }
+  ],
+  "source_inventory": {
+    "file": "review-wide-inventory-5e8f-map.json",
+    "sha256": "7e76c917b98659deff6deac982f80627e4028416be943218747062a1c46ab5ad",
+    "canonical_ledger_file": "docs/superpowers/plans/2026-10-07-codex-review-pr97-pr102.md",
+    "canonical_ledger_commit": "152ad2e1fe7830536bd195db73c396f9f6ac5121",
+    "canonical_ledger_sha256": "a0cd891e2cd5450d9b78f2750907dc572c6e0934946115618a3f976839cf04eb"
+  }
+}

@@ -4644,3 +4644,14 @@ Poza wcześniejszymi 403 inline comments sprawdzono wszystkie 474 rekordy top-le
 React Doctor body `5756853919` zawiera 45 diagnostyk: 4 już powiązano z inline findings i refaktorem 2926; **41 pozostaje pending_source_review**, nie potwierdzonymi błędami ani pozycjami automatycznie odrzuconymi. Rozkład: audit-chart-performance.mjs 17, smoke-analysis-plots.mjs 7, smoke-inspector.mjs 5, smoke-study-authoring-ui.mjs 10, smoke-viewport-3d-explorer-inspector-targets.mjs 1, EigenDispersionInspectorPanel complexity 1. Raport i mapowanie ID→bodyhash→klasyfikacja zachowano w evidence directory: `review-wide-inventory-5e8f.md` SHA256 `f7b553559b93b732acb6ccdbb0c49315f6338b523e1ed0e9d45ab0e29bca3985`, `review-wide-inventory-5e8f-map.json` SHA256 `7e76c917b98659deff6deac982f80627e4028416be943218747062a1c46ab5ad`. Aktualne zielone testy nie rozstrzygają automatycznie tych historycznych ostrzeżeń.
 
 Zadanie i dalsza integracja z masterem pozostają otwarte.
+## Kontynuacja 16.10.2026 — rozpatrzenie 41 body-only diagnostyk
+
+Wszystkie 41 dotąd `pending_source_review` pozycji z body React Doctor `5756853919` otrzymało ocenę źródłową, mapowanie historyczna→aktualna linia i decyzję. [Pełny raport z decyzjami](2026-10-16-react-doctor-performance-triage.md) zawiera per-warning uzasadnienia oraz [hash-bound konteksty](2026-10-16-react-doctor-performance-triage-evidence.json).
+
+- 19 sekwencji pozostaje celowo uporządkowanych: polling, mutacje strony, GC, pomiary przed–po i cleanup.
+- 1 pętla ma stałą długość jeden; nie stanowi workloadu do równoleglenia.
+- 3 wcześniejsze unresolved rozpatrzono jako `reviewed_no_change`: dwa lookupy po dwóch stałych nazwach, a także dynamiczna obserwacja widocznych toastów. Nie wykazano korzyści zmiany bez ryzyka zmiany semantyki testu.
+- 17 kandydatów pozostawiono jako `reviewed_deferred_optimization`: potencjalne ograniczenie round-tripów lub wspólne snapshoty, często wyłącznie w failure diagnostics; brak zmierzonego bottlenecku i poprawy. To jawny opcjonalny backlog, nie wdrożone przyspieszenie ani nowe potwierdzone błędy.
+- 1 complexity EigenDispersionInspectorPanel rozpatrzono jako `reviewed_retained_maintenance_debt`: długi JSX prezentujący metryki i selected point. Istnieją już osobne model/hook/chart/table. Nie stwierdzono nowego błędu fizycznego, pętli ani efektu React; nie udajemy usunięcia ostrzeżenia.
+
+Źródła 40 wskazań sprawdzono na exact152ad2; komponent na exact2d7b4e3e. Późniejsze zmiany realtime/dokumentacji nie zmieniły tych źródeł. W tej aktualizacji nie zmieniano kodu, nie uruchamiano lokalnych testów i nie wyłączano reguł analizatora. Pozostałe potwierdzone błędy zachowania oraz kwalifikacja nadal wymagają pracy; cel nie jest ukończony.
