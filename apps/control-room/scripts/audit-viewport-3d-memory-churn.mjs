@@ -46,6 +46,7 @@ const WARM_QUANTITIES = ["m", "H_eff", "H_demag", "H_ex"];
 const FDM_READY_OBJECT_TARGET_ID = "object:fdm-ready-box";
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
+const MAX_GPU_LIFECYCLE_TIMELINE_ENTRIES = 256;
 const injectDroppedPublication =
   process.env.CONTROL_ROOM_AUDIT_INJECT_DROPPED_PUBLICATION === "1";
 const injectBlankScene = process.env.CONTROL_ROOM_AUDIT_INJECT_BLANK_SCENE === "1";
@@ -99,6 +100,8 @@ const visualizationAckRequests = [];
 const fixture = createFdmFixture({ trackFieldResponses: true });
 let auditActive = false;
 let auditPhase = "bootstrap";
+const gpuLifecycleTimeline = [];
+let gpuLifecycleTimelineDropped = 0;
 
 await installFdmFixtureApi(page, fixture, fixtureRequests);
 await installBrowserAuditInstrumentation(page);
@@ -209,6 +212,12 @@ try {
       QUANTITY_SWITCH_TIMEOUT_MS,
       `Timed out warming viewport quantity ${quantity}.`,
     );
+    await captureGpuLifecycleSnapshot(
+      page,
+      gpuLifecycleTimeline,
+      "warmup-quantity-settled",
+      quantity,
+    );
   }
   await waitForCondition(
     () => WARM_QUANTITIES.every((quantityId) =>
@@ -247,6 +256,12 @@ try {
     initialFullFieldResponse.etag,
     FDM_READY_OBJECT_TARGET_ID,
   );
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "warmup-active-object-adoption",
+    initialQuantityId,
+  );
 
   auditLog("reading baseline diagnostics");
   const baseline = {
@@ -256,10 +271,28 @@ try {
     heapBytes: await readJsHeapBytes(cdp),
   };
   rawPerformanceTrace.push(await captureViewportPerformanceSnapshot(page, "baseline"));
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "baseline",
+    initialQuantityId,
+  );
 
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "before-initial-unmount",
+    currentFixtureQuantity(fixture),
+  );
   await page.locator('[data-action-id="ws-2d"]').click();
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   await page.waitForTimeout(1_000);
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "after-initial-unmount",
+    currentFixtureQuantity(fixture),
+  );
   const unmountedBaselineRuntime = await readViewportAuditRuntime(page);
   const viewport3DMenuItem = page.getByRole("menuitem", { name: "3D viewport" });
   if (await viewport3DMenuItem.isVisible()) {
@@ -273,6 +306,12 @@ try {
   await canvas.waitFor({ state: "visible", timeout: 10_000 });
   await page.keyboard.press("Escape");
   await waitForDiagnostics(viewport);
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "viewport-reopened",
+    currentFixtureQuantity(fixture),
+  );
   if (injectListenerLeak) {
     await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.injectViewportAuditListenerLeak());
   }
@@ -288,6 +327,12 @@ try {
     "quantity-switch-before",
   );
   rawPerformanceTrace.push(quantitySwitchPerformanceBefore);
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "quantity-stress-start",
+    currentFixtureQuantity(fixture),
+  );
   for (const [index, quantity] of QUANTITY_SEQUENCE.entries()) {
     if (index % 12 === 0) {
       auditLog("switching cached quantity batch", `${index + 1}-${index + 12}`);
@@ -326,8 +371,20 @@ try {
       fixture.visualizationState.revision,
       beforePublicationGpu,
     );
+    await captureGpuLifecycleSnapshot(
+      page,
+      gpuLifecycleTimeline,
+      "quantity-stress-rendered",
+      quantity,
+    );
   }
   await page.waitForTimeout(500);
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "quantity-stress-stable-end",
+    currentFixtureQuantity(fixture),
+  );
   const quantitySwitchPerformanceAfter = await captureViewportPerformanceSnapshot(
     page,
     "quantity-switch-after",
@@ -410,11 +467,34 @@ try {
     await clearViewportCanvas(page);
     await assertCanvasHasFidelity(page);
   }
-  const shaderSignatures = await collectStableShaderSignatures(page, fixture, viewport);
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "shader-signature-phase-start",
+    currentFixtureQuantity(fixture),
+  );
+  const shaderSignatures = await collectStableShaderSignatures(
+    page,
+    fixture,
+    viewport,
+    gpuLifecycleTimeline,
+  );
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "shader-signature-phase-complete",
+    currentFixtureQuantity(fixture),
+  );
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "settled-3d.png") });
   if (injectGpuBufferLeak) {
     await injectViewportGpuBufferLeak(page);
   }
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    injectGpuBufferLeak ? "pre-gpu-gate-after-negative-control" : "pre-gpu-gate",
+    currentFixtureQuantity(fixture),
+  );
   const gpuAfterStress = await readBrowserAuditCounters(page);
   const baselineLiveBuffers =
     baseline.gpu.buffersCreated - baseline.gpu.buffersDeleted;
@@ -435,6 +515,12 @@ try {
   await page.locator('[data-action-id="ws-2d"]').click();
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   await page.waitForTimeout(1_000);
+  await captureGpuLifecycleSnapshot(
+    page,
+    gpuLifecycleTimeline,
+    "after-final-unmount",
+    currentFixtureQuantity(fixture),
+  );
   const afterUnmount = await readBrowserAuditCounters(page);
   const afterUnmountRuntime = await readViewportAuditRuntime(page);
   rawPerformanceTrace.push(await captureViewportPerformanceSnapshot(page, "after-unmount"));
@@ -469,6 +555,8 @@ try {
     shaderSignatures,
     fixtureRequests,
     gpuAfterStress,
+    gpuLifecycleTimeline,
+    gpuLifecycleTimelineDropped,
     idle,
     idleRequests,
     partialMultilayer,
@@ -500,6 +588,8 @@ try {
     requestFailureDiagnostics,
     topologyRequests,
     visualizationAckRequests,
+    gpuLifecycleTimeline,
+    gpuLifecycleTimelineDropped,
   });
   throw error;
 } finally {
@@ -864,7 +954,12 @@ async function injectViewportGpuBufferLeak(page) {
   });
 }
 
-async function collectStableShaderSignatures(page, fixture, viewport) {
+async function collectStableShaderSignatures(
+  page,
+  fixture,
+  viewport,
+  gpuLifecycleTimeline,
+) {
   const modes = [
     { colorMode: "magnitude", component: "magnitude", id: "scalar" },
     { colorMode: "orientation", component: "magnitude", id: "orientation" },
@@ -888,6 +983,12 @@ async function collectStableShaderSignatures(page, fixture, viewport) {
     await assertPublicationRendered(page, viewport, "m", fixture.visualizationState.revision, before);
     const first = await assertCanvasHasFidelity(page);
     const second = await assertCanvasHasFidelity(page);
+    await captureGpuLifecycleSnapshot(
+      page,
+      gpuLifecycleTimeline,
+      "shader-signature-" + mode.id,
+      "m",
+    );
     if (first.signature !== second.signature) {
       throw new Error(`Shader visual signature for ${mode.id} was not repeatable.`);
     }
@@ -930,6 +1031,120 @@ function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
 
 async function readBrowserAuditCounters(page) {
   return page.evaluate(() => ({ ...(window.__FM_VIEWPORT_BROWSER_AUDIT__ ?? {}) }));
+}
+
+function appendBoundedGpuLifecycleSnapshot(timeline, snapshot, maxEntries = 256) {
+  timeline.push(snapshot);
+  const overflow = Math.max(0, timeline.length - maxEntries);
+  if (overflow > 0) timeline.splice(0, overflow);
+  return overflow;
+}
+
+async function captureGpuLifecycleSnapshot(
+  page,
+  timeline,
+  phase,
+  requestedQuantity = null,
+) {
+  let browserSnapshot;
+  try {
+    browserSnapshot = await page.evaluate((expectedObjectTargetId) => {
+      const counters = window.__FM_VIEWPORT_BROWSER_AUDIT__ ?? null;
+      const trace = counters?.viewportAckTrace ?? [];
+      const frame = trace.slice().reverse().find((entry) =>
+        entry.event === "frame-commit" &&
+        entry.currentFullBuffer?.fieldBufferId,
+      ) ?? null;
+      const identity = frame?.currentFullBuffer ?? null;
+      let actualQuantityId = null;
+      if (identity?.resourceKey) {
+        try {
+          const resourceKey = identity.resourceKey;
+          const resourceUrl = new URL(
+            resourceKey.slice(resourceKey.lastIndexOf("|") + 1),
+            window.location.href,
+          );
+          const match = resourceUrl.pathname.match(
+            /\/data\/fields\/([^/]+)\/samples\/vector$/,
+          );
+          actualQuantityId = match ? decodeURIComponent(match[1]) : null;
+        } catch {
+          actualQuantityId = null;
+        }
+      }
+      const activeObjectAdoption = frame?.currentFullBufferActiveAdoptions?.find(
+        (adoption) =>
+          adoption?.targetKind === "object" &&
+          adoption.targetId === expectedObjectTargetId &&
+          adoption.kind === "surface" &&
+          adoption.fieldBufferId === identity?.fieldBufferId,
+      ) ?? null;
+      const hudText = Array.from(
+        document.querySelectorAll(".fm-viewport-3d__hud span"),
+      ).map((node) => node.textContent?.trim() ?? "").join(" ");
+      const hudQuantityMatch = hudText.match(/(?:^|\s)q:([^\s]+)/);
+      const gpuContextDiagnostics =
+        typeof counters?.gpuContextDiagnostics === "function"
+          ? counters.gpuContextDiagnostics()
+          : null;
+      return {
+        frameCommitProvenance:
+          "latest recorded frame-commit from viewportAckTrace; history only and not proof of the currently mounted canvas",
+        activeObjectAdoption: activeObjectAdoption ? {
+          carrierId: activeObjectAdoption.carrierId ?? null,
+          fieldBufferId: activeObjectAdoption.fieldBufferId ?? null,
+          requestScopeEpoch: activeObjectAdoption.requestScopeEpoch ?? null,
+          resourceKey: activeObjectAdoption.resourceKey ?? null,
+          sessionEpoch: activeObjectAdoption.sessionEpoch ?? null,
+          sessionId: activeObjectAdoption.sessionId ?? null,
+          targetId: activeObjectAdoption.targetId ?? null,
+        } : null,
+        currentFullBuffer: identity ? {
+          fieldBufferId: identity.fieldBufferId ?? null,
+          fieldRevision: identity.fieldRevision ?? null,
+          quantityId: actualQuantityId,
+          requestScopeEpoch: frame?.requestScopeEpoch ?? null,
+          resourceKey: identity.resourceKey ?? null,
+          sessionEpoch: identity.sessionEpoch ?? null,
+          sessionId: identity.sessionId ?? null,
+        } : null,
+        gpuContextDiagnostics,
+        gpuCounters: counters ? {
+          bufferBytesUploaded: counters.bufferBytesUploaded ?? null,
+          buffersCreated: counters.buffersCreated ?? null,
+          buffersDeleted: counters.buffersDeleted ?? null,
+          drawCalls: counters.drawCalls ?? null,
+          frames: counters.frames ?? null,
+        } : null,
+        latestActiveAdoption: frame?.latestActiveAdoption ? {
+          fieldBufferId: frame.latestActiveAdoption.fieldBufferId ?? null,
+          requestScopeEpoch: frame.latestActiveAdoption.requestScopeEpoch ?? null,
+          resourceKey: frame.latestActiveAdoption.resourceKey ?? null,
+          sessionEpoch: frame.latestActiveAdoption.sessionEpoch ?? null,
+          sessionId: frame.latestActiveAdoption.sessionId ?? null,
+          targetId: frame.latestActiveAdoption.targetId ?? null,
+          targetKind: frame.latestActiveAdoption.targetKind ?? null,
+        } : null,
+        observedHudQuantity: hudQuantityMatch?.[1] ?? null,
+      };
+    }, FDM_READY_OBJECT_TARGET_ID);
+  } catch (error) {
+    browserSnapshot = {
+      captureError: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const snapshot = {
+    observedAtUnixMs: Date.now(),
+    phase,
+    requestedQuantity,
+    ...browserSnapshot,
+  };
+  gpuLifecycleTimelineDropped += appendBoundedGpuLifecycleSnapshot(
+    timeline,
+    snapshot,
+    MAX_GPU_LIFECYCLE_TIMELINE_ENTRIES,
+  );
+  return snapshot;
 }
 
 async function verifyViewportIdle(page, observeMs) {
@@ -1033,6 +1248,13 @@ async function waitForHttp(targetUrl, timeoutMs, child) {
 
 async function installBrowserAuditInstrumentation(page) {
   await page.addInitScript(() => {
+    const MAX_WEBGL_CONTEXT_DIAGNOSTICS = 16;
+    const MAX_WEBGL_CONTEXT_EVENTS = 64;
+    const contextStateByGl = new WeakMap();
+    const contextSummaries = new Map();
+    const contextEvents = [];
+    let nextWebGlContextId = 1;
+    let omittedContextCount = 0;
     const counters = {
       bufferBytesUploaded: 0,
       buffersCreated: 0,
@@ -1052,6 +1274,34 @@ async function installBrowserAuditInstrumentation(page) {
       value: fdmBuildResults,
     });
     window.__FM_VIEWPORT_BROWSER_AUDIT__ = counters;
+    Object.defineProperty(counters, "gpuContextDiagnostics", {
+      enumerable: false,
+      value: () => ({
+        contextEvents: contextEvents.map((event) => ({ ...event })),
+        contexts: Array.from(contextSummaries.values(), (context) => ({
+          bufferCreateCalls: context.bufferCreateCalls,
+          bufferDeleteCalls: context.bufferDeleteCalls,
+          contextId: context.contextId,
+          contextLostEvents: context.contextLostEvents,
+          contextRestoredEvents: context.contextRestoredEvents,
+          contextType: context.contextType,
+        })),
+        measurementKind:
+          "WebGL createBuffer/deleteBuffer call counts; not retained GPU objects or driver bytes",
+        omittedContextCount,
+      }),
+    });
+    const recordContextEvent = (contextState, eventName) => {
+      if (eventName === "webglcontextlost") contextState.contextLostEvents += 1;
+      if (eventName === "webglcontextrestored") contextState.contextRestoredEvents += 1;
+      contextEvents.push({
+        contextId: contextState.contextId,
+        eventName,
+        observedAtUnixMs: Date.now(),
+        phase: window.__FM_VIEWPORT_AUDIT_STEP__ ?? null,
+      });
+      if (contextEvents.length > MAX_WEBGL_CONTEXT_EVENTS) contextEvents.shift();
+    };
 
     const workerMessageListeners = new WeakMap();
     const originalWorkerAddEventListener = Worker.prototype.addEventListener;
@@ -1117,14 +1367,49 @@ async function installBrowserAuditInstrumentation(page) {
         return context;
       }
       const gl = context;
+      let contextState = contextStateByGl.get(gl);
+      if (!contextState) {
+        const contextId = nextWebGlContextId++;
+        const tracked = contextSummaries.size < MAX_WEBGL_CONTEXT_DIAGNOSTICS;
+        contextState = {
+          bufferCreateCalls: 0,
+          bufferDeleteCalls: 0,
+          contextId,
+          contextLostEvents: 0,
+          contextRestoredEvents: 0,
+          contextType: String(args[0]),
+          tracked,
+        };
+        contextStateByGl.set(gl, contextState);
+        if (tracked) {
+          contextSummaries.set(contextId, contextState);
+          const canvas = gl.canvas;
+          if (canvas && typeof canvas.addEventListener === "function") {
+            canvas.addEventListener("webglcontextlost", () =>
+              recordContextEvent(contextState, "webglcontextlost"),
+            );
+            canvas.addEventListener("webglcontextrestored", () =>
+              recordContextEvent(contextState, "webglcontextrestored"),
+            );
+          }
+        } else {
+          omittedContextCount += 1;
+        }
+      }
       if (gl.__fullmagAuditWrapped) return gl;
       gl.__fullmagAuditWrapped = true;
       for (const name of ["createBuffer", "deleteBuffer", "drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced"]) {
         const original = gl[name];
         if (typeof original !== "function") continue;
         gl[name] = function (...methodArgs) {
-          if (name === "createBuffer") counters.buffersCreated += 1;
-          if (name === "deleteBuffer") counters.buffersDeleted += 1;
+          if (name === "createBuffer") {
+            counters.buffersCreated += 1;
+            if (contextState.tracked) contextState.bufferCreateCalls += 1;
+          }
+          if (name === "deleteBuffer") {
+            counters.buffersDeleted += 1;
+            if (contextState.tracked) contextState.bufferDeleteCalls += 1;
+          }
           if (name.startsWith("draw")) counters.drawCalls += 1;
           return original.apply(this, methodArgs);
         };
@@ -1226,6 +1511,8 @@ async function reportAuditFailure(
     requestFailureDiagnostics,
     topologyRequests,
     visualizationAckRequests,
+    gpuLifecycleTimeline,
+    gpuLifecycleTimelineDropped,
   },
 ) {
   const snapshot = await page
@@ -1283,6 +1570,8 @@ async function reportAuditFailure(
     JSON.stringify(
       {
         browser: snapshot,
+        gpuLifecycleTimeline,
+        gpuLifecycleTimelineDropped,
         errors: errors.slice(-10),
         fieldRequests: fieldRequests.slice(-10),
         fixtureRequests: fixtureRequests.slice(-20),

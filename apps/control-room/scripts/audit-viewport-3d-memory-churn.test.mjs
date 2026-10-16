@@ -18,6 +18,18 @@ const resolveInitialFdmFieldAdoption = runInNewContext(
   { URL },
 );
 
+const timelineStart = auditSource.indexOf(
+  "function appendBoundedGpuLifecycleSnapshot(",
+);
+const timelineEnd = auditSource.indexOf(
+  "\nasync function captureGpuLifecycleSnapshot(",
+  timelineStart,
+);
+assert.ok(timelineStart >= 0 && timelineEnd > timelineStart);
+const appendBoundedGpuLifecycleSnapshot = runInNewContext(
+  auditSource.slice(timelineStart, timelineEnd) +
+    "; appendBoundedGpuLifecycleSnapshot",
+);
 const quantityId = "H_eff";
 const expectedObjectTargetId = "object:fdm-ready-box";
 const payloadEtag = '"fdm-memory-H_eff-r0"';
@@ -173,3 +185,19 @@ test(
     }
   },
 );
+
+test("bounds lifecycle snapshots while retaining the newest transition evidence", () => {
+  const timeline = [];
+  let dropped = 0;
+  for (let index = 0; index < 260; index += 1) {
+    dropped += appendBoundedGpuLifecycleSnapshot(
+      timeline,
+      { index },
+    );
+  }
+
+  assert.equal(timeline.length, 256);
+  assert.equal(timeline[0].index, 4);
+  assert.equal(timeline.at(-1).index, 259);
+  assert.equal(dropped, 4);
+});
