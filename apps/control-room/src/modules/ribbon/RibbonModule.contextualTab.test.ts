@@ -43,6 +43,23 @@ describe("Ribbon contextual module selection", () => {
     })).toBe("analysis.dispersion");
   });
 
+  it.each([
+    ["results.dynamics.root", "analysis.time-domain"],
+    ["results.observation_frames.root", "analysis.time-domain"],
+    ["results.observation_frame", "analysis.time-domain"],
+    ["results.hysteresis.root", "analysis.hysteresis"],
+  ])("opens the owning contextual tab for ordinary selection %s", (kind, moduleId) => {
+    expect(contextualAnalysisModuleIdForSelection({
+      ...EMPTY_SELECTION,
+      kind,
+    })).toBe(moduleId);
+    const state = contextualTabDismissalForModuleChange(
+      { contextModuleId: "analysis.dispersion", dismissed: true },
+      moduleId,
+    );
+    expect(contextualRibbonTabIsActive(state, moduleId, true)).toBe(true);
+  });
+
   it("keeps ordinary tab dismissal within the same module and resets after leaving and returning", () => {
     const dispersion = "analysis.dispersion";
     const resonance = "analysis.resonance";

@@ -7,6 +7,10 @@ import type { AnalysisNodeKind } from "./analysisModuleContract";
  * module builders emit `analysis.*` kinds directly.
  */
 export const LEGACY_RESULTS_NODE_KIND_ALIASES: Readonly<Record<string, AnalysisNodeKind>> = {
+  "results.dynamics.root": "analysis.time-domain.overview",
+  "results.observation_frames.root": "analysis.time-domain.overview",
+  "results.observation_frame": "analysis.time-domain.overview",
+  "results.hysteresis.root": "analysis.hysteresis.overview",
   "results.dispersion.root": "analysis.dispersion.overview",
   "results.dispersion.modal.stage": "analysis.dispersion.overview",
   "results.dispersion.driven.stage": "analysis.dispersion.overview",

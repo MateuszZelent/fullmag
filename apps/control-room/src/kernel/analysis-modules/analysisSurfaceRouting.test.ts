@@ -22,6 +22,16 @@ describe("Analysis surface routing from the selected Results node", () => {
     expect(analysisSurfaceForSelectionKind(kind)).toBe("resonance-fmr");
   });
 
+  it.each([
+    ["results.dynamics.root", "analysis.time-domain", "dynamics"],
+    ["results.observation_frames.root", "analysis.time-domain", "dynamics"],
+    ["results.observation_frame", "analysis.time-domain", "dynamics"],
+    ["results.hysteresis.root", "analysis.hysteresis", "hysteresis"],
+  ])("resolves the contextual owner and existing surface for %s", (kind, moduleId, surface) => {
+    expect(analysisModuleIdForNodeKind(kind)).toBe(moduleId);
+    expect(analysisSurfaceForSelectionKind(kind)).toBe(surface);
+  });
+
   it("leaves Analysis unchanged for nodes that do not belong to an analysis", () => {
     expect(analysisSurfaceForSelectionKind("object.visualization")).toBeNull();
     expect(analysisSurfaceForSelectionKind("analysis-chart-point")).toBeNull();
