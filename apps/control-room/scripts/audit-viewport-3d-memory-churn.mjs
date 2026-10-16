@@ -47,6 +47,7 @@ const FDM_READY_OBJECT_TARGET_ID = "object:fdm-ready-box";
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
 const MAX_GPU_LIFECYCLE_TIMELINE_ENTRIES = 256;
+const MAX_INSTANCE_COLOR_LIFECYCLE_EVENTS = 512;
 const injectDroppedPublication =
   process.env.CONTROL_ROOM_AUDIT_INJECT_DROPPED_PUBLICATION === "1";
 const injectBlankScene = process.env.CONTROL_ROOM_AUDIT_INJECT_BLANK_SCENE === "1";
@@ -545,6 +546,7 @@ try {
   if (errors.length > 0) {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
+  const instanceColorLifecycle = await readInstanceColorLifecycleAudit(page);
   await writeAuditArtifact({
     after,
     afterUnmount,
@@ -563,6 +565,7 @@ try {
     quantitySwitchPerformanceDelta,
     rawPerformanceTrace,
     fidelity,
+    instanceColorLifecycle,
     topologyRequests,
     url,
     warmedFieldPayloads,
@@ -913,6 +916,54 @@ async function readViewportAuditRuntime(page) {
     if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
     return hook.readViewportAuditRuntime();
   });
+}
+
+async function readInstanceColorLifecycleAudit(page) {
+  try {
+    return await page.evaluate((maxEvents) => {
+      const audit = window.__FM_VIEWPORT_BROWSER_AUDIT__;
+      const summary = audit?.instanceColorLifecycleSummary ?? null;
+      const roleActionCounts = summary?.objectRoleActionCounts ?? {};
+      const actionCounts = summary?.actionCounts ?? {};
+      return {
+        events: Array.isArray(audit?.instanceColorLifecycleEvents)
+          ? audit.instanceColorLifecycleEvents.slice(-maxEvents)
+          : [],
+        summary: summary ? {
+          actionCounts: {
+            attach: Number(actionCounts.attach ?? 0),
+            detach: Number(actionCounts.detach ?? 0),
+            replace: Number(actionCounts.replace ?? 0),
+          },
+          droppedEventCount: Number(summary.droppedEventCount ?? 0),
+          objectRoleActionCounts: {
+            "fdm-surface": {
+              attach: Number(roleActionCounts["fdm-surface"]?.attach ?? 0),
+              detach: Number(roleActionCounts["fdm-surface"]?.detach ?? 0),
+              replace: Number(roleActionCounts["fdm-surface"]?.replace ?? 0),
+            },
+            "vector-head": {
+              attach: Number(roleActionCounts["vector-head"]?.attach ?? 0),
+              detach: Number(roleActionCounts["vector-head"]?.detach ?? 0),
+              replace: Number(roleActionCounts["vector-head"]?.replace ?? 0),
+            },
+            "vector-shaft": {
+              attach: Number(roleActionCounts["vector-shaft"]?.attach ?? 0),
+              detach: Number(roleActionCounts["vector-shaft"]?.detach ?? 0),
+              replace: Number(roleActionCounts["vector-shaft"]?.replace ?? 0),
+            },
+          },
+          totalEvents: Number(summary.totalEvents ?? 0),
+        } : null,
+      };
+    }, MAX_INSTANCE_COLOR_LIFECYCLE_EVENTS);
+  } catch (error) {
+    return {
+      captureError: error instanceof Error ? error.message : String(error),
+      events: [],
+      summary: null,
+    };
+  }
 }
 
 async function clearViewportCanvas(page) {
@@ -1267,6 +1318,25 @@ async function installBrowserAuditInstrumentation(page) {
       enumerable: false,
       value: viewportAckTrace,
     });
+    const instanceColorLifecycleEvents = [];
+    const instanceColorLifecycleSummary = {
+      actionCounts: { attach: 0, detach: 0, replace: 0 },
+      droppedEventCount: 0,
+      objectRoleActionCounts: {
+        "fdm-surface": { attach: 0, detach: 0, replace: 0 },
+        "vector-head": { attach: 0, detach: 0, replace: 0 },
+        "vector-shaft": { attach: 0, detach: 0, replace: 0 },
+      },
+      totalEvents: 0,
+    };
+    Object.defineProperty(counters, "instanceColorLifecycleEvents", {
+      enumerable: false,
+      value: instanceColorLifecycleEvents,
+    });
+    Object.defineProperty(counters, "instanceColorLifecycleSummary", {
+      enumerable: false,
+      value: instanceColorLifecycleSummary,
+    });
     const fdmBuildRequests = new Map();
     const fdmBuildResults = [];
     Object.defineProperty(counters, "fdmBuildResults", {
@@ -1515,6 +1585,7 @@ async function reportAuditFailure(
     gpuLifecycleTimelineDropped,
   },
 ) {
+  const instanceColorLifecycle = await readInstanceColorLifecycleAudit(page);
   const snapshot = await page
     .evaluate(() => {
       const hud = Array.from(
@@ -1570,6 +1641,7 @@ async function reportAuditFailure(
     JSON.stringify(
       {
         browser: snapshot,
+        instanceColorLifecycle,
         gpuLifecycleTimeline,
         gpuLifecycleTimelineDropped,
         errors: errors.slice(-10),
@@ -1585,6 +1657,15 @@ async function reportAuditFailure(
       2,
     ),
   );
+  try {
+    await mkdir(auditArtifactsDirectory, { recursive: true });
+    await writeFile(
+      path.join(auditArtifactsDirectory, "instance-color-lifecycle.failure.json"),
+      `${JSON.stringify({ instanceColorLifecycle }, null, 2)}\n`,
+    );
+  } catch {
+    // Diagnostic artifact failure must not replace the original audit failure.
+  }
 }
 
 async function setAuditStep(page, step) {

@@ -40,7 +40,10 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
-import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import {
+  recordViewport3DInstanceColorLifecycleAuditEvent,
+  type Viewport3DResourceTracker,
+} from "../viewport3dDiagnostics";
 import {
   resolveViewport3DScalarColorBufferKey,
   type ScalarColorBuffer,
@@ -1202,7 +1205,20 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     // Instance colors are enabled by Three.js independently of vertexColors.
     // Drop the previous quantity's attribute when no compatible buffer exists.
     if (!usesInstanceColors && surface.instanceColor !== null) {
+      const previousInstanceColor = surface.instanceColor;
       surface.instanceColor = null;
+      recordViewport3DInstanceColorLifecycleAuditEvent({
+        action: "detach",
+        afterAttribute: null,
+        beforeAttribute: previousInstanceColor,
+        context: {
+          carrierId,
+          fieldBufferId: surfaceColors?.sourceFieldBufferId ?? fieldBufferId,
+          quantityId: surfaceColors?.quantityId ?? null,
+        },
+        objectRole: "fdm-surface",
+        reason: "no-compatible-instance-colors",
+      });
       colorRevisionRef.current = null;
       const mountedSurfaceMaterial = surface.material;
       if (
@@ -1222,10 +1238,26 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         !surface.instanceColor ||
         surface.instanceColor.array.length !== surfaceColors.colors.length
       ) {
-        surface.instanceColor = new InstancedBufferAttribute(
+        const previousInstanceColor = surface.instanceColor;
+        const nextInstanceColor = new InstancedBufferAttribute(
           new Float32Array(surfaceColors.colors.length),
           3,
         );
+        surface.instanceColor = nextInstanceColor;
+        recordViewport3DInstanceColorLifecycleAuditEvent({
+          action: previousInstanceColor ? "replace" : "attach",
+          afterAttribute: nextInstanceColor,
+          beforeAttribute: previousInstanceColor,
+          context: {
+            carrierId,
+            fieldBufferId: surfaceColors.sourceFieldBufferId ?? fieldBufferId,
+            quantityId: surfaceColors.quantityId ?? null,
+          },
+          objectRole: "fdm-surface",
+          reason: previousInstanceColor
+            ? "instance-color-array-length-changed"
+            : "instance-colors-enabled",
+        });
         colorRevisionRef.current = null;
       }
       colorChanged = colorRevisionRef.current !== colorRevision;

@@ -6,15 +6,126 @@ import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/vis
 
 import {
   buildViewport3DDiagnostics,
+  recordViewport3DInstanceColorLifecycleAuditEvent,
   Viewport3DResourceTracker,
 } from "./viewport3dDiagnostics";
 
 describe("viewport3dDiagnostics", () => {
   const testWindow = globalThis as typeof globalThis & Window;
+  const auditWindow = testWindow as typeof testWindow & {
+    __FM_VIEWPORT_BROWSER_AUDIT__?: unknown;
+  };
 
   afterEach(() => {
     delete testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__;
+    delete auditWindow.__FM_VIEWPORT_BROWSER_AUDIT__;
     vi.unstubAllGlobals();
+  });
+
+  function createInstanceColorAuditStore() {
+    return {
+      instanceColorLifecycleEvents: [] as Array<Record<string, unknown>>,
+      instanceColorLifecycleSummary: {
+        actionCounts: { attach: 0, detach: 0, replace: 0 },
+        droppedEventCount: 0,
+        objectRoleActionCounts: {
+          "fdm-surface": { attach: 0, detach: 0, replace: 0 },
+          "vector-head": { attach: 0, detach: 0, replace: 0 },
+          "vector-shaft": { attach: 0, detach: 0, replace: 0 },
+        },
+        totalEvents: 0,
+      },
+      viewportAckTrace: [] as unknown[],
+    };
+  }
+
+  it("keeps instance-color lifecycle recording opt-in", () => {
+    vi.stubGlobal("window", testWindow);
+    delete auditWindow.__FM_VIEWPORT_BROWSER_AUDIT__;
+
+    expect(() =>
+      recordViewport3DInstanceColorLifecycleAuditEvent({
+        action: "attach",
+        afterAttribute: { array: new Float32Array(3) },
+        beforeAttribute: null,
+        objectRole: "fdm-surface",
+        reason: "test-attach",
+      }),
+    ).not.toThrow();
+    expect(auditWindow.__FM_VIEWPORT_BROWSER_AUDIT__).toBeUndefined();
+  });
+
+  it("keeps total action counts and reports dropped detail after the event cap", () => {
+    vi.stubGlobal("window", testWindow);
+    const audit = createInstanceColorAuditStore();
+    auditWindow.__FM_VIEWPORT_BROWSER_AUDIT__ = audit;
+    const attribute = { array: new Float32Array(3) };
+
+    const actions = ["attach", "detach", "replace"] as const;
+    for (let index = 0; index < 513; index += 1) {
+      const action = actions[index % actions.length];
+      recordViewport3DInstanceColorLifecycleAuditEvent({
+        action,
+        afterAttribute: action === "detach" ? null : attribute,
+        beforeAttribute: action === "attach" ? null : attribute,
+        objectRole: "fdm-surface",
+        reason: "test-attach",
+      });
+    }
+
+    expect(audit.instanceColorLifecycleEvents).toHaveLength(512);
+    expect(audit.instanceColorLifecycleSummary).toMatchObject({
+      actionCounts: { attach: 171, detach: 171, replace: 171 },
+      droppedEventCount: 1,
+      objectRoleActionCounts: {
+        "fdm-surface": { attach: 171, detach: 171, replace: 171 },
+      },
+      totalEvents: 513,
+    });
+  });
+
+  it("uses stable numeric attribute identities without retaining attribute payloads", () => {
+    vi.stubGlobal("window", testWindow);
+    const audit = createInstanceColorAuditStore();
+    auditWindow.__FM_VIEWPORT_BROWSER_AUDIT__ = audit;
+    const attribute = { array: new Float32Array(6) };
+
+    for (const objectRole of ["vector-head", "vector-shaft"] as const) {
+      recordViewport3DInstanceColorLifecycleAuditEvent({
+        action: "attach",
+        afterAttribute: attribute,
+        beforeAttribute: null,
+        objectRole,
+        reason: "test-attach",
+      });
+    }
+
+    const [headEvent, shaftEvent] = audit.instanceColorLifecycleEvents;
+    const headAfter = headEvent.after as Record<string, unknown>;
+    const shaftAfter = shaftEvent.after as Record<string, unknown>;
+    expect(headAfter).toEqual({
+      arrayByteLength: 24,
+      attributeId: expect.any(Number),
+    });
+    expect(shaftAfter).toEqual(headAfter);
+    expect(Object.keys(headAfter).sort()).toEqual(["arrayByteLength", "attributeId"]);
+    expect(Object.keys(headEvent).sort()).toEqual([
+      "action",
+      "after",
+      "before",
+      "buildKey",
+      "carrierId",
+      "colorMode",
+      "event",
+      "fieldBufferId",
+      "objectRole",
+      "phase",
+      "quantityId",
+      "reason",
+      "timestampMs",
+    ]);
+    expect(headEvent).not.toHaveProperty("afterAttribute");
+    expect(shaftEvent).not.toHaveProperty("afterAttribute");
   });
 
   it("subscribes build-engine diagnostics into the diagnostic recorder", () => {
@@ -576,3 +687,4 @@ describe("viewport3dDiagnostics", () => {
     expect(summary).toContain("retention-rejections:2");
   });
 });
+

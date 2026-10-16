@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
@@ -23,7 +24,11 @@ import {
   Vector3,
 } from "three";
 
-import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import {
+  recordViewport3DInstanceColorLifecycleAuditEvent,
+  type Viewport3DInstanceColorAuditContext,
+  type Viewport3DResourceTracker,
+} from "../viewport3dDiagnostics";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DDerivedBufferRetainHandle } from "../build-engine/cache/viewport3dDerivedBufferCache";
@@ -393,6 +398,7 @@ export function resolveVectorGlyphDepthPolicy(renderOnTop = false): {
 }
 
 export function syncVectorGlyphColorState({
+  auditContext,
   hasInstanceColors,
   head,
   instanceColorAttr,
@@ -400,6 +406,7 @@ export function syncVectorGlyphColorState({
   materialColor,
   shaft,
 }: {
+  auditContext?: Viewport3DInstanceColorAuditContext;
   hasInstanceColors: boolean;
   head: InstancedMesh;
   instanceColorAttr: InstancedBufferAttribute;
@@ -408,8 +415,46 @@ export function syncVectorGlyphColorState({
   shaft: InstancedMesh;
 }) {
   const nextInstanceColor = hasInstanceColors ? instanceColorAttr : null;
+  const previousShaftInstanceColor = shaft.instanceColor;
+  const previousHeadInstanceColor = head.instanceColor;
   shaft.instanceColor = nextInstanceColor;
   head.instanceColor = nextInstanceColor;
+  if (previousShaftInstanceColor !== nextInstanceColor) {
+    recordViewport3DInstanceColorLifecycleAuditEvent({
+      action: !nextInstanceColor
+        ? "detach"
+        : previousShaftInstanceColor
+          ? "replace"
+          : "attach",
+      afterAttribute: nextInstanceColor,
+      beforeAttribute: previousShaftInstanceColor,
+      context: auditContext,
+      objectRole: "vector-shaft",
+      reason: !nextInstanceColor
+        ? "glyph-colors-unavailable"
+        : previousShaftInstanceColor
+          ? "instance-color-attribute-changed"
+          : "glyph-colors-enabled",
+    });
+  }
+  if (previousHeadInstanceColor !== nextInstanceColor) {
+    recordViewport3DInstanceColorLifecycleAuditEvent({
+      action: !nextInstanceColor
+        ? "detach"
+        : previousHeadInstanceColor
+          ? "replace"
+          : "attach",
+      afterAttribute: nextInstanceColor,
+      beforeAttribute: previousHeadInstanceColor,
+      context: auditContext,
+      objectRole: "vector-head",
+      reason: !nextInstanceColor
+        ? "glyph-colors-unavailable"
+        : previousHeadInstanceColor
+          ? "instance-color-attribute-changed"
+          : "glyph-colors-enabled",
+    });
+  }
   material.vertexColors = hasInstanceColors;
   material.color.set(hasInstanceColors ? "white" : materialColor);
   if (hasInstanceColors) {
@@ -806,6 +851,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 function useVectorGlyphUpload({
+  instanceColorAuditContextRef,
   buildKey,
   glyphColors,
   glyphCount,
@@ -821,6 +867,7 @@ function useVectorGlyphUpload({
   tracker,
   transformScratch,
 }: {
+  instanceColorAuditContextRef: RefObject<Viewport3DInstanceColorAuditContext>;
   buildKey?: string | null;
   glyphColors: Float32Array | null;
   glyphCount: number;
@@ -855,6 +902,7 @@ function useVectorGlyphUpload({
 
     if (!glyphColors) {
       syncVectorGlyphColorState({
+        auditContext: instanceColorAuditContextRef.current,
         hasInstanceColors: false,
         head,
         instanceColorAttr,
@@ -932,6 +980,7 @@ function useVectorGlyphUpload({
     glyphColors,
     glyphCount,
     headRef,
+    instanceColorAuditContextRef,
     instanceColorAttr,
     invalidate,
     material,
@@ -1039,6 +1088,7 @@ function useVectorGlyphUpload({
         activeShaft.count = activeGlyphs.count;
         activeHead.count = activeGlyphs.count;
         syncVectorGlyphColorState({
+          auditContext: instanceColorAuditContextRef.current,
           hasInstanceColors: Boolean(glyphColors),
           head: activeHead,
           instanceColorAttr,
@@ -1089,6 +1139,7 @@ function useVectorGlyphUpload({
     glyphColors,
     glyphTransforms,
     headRef,
+    instanceColorAuditContextRef,
     instanceColorAttr,
     invalidate,
     material,
@@ -1184,6 +1235,31 @@ export function VectorFieldLayer({
   const { glyphPolicy, headGeometry, material, shaftGeometry } =
     useTrackedVectorGlyphResources({ renderOnTop, tracker });
   const instanceColorAttr = useVectorGlyphInstanceColorAttribute(capacity);
+  const instanceColorAuditContext = useMemo<Viewport3DInstanceColorAuditContext>(
+    () => ({
+      buildKey: visibleGlyphBuild?.buildKey ?? null,
+      carrierId: carrierId ?? null,
+      colorMode,
+      fieldBufferId:
+        glyphBuild?.sourceFieldBufferId ??
+        fieldBufferId ??
+        buildReference?.fieldBufferId ??
+        null,
+      quantityId: null,
+    }),
+    [
+      buildReference?.fieldBufferId,
+      carrierId,
+      colorMode,
+      fieldBufferId,
+      glyphBuild?.sourceFieldBufferId,
+      visibleGlyphBuild?.buildKey,
+    ],
+  );
+  const instanceColorAuditContextRef = useRef(instanceColorAuditContext);
+  useLayoutEffect(() => {
+    instanceColorAuditContextRef.current = instanceColorAuditContext;
+  }, [instanceColorAuditContext]);
   const lastAdoptionRef = useRef<{
     buildKey: string;
     byteLength: number;
@@ -1273,6 +1349,7 @@ export function VectorFieldLayer({
     glyphCount,
     glyphTransforms,
     headRef,
+    instanceColorAuditContextRef,
     instanceColorAttr,
     invalidate,
     material,

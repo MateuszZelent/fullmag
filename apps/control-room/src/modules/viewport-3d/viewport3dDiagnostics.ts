@@ -136,6 +136,135 @@ export interface Viewport3DTrackResourceOptions {
   owner?: string;
 }
 
+export type Viewport3DInstanceColorAuditAction = "attach" | "detach" | "replace";
+
+export interface Viewport3DInstanceColorAuditContext {
+  buildKey?: string | null;
+  carrierId?: string | null;
+  colorMode?: string | null;
+  fieldBufferId?: string | null;
+  quantityId?: string | null;
+}
+
+export interface Viewport3DInstanceColorLifecycleAuditEvent {
+  action: Viewport3DInstanceColorAuditAction;
+  after: { arrayByteLength: number; attributeId: number } | null;
+  before: { arrayByteLength: number; attributeId: number } | null;
+  buildKey: string | null;
+  carrierId: string | null;
+  colorMode: string | null;
+  event: "instance-color-lifecycle";
+  fieldBufferId: string | null;
+  objectRole: "fdm-surface" | "vector-head" | "vector-shaft";
+  phase: string | null;
+  quantityId: string | null;
+  reason: string;
+  timestampMs: number;
+}
+
+interface Viewport3DInstanceColorAuditStore {
+  instanceColorLifecycleEvents?: Viewport3DInstanceColorLifecycleAuditEvent[];
+  instanceColorLifecycleSummary?: {
+    actionCounts: Record<Viewport3DInstanceColorAuditAction, number>;
+    droppedEventCount: number;
+    objectRoleActionCounts: Record<
+      Viewport3DInstanceColorLifecycleAuditEvent["objectRole"],
+      Record<Viewport3DInstanceColorAuditAction, number>
+    >;
+    totalEvents: number;
+  };
+  viewportAckTrace?: unknown[];
+}
+
+const instanceColorAuditAttributeIds = new WeakMap<object, number>();
+let nextInstanceColorAuditAttributeId = 0;
+const MAX_INSTANCE_COLOR_AUDIT_EVENTS = 512;
+const MAX_INSTANCE_COLOR_AUDIT_TEXT_LENGTH = 256;
+
+function boundedInstanceColorAuditText(value: unknown): string | null {
+  return typeof value === "string"
+    ? value.slice(0, MAX_INSTANCE_COLOR_AUDIT_TEXT_LENGTH)
+    : null;
+}
+
+function instanceColorAuditAttributeSnapshot(
+  attribute: { array: { byteLength: number } } | null,
+): { arrayByteLength: number; attributeId: number } | null {
+  if (!attribute) return null;
+  let attributeId = instanceColorAuditAttributeIds.get(attribute);
+  if (attributeId === undefined) {
+    nextInstanceColorAuditAttributeId += 1;
+    attributeId = nextInstanceColorAuditAttributeId;
+    instanceColorAuditAttributeIds.set(attribute, attributeId);
+  }
+  return {
+    arrayByteLength: attribute.array.byteLength,
+    attributeId,
+  };
+}
+
+export function recordViewport3DInstanceColorLifecycleAuditEvent({
+  action,
+  afterAttribute,
+  beforeAttribute,
+  context,
+  objectRole,
+  reason,
+}: {
+  action: Viewport3DInstanceColorAuditAction;
+  afterAttribute: { array: { byteLength: number } } | null;
+  beforeAttribute: { array: { byteLength: number } } | null;
+  context?: Viewport3DInstanceColorAuditContext;
+  objectRole: Viewport3DInstanceColorLifecycleAuditEvent["objectRole"];
+  reason: string;
+}): void {
+  try {
+    if (typeof window === "undefined") return;
+    const auditWindow = window as unknown as {
+      __FM_VIEWPORT_AUDIT_STEP__?: unknown;
+      __FM_VIEWPORT_BROWSER_AUDIT__?: Viewport3DInstanceColorAuditStore;
+    };
+    const audit = auditWindow.__FM_VIEWPORT_BROWSER_AUDIT__;
+    const events = audit?.instanceColorLifecycleEvents;
+    const summary = audit?.instanceColorLifecycleSummary;
+    const ackTrace = audit?.viewportAckTrace;
+    if (!Array.isArray(ackTrace) || !Array.isArray(events) || !summary) return;
+
+    const phase = auditWindow.__FM_VIEWPORT_AUDIT_STEP__;
+    const event: Viewport3DInstanceColorLifecycleAuditEvent = {
+      action,
+      after: instanceColorAuditAttributeSnapshot(afterAttribute),
+      before: instanceColorAuditAttributeSnapshot(beforeAttribute),
+      buildKey: boundedInstanceColorAuditText(context?.buildKey),
+      carrierId: boundedInstanceColorAuditText(context?.carrierId),
+      colorMode: boundedInstanceColorAuditText(context?.colorMode),
+      event: "instance-color-lifecycle",
+      fieldBufferId: boundedInstanceColorAuditText(context?.fieldBufferId),
+      objectRole,
+      phase: boundedInstanceColorAuditText(phase),
+      quantityId: boundedInstanceColorAuditText(context?.quantityId),
+      reason: reason.slice(0, MAX_INSTANCE_COLOR_AUDIT_TEXT_LENGTH),
+      timestampMs: Date.now(),
+    };
+
+    summary.totalEvents += 1;
+    summary.actionCounts[action] += 1;
+    summary.objectRoleActionCounts[objectRole][action] += 1;
+    if (events.length >= MAX_INSTANCE_COLOR_AUDIT_EVENTS) {
+      events.shift();
+      summary.droppedEventCount += 1;
+    }
+    events.push(event);
+
+    ackTrace.push(event);
+    if (ackTrace.length > MAX_INSTANCE_COLOR_AUDIT_EVENTS) {
+      ackTrace.splice(0, ackTrace.length - MAX_INSTANCE_COLOR_AUDIT_EVENTS);
+    }
+  } catch {
+    // This opt-in browser trace must never affect viewport rendering.
+  }
+}
+
 type TrackerListener = () => void;
 export type Viewport3DDirtyReasonCounts = Partial<
   Record<Viewport3DDirtyReason, number>
