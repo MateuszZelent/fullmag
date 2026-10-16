@@ -1,0 +1,102 @@
+name: Managed FEM CPU SLEPc modal wrapper
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_managed_wrapper:
+        description: Build the managed images and execute the canonical modal wrapper on an ephemeral Linux coordinator.
+        type: boolean
+        required: true
+        default: false
+  push:
+    branches:
+      - codex/eigensolve-dispersion-plan-20260912
+    paths:
+      - .github/workflows/fem-managed-modal-wrapper.yml
+      - scripts/ci/run_managed_modal_wrapper.py
+      - scripts/run_fem_cpu_slepc_modal_contract.sh
+      - scripts/fem_modal_library_identity.py
+      - scripts/test_fem_modal_library_identity.py
+      - scripts/fullmag_storage.py
+      - scripts/local_runner_cli.py
+      - scripts/local_runner/container_client.py
+      - scripts/local_runner/container_main.py
+      - scripts/local_runner/unix_docker.py
+      - scripts/local_runner/build_executor.py
+      - scripts/local_runner/Dockerfile.build
+      - scripts/local_runner/Dockerfile.coordinator
+      - scripts/tests/local_runner/test_container_main.py
+      - scripts/test_local_runner_build_executor.py
+      - scripts/test_local_runner_unix_docker.py
+      - docker/fem-cpu/Dockerfile
+  pull_request:
+    paths:
+      - .github/workflows/fem-managed-modal-wrapper.yml
+      - scripts/ci/run_managed_modal_wrapper.py
+      - scripts/run_fem_cpu_slepc_modal_contract.sh
+      - scripts/fem_modal_library_identity.py
+      - scripts/test_fem_modal_library_identity.py
+      - scripts/fullmag_storage.py
+      - scripts/local_runner_cli.py
+      - scripts/local_runner/container_client.py
+      - scripts/local_runner/container_main.py
+      - scripts/local_runner/unix_docker.py
+      - scripts/local_runner/build_executor.py
+      - scripts/local_runner/Dockerfile.build
+      - scripts/local_runner/Dockerfile.coordinator
+      - scripts/tests/local_runner/test_container_main.py
+      - scripts/test_local_runner_build_executor.py
+      - scripts/test_local_runner_unix_docker.py
+      - docker/fem-cpu/Dockerfile
+
+permissions:
+  contents: read
+
+jobs:
+  fast-source-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Verify host coordinator and POSIX storage mapping
+        run: python3 -B -m unittest discover -s scripts/tests/local_runner -p test_container_main.py -v
+      - name: Verify managed receipt and CPU Release cache attestation
+        run: python3 -B -m unittest discover -s scripts -p test_local_runner_build_executor.py -v
+      - name: Verify the production Unix Docker adapter contract
+        run: python3 -B -m unittest discover -s scripts -p test_local_runner_unix_docker.py -v
+      - name: Verify wrapper library identity contract
+        run: python3 -B -m unittest discover -s scripts -p test_fem_modal_library_identity.py -v
+      - name: Check modal wrapper shell syntax
+        run: bash -n scripts/run_fem_cpu_slepc_modal_contract.sh
+
+  managed-wrapper:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_managed_wrapper == true }}
+    needs: fast-source-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      RUN_MANAGED_WRAPPER: 'true'
+      FULLMAG_STORAGE_PROFILE: linux-host
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Verify and run the managed Linux coordinator pipeline
+        run: python3 -B scripts/ci/run_managed_modal_wrapper.py --repo-root "$GITHUB_WORKSPACE"
+      - name: Upload bounded receipt, identity, JUnit, and provenance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullmag-managed-modal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fullmag-managed-modal-evidence/
+          if-no-files-found: warn
+          retention-days: 14
