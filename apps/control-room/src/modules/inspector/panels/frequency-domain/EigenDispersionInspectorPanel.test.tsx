@@ -4,10 +4,10 @@ import type { Selection, SelectionRef } from "@/kernel/selection/selectionTypes"
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 import {
+  buildEigenDispersionPointHandoffContext,
   buildEigenDispersionPointViewModel,
   dispersionReferenceComparison,
 } from "./EigenDispersionInspectorModel";
-import { buildEigenDispersionPointHandoffContext } from "./EigenDispersionInspectorPanel";
 
 const point: EigenDispersionPoint = {
   analyticFrequencyHz: 12.45e9,
@@ -235,3 +235,4 @@ function dispersionPoint(
 ): EigenDispersionPoint {
   return { ...point, pathS, sampleIndex, wavevectorKf };
 }
+

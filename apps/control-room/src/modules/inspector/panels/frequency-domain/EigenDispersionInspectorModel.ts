@@ -24,7 +24,11 @@ import {
   eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
-import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import type {
+  EigenDispersionPoint,
+  FrequencyDomainSelectionContext,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
+import type { InspectorPanelProps } from "../../inspectorTypes";
 import { formatFrequencyHz, formatFrequencyRangeHz } from "@/shared/domain/analysis/frequencyUnits";
 
 export interface EigenDispersionPointViewModel {
@@ -50,6 +54,24 @@ export function buildEigenDispersionPointViewModel(
     pathCoordinate: point.pathS,
     pathUnit: "rad/m",
     pointId: `results:eigen:dispersion:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`,
+  };
+}
+
+export function buildEigenDispersionPointHandoffContext(
+  selection: InspectorPanelProps["selection"],
+): FrequencyDomainSelectionContext {
+  const ownerRef = selection.ref?.type === "frequency-domain"
+    ? selection.ref
+    : null;
+  return {
+    analysisRunId: ownerRef?.analysisRunId,
+    analysisStageId: ownerRef?.analysisStageId,
+    artifactPath: ownerRef?.artifactPath,
+    artifactRevision: ownerRef?.artifactRevision,
+    calculationMode: "dispersion_modal",
+    datasetId: ownerRef?.datasetId,
+    datasetRevision: ownerRef?.datasetRevision,
+    resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   };
 }
 
@@ -392,3 +414,4 @@ function maxFinite(values: readonly number[]): number | null {
   if (!values.length) return null;
   return Math.max(...values);
 }
+

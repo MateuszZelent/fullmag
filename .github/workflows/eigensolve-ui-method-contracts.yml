@@ -18,6 +18,8 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors*'
       - 'apps/control-room/src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/analysis-results/ImportedDispersionReferenceInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/PinnedVisualizationsInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/PinnedVisualizationsInspectorModel*'
       - 'apps/control-room/src/modules/ribbon/RibbonModule*'
       - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
@@ -72,7 +74,9 @@ on:
       - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorModel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorModel*'
       - 'apps/control-room/src/modules/explorer/**'
       - 'apps/control-room/src/kernel/selection/selectionTypes*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
@@ -98,6 +102,8 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors*'
       - 'apps/control-room/src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/analysis-results/ImportedDispersionReferenceInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/PinnedVisualizationsInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/PinnedVisualizationsInspectorModel*'
       - 'apps/control-room/src/modules/ribbon/RibbonModule*'
       - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
       - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
@@ -152,7 +158,9 @@ on:
       - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorModel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorModel*'
       - 'apps/control-room/src/modules/explorer/**'
       - 'apps/control-room/src/kernel/selection/selectionTypes*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
@@ -218,6 +226,7 @@ jobs:
           src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.selection.test.tsx
           src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel.test.tsx
           src/modules/inspector/panels/analysis-results/ImportedDispersionReferenceInspectorPanel.dom.test.tsx
+          src/modules/inspector/panels/analysis-results/PinnedVisualizationsInspectorPanel.test.tsx
           src/modules/ribbon/RibbonModule.contextualTab.test.ts
           src/modules/ribbon/RibbonModule.layout.test.tsx
           src/modules/ribbon/ribbonCommands.test.ts
@@ -308,3 +317,4 @@ jobs:
             ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/explorer-catalog-browser.log
             ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/tmp/**/react-doctor-*/**
           if-no-files-found: error
+

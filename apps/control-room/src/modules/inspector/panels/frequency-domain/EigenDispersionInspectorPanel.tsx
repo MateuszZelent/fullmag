@@ -9,14 +9,13 @@ import {
   buildEigenBranchSelectionRef,
   buildEigenDispersionPointSelectionRef,
   type EigenBranch,
-  type FrequencyDomainSelectionContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { FrequencyDomainDispersionChart } from "../FrequencyDomainCharts";
 import { FrequencyDomainBranchTable } from "../FrequencyDomainTables";
-import { ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH } from "@/kernel/api/apiPaths";
 import {
+  buildEigenDispersionPointHandoffContext,
   buildEigenDispersionPointViewModel,
   useEigenDispersionInspectorSummary,
 } from "./EigenDispersionInspectorModel";
@@ -202,23 +201,7 @@ export function EigenDispersionInspectorPanel({
   );
 }
 
-export function buildEigenDispersionPointHandoffContext(
-  selection: InspectorPanelProps["selection"],
-): FrequencyDomainSelectionContext {
-  const ownerRef = selection.ref?.type === "frequency-domain"
-    ? selection.ref
-    : null;
-  return {
-    analysisRunId: ownerRef?.analysisRunId,
-    analysisStageId: ownerRef?.analysisStageId,
-    artifactPath: ownerRef?.artifactPath,
-    artifactRevision: ownerRef?.artifactRevision,
-    calculationMode: "dispersion_modal",
-    datasetId: ownerRef?.datasetId,
-    datasetRevision: ownerRef?.datasetRevision,
-    resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-  };
-}
+
 
 function selectedDispersionPoint(
   selection: InspectorPanelProps["selection"],
@@ -261,3 +244,4 @@ function formatNumber(value: number): string {
 function formatNumberOrUnavailable(value: number | null): string {
   return value == null ? "not available" : formatNumber(value);
 }
+
