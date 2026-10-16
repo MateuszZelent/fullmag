@@ -22,6 +22,7 @@ if (!reportDirectory || !isAbsolute(reportDirectory)) {
 const reportRoot = resolve(reportDirectory);
 const reportPath = resolve(reportRoot, "study-adaptive-authoring.json");
 const LEGAL_EIGEN_K_PATH = "G:0,0,0; X:1e7,0,0; G:0,0,0 | samples=2,2";
+const RELAX_FIXED_DT_S = 1e-13;
 
 async function loadPlaywright() {
   try {
@@ -586,6 +587,20 @@ async function prepareCombinedAdaptiveDraft(scenario) {
   );
   assert.equal(await editors.count(), 1);
   assert.match(await editors.first().innerText(), /Stage 1:\s*Relax/);
+  const relaxEditor = editors.first();
+  assert.match(
+    await relaxEditor.innerText(),
+    /LLG relaxation requires an explicit fixed or adaptive timestep policy\./,
+  );
+  assert.equal(await scenario.page.getByRole("button", {
+    name: "Apply",
+    exact: true,
+  }).isDisabled(), true);
+  await relaxEditor.getByRole("combobox", { name: "Timestep mode", exact: true })
+    .selectOption("fixed");
+  await relaxEditor.getByRole("textbox", { name: "Fixed dt", exact: true })
+    .fill(String(RELAX_FIXED_DT_S));
+  assert.equal(await relaxEditor.locator(".fm-inspector-validation-list li").count(), 0);
   await toolbar.getByRole("button", {
     name: "Modal eigenmodes",
     exact: true,
@@ -684,6 +699,10 @@ function assertCombinedAdaptiveTransaction(transaction, baseRevision) {
   assert.equal(study.parallel_execution.max_cpu_percent, 73);
   assert.equal(study.requested_device, "cpu");
   assert.deepEqual(study.stages.map((stage) => stage.kind), ["relax", "eigenmodes"]);
+  const relax = study.stages[0];
+  assert.equal(relax.algorithm, "llg_overdamped");
+  assert.equal(Number(relax.fixed_timestep), RELAX_FIXED_DT_S);
+  assert.equal(relax.adaptive_timestep, undefined);
   const eigen = study.stages[1];
   assert.equal(eigen.eigen_count, 3);
   assert.equal(eigen.eigen_operator, "full_2x2");
