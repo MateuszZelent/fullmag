@@ -323,19 +323,23 @@ production criteria, not claims about the current partial report.
   geometry-only scoped ring route also remains unqualified until its own
   existing ring tests pass.
 - The resolved exact-layer generator cap and the reported `effective_airbox_target`
-  are currently distinct. `_resolve_box_airbox_layer_sizes` derives a finite
-  outer target from the interface target and growth ratio when no maximum was
-  authored: for $h_\min=10\times10^{-9}\,\mathrm m$ and $g=1.3$, the generated
-  cap is $10\times10^{-9}\,\mathrm m\,g^4\approx2.8561\times10^{-8}\,\mathrm m$.
-  With $h_\min=15\times10^{-9}\,\mathrm m$, it is approximately
-  $4.2842\times10^{-8}\,\mathrm m$. Current GHA diagnostics still
-  show `effective_airbox_target.hmax=10 nm` for these implicit-cap cases. The
-  report therefore does not yet identify the generator's derived outer cap.
-  The intended report correction is additive: expose the derived cap separately
-  while preserving authored `None` in requested intent. A passing owner-floor
-  status alone also does not prove the applied airbox cap or the owner/air
-  sizing order. Until then, do not use this report field as evidence of the
-  implicit generator cap.
+  are distinct. `_resolve_box_airbox_layer_sizes` keeps the interface target
+  `h_inner` at the authored airbox minimum when present, or at `body_hmax`
+  otherwise. An authored `maximum_element_size` remains the outer cap after
+  validation. When it is absent, the finite implicit cap starts at the larger
+  of `body_hmax` and `h_inner`, then applies four growth-ratio steps. For
+  `body_hmax=10 nm`, `h_inner=2 nm`, and $g=1.3$, the interface target stays
+  $2\times10^{-9}\,\mathrm m$ while the implicit outer cap is
+  $10\times10^{-9}\,\mathrm m\,(1.3)^4\approx2.8561\times10^{-8}\,\mathrm m$.
+  This resolver feeds the shared exact-cell Box and canonical ring generator,
+  so the implicit sizing rule applies to both. It does not change their geometry,
+  extrusion, or layer-plane construction.
+  Current GHA diagnostics still show `effective_airbox_target.hmax=10 nm` for
+  these implicit-cap cases; the report does not expose the generator's derived
+  outer cap. An additive report correction can expose that cap while preserving
+  authored `None` in requested intent. A passing owner-floor status alone also
+  does not prove the applied airbox cap or owner/air sizing order. Keep this
+  report field separate from evidence of the implicit generator cap.
 
 (airbox-grading-scientific-bibliography)=
 ## 12. Scientific bibliography
@@ -360,7 +364,8 @@ production criteria, not claims about the current partial report.
 | Exact-layer ring extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | retains geometry-only scoped ring slabs; ring runtime qualification remains open | FEM meshing | source implemented; runtime NOT VERIFIED, GHA required |
 | Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | verifies body planes, positive tetrahedra, closed boundary geometry, shared body-seam incidence, owner-floor provenance, regional density, and actual periodic node translations | FEM meshing | source regression; GHA pending |
 | Implicit exact-layer cap regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_implicit_airbox_cap_coarsens_far_air` | verifies measured far-air tetrahedral sizes coarsen relative to near-air sizes when only the growth ratio sets the outer cap | FEM meshing | source regression; GHA pending |
+| Pure implicit-cap resolver regression | `packages/fullmag-py/tests/test_meshing.py` | `test_box_airbox_layer_size_resolution_preserves_explicit_targets` | checks that an implicit cap grows from the larger of body target and interface target, while no-limit and explicit-cap behavior stay unchanged | FEM meshing | source test added; GHA pending |
 | Pure chordal-bound regression | `packages/fullmag-py/tests/test_meshing.py` | `test_ring_chordal_bound_guard_and_refinement` | checks the analytic inequality, invalid geometry rejection, and bound tightening under refinement | FEM mesh geometry | source test added; GHA pending |
-| Exact-layer airbox target resolution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` | derives interface and finite outer cap for the exact-layer Box/ring generator | FEM meshing | implemented |
+| Exact-layer airbox target resolution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` | preserves the interface target and authored cap; an implicit cap grows four ratio steps from the larger of `body_hmax` and `h_inner` | FEM meshing | implemented |
 | Effective-target report | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_resolve_effective_shared_domain_targets` | reports resolved airbox intent, not yet the exact-layer generator's implicit cap | FEM meshing | report limitation |
 | Scoped Box periodic prism split | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | keeps scoped slab prisms out of Gmsh's native non-recombined tetrahedral subdivision so the existing coordinate-ranked Fullmag conversion performs the split | FEM meshing | source implemented; runtime `NOT VERIFIED`; hosted GHA must verify actual prism-to-Tet4 conversion and mapped face bijection |

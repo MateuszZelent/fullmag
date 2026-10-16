@@ -2269,10 +2269,11 @@ def _resolve_box_airbox_layer_sizes(
             h_inner = min(h_inner, h_outer)
         return h_inner, h_outer
 
-    # Match the existing lateral/OCC/GEO default: permit four geometric growth
-    # steps when no authored far-air size is available, while keeping the cap
+    # The airbox minimum is an interface target, not a reason to lower the
+    # implicit outer cap below the body sizing target. Permit four geometric
+    # growth steps from whichever target is larger, while keeping the cap
     # finite and positive before it reaches Gmsh.
-    h_outer = h_inner
+    h_outer = max(base_hmax, h_inner)
     for _ in range(4):
         h_outer *= growth
         if not math.isfinite(h_outer) or h_outer <= 0.0:

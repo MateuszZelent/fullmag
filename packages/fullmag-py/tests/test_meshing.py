@@ -13041,6 +13041,36 @@ class RegionMeshPolicyTests(unittest.TestCase):
         )
         self.assertEqual(fields.background, final_max)
 
+    def test_box_airbox_layer_size_resolution_preserves_explicit_targets(self) -> None:
+        implicit_cap = 28.561e-9
+        cases = (
+            (
+                "minimum below body target",
+                AirboxOptions(minimum_element_size=2e-9, grading_ratio=1.3),
+                (2e-9, implicit_cap),
+            ),
+            (
+                "no authored airbox size limits",
+                AirboxOptions(),
+                (10e-9, implicit_cap),
+            ),
+            (
+                "explicit maximum below body target",
+                AirboxOptions(
+                    minimum_element_size=2e-9,
+                    maximum_element_size=5e-9,
+                    grading_ratio=1.3,
+                ),
+                (2e-9, 5e-9),
+            ),
+        )
+
+        for label, airbox, expected in cases:
+            with self.subTest(case=label):
+                actual = gmsh_swept._resolve_box_airbox_layer_sizes(10e-9, airbox)
+                self.assertAlmostEqual(actual[0], expected[0], delta=1e-22)
+                self.assertAlmostEqual(actual[1], expected[1], delta=1e-22)
+
     def test_swept_airbox_hmax_is_scaled_with_body_hmax(self) -> None:
         scale = 1e6
         body_hmax_scaled = 20e-9 * scale

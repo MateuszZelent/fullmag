@@ -335,7 +335,7 @@
       "id": "box-layer-size-resolution",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_resolve_box_airbox_layer_sizes",
-      "responsibility": "Resolves numeric interface and outer targets used by the exact-layer Box/ring generator.",
+      "responsibility": "Supplies the shared exact-layer Box/ring generator. Preserves the interface target and authored outer cap; with no authored maximum, derives a finite cap by applying four growth-ratio steps from the larger of body_hmax and h_inner.",
       "evidence_status": "implemented"
     },
     {
@@ -350,6 +350,13 @@
       "path": "packages/fullmag-py/tests/test_meshing.py",
       "symbol": "test_exact_layer_implicit_airbox_cap_coarsens_far_air",
       "responsibility": "Measures near- and far-air tetrahedral sizes on the exact-layer route when no outer target is authored, checking that geometric growth produces actual far-air coarsening.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "implicit-airbox-cap-resolver-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_box_airbox_layer_size_resolution_preserves_explicit_targets",
+      "responsibility": "Pure resolver regression checks the implicit cap's body/interface starting point and preserves no-limit and authored-maximum cases; CI execution is pending.",
       "evidence_status": "implemented"
     },
     {
