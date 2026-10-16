@@ -624,6 +624,9 @@ def _build_mesh_operation_statuses(
     requested_sweep_direction = opts.sweep_direction or "auto"
     if requested_thin_film is not None:
         exact_box_layers = build_mode == "single_geometry_geo_layered_box"
+        exact_body_only_layers = (
+            build_mode == "single_geometry_geo_body_only_layered_box"
+        )
         for geometry in geometries:
             sweepability = classify_sweepability(geometry)
             scope = getattr(geometry, "geometry_name", type(geometry).__name__)
@@ -635,6 +638,9 @@ def _build_mesh_operation_statuses(
                 )
             )
             scoped_layer_partitioning = (
+                exact_body_only_layers
+                and _has_component_scoped_size_fields(opts)
+            ) or (
                 (exact_box_layers or exact_ring_layers)
                 and _has_component_scoped_size_fields(opts)
                 and _supports_scoped_layer_partitioned_box(
@@ -671,6 +677,20 @@ def _build_mesh_operation_statuses(
                 and len(layer_plane_proof["layer_planes_m"])
                 == expected_layer_partitions + 1
             )
+            if exact_body_only_layers:
+                actual_thin_film_method = (
+                    "geo_body_only_layer_partitioned_tetrahedral"
+                    if scoped_layer_partitioning
+                    else "geo_body_only_layered_tetrahedral"
+                )
+            elif scoped_layer_partitioning:
+                actual_thin_film_method = "geo_layer_partitioned_tetrahedral"
+            elif exact_box_layers or exact_ring_layers:
+                actual_thin_film_method = "geo_layered_tetrahedral"
+            elif sweepability.sweepable:
+                actual_thin_film_method = "feature_aware_tetrahedral"
+            else:
+                actual_thin_film_method = "free_tetrahedral"
             statuses.append(
                 MeshOperationStatus(
                     kind="thin_film",
@@ -682,20 +702,20 @@ def _build_mesh_operation_statuses(
                         else (
                             "applied"
                             if exact_box_layers
+                            or exact_body_only_layers
                             or exact_ring_layers
                             or sweepability.sweepable
                             else "skipped"
                         )
                     ),
                     requested_method=requested_thin_film,
-                    actual_method=(
-                        "geo_layer_partitioned_tetrahedral" if scoped_layer_partitioning else
-                        ("geo_layered_tetrahedral" if exact_box_layers or exact_ring_layers else
-                         ("feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral"))
-                    ),
+                    actual_method=actual_thin_film_method,
                     reason=(
                         None
-                        if exact_box_layers or exact_ring_layers or sweepability.sweepable
+                        if exact_box_layers
+                        or exact_body_only_layers
+                        or exact_ring_layers
+                        or sweepability.sweepable
                         else sweepability.reason
                     ),
                     details={
@@ -703,10 +723,15 @@ def _build_mesh_operation_statuses(
                         "through_thickness_elements": opts.through_thickness_elements,
                         "requested_sweep_direction": requested_sweep_direction,
                         "resolved_sweep_direction": (
-                            "z" if exact_box_layers or exact_ring_layers else
+                            "z"
+                            if exact_box_layers
+                            or exact_body_only_layers
+                            or exact_ring_layers
+                            else
                             ("xyz"[sweepability.thin_axis] if sweepability.thin_axis is not None else None)
                         ),
                         "airbox_present": airbox is not None,
+                        "body_only_domain": bool(exact_body_only_layers),
                         **(
                             {
                                 "resolved_layer_partitions": (
@@ -723,7 +748,11 @@ def _build_mesh_operation_statuses(
                                 "layer_plane_verification": (
                                     "verified" if layer_planes_realized else "pending"
                                 ),
-                                "layer_mesh_mode": "unstructured_tetrahedra_per_layer_volume",
+                                "layer_mesh_mode": (
+                                    "geo_extruded_triangular_source_tet4"
+                                    if exact_body_only_layers
+                                    else "unstructured_tetrahedra_per_layer_volume"
+                                ),
                             }
                             if scoped_layer_partitioning
                             else {}

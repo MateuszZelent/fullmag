@@ -2546,10 +2546,25 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     frozen_payload = _validate_domain_mesh_workflow(mesh_workflow)
 
     airbox = _study_universe_airbox_options(geometries, study_universe)
-    if airbox is None:
+    raw_mesh_options = (
+        mesh_workflow.get("mesh_options")
+        if isinstance(mesh_workflow, Mapping)
+        else None
+    )
+    body_only_without_airbox_requested = (
+        len(geometries) == 1
+        and isinstance(geometries[0], Box)
+        and isinstance(raw_mesh_options, Mapping)
+        and raw_mesh_options.get("mesh_strategy") == "thin_film_tetrahedral"
+    )
+    if airbox is None and not body_only_without_airbox_requested:
         raise ValueError(
             "shared FEM domain mesh generation requires a declared study universe "
             "(manual size/center or auto padding)"
+        )
+    if airbox is None and frozen_payload is not None:
+        raise ValueError(
+            "body-only thin-film Box meshing does not accept a frozen magnetic submesh"
         )
 
     if frozen_payload is not None:
@@ -2720,7 +2735,23 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         # admission as its generator before excluding the generic OCC route.
         and _coincident_ring_airbox_bounds(geometries[0], airbox) is not None
     )
-    single_geometry_occ_direct = mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct
+    body_only_thin_film_box_requested = (
+        len(geometries) == 1
+        and isinstance(geometries[0], Box)
+        and airbox is None
+        and surface_mesh_options.mesh_strategy == "thin_film_tetrahedral"
+    )
+    if body_only_thin_film_box_requested and object_regions:
+        raise ValueError(
+            "body-only thin-film Box meshing does not support conformal object regions"
+        )
+    body_only_thin_film_box_direct = body_only_thin_film_box_requested
+    single_geometry_occ_direct = (
+        mixed_shared_geo_direct
+        or ring_shared_geo_direct
+        or box_layered_geo_direct
+        or body_only_thin_film_box_direct
+    )
     if (
         isinstance(mesh_workflow, Mapping)
         and bool(mesh_workflow.get("single_geometry_occ_direct")) is True
@@ -2728,7 +2759,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         single_geometry_occ_direct = (
             len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry)
             and not conformal_object_regions
-        )
+        ) or body_only_thin_film_box_direct
 
     bounds_by_name: dict[str, tuple] = {}
     fallbacks_triggered: list[str] = []
@@ -2868,6 +2899,10 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 airbox=airbox,
             )
         )
+        scoped_body_only_thin_film_box = (
+            body_only_thin_film_box_direct
+            and _has_component_scoped_size_fields(mesh_options)
+        )
         if scoped_thin_film_box or scoped_ring_layers:
             if not _supports_scoped_layer_partitioned_box(
                 geometries[0],
@@ -2893,6 +2928,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             planned_build_mode = "single_geometry_geo_mixed"
         elif ring_shared_geo_direct:
             planned_build_mode = "single_geometry_geo_ring"
+        elif body_only_thin_film_box_direct:
+            planned_build_mode = "single_geometry_geo_body_only_layered_box"
         elif box_layered_geo_direct:
             planned_build_mode = "single_geometry_geo_layered_box"
         elif single_geometry_occ_direct:
@@ -2968,6 +3005,16 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     ),
                     "rejection_reason": str(exc),
                 }
+            if body_only_thin_film_box_direct:
+                payload["body_only_layer_topology_rejection"] = {
+                    "schema_version": "body_only_layer_topology_rejection.v1",
+                    "certificate_status": "rejected",
+                    "requested_layer_count": int(
+                        mesh_options.through_thickness_elements or 0
+                    ),
+                    "airbox_present": False,
+                    "rejection_reason": str(exc),
+                }
             emit_progress_event(payload)
 
         latest_mesh_phase = "preparing_domain"
@@ -2991,7 +3038,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             )
             if (
                 len(geometries) == 1
-                and (box_layered_geo_direct or ring_shared_geo_direct)
+                and (
+                    box_layered_geo_direct
+                    or body_only_thin_film_box_direct
+                    or ring_shared_geo_direct
+                )
             ):
                 # Exact-layer Box/ring generation also uses hmax as its body
                 # upper field. Resolve it from the same owner target recorded
@@ -3029,13 +3080,23 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         owner_hmax_candidates.append(owner_field_hmax)
                 effective_hmax = max(owner_hmax_candidates)
             if (
-                not (mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct)
+                not (
+                    mixed_shared_geo_direct
+                    or ring_shared_geo_direct
+                    or box_layered_geo_direct
+                    or body_only_thin_film_box_direct
+                )
                 and airbox is not None
                 and airbox.maximum_element_size is not None
                 and float(airbox.maximum_element_size) > effective_hmax
             ):
                 effective_hmax = float(airbox.maximum_element_size)
-            if not (mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct):
+            if not (
+                mixed_shared_geo_direct
+                or ring_shared_geo_direct
+                or box_layered_geo_direct
+                or body_only_thin_film_box_direct
+            ):
                 for field in mesh_options.size_fields:
                     vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
                     if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
@@ -3049,7 +3110,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     else (
                         "single_geometry_geo_ring"
                         if ring_shared_geo_direct
-                        else ("single_geometry_geo_layered_box" if box_layered_geo_direct else "single_geometry_occ")
+                        else (
+                            "single_geometry_geo_body_only_layered_box"
+                            if body_only_thin_film_box_direct
+                            else (
+                                "single_geometry_geo_layered_box"
+                                if box_layered_geo_direct
+                                else "single_geometry_occ"
+                            )
+                        )
                     )
                 )
                 emit_progress_event(
@@ -3067,12 +3136,20 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 )
                                 if ring_shared_geo_direct
                                 else (
-                                    "Generating shared-GEO layer-partitioned tetrahedral Box mesh"
-                                    if scoped_layer_partitioned_geo
+                                    (
+                                        "Generating shared-GEO body-only scoped-field Tet4 Box mesh"
+                                        if scoped_body_only_thin_film_box
+                                        else "Generating shared-GEO body-only exact-layer Tet4 Box mesh"
+                                    )
+                                    if body_only_thin_film_box_direct
                                     else (
-                                        "Generating shared-GEO layered Box tetrahedral mesh"
-                                        if box_layered_geo_direct
-                                        else "Generating direct OCC 3D tetrahedral mesh"
+                                        "Generating shared-GEO layer-partitioned tetrahedral Box mesh"
+                                        if scoped_layer_partitioned_geo
+                                        else (
+                                            "Generating shared-GEO layered Box tetrahedral mesh"
+                                            if box_layered_geo_direct
+                                            else "Generating direct OCC 3D tetrahedral mesh"
+                                        )
                                     )
                                 )
                             )
@@ -3090,12 +3167,18 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         )
                         if ring_shared_geo_direct
                         else (
-                            "Single-geometry shared-GEO layer-partitioned Box mesh path selected"
-                            if scoped_layer_partitioned_geo
+                            (
+                                "Single-geometry shared-GEO body-only exact-layer Tet4 Box path selected"
+                            )
+                            if body_only_thin_film_box_direct
                             else (
-                                "Single-geometry layered Box mesh path selected"
-                                if box_layered_geo_direct
-                                else "Single-geometry OCC mesh path selected (skipping STL component import)"
+                                "Single-geometry shared-GEO layer-partitioned Box mesh path selected"
+                                if scoped_layer_partitioned_geo
+                                else (
+                                    "Single-geometry layered Box mesh path selected"
+                                    if box_layered_geo_direct
+                                    else "Single-geometry OCC mesh path selected (skipping STL component import)"
+                                )
                             )
                         )
                     )

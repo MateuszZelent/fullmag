@@ -2326,6 +2326,476 @@ def generate_swept_tetrahedral_box_airbox_mesh(
     )
 
 
+def _validate_body_only_box_owner_field_scopes(
+    geometry: Box,
+    options: MeshOptions,
+) -> None:
+    """Reject owner fields whose Z support would change under extrusion."""
+    body_z_min = -0.5 * float(geometry.size[2])
+    body_z_max = 0.5 * float(geometry.size[2])
+    z_tolerance = max(1.0e-15, abs(body_z_max - body_z_min) * 1.0e-12)
+
+    def require_full_depth(params: Mapping[str, Any], *, lower: str, upper: str) -> None:
+        try:
+            z_min = float(params[lower])
+            z_max = float(params[upper])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "body-only tetrahedral Box owner field requires finite full-depth Z bounds"
+            ) from exc
+        if (
+            not math.isfinite(z_min)
+            or not math.isfinite(z_max)
+            or z_min > body_z_min + z_tolerance
+            or z_max < body_z_max - z_tolerance
+        ):
+            raise ValueError(
+                "body-only tetrahedral Box cannot project an owner-scoped field "
+                "that does not span the full film thickness"
+            )
+
+    for config in options.size_fields:
+        if not isinstance(config, Mapping):
+            continue
+        params = config.get("params")
+        if not isinstance(params, Mapping):
+            continue
+        owner = params.get("GeometryName")
+        if owner is None:
+            continue
+        if not isinstance(owner, str) or owner.strip() != geometry.geometry_name:
+            raise ValueError(
+                "body-only tetrahedral Box owner-scoped fields must name the exact Box geometry"
+            )
+        kind = config.get("kind")
+        if kind == "ComponentVolumeConstant":
+            continue
+        if kind == "ComponentRestrictedBox":
+            require_full_depth(params, lower="ZMin", upper="ZMax")
+            continue
+        raise ValueError(
+            "body-only tetrahedral Box cannot preserve owner-scoped size field "
+            f"kind={kind!r} through source-face extrusion"
+        )
+
+    for config in options.lower_bound_fields:
+        if not isinstance(config, Mapping):
+            continue
+        params = config.get("params")
+        if not isinstance(params, Mapping):
+            continue
+        owner = params.get("GeometryName")
+        if not isinstance(owner, str) or owner.strip() != geometry.geometry_name:
+            raise ValueError(
+                "body-only tetrahedral Box lower-bound fields must name the exact Box geometry"
+            )
+        kind = config.get("kind")
+        if kind == "ComponentVolumeLowerBound":
+            continue
+        if kind == "ComponentRegionLowerBound" and params.get("ShapeKind") == "box":
+            try:
+                center_z = float(params["Center"][2])
+                size_z = float(params["Size"][2])
+            except (IndexError, KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "body-only tetrahedral Box lower-bound region requires a 3D box"
+                ) from exc
+            if not math.isfinite(center_z) or not math.isfinite(size_z) or size_z <= 0.0:
+                raise ValueError(
+                    "body-only tetrahedral Box lower-bound region requires finite positive Z size"
+                )
+            require_full_depth(
+                {
+                    "ZMin": center_z - 0.5 * size_z,
+                    "ZMax": center_z + 0.5 * size_z,
+                },
+                lower="ZMin",
+                upper="ZMax",
+            )
+            continue
+        raise ValueError(
+            "body-only tetrahedral Box cannot preserve owner-scoped lower-bound "
+            f"field kind={kind!r} through source-face extrusion"
+        )
+
+
+def generate_swept_tetrahedral_box_body_only_mesh(
+    geometry: Box,
+    hmax: float,
+    n_layers: int,
+    *,
+    order: int,
+    distribution: str,
+    recombine: bool,
+    options: MeshOptions,
+) -> MeshData:
+    """Generate a fixed-layer Tet4 Box without adding an air domain."""
+    _clear_scoped_layer_plane_proofs(options)
+    _reject_unresolved_sweep_selectors(options)
+    if isinstance(n_layers, bool) or not isinstance(n_layers, int) or n_layers < 1:
+        raise ValueError("film layer count must be a positive integer")
+    if options.through_thickness_elements not in (None, n_layers):
+        raise ValueError(
+            "body-only layered Box count does not match through_thickness_elements"
+        )
+    if order != 1 or distribution != DISTRIBUTION_FIXED or recombine:
+        raise ValueError(
+            "body-only tetrahedral Box requires P1 fixed non-recombined layers"
+        )
+    if options.through_thickness_distribution not in (None, DISTRIBUTION_FIXED):
+        raise ValueError("body-only tetrahedral Box requires fixed layer spacing")
+    if options.through_thickness_element_ratio not in (None, 1.0):
+        raise ValueError("body-only tetrahedral Box requires uniform film layers")
+    if options.through_thickness_symmetric:
+        raise ValueError("body-only tetrahedral Box requires uniform film layers")
+    if options.sweep_direction not in (None, "auto", "z"):
+        raise ValueError("body-only tetrahedral Box supports only the z sweep direction")
+    if options.sweep_face_meshing not in (None, "triangular"):
+        raise ValueError(
+            "body-only tetrahedral Box requires a triangular source face"
+        )
+    if isinstance(hmax, bool) or not math.isfinite(float(hmax)) or hmax <= 0.0:
+        raise ValueError("film lateral mesh size must be finite and positive")
+
+    sx, sy, sz = (float(value) for value in geometry.size)
+    if not all(math.isfinite(value) and value > 0.0 for value in (sx, sy, sz)):
+        raise ValueError("body-only tetrahedral Box dimensions must be finite and positive")
+    scale = 1.0e6
+    sx_scaled, sy_scaled, sz_scaled = sx * scale, sy * scale, sz * scale
+    hmax_scaled = float(hmax) * scale
+    # The lateral target is independent of the authored Z partition count.
+    # Do not introduce an implicit aspect-ratio refinement or reject a valid
+    # lateral hmin simply because it exceeds the film layer thickness.
+    source_hmax_scaled = hmax_scaled
+    if not all(
+        math.isfinite(value) and value > 0.0
+        for value in (sx_scaled, sy_scaled, sz_scaled, hmax_scaled, source_hmax_scaled)
+    ):
+        raise ValueError("scaled body-only tetrahedral Box sizes must be finite and positive")
+    if options.hmin is not None and (
+        isinstance(options.hmin, bool)
+        or not math.isfinite(float(options.hmin))
+        or float(options.hmin) <= 0.0
+    ):
+        raise ValueError("film minimum element size must be finite and positive")
+    if options.hmin is not None and float(options.hmin) * scale > source_hmax_scaled:
+        raise ValueError(
+            "body-only tetrahedral Box minimum size exceeds its source-face upper target"
+        )
+    _validate_body_only_box_owner_field_scopes(geometry, options)
+
+    layer_heights = _compute_layer_heights(
+        n_layers, sz, distribution, 1.0, False
+    )
+    cumulative_heights: list[float] = []
+    accumulated = 0.0
+    for layer_height in layer_heights:
+        accumulated += float(layer_height)
+        cumulative_heights.append(accumulated)
+
+    gmsh = _import_gmsh()
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        _configure_gmsh_threads(
+            gmsh,
+            requested_threads=1,
+            honor_environment=False,
+        )
+        gmsh.model.add("fullmag_swept_box_body_only_tet4")
+        z_bottom = -0.5 * sz_scaled
+        points = [
+            gmsh.model.geo.addPoint(x, y, z_bottom, source_hmax_scaled)
+            for x, y in (
+                (-0.5 * sx_scaled, -0.5 * sy_scaled),
+                (0.5 * sx_scaled, -0.5 * sy_scaled),
+                (0.5 * sx_scaled, 0.5 * sy_scaled),
+                (-0.5 * sx_scaled, 0.5 * sy_scaled),
+            )
+        ]
+        lines = [
+            gmsh.model.geo.addLine(points[index], points[(index + 1) % 4])
+            for index in range(4)
+        ]
+        source_loop = gmsh.model.geo.addCurveLoop(lines)
+        source_surface = gmsh.model.geo.addPlaneSurface([source_loop])
+        gmsh.model.geo.synchronize()
+
+        # Project only owner fields whose restriction to this exact boundary
+        # face has the same meaning. Every owner field is also installed on
+        # the final volume below, with its real volume and surface tags.
+        source_size_fields = []
+        for config in options.size_fields:
+            params = config.get("params") if isinstance(config, dict) else None
+            geometry_name = (
+                params.get("GeometryName") if isinstance(params, dict) else None
+            )
+            kind = config.get("kind") if isinstance(config, dict) else None
+            if not geometry_name or kind in {
+                "ComponentVolumeConstant",
+                "ComponentRestrictedBox",
+            }:
+                source_size_fields.append(dict(config))
+        source_options = _dc_replace(
+            options,
+            size_fields=source_size_fields,
+            lower_bound_fields=[
+                dict(config) for config in options.lower_bound_fields
+            ],
+        )
+        source_field_ids: list[int] = []
+        if source_options.size_fields or source_options.lower_bound_fields:
+            source_field_ids.append(
+                _apply_mixed_source_face_mesh_options(
+                    gmsh,
+                    source_surface=source_surface,
+                    hmax_scaled=source_hmax_scaled,
+                    order=order,
+                    opts=source_options,
+                    hscale=scale,
+                )
+            )
+        else:
+            gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+            gmsh.option.setNumber(
+                "Mesh.CharacteristicLengthMax", source_hmax_scaled
+            )
+            gmsh.option.setNumber("Mesh.Algorithm", options.algorithm_2d)
+            if options.hmin is not None:
+                gmsh.option.setNumber(
+                    "Mesh.CharacteristicLengthMin", options.hmin * scale
+                )
+        gmsh.model.mesh.generate(2)
+
+        extruded = gmsh.model.geo.extrude(
+            [(2, source_surface)],
+            0.0,
+            0.0,
+            sz_scaled,
+            numElements=[1] * n_layers,
+            heights=cumulative_heights,
+            recombine=False,
+        )
+        gmsh.model.geo.synchronize()
+        body_volumes = [
+            int(tag) for dimension, tag in extruded if int(dimension) == 3
+        ]
+        if len(body_volumes) != 1:
+            body_volumes = [
+                int(tag)
+                for dimension, tag in gmsh.model.getEntities(3)
+                if int(dimension) == 3
+            ]
+        if len(body_volumes) != 1:
+            raise RuntimeError(
+                "body-only Box extrusion must produce exactly one magnetic volume"
+            )
+        body_volume = body_volumes[0]
+        body_surfaces = sorted(
+            {
+                abs(int(tag))
+                for dimension, tag in gmsh.model.getBoundary(
+                    [(3, body_volume)], oriented=False
+                )
+                if int(dimension) == 2
+            }
+        )
+        if not body_surfaces:
+            raise RuntimeError(
+                "body-only Box extrusion produced no magnetic boundary surfaces"
+            )
+
+        from ._gmsh_occ import (
+            _add_periodic_boundary_physical_groups,
+            _configure_axis_periodic_surfaces,
+            _scale_periodic_boundary_pairs,
+        )
+
+        periodic_pair_specs = _configure_axis_periodic_surfaces(
+            gmsh,
+            surface_tags=body_surfaces,
+            pair_ids=list(options.periodic_pair_ids),
+        )
+        _add_periodic_boundary_physical_groups(
+            gmsh,
+            periodic_pair_specs,
+            reserved_markers={1},
+        )
+        body_surface_tags = {geometry.geometry_name: body_surfaces}
+        body_volume_tags = {geometry.geometry_name: [body_volume]}
+        _apply_mesh_options(
+            gmsh,
+            hmax_scaled,
+            order,
+            options,
+            hscale=scale,
+            preexisting_field_ids=source_field_ids,
+            component_volume_tags=body_volume_tags,
+            component_surface_tags=body_surface_tags,
+        )
+        for config in [*options.size_fields, *options.lower_bound_fields]:
+            params = config.get("params") if isinstance(config, Mapping) else None
+            owner = params.get("GeometryName") if isinstance(params, Mapping) else None
+            if owner is None:
+                continue
+            if owner != geometry.geometry_name or config.get("_gmsh_status") != "applied":
+                raise ValueError(
+                    "body-only tetrahedral Box could not apply owner-scoped field "
+                    f"kind={config.get('kind')!r} owner={owner!r} to exact volume tags"
+                )
+
+        with _GmshProgressLogger(gmsh):
+            gmsh.model.mesh.generate(3)
+        _apply_post_mesh_options(gmsh, options)
+        quality, _per_domain_quality = (
+            _extract_quality_metrics(gmsh, options)
+            if options.compute_quality
+            else (None, None)
+        )
+        raw_mesh = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            has_physical_groups=False,
+            periodic_pair_specs=periodic_pair_specs,
+        )
+        if any(kind != "tet4" for kind in raw_mesh.cell_types.tolist()):
+            raise RuntimeError(
+                "body-only thin-film Box requires tet4 volume cells; "
+                f"Gmsh produced {sorted(set(raw_mesh.cell_types.tolist()))}"
+            )
+        if any(kind != "tri3" for kind in raw_mesh.facet_types.tolist()):
+            raise RuntimeError(
+                "body-only thin-film Box requires tri3 boundary facets; "
+                f"Gmsh produced {sorted(set(raw_mesh.facet_types.tolist()))}"
+            )
+
+        nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / scale
+        elements = raw_mesh.elements
+        body_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        if not np.any(body_mask):
+            raise RuntimeError("body-only thin-film Box produced no magnetic cells")
+        body_elements = elements[body_mask]
+        body_nodes = np.unique(body_elements.reshape(-1))
+        body_bottom, body_top = -0.5 * sz, 0.5 * sz
+        layer_planes = np.linspace(
+            body_bottom,
+            body_top,
+            n_layers + 1,
+            dtype=np.float64,
+        )
+        plane_tolerance = max(
+            FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M,
+            FEM_EXACT_LAYER_PLANE_REL_TOLERANCE * sz,
+        )
+        body_node_z = nodes[body_nodes, 2]
+        plane_distance = np.min(
+            np.abs(body_node_z[:, None] - layer_planes[None, :]),
+            axis=1,
+        )
+        if np.any(plane_distance > plane_tolerance):
+            raise RuntimeError(
+                "body-only thin-film Box has magnetic nodes outside requested layer planes"
+            )
+        exact_plane_count = _count_exact_layer_planes(nodes[body_nodes], 2)
+        if exact_plane_count != n_layers + 1:
+            raise RuntimeError(
+                "body-only thin-film Box requested "
+                f"{n_layers} layers but resolved {exact_plane_count - 1} exact z intervals"
+            )
+        plane_incidence = [
+            int(np.count_nonzero(np.abs(body_node_z - plane) <= plane_tolerance))
+            for plane in layer_planes
+        ]
+        if any(count == 0 for count in plane_incidence):
+            raise RuntimeError(
+                "body-only thin-film Box lost a requested layer plane: "
+                f"incidence={plane_incidence}"
+            )
+        body_cell_z = nodes[body_elements, 2]
+        for plane in layer_planes[1:-1]:
+            crosses_plane = (
+                np.min(body_cell_z, axis=1) < plane - plane_tolerance
+            ) & (
+                np.max(body_cell_z, axis=1) > plane + plane_tolerance
+            )
+            if np.any(crosses_plane):
+                raise RuntimeError(
+                    "body-only thin-film Box has tetrahedra crossing requested "
+                    f"layer plane z={plane:.17g} m"
+                )
+        body_centroid_z = np.mean(body_cell_z, axis=1)
+        for lower_plane, upper_plane in zip(
+            layer_planes[:-1], layer_planes[1:], strict=True
+        ):
+            in_layer = (
+                (body_centroid_z >= lower_plane - plane_tolerance)
+                & (body_centroid_z <= upper_plane + plane_tolerance)
+            )
+            if not np.any(in_layer):
+                raise RuntimeError(
+                    "body-only thin-film Box has an empty requested layer "
+                    f"[{lower_plane:.17g}, {upper_plane:.17g}] m"
+                )
+        layer_plane_proof: dict[str, object] = {
+            "_verification_token": _SCOPED_LAYER_PLANE_PROOF_TOKEN,
+            "geometry_name": geometry.geometry_name,
+            "requested_layer_partitions": int(n_layers),
+            "resolved_layer_partitions": int(exact_plane_count - 1),
+            "exact_plane_count": int(exact_plane_count),
+            "layer_planes_m": [float(value) for value in layer_planes],
+            "all_magnetic_nodes_on_requested_planes": True,
+            "no_magnetic_tetrahedra_cross_requested_planes": True,
+            "verification": "passed",
+        }
+        if _has_component_scoped_size_fields(options):
+            for config in [*options.size_fields, *options.lower_bound_fields]:
+                if isinstance(config, dict):
+                    config[_SCOPED_LAYER_PLANE_PROOF_KEY] = layer_plane_proof
+
+        result = MeshData(
+            nodes=nodes,
+            cell_types=raw_mesh.cell_types,
+            cell_offsets=raw_mesh.cell_offsets,
+            cell_nodes=raw_mesh.cell_nodes,
+            element_markers=raw_mesh.element_markers,
+            facet_types=raw_mesh.facet_types,
+            facet_roles=raw_mesh.facet_roles,
+            facet_offsets=raw_mesh.facet_offsets,
+            facet_nodes=raw_mesh.facet_nodes,
+            boundary_markers=raw_mesh.boundary_markers,
+            cell_global_ordinals=raw_mesh.cell_global_ordinals,
+            facet_global_ordinals=raw_mesh.facet_global_ordinals,
+            cell_mesh_parts=raw_mesh.cell_mesh_parts,
+            periodic_boundary_pairs=_scale_periodic_boundary_pairs(
+                raw_mesh.periodic_boundary_pairs,
+                scale=scale,
+            ),
+            periodic_node_pairs=raw_mesh.periodic_node_pairs,
+            periodic_mesh_certificate=None,
+            quality=_quality_volumes_in_si(raw_mesh.quality, scale),
+            per_domain_quality=(
+                {
+                    marker: _quality_volumes_in_si(report, scale)
+                    for marker, report in raw_mesh.per_domain_quality.items()
+                }
+                if raw_mesh.per_domain_quality is not None
+                else None
+            ),
+        )
+        result = _recertify_scaled_periodic_mesh(result)
+        result.validate_strict(require_positive_orientation=True)
+        emit_progress(
+            "Gmsh swept body-only Box realization: "
+            f"layers={exact_plane_count - 1}, nodes={result.n_nodes}, "
+            f"cells={result.n_elements}, facets={result.n_boundary_faces}, "
+            f"periodic_pairs={len(result.periodic_boundary_pairs)}"
+        )
+        return result
+    finally:
+        gmsh.finalize()
+
+
 def _generate_coincident_ring_airbox_mesh(
     geometry: Geometry,
     *,
@@ -4319,6 +4789,16 @@ def generate_swept_mesh(
         )
     if isinstance(geometry, Box):
         if options is not None and options.mesh_strategy == "thin_film_tetrahedral":
+            if airbox is None:
+                return generate_swept_tetrahedral_box_body_only_mesh(
+                    geometry,
+                    hmax,
+                    n_layers,
+                    order=order,
+                    distribution=distribution,
+                    recombine=recombine,
+                    options=options,
+                )
             return generate_swept_tetrahedral_box_airbox_mesh(
                 geometry, hmax, n_layers, order=order, distribution=distribution,
                 recombine=recombine, airbox=airbox, options=options,

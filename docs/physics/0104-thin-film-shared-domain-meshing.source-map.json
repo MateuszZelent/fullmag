@@ -253,8 +253,43 @@
       "id": "box-exact-cell-route-selection",
       "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
       "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
-      "responsibility": "Selects layered GEO only for an exact-cell Box airbox; other unscoped supported geometry uses OCC.",
+      "responsibility": "Selects layered GEO for an exact-cell Box airbox; with no universe it admits only a single explicit thin-film Box, while frozen submeshes and object regions remain rejected.",
       "evidence_status": "source-only"
+    },
+    {
+      "id": "box-body-only-exact-layer-generator",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_swept_tetrahedral_box_body_only_mesh",
+      "responsibility": "Generates Box-only Tet4/tri3 exact Z layers, checks planes and strict geometry, and recertifies periodic mappings in SI.",
+      "evidence_status": "source_implemented_runtime_not_verified"
+    },
+    {
+      "id": "box-body-only-owner-field-scope",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_validate_body_only_box_owner_field_scopes",
+      "responsibility": "Accepts only exact-owner fields whose source-face projection spans the full film depth; rejects unsupported or partial-depth owner fields before Gmsh.",
+      "evidence_status": "source_implemented_runtime_not_verified"
+    },
+    {
+      "id": "box-body-only-pipeline-report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_mesh_operation_statuses",
+      "responsibility": "Reports body-only Box layers with a distinct build mode and actual-method label, separate from airbox layered GEO.",
+      "evidence_status": "source_implemented_runtime_not_verified"
+    },
+    {
+      "id": "box-body-only-gmsh-regression",
+      "path": "scripts/test_box_body_only_thin_film_mesh.py",
+      "symbol": "test_body_only_box_thin_film_realizes_exact_tet4_layers",
+      "responsibility": "Real-Gmsh regression for nonperiodic and X/Y-periodic Box-only exact layers, Tet4/tri3, positive volume, and SI certificate.",
+      "evidence_status": "existing_github_actions_regression_pending"
+    },
+    {
+      "id": "box-body-only-public-pipeline-regression",
+      "path": "scripts/test_box_body_only_thin_film_mesh.py",
+      "symbol": "test_public_mesh_pipeline_reports_body_only_owner_fields_without_airbox",
+      "responsibility": "Exercises public shared-domain realization with accepted full-depth owner fields and requires truthful body-only reporting.",
+      "evidence_status": "existing_github_actions_regression_pending"
     }
   ],
   "public_api": {
