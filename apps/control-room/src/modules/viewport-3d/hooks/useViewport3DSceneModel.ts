@@ -127,6 +127,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import {
+  analysisFieldOverlayDisplayLabel,
   useAnalysisFieldOverlayContext,
   useRenderableAnalysisFieldOverlay,
   type AnalysisFieldOverlayAppearanceState,
@@ -7218,9 +7219,10 @@ export function useViewport3DSceneModel({
     sceneRevision: savedSelectionActive ? null : primitiveModel.sceneRevision,
     sceneStatus: savedSelectionActive ? "idle" : scene.status,
     quantityId: effectiveViewportQuantityId,
-    quantityLabel: !savedSelectionActive && analysisOverlay
-      ? `Mode · ${analysisOverlay.label}`
-      : effectiveViewportQuantityId,
+    quantityLabel:
+      !savedSelectionActive && analysisOverlay
+        ? analysisFieldOverlayDisplayLabel(analysisOverlay)
+        : effectiveViewportQuantityId,
     regionOverlays: savedSelectionActive ? [] : regionOverlays,
     resourceFrameKey,
     savedViewportActive: savedSelectionActive,

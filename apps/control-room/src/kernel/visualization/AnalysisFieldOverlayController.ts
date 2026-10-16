@@ -90,6 +90,20 @@ export interface AnalysisFieldOverlayState {
   };
 }
 
+export function analysisFieldOverlayDisplayLabel(
+  overlay: Pick<AnalysisFieldOverlayState, "label"> & { source: string },
+): string {
+  switch (overlay.source) {
+    case "eigen-mode":
+      return `Mode · ${overlay.label}`;
+    case "frequency-response":
+    case "time-domain-response":
+      return `Response · ${overlay.label}`;
+    default:
+      return `Field · ${overlay.label}`;
+  }
+}
+
 export type AnalysisFieldOverlayContextStatus =
   | "compatible"
   | "foreign"

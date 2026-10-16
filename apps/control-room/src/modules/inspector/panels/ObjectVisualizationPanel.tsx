@@ -12,7 +12,10 @@ import React, {
 } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
-import { useRenderableAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import {
+  analysisFieldOverlayDisplayLabel,
+  useRenderableAnalysisFieldOverlay,
+} from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -1488,7 +1491,7 @@ function ObjectVisualizationPanelView({
               !capabilities.supportsFieldData
                 ? "Not available"
                 : analysisFieldShown && shownAnalysisField
-                  ? `Mode · ${shownAnalysisField.label}`
+                  ? analysisFieldOverlayDisplayLabel(shownAnalysisField)
                   : settings.activeQuantityId || "H_eff"
             }
             surfaceColoring={!capabilities.supportsFieldData || target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? null : (

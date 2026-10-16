@@ -1,8 +1,36 @@
 import { describe, expect, it } from "vitest";
 
-import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
+import {
+  AnalysisFieldOverlayController,
+  analysisFieldOverlayDisplayLabel,
+} from "./AnalysisFieldOverlayController";
 
 describe("AnalysisFieldOverlay result context", () => {
+  it.each([
+    [
+      "eigen-mode",
+      "Mode 3 · 12.5 GHz",
+      "Mode · Mode 3 · 12.5 GHz",
+    ],
+    [
+      "frequency-response",
+      "Frequency response 12.5 GHz",
+      "Response · Frequency response 12.5 GHz",
+    ],
+    [
+      "time-domain-response",
+      "Time sample 4",
+      "Response · Time sample 4",
+    ],
+    ["unrecognized-source", "Unchanged label", "Field · Unchanged label"],
+  ] as const)(
+    "formats the %s source label without changing its text",
+    (source, label, expected) => {
+      expect(analysisFieldOverlayDisplayLabel({ source, label })).toBe(expected);
+    },
+  );
+
+
   it("preserves the complete immutable result identity", () => {
     const controller = ownedOverlayController();
 
