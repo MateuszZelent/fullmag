@@ -7889,30 +7889,66 @@ class MeshScaffoldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             frozen_path = Path(tmp_dir) / "frozen_film.npz"
             frozen_mesh.save(frozen_path)
-            merged, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
-                [film],
-                fm.FEM(order=1, hmax=0.75),
-                study_universe={
-                    "mode": "manual",
-                    "size": [4.0, 4.0, 4.0],
-                    "center": [0.5, 0.5, 0.5],
-                    "airbox_hmax": 1.0,
-                },
-                mesh_workflow={
-                    "domain_mesh_mode": "generated_frozen_magnetic_submesh",
-                    "frozen_magnetic_submesh_source": {
-                        "mesh_source": str(frozen_path),
-                        "region_markers": [
-                            {"geometry_name": "film", "marker": 1},
-                        ],
-                    },
-                    "mesh_options": {
-                        "algorithm_3d": ALGO_3D_DELAUNAY,
-                        "smoothing_steps": 0,
-                        "optimize": None,
-                    },
-                },
+            original_generate_mesh_from_file = mesh_asset_pipeline.generate_mesh_from_file
+            with patch.object(
+                mesh_asset_pipeline,
+                "generate_mesh_from_file",
+                wraps=original_generate_mesh_from_file,
+            ) as air_mesh_generator:
+                merged, region_markers, report = (
+                    realize_fem_domain_mesh_asset_from_components_with_report(
+                        [film],
+                        fm.FEM(order=1, hmax=0.75),
+                        study_universe={
+                            "mode": "manual",
+                            "size": [4.0, 4.0, 4.0],
+                            "center": [0.5, 0.5, 0.5],
+                            "airbox_hmax": 1.0,
+                            "airbox_hmin": 0.1,
+                        },
+                        mesh_workflow={
+                            "domain_mesh_mode": "generated_frozen_magnetic_submesh",
+                            "frozen_magnetic_submesh_source": {
+                                "mesh_source": str(frozen_path),
+                                "region_markers": [
+                                    {"geometry_name": "film", "marker": 1},
+                                ],
+                            },
+                            "mesh_options": {
+                                "algorithm_3d": ALGO_3D_DELAUNAY,
+                                "smoothing_steps": 0,
+                                "hmin": 0.05,
+                                "optimize": None,
+                            },
+                            "per_geometry": [
+                                {"geometry": "film", "hmin": 0.5},
+                            ],
+                        },
+                    )
+                )
+
+        self.assertEqual(air_mesh_generator.call_count, 1)
+        air_call = air_mesh_generator.call_args
+        air_options = air_call.kwargs["options"]
+        self.assertEqual(air_options.hmin, 0.05)
+        self.assertEqual(air_call.kwargs["airbox"].minimum_element_size, 0.1)
+        self.assertFalse(
+            any(
+                field.get("params", {}).get("GeometryName") == "film"
+                for field in air_options.lower_bound_fields
             )
+        )
+        self.assertEqual(report.effective_airbox_target.hmin, 0.1)
+        self.assertEqual(report.fallbacks_triggered, [])
+        body_floor = next(
+            field
+            for field in report.size_fields_realized
+            if field["kind"] == "ComponentVolumeLowerBound"
+        )
+        self.assertEqual(body_floor["target"], "film")
+        self.assertEqual(body_floor["params"]["MinimumElementSize"], 0.5)
+        self.assertEqual(body_floor["source"], "per_geometry_mesh_policy")
+        self.assertEqual(body_floor["status"], "requested")
 
         np.testing.assert_array_equal(merged.nodes[: frozen_mesh.n_nodes], frozen_mesh.nodes)
         np.testing.assert_array_equal(merged.elements[: frozen_mesh.n_elements], frozen_mesh.elements)

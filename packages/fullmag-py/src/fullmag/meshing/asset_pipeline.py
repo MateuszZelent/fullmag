@@ -904,6 +904,36 @@ def _frozen_magnetic_submesh_air_mesh_source(
     return air_mesh_source.strip()
 
 
+def _mesh_options_for_frozen_air_generation(
+    mesh_options: MeshOptions,
+    geometries: list[Geometry],
+) -> MeshOptions:
+    """Exclude body-owned lower bounds from the air-only STL realization."""
+    body_geometry_names = {geometry.geometry_name for geometry in geometries}
+    if not body_geometry_names:
+        return mesh_options
+
+    body_scoped_kinds = {
+        "ComponentVolumeLowerBound",
+        "ComponentRegionLowerBound",
+    }
+    retained_lower_bounds: list[dict[str, Any]] = []
+    for descriptor in mesh_options.lower_bound_fields:
+        params = descriptor.get("params")
+        if (
+            descriptor.get("kind") in body_scoped_kinds
+            and isinstance(params, Mapping)
+            and params.get("GeometryName") in body_geometry_names
+        ):
+            continue
+        retained_lower_bounds.append(descriptor)
+
+    # Keep operator-global hmin and the separate AirboxOptions unchanged. The
+    # body-owned descriptors remain in the final build report, which is rebuilt
+    # from the original metadata after the air mesh has been merged.
+    return _dc_replace(mesh_options, lower_bound_fields=retained_lower_bounds)
+
+
 def _generate_air_mesh_for_frozen_magnetic_submesh(
     *,
     frozen: FrozenMagneticSubmeshPayload,
@@ -924,6 +954,10 @@ def _generate_air_mesh_for_frozen_magnetic_submesh(
             default_hmax=_shared_domain_size_field_default_hmax(hints, airbox),
             bounds_by_name=None,
             include_size_fields=False,
+        )
+        mesh_options = _mesh_options_for_frozen_air_generation(
+            mesh_options,
+            geometries,
         )
         generated = generate_mesh_from_file(
             frozen_surface_path,
