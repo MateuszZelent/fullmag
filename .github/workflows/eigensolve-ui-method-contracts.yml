@@ -269,6 +269,7 @@ jobs:
           src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx
           src/modules/explorer/ExplorerTreeView.test.ts
           src/modules/explorer/ExplorerTreeView.dom.test.tsx
+          src/modules/explorer/builders/buildModelTree.test.ts
           src/modules/explorer/builders/catalogAnalysisFamilies.test.ts
           src/modules/explorer/builders/resultsExplorerNodes.test.ts
           src/modules/explorer/explorerSelection.test.ts
