@@ -5492,7 +5492,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "arch_waveguide.stl"
-            surface.export(path)
+            surface.export(path, file_type="stl_ascii")
 
             gmsh.initialize()
             gmsh.option.setNumber("General.Terminal", 0)
@@ -6837,7 +6837,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, path: Path) -> None:
+            def export(self, path: Path, *, file_type: str) -> None:
+                assert file_type == "stl_ascii"
                 path.write_text("solid fake\nendsolid fake\n", encoding="utf-8")
 
         fake_trimesh = type(
@@ -6928,7 +6929,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, path: Path) -> None:
+            def export(self, path: Path, *, file_type: str) -> None:
+                assert file_type == "stl_ascii"
                 path.write_text("solid fake\nendsolid fake\n", encoding="utf-8")
 
         fake_result = SharedDomainMeshResult(
@@ -7011,7 +7013,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, path: Path) -> None:
+            def export(self, path: Path, *, file_type: str) -> None:
+                assert file_type == "stl_ascii"
                 path.write_text("solid fake\nendsolid fake\n", encoding="utf-8")
 
         fake_result = SharedDomainMeshResult(
@@ -8055,7 +8058,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, path: Path) -> None:
+            def export(self, path: Path, *, file_type: str) -> None:
+                assert file_type == "stl_ascii"
                 path.write_text("solid fake\nendsolid fake\n", encoding="utf-8")
 
         fake_trimesh = type(
@@ -8170,7 +8174,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, _path: Path) -> None:
+            def export(self, _path: Path, *, file_type: str) -> None:
+                assert file_type == "stl_ascii"
                 return None
 
         fake_trimesh = type(
@@ -16187,7 +16192,8 @@ class MeshFailureDiagnosticTests(unittest.TestCase):
                 dtype=np.float64,
             )
 
-            def export(self, path: Path) -> None:
+            def export(self, path: Path, *, file_type: str) -> None:
+                assert file_type == "stl_ascii"
                 path.write_text("solid diagnostic\nendsolid diagnostic\n", encoding="utf-8")
 
         fake_trimesh = SimpleNamespace(

@@ -9,10 +9,6 @@
 
 #include "fullmag_fem.h"
 
-#ifndef FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256
-#define FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 ""
-#endif
-
 #include "backend_handle.hpp"
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
@@ -1842,7 +1838,7 @@ int fullmag_fem_get_frequency_domain_dependency_info(
         "\"petsc_library_path\":\"%s\","
         "\"slepc_library_path\":\"%s\","
         "\"reason\":\"%s\"}",
-        FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256,
+        fullmag::fem::runtime_source_snapshot_sha256(),
         petsc_available ? "true" : "false",
         slepc_available ? "true" : "false",
         modal_eigen_native_cpu_slepc_available ? "true" : "false",

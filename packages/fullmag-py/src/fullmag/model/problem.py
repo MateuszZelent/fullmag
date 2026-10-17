@@ -10,7 +10,6 @@ import tempfile
 import threading
 import time
 import uuid
-import warnings
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
@@ -1879,14 +1878,23 @@ class RuntimeSelection:
         )
 
     def gpu(self, gpu_count: int = 1) -> "RuntimeSelection":
-        """Alias for :meth:`cuda`.  Deprecated — use ``.cuda()`` instead."""
-        warnings.warn(
-            "RuntimeSelection.gpu() is deprecated — use .cuda() instead; "
-            "'gpu' and 'cuda' are synonyms in Fullmag",
-            DeprecationWarning,
-            stacklevel=2,
+        """Select the canonical public GPU execution target.
+
+        ``cuda()`` remains the explicit legacy CUDA selector.  Keeping the
+        targets distinct lets public SceneDocument/run-intent payloads use the
+        canonical ``gpu`` vocabulary while preserving legacy ordinal input.
+        """
+        return RuntimeSelection(
+            backend_target=self.backend_target,
+            device_target=DeviceTarget.GPU,
+            gpu_count=gpu_count,
+            device_index=self.device_index,
+            cpu_threads=self.cpu_threads,
+            execution_mode=self.execution_mode,
+            execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
-        return self.cuda(gpu_count=gpu_count)
 
     def threads(self, cpu_threads: int) -> "RuntimeSelection":
         return RuntimeSelection(

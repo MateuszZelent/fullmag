@@ -132,10 +132,38 @@ Definicja toolchaina: `compose.toolchain.yaml`. Definicja aplikacji:
 just runner-container-status
 ```
 
-Gdy koordynator jest nieobecny, najpierw potrzebna jest jego inicjalizacja
-oraz przypisanie lokalnego, zweryfikowanego obrazu workera. Nie należy
-wklejać hashy obrazów z pierwszego komputera. Automatyczny bootstrap całego
-nowego hosta jest nadal wymagającą dokończenia częścią wdrożenia.
+Na nowym hoście, **przed rejestracją koordynatora**, zbuduj zależności:
+
+```powershell
+just docker-all-toolchain-bootstrap
+```
+
+Recepta używa `compose.toolchain.yaml` i kanonicznego
+`docker/fem-gpu/Dockerfile`. Zamraża tylko kontekst zależności, zachowuje jego
+hashy, trzyma wspólną blokadę ciężkich prac i zapisuje końcowy receipt w storage.
+CUDA toolkit, MFEM, hypre, libCEED, PETSc/SLEPc oraz narzędzia pobierane są
+wewnątrz builda Docker. Windows nie musi mieć tych bibliotek.
+
+Bootstrap odrzuca istniejącą konfigurację runnera, także częściową, oraz istniejący
+rejestr kolejki — również bez aktywnych wierszy. Nie jest trasą do obchodzenia działającego koordynatora przy
+aktualizacji zależności. Nie usuwa cache ani nie inicjalizuje drugiego runnera.
+Po błędzie zachowaj receipt i logi; przerwanej obserwacji nie traktuj jako
+potwierdzenia zatrzymania Docker BuildKit. Niepotwierdzony wynik pozostawia
+blokujący wpis `index/docker-toolchain-bootstrap.json`; następna próba wymaga
+najpierw sprawdzenia dokładnie wskazanych zasobów i jawnego recovery operatora.
+Nie kasuj wpisu ani cache, aby ominąć tę kontrolę.
+
+Wynik podaje lokalny tag i immutable `image_id` obrazu toolchaina. Wersje
+bibliotek są przypięte w Dockerfile; zbudowany manifest znajduje się w obrazie
+pod `/opt/fullmag-deps/share/fullmag/dependency-versions.json`. Bootstrap odczytuje
+ten manifest z niezmiennego image ID i zachowuje jego kopię oraz SHA-256 w receipt.
+Sam sukces builda obrazu zależności nie kwalifikuje wykonania solvera GPU.
+
+Następnie przygotuj workera z otrzymanego lokalnego tagu oraz jeden koordynator
+według [instrukcji runnera](local-container-runner.md#konfiguracja-i-obsługa).
+Skonfiguruj profil `fem-gpu-release` z **rzeczywistym image ID workera**, nie ID
+samego toolchaina. Nie wklejaj hashy z pierwszego komputera. Kreator nadal nie
+wykonuje automatycznie tego całego wieloetapowego enrollmentu.
 
 ## 4. Właściwe uruchomienie developerskie
 

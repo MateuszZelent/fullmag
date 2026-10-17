@@ -3219,7 +3219,7 @@ mod tests {
         )
         .unwrap_err()
         .message
-        .contains("sha256 mismatch"));
+        .contains("sha256, size, or finite-value check failed"));
 
         assert!(load_solved_antenna_drive_basis_projected(
             &artifacts.last().unwrap().bytes,

@@ -448,6 +448,15 @@ fn observe_compute_nodes(
     store_root: Option<&std::path::Path>,
     explicit_config_path: Option<PathBuf>,
 ) -> anyhow::Result<ComputeNodesResource> {
+    fullmag_runtime_control::retry_store_writer_busy(|| {
+        observe_compute_nodes_once(store_root, explicit_config_path.clone())
+    })
+}
+
+fn observe_compute_nodes_once(
+    store_root: Option<&std::path::Path>,
+    explicit_config_path: Option<PathBuf>,
+) -> anyhow::Result<ComputeNodesResource> {
     use fullmag_session::{
         host_resource_ledger::HostResourceLedger,
         runtime_service::RuntimeServiceConfig,

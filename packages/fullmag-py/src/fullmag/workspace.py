@@ -1,9 +1,11 @@
 """Read and write the per-user Fullmag workspace database.
 
-One SQLite file (``workspace.db`` in the Fullmag state directory) records what
+One SQLite file (``workspace.db`` in the workspace state directory) records what
 a person has opened, saved and run with Fullmag: projects (``.fms``) and Python
-scripts. The desktop application, the ``fullmag`` command and this module share
-it. The contract is ``docs/design/start-screen/docs/07-workspace-database.md``;
+scripts. The optional ``FULLMAG_WORKSPACE_STATE_DIR`` scopes that directory per
+Compose/source group without moving runtime/session state. The desktop
+application, the ``fullmag`` command and this module share it. The contract is
+``docs/design/start-screen/docs/07-workspace-database.md``;
 the Rust crate ``fullmag-workspace`` is the reference implementation and this
 module mirrors its state-directory resolution, schema, identity rules and
 ordering using only the standard library (``sqlite3``).
@@ -208,11 +210,21 @@ def state_dir() -> Path:
     raise WorkspaceError("cannot determine the Fullmag state directory; set FULLMAG_STATE_DIR")
 
 
+def _workspace_state_dir() -> Path:
+    """Resolve the database directory scoped to the workspace group."""
+    # The override is intentionally limited to the workspace database;
+    # runtime/session state continues to use ``state_dir()``.
+    explicit = os.environ.get("FULLMAG_WORKSPACE_STATE_DIR")
+    if explicit:
+        return Path(explicit)
+    return state_dir()
+
+
 def database_path(database: str | os.PathLike[str] | None = None) -> Path:
-    """Path of ``workspace.db``; ``database`` overrides the default location."""
+    """Path of ``workspace.db``; explicit ``database`` wins over the scoped default."""
     if database is not None:
         return Path(database)
-    return state_dir() / DATABASE_FILE_NAME
+    return _workspace_state_dir() / DATABASE_FILE_NAME
 
 
 # -- reading ----------------------------------------------------------------

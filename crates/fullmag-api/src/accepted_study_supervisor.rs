@@ -513,6 +513,7 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
                 host.ledger(),
                 &claim,
                 host.solver_placement(&lease.resource_id)?,
+                host.expected_runtime_generation_sha256(),
             )?;
             host.ledger()
                 .release_worker_without_spawn(store, &request.identity)?;

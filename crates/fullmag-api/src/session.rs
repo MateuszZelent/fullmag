@@ -1595,12 +1595,12 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
             .and_then(|plan| plan.get("backend_plan"))
             .and_then(|plan| plan.get("kind"))
             .and_then(Value::as_str)
-            .is_some_and(|kind| kind.eq_ignore_ascii_case("fdm"))
+            .is_some_and(|kind| matches!(kind.to_ascii_lowercase().as_str(), "fdm" | "fdm_multilayer"))
             || metadata
                 .get("artifact_layout")
                 .and_then(|layout| layout.get("backend"))
                 .and_then(Value::as_str)
-                .is_some_and(|backend| backend.eq_ignore_ascii_case("fdm"));
+                .is_some_and(|backend| matches!(backend.to_ascii_lowercase().as_str(), "fdm" | "fdm_multilayer"));
         if backend_is_fdm {
             current.fem_mesh = None;
         }
@@ -2329,6 +2329,7 @@ fn apply_current_live_snapshot_in_place(
             current,
             latest_fields,
             req.latest_scalar_row.as_ref(),
+            None,
         )?;
     }
     if let Some(preview_fields) = req.preview_fields.as_ref() {
@@ -2821,7 +2822,24 @@ pub(crate) fn apply_current_live_field_frame(
     frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_field_frame_in_place(&mut candidate, frame)?;
+    apply_current_live_field_frame_in_place(&mut candidate, frame, None)?;
+    *current = candidate;
+    Ok(())
+}
+
+/// Apply a field carrier whose observation identity was verified from an
+/// immutable accepted Study output.  Accepted Study workers may publish a
+/// magnetization carrier before the legacy scalar-row stream exists, so the
+/// normal live-frame applicator cannot infer an observation frame from the
+/// current solver callback.  The caller still supplies the complete frame
+/// identity; this helper applies all ordinary field-source/revision guards.
+pub(crate) fn apply_current_live_accepted_field_frame(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveFieldFrameRequest,
+    accepted_source_frame: crate::schemas::common::AcceptedObservationFrameRef,
+) -> Result<(), ApiError> {
+    let mut candidate = current.clone();
+    apply_current_live_field_frame_in_place(&mut candidate, frame, Some(&accepted_source_frame))?;
     *current = candidate;
     Ok(())
 }
@@ -2829,6 +2847,7 @@ pub(crate) fn apply_current_live_field_frame(
 fn apply_current_live_field_frame_in_place(
     current: &mut SessionStateResponse,
     mut frame: CurrentLiveFieldFrameRequest,
+    accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
 ) -> Result<(), ApiError> {
     if matches!(
         validate_terminal_field_replacement(
@@ -2872,7 +2891,12 @@ fn apply_current_live_field_frame_in_place(
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
     if let Some(latest_fields) = frame.latest_fields.as_mut() {
-        bind_latest_field_observation_frames(current, latest_fields)?;
+        bind_latest_field_observation_frames_with_candidate(
+            current,
+            latest_fields,
+            None,
+            accepted_source_frame,
+        )?;
     }
     if let Some(preview_fields) = frame.preview_fields.as_ref() {
         validate_preview_field_sources(current, preview_fields, None)?;
@@ -2979,7 +3003,7 @@ pub(crate) fn merge_latest_fields(current: &mut LatestFields, incoming: LatestFi
     }
 }
 
-fn accepted_observation_frame_ref(
+pub(crate) fn accepted_observation_frame_ref(
     current: &SessionStateResponse,
     source_step: u64,
     source_time_seconds: Option<f64>,
@@ -3009,6 +3033,17 @@ fn observation_source_time_matches(source_time_seconds: Option<f64>, row_time: f
     source_time_seconds.is_none_or(|source_time| {
         source_time.is_finite() && row_time.is_finite() && source_time == row_time
     })
+}
+
+fn accepted_source_frame_matches(
+    frame: &crate::schemas::common::AcceptedObservationFrameRef,
+    source_step: Option<u64>,
+    source_time_seconds: Option<f64>,
+) -> bool {
+    Some(frame.source_step) == source_step
+        && source_time_seconds.is_none_or(|source_time| {
+            frame.source_time_seconds == Some(source_time)
+        })
 }
 
 fn accepted_observation_frame_for_source(
@@ -3426,13 +3461,14 @@ fn bind_latest_field_observation_frames(
     current: &mut SessionStateResponse,
     latest_fields: &mut LatestFields,
 ) -> Result<(), ApiError> {
-    bind_latest_field_observation_frames_with_candidate(current, latest_fields, None)
+    bind_latest_field_observation_frames_with_candidate(current, latest_fields, None, None)
 }
 
 fn bind_latest_field_observation_frames_with_candidate(
     current: &mut SessionStateResponse,
     latest_fields: &mut LatestFields,
     candidate_row: Option<&ScalarRow>,
+    accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
 ) -> Result<(), ApiError> {
     let current_step = current.live_state.as_ref().map(|state| &state.latest_step);
     let current_physical_step = current_step.filter(|step| step.is_physical_observation());
@@ -3508,6 +3544,12 @@ fn bind_latest_field_observation_frames_with_candidate(
             });
         let accepted_frame = if quantity_id == "m" {
             replay_frame.clone().or_else(|| {
+                accepted_source_frame
+                    .filter(|frame| {
+                        accepted_source_frame_matches(frame, source_step, source_time_seconds)
+                    })
+                    .cloned()
+            }).or_else(|| {
                 source_step.and_then(|step| {
                     accepted_observation_frame_for_source(
                         current,
@@ -3526,6 +3568,13 @@ fn bind_latest_field_observation_frames_with_candidate(
                         source_time_seconds,
                         candidate_row,
                     )
+                })
+                .or_else(|| {
+                    accepted_source_frame
+                        .filter(|frame| {
+                            accepted_source_frame_matches(frame, source_step, source_time_seconds)
+                        })
+                        .cloned()
                 })
                 .or(replay_frame)
         };

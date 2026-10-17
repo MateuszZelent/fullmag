@@ -1629,6 +1629,116 @@ Ograniczony odbiór operator initialization na przypiętym pakiecie opisuje
 [raport 26 kontroli natywnych](../plans/active/compute-execution-20261004/host-initialization-check-20261007.md).
 Nie odblokowuje on guardu v2 ani pozostałych bramek wykonania.
 
+### 13.30 Planowana generacja runtime i kontrolowany upgrade ABI backendu Docker
+
+**Status: PLANOWANE — NIEZAIMPLEMENTOWANE.** Ten kontrakt nie jest dowodem
+uruchomionego runtime, HMR ani kwalifikacji GPU. Ma przygotować bezpieczną
+migrację backendu Docker, gdy implementacja i odbiór będą osobno gotowe.
+
+#### 13.30.1 V4 dokumentu ledgera i bounded CAS
+
+V4 `HostResourceLedgerDocument` dodaje mały, typowany wskaźnik `runtime_state`:
+
+```json
+{
+  "schema_version": "host_runtime_state.v1",
+  "readiness_sha256": "<64-lowercase-hex>",
+  "snapshot_sha256": null
+}
+```
+
+`readiness_sha256` jest digestem kanonicznych bajtów immutable blobu świeżej
+GPU/runtime readiness. `snapshot_sha256` jest opcjonalnym digestem kanonicznych
+bajtów immutable blobu `ComputeNodeSnapshot`; `null` jest wymaganym stanem po
+ustanowieniu nowej generacji, zanim pierwszy snapshot zostanie zaakceptowany.
+Blob zawiera pełny typed payload i jest walidowany po odczycie; dokument zawiera
+wyłącznie referencje. `policy`, `reservations` i `node_policy` zachowują
+obecne pola oraz semantykę.
+
+Obowiązują dotychczasowe limity: readiness blob ma najwyżej 256 KiB, snapshot
+blob najwyżej 4 MiB. Limit dokumentu ledgera pozostaje niezmieniony; jego
+serializacja V4 musi sprawdzać jawnie rezerwę na mały blok wskaźników. Wskaźnik
+nie może stać się obejściem limitu przez inline JSON, nieograniczony tekst lub
+WAL.
+
+#### 13.30.2 Upgrade i publikacja
+
+Kontrolowany upgrade jest dozwolony tylko po spełnieniu wszystkich warunków:
+
+1. host writer jest zdobyty w istniejącym lock order;
+2. upgrade ma wyłączną bramkę inventory i nie ma aktywnego
+   `HostInventoryOwner`;
+3. wszystkie rezerwacje są `Released` (`allReleased`), bez `Active`, `Tentative`,
+   `Committed` lub `Quarantined`;
+4. nowa readiness jest zbudowana z aktualnego, jawnie zweryfikowanego GPU i
+   ABI, a jej typed blob został zapisany i potwierdzony przed zmianą dokumentu.
+
+Po tych warunkach następuje jedna atomiczna publikacja dokumentu V4 z nowym
+`runtime_state.readiness_sha256` oraz `snapshot_sha256: null`. Nie ma etapu,
+w którym dokument wskazuje nieopublikowany blob, ani etapu częściowego
+przenoszenia policy/reservations/node policy.
+
+Snapshot publikuje się w dwóch rozdzielonych, trwałych krokach: immutable CAS
+blob, potwierdzenie jego treści i durability, a potem jedna atomiczna publikacja
+pointera `snapshot_sha256` pod writerem oraz właściwą kontrolą ownera. Widoczny
+blob bez pointera jest osieroconym, nieszkodliwym kandydatem do retencji; pointer
+bez poprawnego blobu jest corruption i blokuje admission. Po publikacji można
+wykonać bounded GC pod tym samym writerem: obejmuje wyłącznie nieosiągalne,
+regularne pliki snapshot CAS o dokładnym 64-znakowym digest-nazewnictwie,
+zachowuje bieżący pointer oraz readiness CAS, a także legacy files i dane
+historyczne. Sprzątanie jest idempotentne po awarii i może być kontynuowane przy
+następnej publikacji lub inicjalizacji; nie usuwa wyników ani nie wykonuje
+globalnego prune storage.
+
+#### 13.30.3 Generacja jako fence wykonania
+
+`runtime_generation_sha256` musi być zapisany i sprawdzany w każdej nowej
+konfiguracji usługi, host bindingu, `HostReservationRequest`, local admission
+i worker launch permit. Jego wartością jest dokładnie `readiness_sha256` z
+runtime state oraz dokładnie 64 znaki lowercase hex, bez prefiksu `sha256:`.
+Żaden konsument nie może zastąpić go tagiem obrazu, numerem builda, ścieżką
+Windows ani chwilowym odczytem GPU.
+
+Stale generation, brak generation, niezgodny digest readiness/snapshot,
+missing/corrupt CAS, wrong GPU, brak aktywnego ownera albo ownerless v2 request
+kończą się odmową fail-closed. Rezerwacja nie może być zbudowana na snapshotcie
+z poprzedniej generacji, nawet jeśli jego czas mieści się w zwykłym freshness
+window. Worker odmawia przed native startem; nie ma cichego fallbacku CPU ani
+ponownego użycia starego permitu.
+
+#### 13.30.4 Wersje i ścieżka legacy
+
+Binaria V1–V3 muszą odrzucić dokument V4 jako nieobsługiwany schemat, zanim
+wykorzystają policy, reservations, node policy lub runtime state. Historyczne pliki readiness/snapshot oraz marker pozostają zachowane dla
+kontrolowanej diagnostyki. Dokument ledgera jest aktualizowany atomowo do V4
+z zachowaniem polityki, historii rezerwacji i NodePolicy. Nie są automatycznie
+traktowane jako bieżące dowody V4 i nie mogą otworzyć ownerless admission.
+Nowy czytnik może rozpoznać poprzedni format tylko przez jawny adapter
+kompatybilności, bez dopisywania brakującego generation digestu.
+
+#### 13.30.5 Wymagane źródła i odbiór
+
+Implementacja wymaga zmian w następujących granicach:
+
+- `crates/fullmag-session/src/host_resource_ledger.rs`;
+- `crates/fullmag-session/src/runtime_service_host.rs` i
+  `crates/fullmag-session/src/types.rs`;
+- `crates/fullmag-runtime-control/src/host_runtime.rs`;
+- `crates/fullmag-api/src/runtime_service_main.rs`;
+- worker/preparer i supervisor launch paths, w szczególności
+  `crates/fullmag-api/src/accepted_fem_preparer.rs` oraz powiązane worker
+  permit consumers;
+- Docker runtime helper `docker/all-in-one/runtime_service.py` oraz jego
+  konsument startu `docker/all-in-one/entrypoint.py`; generacja jest ustalana
+  przy inicjalizacji fizycznego hosta, nie podczas kompilacji obrazu.
+
+Odbiór musi obejmować idle upgrade i restart z zachowaniem Windows storage,
+sesji i wyników; odmowy dla aktywnych/quarantined reservations, wrong GPU,
+corrupt/missing CAS, stale config/generation/permit i ownerless v2; oraz
+fault-injection przed i po atomicznej publikacji pointera. Wymagany jest także
+test granicy małego dokumentu z zachowaną rezerwą oraz testów limitów 256 KiB
+i 4 MiB. Do czasu przejścia tych bramek status pozostaje PLANOWANE.
+
 ## Wspólna normalizacja authoring — ADR0057
 
 Scoped korekta ownership z E1: pure replay execution profile/layers jest współdzielony przez IR core, a application re-exportuje te same funkcje i nadal wiąże ProblemIR, rozstrzyga capability oraz steruje submit/runtime. Algorytm precedence, origins i immutable hashes pozostaje bez zmian. Authoring adaptive waliduje efektywne requested intent, zamiast stale legacy fields sceny. Nie ma zmiany wire, fizyki ani nowego GPU fallback. [ADR0057](../adr/0057-shared-execution-intent-normalization.md) określa zakres i bramki; implementacja/runtime wymagają osobnych dowodów.

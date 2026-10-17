@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
-const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
+pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
 const WORKER_EXECUTION_STARTED_RECEIPT: &str = "worker_execution_started.v1.json";
 const WORKER_PRELAUNCH_FAILED_RECEIPT: &str = "worker_prelaunch_failed.v1.json";
 const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.json";
@@ -134,7 +134,7 @@ pub(crate) fn create_private_attempt_output_dir(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<PathBuf> {
-    verify_host_worker_launch(store, claim.run_id.as_str(), claim.task_id.as_str())?;
+    verify_host_worker_launch(store, claim)?;
     for (value, label) in [
         (claim.run_id.as_str(), "run_id"),
         (claim.task_id.as_str(), "task_id"),
@@ -178,14 +178,103 @@ pub(crate) fn create_private_attempt_output_dir(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AcceptedFemRuntime {
+    pub(crate) resolved_device: String,
+    pub(crate) gpu_uuid: Option<String>,
+}
+
+/// Resolve the FEM lane from the authoritative lease rather than from a
+/// process environment or a resource-id naming convention.
+pub(crate) fn resolve_requested_fem_device(
+    requested: &str,
+    kind: fullmag_session::FmsResourceKind,
+    gpu_memory_bytes: u64,
+) -> Result<&'static str> {
+    match (kind, gpu_memory_bytes) {
+        (fullmag_session::FmsResourceKind::Cpu, 0) => match requested {
+            "auto" | "cpu" => Ok("cpu"),
+            "gpu" => bail!("accepted FEM GPU request has a CPU lease"),
+            other => bail!("accepted FEM request has unsupported device `{other}`"),
+        },
+        (fullmag_session::FmsResourceKind::Gpu, value) if value > 0 => match requested {
+            "auto" | "gpu" => Ok("gpu"),
+            "cpu" => bail!("accepted FEM CPU request has a GPU lease"),
+            other => bail!("accepted FEM request has unsupported device `{other}`"),
+        },
+        (fullmag_session::FmsResourceKind::Cpu, _) => {
+            bail!("CPU FEM lease must have zero GPU budget")
+        }
+        (fullmag_session::FmsResourceKind::Gpu, 0) => {
+            bail!("GPU FEM lease must have a positive GPU budget")
+        }
+        (kind, _) => bail!("accepted FEM requires a CPU or GPU lease, got {kind:?}"),
+    }
+}
+
+fn validate_active_fms_lease_matches_claim(
+    lease: &fullmag_session::FmsResourceLease,
+    claim: &fullmag_application::TaskClaim,
+) -> Result<()> {
+    if lease.state != fullmag_session::FmsResourceLeaseState::Active {
+        bail!("worker execution requires an active local lease");
+    }
+    let kind_matches = match (&claim.lease.kind, lease.kind) {
+        (
+            fullmag_application::ResourceKind::Cpu,
+            fullmag_session::FmsResourceKind::Cpu,
+        )
+        | (
+            fullmag_application::ResourceKind::Gpu,
+            fullmag_session::FmsResourceKind::Gpu,
+        )
+        | (
+            fullmag_application::ResourceKind::Storage,
+            fullmag_session::FmsResourceKind::Storage,
+        )
+        | (
+            fullmag_application::ResourceKind::Meshing,
+            fullmag_session::FmsResourceKind::Meshing,
+        ) => true,
+        _ => false,
+    };
+    let budget_matches = lease.budget.cpu_millis == claim.lease.budget.cpu_millis
+        && lease.budget.memory_bytes == claim.lease.budget.memory_bytes
+        && lease.budget.gpu_memory_bytes == claim.lease.budget.gpu_memory_bytes
+        && lease.budget.storage_bytes == claim.lease.budget.storage_bytes;
+    if lease.run_id != claim.run_id.as_str()
+        || lease.task_id != claim.task_id.as_str()
+        || lease.attempt_id != claim.attempt_id.as_str()
+        || lease.ownership_epoch != claim.ownership_epoch.value()
+        || lease.resource_id != claim.lease.resource_id
+        || lease.lease_token != claim.lease.lease_token.as_str()
+        || !kind_matches
+        || !budget_matches
+        || lease.heartbeat_sequence < claim.lease.heartbeat_sequence
+    {
+        bail!("active local lease does not match the worker task claim");
+    }
+    Ok(())
+}
+
 /// The durable lease is authoritative; omitting a CLI flag cannot downgrade a
 /// host-bound attempt into the legacy execution path. Lock order is host→store.
-fn verify_host_worker_launch(store: &SessionStore, run_id: &str, task_id: &str) -> Result<()> {
+fn verify_host_worker_launch_for_claim(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    require_gpu_binding: bool,
+) -> Result<Option<String>> {
     let lease = store
-        .read_active_resource_lease_for_task(run_id, task_id)?
+        .read_active_resource_lease_for_task(claim.run_id.as_str(), claim.task_id.as_str())?
         .context("worker execution requires its active local lease")?;
+    validate_active_fms_lease_matches_claim(&lease, claim)?;
+    let require_gpu_binding =
+        requires_gpu_host_binding(lease.kind, require_gpu_binding);
     let Some(binding) = lease.host_launch_binding.as_ref() else {
-        return Ok(());
+        if require_gpu_binding {
+            bail!("accepted GPU execution requires a host launch binding");
+        }
+        return Ok(None);
     };
     let token = std::env::var("FULLMAG_HOST_LAUNCH_TOKEN")
         .context("host-bound worker requires its supervisor launch permit")?;
@@ -193,22 +282,82 @@ fn verify_host_worker_launch(store: &SessionStore, run_id: &str, task_id: &str) 
         &binding.ledger_root,
         binding.policy.clone(),
     )?;
+    if binding.policy.schema_version
+        == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
+    {
+        let expected_generation = binding.require_runtime_generation_sha256()?;
+        fullmag_runtime_control::retry_store_writer_busy(|| {
+            ledger.validate_runtime_generation(expected_generation)
+        })?;
+    }
     let reservation = ledger.validate_worker_launch(store, &lease, &token)?;
     if lease.kind == fullmag_session::FmsResourceKind::Gpu {
+        if reservation.exclusive_gpu_uuids.len() != 1
+            || reservation.gpu_vram_bytes_by_uuid.len() != 1
+        {
+            bail!("host GPU worker has no exact single-device allocation");
+        }
         let uuid = reservation
             .exclusive_gpu_uuids
             .iter()
             .next()
             .context("host GPU worker has no physical allocation")?;
-        if reservation.exclusive_gpu_uuids.len() != 1
-            || std::env::var("CUDA_VISIBLE_DEVICES").ok().as_ref() != Some(uuid)
+        if reservation.budget.gpu_memory_bytes != lease.budget.gpu_memory_bytes
+            || reservation.gpu_vram_bytes_by_uuid.get(uuid)
+                != Some(&lease.budget.gpu_memory_bytes)
+            || std::env::var("CUDA_VISIBLE_DEVICES").ok().as_deref() != Some(uuid.as_str())
             || std::env::var("FULLMAG_FDM_GPU_INDEX").ok().as_deref() != Some("0")
             || std::env::var("FULLMAG_FEM_GPU_INDEX").ok().as_deref() != Some("0")
         {
             bail!("host GPU worker environment differs from its exact single-device allocation");
         }
+        return Ok(Some(uuid.clone()));
     }
-    Ok(())
+    Ok(None)
+}
+
+fn requires_gpu_host_binding(
+    lease_kind: fullmag_session::FmsResourceKind,
+    caller_requires_gpu_binding: bool,
+) -> bool {
+    caller_requires_gpu_binding || lease_kind == fullmag_session::FmsResourceKind::Gpu
+}
+
+fn verify_host_worker_launch(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+) -> Result<()> {
+    verify_host_worker_launch_for_claim(store, claim, false).map(|_| ())
+}
+
+pub(crate) fn resolve_accepted_fem_runtime(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+) -> Result<AcceptedFemRuntime> {
+    let lease = store
+        .read_active_resource_lease_for_task(
+            accepted_step.claim.run_id.as_str(),
+            accepted_step.claim.task_id.as_str(),
+        )?
+        .context("accepted FEM execution requires its active local lease")?;
+    validate_active_fms_lease_matches_claim(&lease, &accepted_step.claim)?;
+    let resolved_device = resolve_requested_fem_device(
+        accepted_step.resolved_input.requested_execution.device.as_str(),
+        lease.kind,
+        lease.budget.gpu_memory_bytes,
+    )?;
+    let gpu_uuid = verify_host_worker_launch_for_claim(
+        store,
+        &accepted_step.claim,
+        resolved_device == "gpu",
+    )?;
+    if resolved_device == "gpu" && gpu_uuid.is_none() {
+        bail!("accepted FEM GPU execution has no authoritative device UUID");
+    }
+    Ok(AcceptedFemRuntime {
+        resolved_device: resolved_device.to_owned(),
+        gpu_uuid,
+    })
 }
 
 fn require_real_directory(path: &Path) -> Result<PathBuf> {
@@ -1205,19 +1354,19 @@ pub(crate) fn execute_accepted_worker_start(
         Err(error) if is_not_found_error(&error) => {}
         Err(error) => return Err(error).context("inspect existing accepted FDM attempt"),
     }
-    // The verified task input is the accepted device/precision intent. Project
-    // that request into the runner adapter while retaining other authored fields;
-    // the environment guard above prevents a managed override from changing it.
+    // Keep the authored runtime selection intact. The managed lease is an
+    // effective runtime override, recorded separately for provenance.
     let mut problem = accepted_step.problem.clone();
-    let selection = problem
+    problem
         .problem_meta
         .runtime_metadata
-        .entry("runtime_selection".into())
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .context("accepted runtime_selection must be an object")?;
-    selection.insert("device".into(), serde_json::json!(request.device));
-    selection.insert("precision".into(), serde_json::json!(request.precision));
+        .insert(
+            "runtime_device_override".into(),
+            serde_json::json!({
+                "device": request.device.clone(),
+                "source": "managed_launcher"
+            }),
+        );
     crate::accepted_project_storage::AcceptedProjectStorage::preflight(
         &problem,
         store,
@@ -1375,6 +1524,8 @@ fn execute_accepted_fem_worker_start(
     interrupt_requested: Option<&AtomicBool>,
 ) -> Result<AcceptedRunnerExecution> {
     let receipt_identity = worker_execution_receipt_identity(start, accepted_step, case_id)?;
+    let runtime = resolve_accepted_fem_runtime(store, accepted_step)
+        .context("resolve accepted FEM CPU/GPU device from the active lease")?;
     let existing_attempt = match existing_private_attempt_output_dir(store, &accepted_step.claim) {
         Ok(path) => Some(path),
         Err(error) if is_not_found_error(&error) => None,
@@ -1387,18 +1538,20 @@ fn execute_accepted_fem_worker_start(
             &receipt_identity,
             &study_step.outputs,
             existing_path,
+            &runtime,
         )
         .context("recover completed accepted FEM worker attempt without rerunning solver");
     }
 
-    let prepared = crate::accepted_fem_study_worker::prepare_accepted_fem_cpu_execution(
+    let prepared = crate::accepted_fem_study_worker::prepare_accepted_fem_execution(
         store,
         accepted,
         accepted_step,
         study_step,
         case_id,
+        &runtime,
     )
-    .context("prepare accepted FEM CPU execution before attempt reservation")?;
+    .context("prepare accepted FEM CPU/GPU execution before attempt reservation")?;
     crate::accepted_project_storage::AcceptedProjectStorage::preflight(
         &prepared.problem,
         store,
@@ -1435,6 +1588,7 @@ fn execute_accepted_fem_worker_start(
                 &receipt_identity,
                 &prepared.output_ports,
                 existing_path,
+                &runtime,
             )
             .context("recover completed accepted FEM worker attempt without rerunning solver");
         }
@@ -1450,7 +1604,7 @@ fn execute_accepted_fem_worker_start(
     )?;
     let storage_attempt_dir = attempt_output_dir.clone();
     let execution: Result<AcceptedRunnerExecution> = (|| {
-        let outcome = crate::accepted_fem_study_worker::execute_accepted_fem_cpu_attempt(
+        let outcome = crate::accepted_fem_study_worker::execute_accepted_fem_attempt(
             accepted_step,
             &prepared,
             &attempt_output_dir,
@@ -1460,9 +1614,9 @@ fn execute_accepted_fem_worker_start(
                 .unwrap_or(&attempt_output_dir),
             interrupt_requested,
         )
-        .context("execute accepted FEM CPU worker attempt")?;
+        .context("execute accepted FEM CPU/GPU worker attempt")?;
         match outcome {
-            crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Cancelled {
+            crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Cancelled {
                 completed_step_count,
                 attempt_output_dir,
             } => Ok(AcceptedRunnerExecution {
@@ -1474,7 +1628,7 @@ fn execute_accepted_fem_worker_start(
                 accepted_state_ref: None,
                 observation_source: None,
             }),
-            crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Completed(
+            crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Completed(
                 execution,
             ) => {
                 if let Some(storage) = &mut storage {
@@ -1766,6 +1920,7 @@ fn recover_accepted_fem_worker_attempt(
     receipt_identity: &WorkerExecutionReceiptIdentity,
     declared_outputs: &[StudyOutputPort],
     existing_path: PathBuf,
+    runtime: &AcceptedFemRuntime,
 ) -> Result<AcceptedRunnerExecution> {
     let current_claim = retry_store_writer_busy(|| {
         fullmag_runtime_control::load_current_task_claim(
@@ -1783,6 +1938,7 @@ fn recover_accepted_fem_worker_attempt(
         crate::accepted_fem_study_worker::accepted_state_ref_from_attempt_snapshot(
             &existing_path,
             accepted_step,
+            runtime,
         )
         .context("load accepted FEM state identity for receipt recovery")?;
     recover_completed_worker_execution(
@@ -1824,7 +1980,6 @@ pub(crate) fn run_pending_accepted_start(
         .context("accepted worker run id is invalid")?;
     fullmag_session::repository_path::validate_store_id(task_id)
         .context("accepted worker task id is invalid")?;
-    verify_host_worker_launch(store, run_id, task_id)?;
     let run_id = fullmag_application::RunId::parse(run_id.to_owned())
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let intent = store
@@ -1835,6 +1990,13 @@ pub(crate) fn run_pending_accepted_start(
             .context("accepted worker RunSpec is invalid")?;
     if specification.run_id != run_id {
         bail!("accepted worker RunSpec belongs to another run");
+    }
+    // A worker process may be restored after its scheduler admitted the task.
+    // Recheck the immutable Compute release immediately before loading the
+    // accepted study or executing a solver. Legacy runs without the optional
+    // manual policy remain permitted by the session gate.
+    if !store.accepted_run_start_permitted(run_id.as_str())? {
+        bail!("accepted worker refuses to execute before explicit Compute release");
     }
     let accepted = retry_store_writer_busy(|| {
         fullmag_runtime_control::load_accepted_study_snapshot(
@@ -1848,6 +2010,7 @@ pub(crate) fn run_pending_accepted_start(
         fullmag_runtime_control::load_current_task_claim(store, &run_id, task_id)
     })
     .context("worker process requires the exact active durable task claim")?;
+    verify_host_worker_launch(store, &claim)?;
     let recovered =
         retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, &claim))
             .context("worker process could not recover the durable coordinator")?;
@@ -2595,7 +2758,7 @@ fn push_typed_output(
     Ok(())
 }
 
-fn read_explicit_runner_artifact(
+pub(crate) fn read_explicit_runner_artifact(
     attempt_output_dir: &Path,
     file_name: &str,
     max_bytes: u64,
@@ -2639,4 +2802,177 @@ fn read_explicit_runner_artifact(
         bail!("runner artifact `{file_name}` changed while it was being read");
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod accepted_fem_runtime_tests {
+    use super::resolve_requested_fem_device;
+
+    #[test]
+    fn auto_resolves_from_authoritative_cpu_or_gpu_lease() {
+        assert_eq!(
+            resolve_requested_fem_device(
+                "auto",
+                fullmag_session::FmsResourceKind::Cpu,
+                0
+            )
+            .unwrap(),
+            "cpu"
+        );
+        assert_eq!(
+            resolve_requested_fem_device(
+                "auto",
+                fullmag_session::FmsResourceKind::Gpu,
+                8 * 1024 * 1024
+            )
+            .unwrap(),
+            "gpu"
+        );
+    }
+
+    #[test]
+    fn explicit_device_mismatch_and_invalid_budget_fail_closed() {
+        assert!(resolve_requested_fem_device(
+            "gpu",
+            fullmag_session::FmsResourceKind::Cpu,
+            0
+        )
+        .is_err());
+        assert!(resolve_requested_fem_device(
+            "cpu",
+            fullmag_session::FmsResourceKind::Gpu,
+            8 * 1024 * 1024
+        )
+        .is_err());
+        assert!(resolve_requested_fem_device(
+            "auto",
+            fullmag_session::FmsResourceKind::Cpu,
+            1
+        )
+        .is_err());
+        assert!(resolve_requested_fem_device(
+            "auto",
+            fullmag_session::FmsResourceKind::Gpu,
+            0
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn gpu_lane_is_scoped_to_receipted_time_evolution_or_llg() {
+        let source = include_str!("accepted_fem_study_worker.rs");
+        assert!(source.contains("StudyIR::TimeEvolution { .. }"));
+        assert!(source.contains("RelaxationAlgorithmIR::LlgOverdamped"));
+        assert!(source.contains("does not have a native execution receipt"));
+    }
+
+    #[test]
+    fn host_gpu_admission_keeps_claim_lease_and_environment_fences() {
+        let source = include_str!("accepted_study_worker.rs");
+        for needle in [
+            "validate_active_fms_lease_matches_claim",
+            "lease.heartbeat_sequence < claim.lease.heartbeat_sequence",
+            "require_gpu_binding",
+            "gpu_vram_bytes_by_uuid",
+            "FULLMAG_FEM_GPU_INDEX",
+        ] {
+            assert!(source.contains(needle), "missing host GPU fence: {needle}");
+        }
+    }
+
+    #[test]
+    fn common_host_launch_gate_requires_binding_for_gpu_but_not_cpu() {
+        assert!(super::requires_gpu_host_binding(
+            fullmag_session::FmsResourceKind::Gpu,
+            false
+        ));
+        assert!(!super::requires_gpu_host_binding(
+            fullmag_session::FmsResourceKind::Cpu,
+            false
+        ));
+        assert!(super::requires_gpu_host_binding(
+            fullmag_session::FmsResourceKind::Cpu,
+            true
+        ));
+    }
+
+    #[test]
+    fn restored_manual_worker_requires_exact_compute_release_before_claim_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = "run-manual-worker-recovery";
+        let task_id = "task-recovered";
+        let intent = fullmag_session::FmsRunIntent::new(
+            run_id,
+            "intent-manual-worker-recovery",
+            serde_json::json!({
+                "schema_version": "run_spec.v2",
+                "run_id": run_id,
+                "snapshot": {
+                    "project_id": "project-manual-worker-recovery",
+                    "definition_revision": 1,
+                    "definition_sha256": "a".repeat(64)
+                },
+                "study": {
+                    "study_id": "study-manual-worker-recovery",
+                    "plan_version": "study_plan.v2",
+                    "plan_sha256": "b".repeat(64)
+                },
+                "study_catalog_sha256": "c".repeat(64),
+                "parameters": {
+                    (fullmag_session::ACCEPTED_RUN_START_POLICY_KEY): {
+                        "schema_version": "accepted_run_start_policy.v1",
+                        "mode": "manual"
+                    }
+                },
+                "seeds": {},
+                "dependencies": [],
+                "immutable_assets": [],
+                "requested_execution": {
+                    "backend": "fdm",
+                    "device": "cpu",
+                    "precision": "double",
+                    "mode": "strict",
+                    "minimum_resources": {
+                        "cpu_millis": 100,
+                        "memory_bytes": 1,
+                        "gpu_memory_bytes": 0,
+                        "storage_bytes": 1
+                    }
+                }
+            }),
+        );
+        store.commit_run_intent(&intent).unwrap();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: vec![fullmag_session::FmsTaskCatalogEntry {
+                    task_id: task_id.into(),
+                    input_fingerprint: "d".repeat(64),
+                    lifecycle: fullmag_session::FmsTaskLifecycle::Preparing,
+                    readiness: fullmag_session::FmsTaskReadiness::Ready,
+                    observation: None,
+                    attempt_id: Some("attempt-recovered".into()),
+                    ownership_epoch: Some(1),
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: Some("resource-cpu".into()),
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+
+        let error = match super::run_pending_accepted_start(&store, run_id, task_id) {
+            Ok(_) => panic!("manual worker recovery must not execute without a release"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("explicit Compute release"),
+            "missing exact release must fail before claim recovery: {error:#}"
+        );
+    }
 }

@@ -1,6 +1,16 @@
 # Optional packaged release. Development uses the root compose.yaml instead.
+# The managed launcher supplies the selected checkout identity.
+name: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
+
+x-fullmag-source-labels: &fullmag-source-labels
+  org.fullmag.source.project-id: ${FULLMAG_SOURCE_PROJECT_ID:-unknown}
+  org.fullmag.source.worktree-id: ${FULLMAG_SOURCE_WORKTREE_ID:-unknown}
+  org.fullmag.source.checkout-kind: ${FULLMAG_SOURCE_CHECKOUT_KIND:-unknown}
+  org.fullmag.compose.project: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
+
 services:
   backend:
+    labels: *fullmag-source-labels
     image: ${FULLMAG_RELEASE_IMAGE:?Assemble the managed release image first}
     pull_policy: never
     init: true
@@ -18,8 +28,16 @@ services:
       FULLMAG_DOCKER_ROLE: backend
       FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1
       FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_RELEASE_IMAGE}
+      # Durable workspace metadata is isolated per Compose source group.
+      FULLMAG_WORKSPACE_STATE_DIR: /user-data
     ports: ["127.0.0.1:${FULLMAG_HTTP_PORT:-3197}:8081"]
     volumes:
+      # Per-group durable user data: workspace.db and related settings only.
+      # Runtime sessions/results remain in the per-run /state bind below.
+      - type: bind
+        source: ${FULLMAG_WORKSPACE_STATE_ROOT:?Managed group user-data namespace is required}
+        target: /user-data
+        bind: {create_host_path: false}
       - type: bind
         source: ${FULLMAG_STATE_ROOT:?Managed Windows storage namespace is required}
         target: /state
@@ -33,4 +51,10 @@ services:
     networks: [fullmag]
 networks:
   fullmag:
+    # The managed launcher supplies the deterministic short alias when the
+    # readable worktree project would exceed Docker's network-name limit.
+    name: ${FULLMAG_COMPOSE_NETWORK:-fullmag-master_fullmag}
+    labels: *fullmag-source-labels
     driver: bridge
+    ipam:
+      driver: default

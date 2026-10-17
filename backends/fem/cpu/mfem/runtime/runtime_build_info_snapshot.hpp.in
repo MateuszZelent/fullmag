@@ -1,0 +1,8 @@
+#pragma once
+
+namespace fullmag::fem::detail {
+
+inline constexpr char kRuntimeSourceSnapshotSha256[] =
+    "@FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256@";
+
+} // namespace fullmag::fem::detail

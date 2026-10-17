@@ -2,12 +2,12 @@
 
 import { useCallback } from "react";
 
-import type { LiveStatusResource } from "../api/apiTypes";
+import type { LiveStatusResource, SessionListResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 
 import { useResourceSelector } from "./useResource";
-import type { ResourceResult } from "./resourceTypes";
+import type { ResourceResult, ResourceStatus } from "./resourceTypes";
 import {
   selectSessionLifecycle,
   type SelectedSessionLifecycle,
@@ -89,6 +89,56 @@ export function useSessionResourceIdentity(): SessionResourceIdentity | null {
     { enabled: sessions.state === "ready", isEqual: sessionResourceIdentitiesEqual },
   );
   return confirmedSessionResourceIdentity(identity, sessions.resource.data);
+}
+
+export interface SessionBootstrapStatus {
+  readonly error: Error | null;
+  readonly identity: SessionResourceIdentity | null;
+  readonly refetch: () => void;
+  readonly status: ResourceStatus;
+}
+
+/**
+ * Expose the current-session initialization result without creating another
+ * transport. The workspace needs the status error and its refetch callback in
+ * addition to the identity, otherwise a failed current/status request is
+ * indistinguishable from a request that is still loading.
+ */
+export function useSessionBootstrapStatus({
+  collection,
+  enabled,
+}: {
+  collection: SessionListResource | null;
+  enabled: boolean;
+}): SessionBootstrapStatus {
+  const selectBootstrapStatus = useCallback(
+    (status: ResourceResult<LiveStatusResource>): SessionBootstrapStatus => ({
+      error: status.error,
+      identity: confirmedSessionResourceIdentity(
+        sessionResourceIdentityFromStatus(status.data),
+        collection,
+      ),
+      refetch: status.refetch,
+      status: status.status,
+    }),
+    [collection],
+  );
+  return useSessionStatusSelector(selectBootstrapStatus, {
+    enabled,
+    isEqual: sessionBootstrapStatusesEqual,
+  });
+}
+
+function sessionBootstrapStatusesEqual(
+  previous: SessionBootstrapStatus,
+  next: SessionBootstrapStatus,
+): boolean {
+  return (
+    previous.status === next.status &&
+    previous.error === next.error &&
+    previous.refetch === next.refetch &&
+    sessionResourceIdentitiesEqual(previous.identity, next.identity)
+  );
 }
 
 /** Identity and preparation publication share one status subscription. */

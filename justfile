@@ -23,6 +23,24 @@ help:
 storage-info:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" resolve --repo-root "{{repo_root}}" --format json
 
+# Build the dependency toolchain for direct Compose development, without enrollment.
+docker-dev-toolchain:
+    @{{storage_python}} "{{repo_root}}/scripts/bootstrap_docker_toolchain.py" --repo-root "{{repo_root}}" --direct-development
+
+# Direct two-service development: the persistent backend checks/builds source at every start.
+# The source parameter selects the main checkout or a registered worktree.
+docker-dev source_root="" port="3197" script="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up --port {{quote(port)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if script == "" { "" } else { "--script " + quote(script) }}}
+
+# Controlled recreation of one terminal failed direct-development run.  The
+# receipt and config digest are mandatory; this is not unknown-owner recovery.
+docker-dev-recreate run_receipt previous_config_sha256 source_root="" port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate --direct-development --run-receipt {{quote(run_receipt)}} --previous-config-sha256 {{quote(previous_config_sha256)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} --port {{quote(port)}}
+
+# Compatibility start alias: starts both fixed services; use backend restart for iteration.
+docker-dev-build source_root="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" build {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}
+
 # Submit a clean commit to the shared runner using independent source copies.
 docker-all-build commit:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" submit --commit {{quote(commit)}}
@@ -31,12 +49,12 @@ docker-all-build commit:
 docker-all-image job_id commit:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" build-image --job-id {{quote(job_id)}} --commit {{quote(commit)}}
 
-docker-all-start assembly_receipt port="3197":
-    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" start --assembly-receipt {{quote(assembly_receipt)}} --port {{quote(port)}}
+docker-all-start assembly_receipt port="3197" source_root="" startup_script="":
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" start --assembly-receipt {{quote(assembly_receipt)}} --port {{quote(port)}}{{if source_root == "" { "" } else { " --source-root " + quote(source_root) }}}{{if startup_script == "" { "" } else { " --startup-script " + quote(startup_script) }}}
 
 # Live source defaults to the Git main checkout; source_root can select a worktree.
-docker-all-dev assembly_receipt port="3197" source_root="":
-    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" start --assembly-receipt {{quote(assembly_receipt)}} --port {{quote(port)}} --frontend 'dev' {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}
+docker-all-dev assembly_receipt port="3197" source_root="" startup_script="":
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" start --assembly-receipt {{quote(assembly_receipt)}} --port {{quote(port)}} --frontend 'dev'{{if source_root == "" { "" } else { " --source-root " + quote(source_root) }}}{{if startup_script == "" { "" } else { " --startup-script " + quote(startup_script) }}}
 
 # Explicit immutable snapshot of the selected checkout; no restart.
 docker-all-dev-backend-build source_root="":
@@ -48,6 +66,13 @@ docker-all-dev-image job_id commit source_digest="" native_snapshot_sha256="" so
 # Fixed GPU execution and FMS round-trip; never build or restart a runtime.
 docker-all-verify run_receipt:
     @{{storage_python}} "{{repo_root}}/scripts/verify_docker_all_runtime.py" --repo-root "{{repo_root}}" {{quote(run_receipt)}}
+
+# Bootstrap only the pinned FEM/GPU dependency image on a fresh Windows host.
+# The helper owns storage initialization, the global heavy lock, and its
+# enrolled-runner admission; this route must not run generic compatibility
+# preparation first.
+docker-all-toolchain-bootstrap:
+    @{{storage_python}} "{{justfile_directory()}}/scripts/bootstrap_docker_toolchain.py" --repo-root "{{justfile_directory()}}"
 
 storage-inventory:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" inventory --repo-root "{{repo_root}}" --format json

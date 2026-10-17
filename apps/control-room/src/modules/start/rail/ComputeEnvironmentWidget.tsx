@@ -187,6 +187,7 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
             (candidate) => candidate.backend === backend && candidate.device === device,
           );
           const availability = lane?.availability ?? "unknown";
+          const diagnostic = availability === "unknown" ? lane?.diagnostic : undefined;
           let label: string;
           if (compute === undefined) {
             label = "Loading";
@@ -194,6 +195,10 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
             label = "Available";
           } else if (availability === "unavailable") {
             label = "Unavailable";
+          } else if (diagnostic?.state === "available") {
+            label = "Experimental";
+          } else if (diagnostic?.state === "unavailable") {
+            label = "Experimental unavailable";
           } else {
             label = "Not reported";
           }
@@ -202,13 +207,18 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
             <li
               className="fm-start-env__lane"
               data-availability={availability}
+              data-diagnostic-state={diagnostic?.state}
               data-state={compute === undefined ? "loading" : undefined}
               key={`${backend}-${device}`}
             >
               <span className="fm-start-env__lane-name">
                 {backend} · {device}
               </span>
-              <span className="fm-start-env__lane-state">
+              <span
+                aria-label={diagnostic?.reason ? `${label}: ${diagnostic.reason}` : undefined}
+                className="fm-start-env__lane-state"
+                title={diagnostic?.reason}
+              >
                 <span aria-hidden="true" className="fm-start-env__lane-dot" />
                 {label}
               </span>
@@ -217,7 +227,7 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
         })}
       </ul>
       <p className="fm-start-env__note">
-        Runtime support is separate from detected hardware. A concrete device is resolved when a run starts.
+        Runtime support is separate from detected hardware. Experimental entries are diagnostic only. A concrete device is resolved when a run starts.
       </p>
     </section>
   );

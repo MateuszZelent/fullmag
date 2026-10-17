@@ -24,8 +24,14 @@ use uuid::Uuid;
 const HOST_ATTESTATION_PATH: &str = "/run/fullmag/windows-folder-host.json";
 const CONTAINER_ROOT: &str = "/state";
 const GRANT_NAME: &str = ".fullmag-windows-folder-grant.json";
+const DEVELOPMENT_PACKAGE_ROOT: &str = "/opt/fullmag/package";
+const DEVELOPMENT_PROVENANCE_PATH: &str = "/opt/fullmag/provenance.json";
+const DEVELOPMENT_RECEIPT_PATH: &str = "/opt/fullmag/package/backend-build-receipt.json";
+const DEVELOPMENT_BUILD_SCHEMA: &str = "fullmag.windows-folder-development-build.v1";
 #[cfg(windows)]
 const OWNER_MARKER_NAME: &str = ".fullmag-windows-folder-owner.json";
+pub(crate) const DOCKER_ADMITTED_STORE_IDENTITY_SCHEMA_V2: &str =
+    "fullmag.docker-admitted-store-identity.v2";
 const MAX_EVIDENCE_BYTES: u64 = 1024 * 1024;
 const SHA256_HEX_LENGTH: usize = 64;
 const SOURCE_COMMIT_HEX_LENGTH: usize = 40;
@@ -61,6 +67,29 @@ struct HostAttestation {
     artifact_receipt_sha256: String,
     restart_expected_sha256: String,
     restart_verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    development_build: Option<DevelopmentBuildDelegation>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentBuildDelegation {
+    schema: String,
+    cargo_profile: String,
+    toolchain_image_id: String,
+    package_root: String,
+    provenance_path: String,
+    group_identity: String,
+    source_identity: DevelopmentSourceIdentity,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentSourceIdentity {
+    commit: String,
+    source_digest: String,
+    source_snapshot_sha256: String,
+    native_source_identity_sha256: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -78,6 +107,51 @@ struct SessionGrant {
     mount_namespace_inode: u64,
     power_loss: String,
     checks: BTreeMap<String, bool>,
+}
+
+/// Stable identity for one accepted Docker session store.
+///
+/// The identity deliberately contains the validated Windows grant's stable
+/// host and mount scope only.  Linux device/inode and mount-namespace values
+/// remain admission evidence; they are not part of this restart-stable ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DockerAdmittedStoreIdentity {
+    pub(crate) host_root: String,
+    pub(crate) host_volume_serial: u32,
+    pub(crate) engine_id: String,
+    pub(crate) owner_token: String,
+    pub(crate) relative_state_path: String,
+}
+
+impl DockerAdmittedStoreIdentity {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_windows_drive_path(&self.host_root)?;
+        if self.host_root != stable_windows_host_root(&self.host_root)? {
+            bail!("Docker store identity host_root is not normalized");
+        }
+        if self.host_volume_serial == 0 {
+            bail!("Docker store identity host volume serial must be nonzero");
+        }
+        validate_scalar(&self.engine_id, "Docker store identity engine_id", 256)?;
+        validate_uuid(&self.owner_token, "Docker store identity owner_token")?;
+        if Uuid::parse_str(&self.owner_token)?.to_string() != self.owner_token {
+            bail!("Docker store identity owner_token must be canonical");
+        }
+        validate_relative_state_path(&self.relative_state_path)?;
+        Ok(())
+    }
+
+    pub(crate) fn stable_value(&self) -> Result<serde_json::Value> {
+        self.validate()?;
+        Ok(serde_json::json!({
+            "schema": DOCKER_ADMITTED_STORE_IDENTITY_SCHEMA_V2,
+            "host_root": self.host_root,
+            "host_volume_serial": self.host_volume_serial,
+            "engine_id": self.engine_id,
+            "owner_token": self.owner_token,
+            "relative_state_path": self.relative_state_path,
+        }))
+    }
 }
 
 fn validate_hex(value: &str, length: usize, label: &str) -> Result<()> {
@@ -127,6 +201,24 @@ fn validate_windows_drive_path(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn stable_windows_host_root(value: &str) -> Result<String> {
+    validate_windows_drive_path(value)?;
+    Ok(value.replace('\\', "/").to_ascii_lowercase())
+}
+
+fn validate_relative_state_path(value: &str) -> Result<()> {
+    if value.is_empty() || value.starts_with('/') || value.len() > 4096 {
+        bail!("Docker store identity relative_state_path is invalid");
+    }
+    for component in value.split('/') {
+        if component.is_empty() || matches!(component, "." | "..") {
+            bail!("Docker store identity relative_state_path contains an unsafe component");
+        }
+        validate_scalar(component, "Docker store identity path component", 255)?;
+    }
+    Ok(())
+}
+
 fn validate_binary_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name == "."
@@ -137,6 +229,60 @@ fn validate_binary_name(name: &str) -> Result<()> {
         bail!("binary_hashes contains an unsafe executable name");
     }
     Ok(())
+}
+
+fn validate_image_id(value: &str, label: &str) -> Result<()> {
+    if !value.starts_with("sha256:")
+        || value.len() != "sha256:".len() + SHA256_HEX_LENGTH
+        || !value["sha256:".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("{label} must be sha256: followed by 64 lowercase hexadecimal characters");
+    }
+    Ok(())
+}
+
+fn validate_development_source_identity(identity: &DevelopmentSourceIdentity) -> Result<()> {
+    validate_hex(
+        &identity.commit,
+        SOURCE_COMMIT_HEX_LENGTH,
+        "development source commit",
+    )?;
+    for (value, label) in [
+        (&identity.source_digest, "development source digest"),
+        (
+            &identity.source_snapshot_sha256,
+            "development source snapshot",
+        ),
+        (
+            &identity.native_source_identity_sha256,
+            "development native source identity",
+        ),
+    ] {
+        validate_hex(value, SHA256_HEX_LENGTH, label)?;
+    }
+    Ok(())
+}
+
+fn validate_development_build(delegation: &DevelopmentBuildDelegation) -> Result<()> {
+    if delegation.schema != DEVELOPMENT_BUILD_SCHEMA
+        || delegation.cargo_profile != "backend-dev"
+        || delegation.package_root != DEVELOPMENT_PACKAGE_ROOT
+        || delegation.provenance_path != DEVELOPMENT_PROVENANCE_PATH
+    {
+        bail!("Windows-folder development delegation scope is invalid");
+    }
+    validate_image_id(
+        &delegation.toolchain_image_id,
+        "development toolchain image identity",
+    )?;
+    validate_scalar(
+        &delegation.group_identity,
+        "development group identity",
+        256,
+    )?;
+    validate_development_source_identity(&delegation.source_identity)
 }
 
 fn validate_host_attestation(attestation: &HostAttestation) -> Result<()> {
@@ -161,17 +307,7 @@ fn validate_host_attestation(attestation: &HostAttestation) -> Result<()> {
     }
     validate_uuid(&attestation.owner_token, "owner_token")?;
     validate_scalar(&attestation.engine_id, "engine_id", 256)?;
-    if !attestation.image_id.starts_with("sha256:") {
-        bail!("host image_id must use the sha256: prefix");
-    }
-    validate_hex(
-        attestation
-            .image_id
-            .strip_prefix("sha256:")
-            .unwrap_or_default(),
-        SHA256_HEX_LENGTH,
-        "host image_id",
-    )?;
+    validate_image_id(&attestation.image_id, "host image identity")?;
     validate_hex(
         &attestation.source_commit,
         SOURCE_COMMIT_HEX_LENGTH,
@@ -196,6 +332,9 @@ fn validate_host_attestation(attestation: &HostAttestation) -> Result<()> {
     )?;
     if !attestation.restart_verified {
         bail!("Windows-folder restart readback was not verified");
+    }
+    if let Some(delegation) = &attestation.development_build {
+        validate_development_build(delegation)?;
     }
     Ok(())
 }
@@ -477,6 +616,180 @@ fn current_executable_sha256() -> Result<String> {
 }
 
 #[cfg(target_os = "linux")]
+fn read_json_document(path: &str, label: &str) -> Result<serde_json::Value> {
+    let bytes = read_bounded_regular_file(Path::new(path), MAX_EVIDENCE_BYTES)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).with_context(|| format!("decoding {label}"))?;
+    if !value.is_object() {
+        bail!("{label} must contain a JSON object");
+    }
+    Ok(value)
+}
+
+#[cfg(target_os = "linux")]
+fn required_json_string<'a>(
+    document: &'a serde_json::Value,
+    field: &str,
+    label: &str,
+) -> Result<&'a str> {
+    document
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("{label} has no string field {field}"))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_development_runtime_identity(
+    delegation: &DevelopmentBuildDelegation,
+    expected_commit: &str,
+) -> Result<()> {
+    let toolchain_image_id = env::var("FULLMAG_TOOLCHAIN_IMAGE_ID")
+        .context("FULLMAG_TOOLCHAIN_IMAGE_ID is required for a development delegation")?;
+    validate_image_id(&toolchain_image_id, "FULLMAG_TOOLCHAIN_IMAGE_ID")?;
+    if delegation.toolchain_image_id != toolchain_image_id {
+        bail!("development delegation toolchain differs from the running environment");
+    }
+    if env::var("FULLMAG_BACKEND_CARGO_PROFILE").ok().as_deref() != Some("backend-dev") {
+        bail!("development delegation requires FULLMAG_BACKEND_CARGO_PROFILE=backend-dev");
+    }
+    let group_identity = env::var("FULLMAG_COMPOSE_PROJECT")
+        .context("FULLMAG_COMPOSE_PROJECT is required for a development delegation")?;
+    validate_scalar(&group_identity, "FULLMAG_COMPOSE_PROJECT", 256)?;
+    if delegation.group_identity != group_identity {
+        bail!("development delegation group identity differs from the Compose project");
+    }
+
+    let provenance = read_json_document(DEVELOPMENT_PROVENANCE_PATH, "runtime provenance")?;
+    if required_json_string(&provenance, "schema", "runtime provenance")?
+        != "fullmag.docker-all-image.v1"
+        || required_json_string(&provenance, "state", "runtime provenance")? != "succeeded"
+        || required_json_string(&provenance, "source_mode", "runtime provenance")?
+            != "live-shadow-v1"
+    {
+        bail!("runtime provenance is not a succeeded live development build");
+    }
+    if required_json_string(&provenance, "commit", "runtime provenance")? != expected_commit {
+        bail!("compiled source commit differs from runtime provenance");
+    }
+    if required_json_string(&provenance, "package_root", "runtime provenance")?
+        != DEVELOPMENT_PACKAGE_ROOT
+        || required_json_string(&provenance, "backend_build_receipt", "runtime provenance")?
+            != DEVELOPMENT_RECEIPT_PATH
+    {
+        bail!("runtime provenance paths are not canonical");
+    }
+    if required_json_string(&provenance, "cargo_profile", "runtime provenance")? != "backend-dev"
+        || required_json_string(&provenance, "toolchain_image_id", "runtime provenance")?
+            != toolchain_image_id.as_str()
+    {
+        bail!("runtime provenance build identity differs from the delegation");
+    }
+    let provenance_commit = required_json_string(&provenance, "commit", "runtime provenance")?;
+    let provenance_source_digest =
+        required_json_string(&provenance, "source_digest", "runtime provenance")?;
+    let provenance_source_snapshot =
+        required_json_string(&provenance, "source_snapshot_sha256", "runtime provenance")?;
+    let provenance_native_identity_sha256 = required_json_string(
+        &provenance,
+        "native_source_identity_sha256",
+        "runtime provenance",
+    )?;
+    validate_hex(
+        provenance_commit,
+        SOURCE_COMMIT_HEX_LENGTH,
+        "runtime provenance commit",
+    )?;
+    for (value, label) in [
+        (provenance_source_digest, "runtime provenance source digest"),
+        (
+            provenance_source_snapshot,
+            "runtime provenance source snapshot",
+        ),
+        (
+            provenance_native_identity_sha256,
+            "runtime provenance native source identity",
+        ),
+    ] {
+        validate_hex(value, SHA256_HEX_LENGTH, label)?;
+    }
+
+    let receipt_bytes =
+        read_bounded_regular_file(Path::new(DEVELOPMENT_RECEIPT_PATH), MAX_EVIDENCE_BYTES)?;
+    let receipt_sha256 = sha256_hex(&receipt_bytes);
+    if receipt_sha256
+        != required_json_string(&provenance, "build_receipt_sha256", "runtime provenance")?
+    {
+        bail!("package build receipt hash differs from runtime provenance");
+    }
+    let receipt: serde_json::Value = serde_json::from_slice(&receipt_bytes)
+        .context("decoding the package backend build receipt")?;
+    if required_json_string(&receipt, "schema", "backend build receipt")?
+        != "fullmag.direct-compose.backend-build-receipt.v1"
+        || required_json_string(&receipt, "state", "backend build receipt")? != "succeeded"
+    {
+        bail!("package backend build receipt is not a succeeded direct build");
+    }
+    let receipt_source = receipt
+        .get("source")
+        .ok_or_else(|| anyhow::anyhow!("backend build receipt has no source identity"))?;
+    for (field, expected) in [
+        ("resolved_commit", provenance_commit),
+        ("source_digest", provenance_source_digest),
+        ("source_snapshot_sha256", provenance_source_snapshot),
+    ] {
+        if required_json_string(receipt_source, field, "backend build receipt")? != expected {
+            bail!("backend build receipt source identity differs from runtime provenance");
+        }
+    }
+    if receipt.get("native_source_identity") != provenance.get("native_source_identity")
+        || required_json_string(
+            &receipt,
+            "native_source_identity_sha256",
+            "backend build receipt",
+        )? != provenance_native_identity_sha256
+    {
+        bail!("backend build receipt native source identity differs from provenance");
+    }
+    let build = receipt
+        .get("build")
+        .ok_or_else(|| anyhow::anyhow!("backend build receipt has no build identity"))?;
+    if required_json_string(build, "cargo_profile", "backend build receipt")? != "backend-dev" {
+        bail!("backend build receipt Cargo profile is not backend-dev");
+    }
+    let toolchain = receipt
+        .get("toolchain")
+        .ok_or_else(|| anyhow::anyhow!("backend build receipt has no toolchain identity"))?;
+    if required_json_string(toolchain, "image_id", "backend build receipt")?
+        != toolchain_image_id.as_str()
+    {
+        bail!("backend build receipt toolchain differs from the delegation");
+    }
+
+    let executable = env::current_exe().context("resolving current executable")?;
+    let name = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("current executable has no portable filename"))?;
+    let binary_hashes = provenance
+        .get("binary_hashes")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("runtime provenance has no binary hashes"))?;
+    let expected_hash = binary_hashes
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("runtime provenance omits the current executable"))?;
+    validate_hex(
+        expected_hash,
+        SHA256_HEX_LENGTH,
+        "runtime provenance binary hash",
+    )?;
+    if expected_hash != current_executable_sha256()? {
+        bail!("current executable hash differs from runtime provenance");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn validate_runtime_identity(attestation: &HostAttestation) -> Result<()> {
     let expected_commit = option_env!("FULLMAG_SOURCE_GIT_COMMIT").ok_or_else(|| {
         anyhow::anyhow!("managed source commit identity is missing at compile time")
@@ -486,21 +799,18 @@ fn validate_runtime_identity(attestation: &HostAttestation) -> Result<()> {
         SOURCE_COMMIT_HEX_LENGTH,
         "compiled FULLMAG_SOURCE_GIT_COMMIT",
     )?;
-    if attestation.source_commit != expected_commit {
-        bail!("Windows-folder source commit differs from the managed binary");
-    }
     let image_id = env::var("FULLMAG_RUNTIME_IMAGE_ID")
         .context("FULLMAG_RUNTIME_IMAGE_ID is required for Windows-folder admission")?;
-    if !image_id.starts_with("sha256:")
-        || image_id.len() != "sha256:".len() + SHA256_HEX_LENGTH
-        || !image_id["sha256:".len()..]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        bail!("FULLMAG_RUNTIME_IMAGE_ID must be sha256: followed by 64 lowercase hex characters");
-    }
+    validate_image_id(&image_id, "FULLMAG_RUNTIME_IMAGE_ID")?;
     if attestation.image_id != image_id {
         bail!("Windows-folder image identity differs from the running image");
+    }
+    if let Some(delegation) = &attestation.development_build {
+        validate_development_build(delegation)?;
+        return validate_development_runtime_identity(delegation, expected_commit);
+    }
+    if attestation.source_commit != expected_commit {
+        bail!("Windows-folder source commit differs from the managed binary");
     }
     let executable = env::current_exe().context("resolving current executable")?;
     let name = executable
@@ -675,11 +985,34 @@ fn admit_container_identity(root: &Path, grant: &SessionGrant) -> Result<()> {
     Ok(())
 }
 
-/// Admit one Linux 9p-backed session root under the explicit Windows-folder
-/// profile.  Every evidence file is reread for each admission; only the
-/// immutable current executable hash is cached for the lifetime of the process.
 #[cfg(target_os = "linux")]
-pub(crate) fn admit(root: &Path) -> Result<()> {
+fn relative_state_path(root: &Path) -> Result<String> {
+    let (_, state_components) = normalized_components(Path::new(CONTAINER_ROOT), "Docker state path")?;
+    let (_, root_components) = normalized_components(root, "session root")?;
+    if root_components.len() <= state_components.len()
+        || !root_components
+            .iter()
+            .zip(state_components.iter())
+            .all(|(root, state)| root == state)
+    {
+        bail!("session root must be a nonempty child of the Docker state mount");
+    }
+    let components = root_components
+        .iter()
+        .skip(state_components.len())
+        .map(|component| {
+            component
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("session root has a non-portable path component"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let relative = components.join("/");
+    validate_relative_state_path(&relative)?;
+    Ok(relative)
+}
+
+#[cfg(target_os = "linux")]
+fn read_validated_admission(root: &Path) -> Result<(HostAttestation, SessionGrant, String)> {
     if env::var("FULLMAG_SESSION_STORAGE_PROFILE").ok().as_deref() != Some("windows-folder-v1") {
         bail!("9p session storage requires FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1");
     }
@@ -697,6 +1030,35 @@ pub(crate) fn admit(root: &Path) -> Result<()> {
     }
     validate_runtime_identity(&host)?;
     admit_container_identity(root, &grant)?;
+    let relative = relative_state_path(root)?;
+    Ok((host, grant, relative))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn admitted_docker_store_identity(root: &Path) -> Result<DockerAdmittedStoreIdentity> {
+    let (host, grant, relative_state_path) = read_validated_admission(root)?;
+    let identity = DockerAdmittedStoreIdentity {
+        host_root: stable_windows_host_root(&host.host_root)?,
+        host_volume_serial: host.host_volume_serial,
+        engine_id: host.engine_id,
+        owner_token: Uuid::parse_str(&grant.owner_token)?.to_string(),
+        relative_state_path,
+    };
+    identity.validate()?;
+    Ok(identity)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn admitted_docker_store_identity(_root: &Path) -> Result<DockerAdmittedStoreIdentity> {
+    bail!("Docker Windows-folder admission requires the attested Linux container")
+}
+
+/// Admit one Linux 9p-backed session root under the explicit Windows-folder
+/// profile.  Every evidence file is reread for each admission; only the
+/// immutable current executable hash is cached for the lifetime of the process.
+#[cfg(target_os = "linux")]
+pub(crate) fn admit(root: &Path) -> Result<()> {
+    read_validated_admission(root)?;
     Ok(())
 }
 
@@ -817,6 +1179,24 @@ mod tests {
             artifact_receipt_sha256: "d".repeat(64),
             restart_expected_sha256: "e".repeat(64),
             restart_verified: true,
+            development_build: None,
+        }
+    }
+
+    fn development_delegation() -> DevelopmentBuildDelegation {
+        DevelopmentBuildDelegation {
+            schema: DEVELOPMENT_BUILD_SCHEMA.into(),
+            cargo_profile: "backend-dev".into(),
+            toolchain_image_id: format!("sha256:{}", "b".repeat(64)),
+            package_root: DEVELOPMENT_PACKAGE_ROOT.into(),
+            provenance_path: DEVELOPMENT_PROVENANCE_PATH.into(),
+            group_identity: "fullmag-dev".into(),
+            source_identity: DevelopmentSourceIdentity {
+                commit: "c".repeat(40),
+                source_digest: "d".repeat(64),
+                source_snapshot_sha256: "e".repeat(64),
+                native_source_identity_sha256: "f".repeat(64),
+            },
         }
     }
 
@@ -844,6 +1224,32 @@ mod tests {
     fn strict_host_and_grant_validation_accepts_the_contract() {
         validate_host_attestation(&host()).unwrap();
         validate_session_grant(&grant()).unwrap();
+    }
+
+    #[test]
+    fn development_delegation_is_optional_and_validates_bootstrap_scope() {
+        let legacy = host();
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(!serialized
+            .as_object()
+            .unwrap()
+            .contains_key("development_build"));
+        let parsed: HostAttestation = serde_json::from_value(serialized).unwrap();
+        assert!(parsed.development_build.is_none());
+
+        let mut development = host();
+        development.source_commit = "1".repeat(40);
+        development.development_build = Some(development_delegation());
+        validate_host_attestation(&development).unwrap();
+        assert_ne!(
+            development.source_commit,
+            development
+                .development_build
+                .as_ref()
+                .unwrap()
+                .source_identity
+                .commit
+        );
     }
 
     #[test]

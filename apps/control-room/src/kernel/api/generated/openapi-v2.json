@@ -47738,6 +47738,9 @@
               }
             },
             "description": "Runtime capabilities"
+          },
+          "500": {
+            "description": "Invalid runtime package root configuration"
           }
         },
         "tags": [

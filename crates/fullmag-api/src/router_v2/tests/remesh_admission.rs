@@ -545,4 +545,10 @@ async fn remesh_without_a_canonical_scene_drops_client_policy_snapshot() {
         .unwrap()
         .get("canonical_policy_snapshot")
         .is_none());
+    assert!(state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.scene_document.is_none()));
 }

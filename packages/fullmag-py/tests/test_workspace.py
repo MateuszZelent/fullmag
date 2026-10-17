@@ -68,23 +68,53 @@ class ImportContractTests(unittest.TestCase):
 
 class LocationTests(unittest.TestCase):
     def test_explicit_state_dir_wins(self) -> None:
-        with mock.patch.dict(os.environ, {"FULLMAG_STATE_DIR": "/somewhere/fm"}):
+        with mock.patch.dict(
+            os.environ,
+            {"FULLMAG_STATE_DIR": "/somewhere/fm", "FULLMAG_WORKSPACE_STATE_DIR": ""},
+        ):
             self.assertEqual(ws.state_dir(), Path("/somewhere/fm"))
             self.assertEqual(ws.database_path(), Path("/somewhere/fm") / "workspace.db")
 
+    def test_workspace_state_override_moves_only_the_database(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FULLMAG_STATE_DIR": "/runtime/fm",
+                "FULLMAG_WORKSPACE_STATE_DIR": "/stable/fm",
+            },
+        ):
+            self.assertEqual(ws.state_dir(), Path("/runtime/fm"))
+            self.assertEqual(ws.database_path(), Path("/stable/fm") / "workspace.db")
+
+    def test_empty_workspace_state_override_uses_global_state_dir(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"FULLMAG_STATE_DIR": "/runtime/fm", "FULLMAG_WORKSPACE_STATE_DIR": ""},
+        ):
+            self.assertEqual(ws.database_path(), Path("/runtime/fm") / "workspace.db")
+
     @unittest.skipUnless(sys.platform == "win32", "Windows default")
     def test_windows_default_is_appdata(self) -> None:
-        env = {"APPDATA": r"C:\Users\x\AppData\Roaming"}
+        env = {
+            "APPDATA": r"C:\Users\x\AppData\Roaming",
+            "FULLMAG_WORKSPACE_STATE_DIR": "",
+        }
         with mock.patch.dict(os.environ, env):
             os.environ.pop("FULLMAG_STATE_DIR", None)
             self.assertEqual(ws.state_dir(), Path(r"C:\Users\x\AppData\Roaming") / "Fullmag")
 
     @unittest.skipIf(sys.platform in ("win32", "darwin"), "XDG default")
     def test_linux_default_follows_xdg(self) -> None:
-        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/x/data", "HOME": "/h"}):
+        with mock.patch.dict(
+            os.environ,
+            {"XDG_DATA_HOME": "/x/data", "HOME": "/h", "FULLMAG_WORKSPACE_STATE_DIR": ""},
+        ):
             os.environ.pop("FULLMAG_STATE_DIR", None)
             self.assertEqual(ws.state_dir(), Path("/x/data/fullmag"))
-        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "rel", "HOME": "/h"}):
+        with mock.patch.dict(
+            os.environ,
+            {"XDG_DATA_HOME": "rel", "HOME": "/h", "FULLMAG_WORKSPACE_STATE_DIR": ""},
+        ):
             os.environ.pop("FULLMAG_STATE_DIR", None)
             self.assertEqual(ws.state_dir(), Path("/h/.local/share/fullmag"))
 

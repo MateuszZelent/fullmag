@@ -136,6 +136,13 @@ pub struct ComputeNodeSample {
     /// Probe-level failure, if collection did not complete successfully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<UnavailableReason>,
+    /// Nanoseconds since boot from a clock that never steps backwards within
+    /// `boot_id` (Linux `CLOCK_BOOTTIME`, Windows tick count). It orders
+    /// samples of one boot; `collected_at` remains the UTC freshness time.
+    /// The value is kept outside snapshot bytes by the host ledger so older
+    /// readers that reject unknown fields remain compatible.
+    #[serde(skip)]
+    pub boot_monotonic_ns: Option<u64>,
 }
 
 impl ComputeNodeSample {
@@ -151,9 +158,16 @@ impl ComputeNodeSample {
             collected_at,
             freshness: SampleFreshness::Current,
             error,
+            boot_monotonic_ns: None,
         };
         sample.refresh_freshness_at(now);
         sample
+    }
+
+    /// Attaches the boot-relative monotonic collection time.
+    pub fn with_boot_monotonic_ns(mut self, boot_monotonic_ns: u64) -> Self {
+        self.boot_monotonic_ns = Some(boot_monotonic_ns);
+        self
     }
 
     /// Computes freshness without trusting the serialized freshness field.
@@ -771,6 +785,23 @@ impl ComputeNodeSnapshot {
             enforcement: self.enforcement,
         };
         canonical_sha256(&canonical)
+    }
+
+    /// Whether this sample fails to advance past `previous` within one node
+    /// and boot. When both samples carry `boot_monotonic_ns`, that clock is
+    /// the ordering authority, so a wall-clock correction cannot reject a
+    /// genuinely newer sample. Legacy samples without it keep the UTC rule.
+    pub fn sample_does_not_advance(&self, previous: &Self) -> bool {
+        if self.node_id != previous.node_id || self.boot_id != previous.boot_id {
+            return false;
+        }
+        match (
+            self.sample.boot_monotonic_ns,
+            previous.sample.boot_monotonic_ns,
+        ) {
+            (Some(current), Some(earlier)) => current <= earlier,
+            _ => self.sample.collected_at <= previous.sample.collected_at,
+        }
     }
 
     /// Validates revision movement from the previous snapshot for the same node/boot.

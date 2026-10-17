@@ -2201,14 +2201,7 @@ pub(crate) fn runtime_precision(problem: &ProblemIR) -> &str {
 }
 
 pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
-    match std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref() {
-        Some("cpu") => "cpu".to_string(),
-        Some("cuda") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
-            .unwrap_or("auto")
-            .replace("cuda", "gpu"),
-        Some(other) => other.replace("cuda", "gpu"),
-    }
+    crate::solver_runtime::selection::requested_registry_device_for_fdm(problem)
 }
 
 pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {

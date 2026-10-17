@@ -1266,6 +1266,11 @@ def _sanitize_surface_mesh_for_stl_export(surface: object) -> object:
     return mesh
 
 
+def _export_surface_for_gmsh(surface: Any, destination: Path) -> None:
+    """Export a surface in the ASCII STL form accepted by the Gmsh bridge."""
+    surface.export(destination, file_type="stl_ascii")
+
+
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
     nodes = np.asarray(preview.get("nodes", []), dtype=np.float64)
     if nodes.ndim != 2 or nodes.shape[1] != 3:
@@ -2781,7 +2786,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 b_max = tuple(float(v) for v in verts.max(axis=0))
                 bounds_by_name[geometry.geometry_name] = (b_min, b_max)
                 comp_path = Path(tmp_dir) / f"{geometry.geometry_name}.stl"
-                comp_mesh.export(comp_path)
+                _export_surface_for_gmsh(comp_mesh, comp_path)
                 component_descriptors.append(
                     ComponentDescriptor(
                         geometry_name=geometry.geometry_name,
@@ -3376,7 +3381,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             trimesh.util.concatenate(component_meshes)
                         )
                         surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
-                        combined_surface.export(surface_path)
+                        _export_surface_for_gmsh(combined_surface, surface_path)
                         from .gmsh_bridge import generate_mesh_from_file
                         fallback_geometry_binding = (
                             {"geometry_name": geometries[0].geometry_name}

@@ -1,8 +1,10 @@
 //! Per-user Fullmag workspace database.
 //!
-//! One SQLite file (`workspace.db` in [`state_dir`]) records what a person has
-//! opened, saved and run with Fullmag: projects (`.fms`), Python scripts and
-//! result folders found by a scan.
+//! One SQLite file (`workspace.db` in the workspace state directory) records what
+//! a person has opened, saved and run with Fullmag: projects (`.fms`), Python
+//! scripts and result folders found by a scan.
+//! The optional `FULLMAG_WORKSPACE_STATE_DIR` scopes this database without
+//! changing the global runtime state directory returned by [`state_dir`].
 //! The desktop application, the CLI and Python share it. The contract is
 //! `docs/design/start-screen/docs/07-workspace-database.md`.
 //!

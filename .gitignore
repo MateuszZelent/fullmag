@@ -17,6 +17,7 @@ apps/desktop/src-tauri/gen/
 !.github/**/*.md
 *.zip
 *.patch
+!patches/**/*.patch
 *.orig
 *.rej
 *.tar.gz

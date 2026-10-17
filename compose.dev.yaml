@@ -1,17 +1,25 @@
 # Fullmag development on Docker Desktop. Sources stay in the selected checkout.
-# The managed launcher resolves these paths, builds the backend on request,
-# checks Windows storage, and records the fully resolved Compose configuration.
-name: fullmag-development
+# The direct development launcher resolves paths, builds inside the backend
+# service at each start, checks Windows storage and records the resolved config.
+# Compose project identity is injected by the managed launcher.  The default
+# keeps direct config inspection deterministic; selected worktrees override it.
+name: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
+
+x-fullmag-source-labels: &fullmag-source-labels
+  org.fullmag.source.project-id: ${FULLMAG_SOURCE_PROJECT_ID:-unknown}
+  org.fullmag.source.worktree-id: ${FULLMAG_SOURCE_WORKTREE_ID:-unknown}
+  org.fullmag.source.checkout-kind: ${FULLMAG_SOURCE_CHECKOUT_KIND:-unknown}
+  org.fullmag.compose.project: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
 
 services:
   backend:
-    image: ${FULLMAG_DEV_IMAGE:?Prepare the development image with the managed launcher}
+    labels: *fullmag-source-labels
+    image: ${FULLMAG_DEV_IMAGE:?Prepare the development toolchain image}
     build:
       context: ./docker/all-in-one
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.backend
       args:
-        RUNTIME_BASE: ${FULLMAG_TOOLCHAIN_IMAGE:?Build the Fullmag toolchain first}
-        FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the inspected toolchain image ID}
+        DEV_BASE: ${FULLMAG_DEVELOPMENT_BASE_IMAGE:-fullmag/development-base:local}
     pull_policy: never
     init: true
     user: "65532:65532"
@@ -24,10 +32,37 @@ services:
     security_opt: ["no-new-privileges:true"]
     stop_grace_period: 60s
     hostname: ${FULLMAG_BACKEND_HOSTNAME:?Managed run hostname is required}
+    # Capture the current mounted checkout on every start, build as needed in
+    # this same container, then hand the receipt-validated package to runtime.
+    # The managed storage probe overrides this command with
+    # `serve --storage-probe`; keeping the operation outside the entrypoint
+    # preserves that preflight boundary without allowing a shell command from
+    # the host.
+    entrypoint: ["/usr/local/bin/python3", "/opt/fullmag/backend_dev.py"]
+    command:
+      - start
+      - --source-root
+      - /opt/fullmag/source
+      - --git-common-root
+      - /opt/fullmag/source-git
+      - --output
+      - /opt/fullmag/package
+      - --build-root
+      - /build
     environment:
       FULLMAG_DOCKER_ROLE: backend
+      FULLMAG_COMPOSE_PROJECT: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
+      FULLMAG_SOURCE_HOST_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
       FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1
       FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_DEV_IMAGE}
+      FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the toolchain identity}
+      FULLMAG_BACKEND_CARGO_PROFILE: ${FULLMAG_BACKEND_CARGO_PROFILE:-backend-dev}
+      FULLMAG_REPO_ROOT: /opt/fullmag/source
+      FULLMAG_RUNTIME_PACKAGE_ROOT: /opt/fullmag/package
+      FULLMAG_PACKAGE_PROVENANCE: /opt/fullmag/provenance.json
+      PYTHONPATH: /build/workspace/packages/fullmag-py/src:/opt/fullmag/package
+      # Durable workspace metadata is isolated per Compose source group.
+      FULLMAG_WORKSPACE_STATE_DIR: /user-data
     expose: ["8081"]
     volumes:
       # One source selection for both services: the main checkout or a worktree.
@@ -36,16 +71,33 @@ services:
         target: /opt/fullmag/source
         read_only: true
         bind: {create_host_path: false}
-      # Compiled backend output, not a Windows executable or source copy.
+      # The live Git common directory is read-only input for the authenticated
+      # source manifest.  It is never used as a mutable build workspace.
       - type: bind
-        source: ${FULLMAG_BACKEND_PACKAGE:?Build the backend through the managed queue}
-        target: /opt/fullmag/package
+        source: ${FULLMAG_SOURCE_GIT_COMMON:?Mount the selected checkout Git common directory}
+        target: /opt/fullmag/source-git
         read_only: true
         bind: {create_host_path: false}
+      # Compiled backend output is the fixed package child of the helper-attested
+      # ext4 cache; the launcher preserves its Docker-daemon path unchanged.
       - type: bind
-        source: ${FULLMAG_PACKAGE_PROVENANCE:?Managed package provenance is required}
+        source: ${FULLMAG_BACKEND_PACKAGE:?Build the backend inside its Compose service}
+        target: /opt/fullmag/package
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_PACKAGE_PROVENANCE:?Backend build provenance is required}
         target: /opt/fullmag/provenance.json
-        read_only: true
+        # This is the small run-owned handoff record.  The backend writer
+        # updates it in place while API admission is still closed; the parent
+        # /opt/fullmag tree remains read-only and no directory is overmounted.
+        read_only: false
+        bind: {create_host_path: false}
+      # Per-group durable user data: workspace.db and related settings only.
+      # Runtime sessions/results remain in the per-run /state bind below.
+      - type: bind
+        source: ${FULLMAG_WORKSPACE_STATE_ROOT:?Managed group user-data namespace is required}
+        target: /user-data
         bind: {create_host_path: false}
       # Real Windows storage: sessions, results, logs and the CUDA disk cache.
       - type: bind
@@ -58,31 +110,53 @@ services:
         read_only: true
         bind: {create_host_path: false}
     tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]
+    healthcheck:
+      # Cold CUDA/FEM compilation runs before the API process exists.  Keep a
+      # four-hour start budget aligned with the bounded direct backend build;
+      # readiness still requires the existing process-tree, healthz, and
+      # native-service checks in healthcheck.py.
+      test: ["CMD", "/usr/local/bin/python3", "/opt/fullmag/healthcheck.py"]
+      interval: 5s
+      timeout: 10s
+      start_period: 14400s
+      retries: 6
     networks: [fullmag]
 
   frontend:
+    labels: *fullmag-source-labels
     image: ${FULLMAG_DEV_IMAGE}
     pull_policy: never
     init: true
     user: "65532:65532"
     read_only: true
     cpus: 2
-    mem_limit: 4g
+    mem_limit: 6g
     pids_limit: 512
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     stop_grace_period: 60s
     depends_on:
-      backend: {condition: service_healthy}
+      # The shell must remain reachable while backend admission is closed or
+      # its health probe is failing; API requests still use the private proxy.
+      backend: {condition: service_started}
     environment:
       FULLMAG_DOCKER_ROLE: frontend
       FULLMAG_DOCKER_FRONTEND: dev
       FULLMAG_API_PROXY_TARGET: http://backend:8081
+      FULLMAG_WATCHPACK_POLLING_MS: ${FULLMAG_WATCHPACK_POLLING_MS:-5000}
       HOME: /state/development
       NVIDIA_VISIBLE_DEVICES: void
     ports: ["127.0.0.1:${FULLMAG_HTTP_PORT:-3197}:8080"]
     volumes:
+      - type: bind
+        source: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
+        target: /opt/fullmag/source
+        read_only: true
+        bind: {create_host_path: false}
       # Linux dependencies, Next output and HMR logs stay out of the checkout.
+      # The frontend-cache-v1 overlay replaces only the four Linux cache/dependency
+      # children below; the Windows state bind remains the owner of sessions, logs
+      # and receipts.
       - type: bind
         source: ${FULLMAG_STATE_ROOT}/development
         target: /state/development
@@ -114,10 +188,17 @@ services:
         bind: {create_host_path: false}
     tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]
     healthcheck:
-      start_period: 1920s
+      # Two 120s tool probes + 60m frozen install + 60s Next startup margin.
+      start_period: 3900s
     networks: [fullmag]
 
 # A separate project-scoped bridge; no external networks, static IPs or host mode.
 networks:
   fullmag:
+    # The managed launcher supplies the deterministic short alias when the
+    # readable worktree project would exceed Docker's network-name limit.
+    name: ${FULLMAG_COMPOSE_NETWORK:-fullmag-master_fullmag}
+    labels: *fullmag-source-labels
     driver: bridge
+    ipam:
+      driver: default

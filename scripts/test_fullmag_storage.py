@@ -100,6 +100,28 @@ class StorageTests(unittest.TestCase):
         with self.assertRaises(storage.StorageError):
             self.resolve()
 
+    def test_dotenv_rejects_duplicate_managed_keys_and_reparse_points(self):
+        dotenv = self.repo / ".env"
+        dotenv.write_text(
+            "FULLMAG_PROJECT_STORAGE_ROOT=/one\n"
+            "FULLMAG_PROJECT_STORAGE_ROOT=/two\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(storage.StorageError):
+            storage.storage_dotenv(self.repo)
+
+        dotenv.unlink()
+        external = self.project / "external.env"
+        external.write_text("FULLMAG_PROJECT_STORAGE_ROOT=/outside\n", encoding="utf-8")
+        try:
+            dotenv.symlink_to(external)
+        except OSError as error:
+            if os.name == "nt":
+                self.skipTest(f"Host cannot create a symlink: {error}")
+            raise
+        with self.assertRaises(storage.StorageError):
+            storage.storage_dotenv(self.repo)
+
     def test_nested_worktree_uses_common_project_and_isolated_build(self):
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
                         "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)

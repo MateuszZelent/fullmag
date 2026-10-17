@@ -363,6 +363,16 @@ pub(crate) enum RuntimeCommand {
         #[arg(long)]
         config_sha256: String,
     },
+    /// Recover one exactly pinned unknown native service owner after a durable
+    /// empty-store and host-quiescence proof.
+    ServiceRecover {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        request_sha256: String,
+    },
     /// Internal managed proof of one-shot durable handoff acceptance.
     #[command(hide = true)]
     VerifyDevelopmentHandoffCommit {

@@ -76,11 +76,26 @@ pub(crate) fn prepare_accepted_fem_task(
     if let Some(binding) = &preparation_lease.host_launch_binding {
         let token = std::env::var("FULLMAG_HOST_PREPARATION_LAUNCH_TOKEN")
             .context("host-bound FEM preparer requires its supervisor launch permit")?;
-        let ledger = fullmag_session::host_resource_ledger::HostResourceLedger::open(
-            &binding.ledger_root,
-            binding.policy.clone(),
-        )?;
-        ledger.validate_preparation_launch(store, &preparation_lease, &token)?;
+        let ledger = retry_preparation_store_writer_busy(|| {
+            fullmag_session::host_resource_ledger::HostResourceLedger::open(
+                &binding.ledger_root,
+                binding.policy.clone(),
+            )
+        })
+        .context("open host resource ledger for accepted FEM preparation")?;
+        if binding.policy.schema_version
+            == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
+        {
+            let expected_generation = binding.require_runtime_generation_sha256()?;
+            retry_preparation_store_writer_busy(|| {
+                ledger.validate_runtime_generation(expected_generation)
+            })
+            .context("validate host runtime generation for accepted FEM preparation")?;
+        }
+        retry_preparation_store_writer_busy(|| {
+            ledger.validate_preparation_launch(store, &preparation_lease, &token)
+        })
+        .context("validate host preparation launch for accepted FEM preparation")?;
     }
 
     let step = accepted
@@ -169,12 +184,15 @@ pub(crate) fn prepare_accepted_fem_task(
         payload,
     )?;
     let replayed = matches!(
-        store.commit_task_preparation_receipt_with_preparation_lease(
-            &durable,
-            resource_id,
-            preparation_attempt_id,
-            lease_token,
-        )?,
+        retry_preparation_store_writer_busy(|| {
+            store.commit_task_preparation_receipt_with_preparation_lease(
+                &durable,
+                resource_id,
+                preparation_attempt_id,
+                lease_token,
+            )
+        })
+        .context("publish accepted FEM preparation receipt")?,
         PreparationReceiptCommitDisposition::Replayed
     );
     let verified = accepted
@@ -202,6 +220,12 @@ fn accepted_preparation_mesh(plan: &BackendPlanIR) -> Result<(&fullmag_ir::MeshI
     }
 }
 
+/// Retry only one idempotent store/host-writer operation. Native FEM evidence
+/// must never be repeated merely because a shared writer is temporarily busy.
+fn retry_preparation_store_writer_busy<T>(operation: impl FnMut() -> Result<T>) -> Result<T> {
+    fullmag_runtime_control::retry_store_writer_busy(operation)
+}
+
 #[cfg(feature = "fem-native")]
 fn produce_native_fem_evidence(
     mesh: &fullmag_ir::MeshIR,
@@ -223,6 +247,7 @@ fn produce_native_fem_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Error;
 
     #[test]
     fn mesh_selection_preserves_magnetic_mesh_order_and_rejects_fdm() {
@@ -242,5 +267,30 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("time-domain FEM or antenna inspection"));
+    }
+
+    #[test]
+    fn preparation_writer_retry_retries_typed_busy_but_not_other_errors() {
+        let mut typed_attempts = 0;
+        let value = retry_preparation_store_writer_busy(|| {
+            typed_attempts += 1;
+            if typed_attempts == 1 {
+                Err(Error::new(fullmag_session::StoreWriterBusy))
+            } else {
+                Ok("validated")
+            }
+        })
+        .unwrap();
+        assert_eq!(value, "validated");
+        assert_eq!(typed_attempts, 2);
+
+        let mut ordinary_attempts = 0;
+        let error = retry_preparation_store_writer_busy(|| {
+            ordinary_attempts += 1;
+            Err::<(), _>(anyhow::anyhow!("invalid launch token"))
+        })
+        .unwrap_err();
+        assert_eq!(ordinary_attempts, 1);
+        assert!(error.to_string().contains("invalid launch token"));
     }
 }

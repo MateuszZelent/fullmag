@@ -3,7 +3,7 @@
 //! These types define the logical snapshot of a simulation session,
 //! used for both the internal `SessionStore` and the portable `.fms` file format.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,11 +48,39 @@ pub enum RestoreClass {
 
 // ── Session manifest ───────────────────────────────────────────────────
 
+pub const FMS_SESSION_FORMAT_V1: &str = "fullmag.session.v1";
+pub const FMS_SESSION_FORMAT_V2: &str = "fullmag.session.v2";
+pub const FMS_ACCEPTED_PROVENANCE_MANIFEST_REF: &str = "manifest/accepted_provenance.json";
+
+/// Typed pointer to the detached accepted-run evidence closure in a v2 FMS.
+///
+/// This is provenance only. It carries no lease, claim, process, scheduler,
+/// or resume authority and must never be used as a runtime store binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsAcceptedProvenanceReference {
+    pub manifest_ref: String,
+    pub accepted_run_id: String,
+    pub closure_sha256: String,
+}
+
+impl FmsAcceptedProvenanceReference {
+    pub fn validate(&self) -> Result<()> {
+        if self.manifest_ref != FMS_ACCEPTED_PROVENANCE_MANIFEST_REF {
+            bail!("accepted provenance manifest reference is not canonical");
+        }
+        crate::repository_path::validate_store_id(&self.accepted_run_id)
+            .context("invalid accepted provenance run id")?;
+        validate_prefixed_sha256(&self.closure_sha256, "accepted provenance closure_sha256")
+    }
+}
+
 /// Top-level manifest written as `manifest/session.json` in the `.fms` archive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FmsSessionManifest {
-    /// Always `"fullmag.session.v1"`.
+    /// `fullmag.session.v1` for ordinary archives or `fullmag.session.v2`
+    /// when an evidence-only accepted-run provenance closure is attached.
     pub format: String,
     /// Unique session identifier.
     pub session_id: String,
@@ -78,6 +106,10 @@ pub struct FmsSessionManifest {
     pub workspace_ref: String,
     /// Reference to export profile.
     pub export_profile_ref: String,
+    /// Present only for `fullmag.session.v2`; points to an evidence-only
+    /// accepted-run closure under `manifest/accepted_provenance.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_provenance_ref: Option<FmsAcceptedProvenanceReference>,
 }
 
 impl FmsSessionManifest {
@@ -88,7 +120,7 @@ impl FmsSessionManifest {
     ) -> Self {
         let now = Utc::now();
         Self {
-            format: "fullmag.session.v1".into(),
+            format: FMS_SESSION_FORMAT_V1.into(),
             session_id: session_id.into(),
             name: name.into(),
             profile,
@@ -100,6 +132,7 @@ impl FmsSessionManifest {
             batch_refs: Vec::new(),
             workspace_ref: "manifest/workspace.json".into(),
             export_profile_ref: "manifest/export_profile.json".into(),
+            accepted_provenance_ref: None,
         }
     }
 }
@@ -455,10 +488,7 @@ impl FmsBatchIntent {
         validate_sha256(&self.manifest_object_ref, "manifest_object_ref")?;
         validate_sha256(&self.definition_object_ref, "definition_object_ref")?;
         validate_sha256(&self.study_object_ref, "study_object_ref")?;
-        validate_sha256(
-            &self.study_catalog_object_ref,
-            "study_catalog_object_ref",
-        )?;
+        validate_sha256(&self.study_catalog_object_ref, "study_catalog_object_ref")?;
 
         let snapshot_schema = self
             .specification
@@ -468,9 +498,8 @@ impl FmsBatchIntent {
         let output_storage = self.specification.get("output_storage");
         if snapshot_schema == FMS_BATCH_SUBMIT_SNAPSHOT_SCHEMA {
             validate_batch_output_storage_snapshot(
-                output_storage.context(
-                    "batch_submit_snapshot.v2 requires an output_storage snapshot",
-                )?,
+                output_storage
+                    .context("batch_submit_snapshot.v2 requires an output_storage snapshot")?,
             )?;
         } else if snapshot_schema == FMS_BATCH_SUBMIT_SNAPSHOT_LEGACY_SCHEMA {
             if let Some(snapshot) = output_storage {
@@ -539,8 +568,7 @@ impl FmsBatchIntent {
                 .and_then(Value::as_str)
                 .context("batch immutable asset has no content_sha256")?;
             if !seen.insert(asset_id)
-                || self.asset_object_refs.get(asset_id).map(String::as_str)
-                    != Some(content_sha256)
+                || self.asset_object_refs.get(asset_id).map(String::as_str) != Some(content_sha256)
             {
                 bail!("batch asset object does not match immutable asset reference");
             }
@@ -679,7 +707,9 @@ fn validate_resolved_batch_output_storage_snapshot(snapshot: &Value) -> Result<(
         .filter(|value| value.is_object())
         .context("batch output_storage snapshot has no settings object")?;
     let settings: fullmag_ir::OutputStorageIR = serde_json::from_value(settings_value.clone())
-        .context("batch output_storage settings do not match the resolved OutputStorage contract")?;
+        .context(
+            "batch output_storage settings do not match the resolved OutputStorage contract",
+        )?;
     settings
         .validate()
         .map_err(|errors| anyhow::anyhow!(errors.join("; ")))
@@ -849,7 +879,12 @@ impl FmsBatchCommandIntent {
         }
         crate::repository_path::validate_store_id(&self.batch_id)?;
         crate::repository_path::validate_store_id(&self.command_id)?;
-        if self.revision != self.expected_revision.checked_add(1).context("batch command revision overflow")? {
+        if self.revision
+            != self
+                .expected_revision
+                .checked_add(1)
+                .context("batch command revision overflow")?
+        {
             bail!("batch command revision does not follow its expected revision");
         }
         if self.reason.trim().is_empty() || self.reason.len() > 1024 {
@@ -998,8 +1033,7 @@ impl FmsBatchExpansionProgress {
         let manifest: Value = serde_json::from_slice(manifest_bytes)
             .context("batch expansion manifest object is not valid JSON")?;
         if self.state == FmsBatchExpansionState::Stopped
-            && manifest.get("failure_policy").and_then(Value::as_str)
-                != Some("stop_admission")
+            && manifest.get("failure_policy").and_then(Value::as_str) != Some("stop_admission")
         {
             bail!("stopped batch expansion requires stop_admission failure policy");
         }
@@ -1038,9 +1072,15 @@ pub enum BatchCommandCommitDisposition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchCommandConflict {
-    Revision { expected: u64, actual: u64 },
+    Revision {
+        expected: u64,
+        actual: u64,
+    },
     Identity,
-    InvalidTransition { action: &'static str, state: FmsBatchExpansionState },
+    InvalidTransition {
+        action: &'static str,
+        state: FmsBatchExpansionState,
+    },
 }
 
 impl std::fmt::Display for BatchCommandConflict {
@@ -1050,7 +1090,9 @@ impl std::fmt::Display for BatchCommandConflict {
                 formatter,
                 "batch command revision conflict: expected {expected}, found {actual}"
             ),
-            Self::Identity => formatter.write_str("batch command id was reused for another request"),
+            Self::Identity => {
+                formatter.write_str("batch command id was reused for another request")
+            }
             Self::InvalidTransition { action, state } => write!(
                 formatter,
                 "batch command `{action}` is invalid while expansion is {state:?}"
@@ -1615,6 +1657,110 @@ impl FmsTaskPreparationReceipt {
             && self.plan_fingerprint == other.plan_fingerprint
             && self.payload_sha256 == other.payload_sha256
             && self.payload == other.payload
+    }
+}
+
+/// Immutable pointer proving that the live accepted projection selected one
+/// study-stage preparation. The task receipt remains the authoritative
+/// payload; this record stores the exact task/plan identity needed to recover
+/// the selected stage after an API restart without replacing the run-level
+/// live preparation anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsAcceptedStagePreparationReceipt {
+    pub schema_version: String,
+    pub run_id: String,
+    pub step_id: String,
+    pub task_id: String,
+    pub input_fingerprint: String,
+    pub preparation_id: String,
+    pub plan_fingerprint: String,
+    pub task_receipt_payload_sha256: String,
+}
+
+pub const FMS_ACCEPTED_STAGE_PREPARATION_RECEIPT_SCHEMA: &str =
+    "accepted_stage_preparation_receipt.v1";
+
+impl FmsAcceptedStagePreparationReceipt {
+    pub fn from_task_receipt(receipt: &FmsTaskPreparationReceipt) -> Result<Self> {
+        receipt.validate()?;
+        let stage = Self {
+            schema_version: FMS_ACCEPTED_STAGE_PREPARATION_RECEIPT_SCHEMA.into(),
+            run_id: receipt.run_id.clone(),
+            step_id: receipt.step_id.clone(),
+            task_id: receipt.task_id.clone(),
+            input_fingerprint: receipt.input_fingerprint.clone(),
+            preparation_id: receipt.preparation_id.clone(),
+            plan_fingerprint: receipt.plan_fingerprint.clone(),
+            task_receipt_payload_sha256: receipt.payload_sha256.clone(),
+        };
+        stage.validate()?;
+        Ok(stage)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_ACCEPTED_STAGE_PREPARATION_RECEIPT_SCHEMA {
+            bail!(
+                "unsupported accepted stage preparation receipt schema `{}`",
+                self.schema_version
+            );
+        }
+        crate::repository_path::validate_store_id(&self.run_id)
+            .context("invalid accepted stage receipt run_id")?;
+        validate_study_step_id(&self.step_id)?;
+        crate::repository_path::validate_store_id(&self.task_id)
+            .context("invalid accepted stage receipt task_id")?;
+        validate_sha256(
+            &self.input_fingerprint,
+            "accepted stage receipt input_fingerprint",
+        )?;
+        crate::repository_path::validate_store_id(&self.preparation_id)
+            .context("invalid accepted stage receipt preparation_id")?;
+        validate_prefixed_sha256(
+            &self.plan_fingerprint,
+            "accepted stage receipt plan_fingerprint",
+        )?;
+        validate_sha256(
+            &self.task_receipt_payload_sha256,
+            "accepted stage receipt task_receipt_payload_sha256",
+        )?;
+        let expected_task_id = task_id_for_study_step(&self.run_id, &self.step_id)?;
+        if self.task_id != expected_task_id {
+            bail!("accepted stage receipt task_id does not match run_id and step_id");
+        }
+        if self.preparation_id != format!("prep-{}", self.task_id) {
+            bail!("accepted stage receipt preparation_id is not deterministic for its task");
+        }
+        Ok(())
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/accepted_stage_preparation_receipts/{}.json",
+            self.run_id, self.task_id
+        ))
+    }
+
+    pub fn matches_task_receipt(&self, receipt: &FmsTaskPreparationReceipt) -> bool {
+        self.run_id == receipt.run_id
+            && self.step_id == receipt.step_id
+            && self.task_id == receipt.task_id
+            && self.input_fingerprint == receipt.input_fingerprint
+            && self.preparation_id == receipt.preparation_id
+            && self.plan_fingerprint == receipt.plan_fingerprint
+            && self.task_receipt_payload_sha256 == receipt.payload_sha256
+    }
+
+    pub fn same_immutable_payload(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.run_id == other.run_id
+            && self.step_id == other.step_id
+            && self.task_id == other.task_id
+            && self.input_fingerprint == other.input_fingerprint
+            && self.preparation_id == other.preparation_id
+            && self.plan_fingerprint == other.plan_fingerprint
+            && self.task_receipt_payload_sha256 == other.task_receipt_payload_sha256
     }
 }
 
@@ -2994,6 +3140,11 @@ pub struct FmsHostLaunchBinding {
     pub schema_version: String,
     pub ledger_root: PathBuf,
     pub policy: crate::host_resource_ledger::HostResourceLedgerPolicy,
+    /// Canonical digest of the immutable host-readiness blob for the strict
+    /// runtime generation that admitted this lease. Legacy bindings may omit
+    /// it and remain readable, but new v2 launch paths require it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_generation_sha256: Option<String>,
 }
 
 impl FmsHostLaunchBinding {
@@ -3018,7 +3169,20 @@ impl FmsHostLaunchBinding {
             bail!("host launch binding ledger_root must name a dedicated directory");
         }
         self.policy.validate()?;
+        if let Some(digest) = self.runtime_generation_sha256.as_deref() {
+            validate_runtime_generation_sha256(digest)?;
+        }
         Ok(())
+    }
+
+    /// Return the generation carried by a strict host binding. This separate
+    /// accessor preserves readability of legacy bindings while preventing a
+    /// v2 worker from treating a missing generation as an admission proof.
+    pub fn require_runtime_generation_sha256(&self) -> Result<&str> {
+        self.validate()?;
+        self.runtime_generation_sha256
+            .as_deref()
+            .context("host launch binding is missing runtime_generation_sha256")
     }
 }
 
@@ -3198,7 +3362,9 @@ impl FmsPreparationResourceLease {
             || task.ownership_epoch.is_some()
             || task.resource_id.is_some()
         {
-            bail!("preparation resource lease requires an unclaimed accepted task awaiting preparation");
+            bail!(
+                "preparation resource lease requires an unclaimed accepted task awaiting preparation"
+            );
         }
         Ok(())
     }
@@ -3463,6 +3629,10 @@ pub fn canonical_json_bytes(value: &Value) -> Vec<u8> {
 
 pub fn canonical_json_sha256(value: &Value) -> String {
     format!("{:x}", Sha256::digest(canonical_json_bytes(value)))
+}
+
+pub(crate) fn validate_runtime_generation_sha256(value: &str) -> Result<()> {
+    validate_sha256(value, "runtime_generation_sha256")
 }
 
 fn validate_sha256(value: &str, field: &str) -> Result<()> {
@@ -3875,11 +4045,11 @@ mod graph_schema_tests {
 #[cfg(test)]
 mod host_launch_binding_tests {
     use super::{
-        FmsHostLaunchBinding, FmsResourceBudget, FmsResourceKind, FmsResourceLease,
-        FmsResourceLeaseState, FMS_HOST_LAUNCH_BINDING_SCHEMA, FMS_RESOURCE_LEASE_SCHEMA,
+        FMS_HOST_LAUNCH_BINDING_SCHEMA, FMS_RESOURCE_LEASE_SCHEMA, FmsHostLaunchBinding,
+        FmsResourceBudget, FmsResourceKind, FmsResourceLease, FmsResourceLeaseState,
     };
     use crate::host_resource_ledger::{
-        HostResourceLedgerPolicy, HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1,
+        HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1, HostResourceLedgerPolicy,
     };
     use chrono::Utc;
     use std::collections::{BTreeMap, BTreeSet};
@@ -3915,6 +4085,7 @@ mod host_launch_binding_tests {
                 gpu_vram_bytes_by_uuid: BTreeMap::new(),
                 allowed_cpu_ids: BTreeSet::new(),
             },
+            runtime_generation_sha256: None,
         }
     }
 
@@ -3947,12 +4118,16 @@ mod host_launch_binding_tests {
     #[test]
     fn binding_validates_absolute_non_traversing_root_and_policy() {
         assert!(binding(absolute_test_root()).validate().is_ok());
-        assert!(binding(PathBuf::from("relative/ledger"))
-            .validate()
-            .is_err());
-        assert!(binding(absolute_test_root().join("..").join("ledger"))
-            .validate()
-            .is_err());
+        assert!(
+            binding(PathBuf::from("relative/ledger"))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            binding(absolute_test_root().join("..").join("ledger"))
+                .validate()
+                .is_err()
+        );
 
         let mut invalid_policy = binding(absolute_test_root());
         invalid_policy.policy.revision = 0;
@@ -3981,9 +4156,9 @@ mod host_launch_binding_tests {
 #[cfg(test)]
 mod resolved_inputs_snapshot_tests {
     use super::{
-        canonical_json_sha256, FmsResolvedInputsSnapshot, FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA,
+        FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA, FmsResolvedInputsSnapshot, canonical_json_sha256,
     };
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
     use std::collections::BTreeSet;
 
     #[test]
@@ -4043,21 +4218,22 @@ mod resolved_inputs_snapshot_tests {
             snapshot.object_refs().unwrap(),
             BTreeSet::from(["b".repeat(64)])
         );
-        assert!(FmsResolvedInputsSnapshot::new(json!({
-            "artifact": {"study_artifact": {"object_ref": "not-a-sha256"}}
-        }))
-        .is_err());
+        assert!(
+            FmsResolvedInputsSnapshot::new(json!({
+                "artifact": {"study_artifact": {"object_ref": "not-a-sha256"}}
+            }))
+            .is_err()
+        );
     }
 }
 
 #[cfg(test)]
 mod batch_output_storage_snapshot_tests {
     use super::{
+        FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_LEGACY_SCHEMA, FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA,
         canonical_json_sha256, validate_batch_output_storage_snapshot,
-        FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_LEGACY_SCHEMA,
-        FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn legacy_snapshot(settings: Value) -> Value {
         json!({
@@ -4130,32 +4306,40 @@ mod batch_output_storage_snapshot_tests {
             "cleanup": "on_success",
             "existing_output": "timestamp"
         });
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            settings.clone(),
-            "workspace_defaults"
-        ))
-        .is_ok());
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            settings.clone(),
-            "project_authoring"
-        ))
-        .is_ok());
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                settings.clone(),
+                "workspace_defaults"
+            ))
+            .is_ok()
+        );
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                settings.clone(),
+                "project_authoring"
+            ))
+            .is_ok()
+        );
 
         let mut relative = settings.clone();
         relative["output_dir"] = json!("results");
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            relative,
-            "workspace_defaults"
-        ))
-        .is_err());
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                relative,
+                "workspace_defaults"
+            ))
+            .is_err()
+        );
 
         let mut traversal = settings.clone();
         traversal["output_dir"] = json!(format!("{output_dir}/../escape"));
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            traversal,
-            "workspace_defaults"
-        ))
-        .is_err());
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                traversal,
+                "workspace_defaults"
+            ))
+            .is_err()
+        );
 
         let mut missing_policy_digest = resolved_snapshot(settings.clone(), "project_authoring");
         missing_policy_digest

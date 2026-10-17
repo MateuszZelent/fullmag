@@ -275,10 +275,13 @@ RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
 RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
     test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
     cd /tmp/build/slepc-cpu && \
-    SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
+    unset PETSC_ARCH && \
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
       python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
-    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= -j2 all && \
-    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= install
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
+      make -j2 all && \
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
+      make install
 
 # The CPU FEM client is compiled with the host C++ compiler. Keep its MFEM
 # headers and library in a separate, CUDA-free prefix so SparseMatrix has the
@@ -394,13 +397,17 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python_archive="Python-${PYTHON_VERSION}.tar.xz" && \
-    curl -fsSLo "/tmp/${python_archive}" \
+    echo "Downloading pinned Python ${PYTHON_VERSION} (connect timeout 30s, attempt timeout 600s)" && \
+    curl --connect-timeout 30 --max-time 600 --retry 2 --retry-delay 2 --retry-connrefused \
+      -fsSLo "/tmp/${python_archive}" \
       "https://www.python.org/ftp/python/${PYTHON_VERSION}/${python_archive}" && \
     echo "${PYTHON_SHA256}  /tmp/${python_archive}" | sha256sum -c - && \
     mkdir -p /tmp/python-build && \
     tar -xJf "/tmp/${python_archive}" -C /tmp/python-build --strip-components=1 && \
     cd /tmp/python-build && \
+    echo "Configuring pinned Python ${PYTHON_VERSION}" && \
     ./configure --prefix=/usr/local --enable-shared --with-ensurepip=install && \
+    echo "Compiling pinned Python ${PYTHON_VERSION}" && \
     make -j"$(nproc)" && \
     make altinstall && \
     ldconfig && \

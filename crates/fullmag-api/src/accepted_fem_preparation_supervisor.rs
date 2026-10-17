@@ -144,11 +144,11 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
         bail!("legacy preparation launch has no process exit; spawn outcome is ambiguous and lease remains retained");
     }
     if let Some(host) = host {
-        host.ensure_preparation_lease_committed(store, &active_lease)?;
-        if !host
-            .ledger()
-            .preparation_lease_has_pending_launch(store, &active_lease)?
-        {
+        retry_store_writer_busy(|| host.ensure_preparation_lease_committed(store, &active_lease))?;
+        if !retry_store_writer_busy(|| {
+            host.ledger()
+                .preparation_lease_has_pending_launch(store, &active_lease)
+        })? {
             bail!("host preparation launch gate is not Pending; explicit migration or recovery is required before publishing a launch record");
         }
     }
@@ -193,12 +193,14 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
     let thread_environment = preparation_thread_environment(&cpu_ids, host.is_some())?;
     let host_launch_token = host
         .map(|host| {
-            host.ledger().authorize_preparation_launch(
-                store,
-                &active_lease,
-                &launch,
-                spawn_supervisor_start_token.clone(),
-            )
+            retry_store_writer_busy(|| {
+                host.ledger().authorize_preparation_launch(
+                    store,
+                    &active_lease,
+                    &launch,
+                    spawn_supervisor_start_token.clone(),
+                )
+            })
         })
         .transpose()?;
     let spawn_lease = active_lease.clone();
@@ -491,6 +493,44 @@ mod thread_environment_tests {
     #[test]
     fn host_preparation_rejects_an_empty_cpu_allocation() {
         assert!(preparation_thread_environment(&BTreeSet::new(), true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pre_spawn_store_writer_retry_tests {
+    use super::retry_store_writer_busy;
+    use anyhow::Error;
+    use chrono::Utc;
+    use fullmag_session::{FmsPreparationProcessLaunch, FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA};
+
+    #[test]
+    fn typed_writer_busy_retry_preserves_preparation_launch_identity() {
+        let expected = FmsPreparationProcessLaunch {
+            schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-test".into(),
+            run_id: "run-test".into(),
+            task_id: "task-test".into(),
+            preparation_attempt_id: "preparation-attempt-test".into(),
+            resource_id: "prep.cpu".into(),
+            lease_token: "lease-test".into(),
+            lease_heartbeat_sequence: 7,
+            supervisor_process_id: 1,
+            supervisor_start_token: Some("start-token-test".into()),
+            created_at: Utc::now(),
+        };
+        let mut attempts = 0;
+        let observed = retry_store_writer_busy(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(Error::new(fullmag_session::StoreWriterBusy))
+            } else {
+                Ok(expected.clone())
+            }
+        })
+        .unwrap();
+
+        assert_eq!(attempts, 2);
+        assert_eq!(observed, expected);
     }
 }
 

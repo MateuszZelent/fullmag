@@ -68,6 +68,7 @@ import {
   resolveApiConnectionErrorDetails,
   resolveHeaderSessionDisplay,
   resolveHydrationSafeHeaderSessionSource,
+  resolveNoSessionSubtitle,
   selectHeaderSessionSource,
 } from "./AppMenuBarHeaderModel";
 import { CommunicationPolicyDialog } from "./CommunicationPolicyDialog";
@@ -467,13 +468,7 @@ function NoSessionAppMenuBar({
   return (
     <header className="fm-header">
       <HeaderBrand
-        subtitle={
-          state === "no-session"
-            ? "No active session"
-            : state === "loading"
-              ? "Checking sessions"
-              : "Session list unavailable"
-        }
+        subtitle={resolveNoSessionSubtitle(state)}
       />
       <nav className="fm-header__nav" aria-label="Main menu">
         <StartNavItem

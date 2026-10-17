@@ -17,7 +17,8 @@ use crate::schemas::commands::{
 use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::session::effective_runtime_status_code;
 use crate::types::{
-    AppState, CommandLifecycleState, SessionCommand, SessionStateResponse, TrackedCommandRecord,
+    AppState, CommandLifecycleState, CurrentLiveSnapshotRequest, RunManifest, SessionCommand,
+    SessionStateResponse, TrackedCommandRecord,
 };
 use fullmag_authoring::{
     geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
@@ -130,7 +131,170 @@ async fn submit_structured_command_impl_with_context(
             .await;
         }
     }
+
+    // A published v2 execution profile owns the durable accepted-run path.
+    // Keep the legacy journal/queue path for v1 CPU scenes, while ensuring a
+    // Docker API-only process never publishes a second scratch command for an
+    // accepted run.
+    if let Some(response) = cached_command_response(&state, headers).await {
+        return Ok(response);
+    }
+    if let Some(context) = context {
+        // Scene export may need the transition fence itself, so complete it
+        // before taking the fence that spans accepted RunIntent and journal
+        // publication.
+        if !matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh") {
+            crate::get_or_load_current_live_scene_document_for_context(&state, context).await?;
+        }
+        let transition_guard = state.current_live_session_transition.lock().await;
+        if crate::live_accepted_execution::docker_api_only_runtime()
+            && matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh")
+        {
+            // Reject stale mesh/preparation commands before creating or rebinding
+            // the durable accepted RunIntent. This keeps admission failures
+            // side-effect free for the current live workspace.
+            let admission_snapshot =
+                accepted_command_admission_snapshot(&state, context, &command).await?;
+            let accepted_context =
+                crate::live_accepted_execution::ensure_live_accepted_study_with_transition(
+                    &state,
+                    context,
+                    &command.command_id,
+                )
+                .await?;
+            command.target = Some(RuntimeCommandTarget::Run {
+                run_id: accepted_context.run_id.clone(),
+            });
+            let command_kind = command.kind.clone();
+            // Reserve the accepted command journal entry before the transition
+            // fence is dropped for preparation polling. The admission above
+            // captured the immutable pre-preparation snapshot; the accepted
+            // RunIntent publication may change state-version fields before the
+            // journal record is written, so validation uses that snapshot.
+            let _ = publish_accepted_preparation_command_impl_with_context_under_transition(
+                Arc::clone(&state),
+                headers,
+                command.clone(),
+                &accepted_context,
+                &admission_snapshot,
+            )
+            .await?;
+            // Preparation may wait for an admitted native receipt. Do not
+            // hold the session transition across that bounded wait; the
+            // preparation helper fences each receipt attempt independently.
+            drop(transition_guard);
+            let preparation_result =
+                crate::live_scene_preparation::publish_accepted_frontier_preparation(
+                    &state,
+                    &accepted_context,
+                    &command_kind,
+                )
+                .await;
+            if let Err(error) = preparation_result {
+                let _transition = state.current_live_session_transition.lock().await;
+                let completion = if error.code.as_deref()
+                    == Some("accepted_preparation_run_stopped")
+                {
+                    crate::types::CommandCompletionState::Cancelled
+                } else {
+                    crate::types::CommandCompletionState::Failed
+                };
+                // A replacement session/run must never receive the old
+                // command's terminal journal mutation. The helper fences the
+                // exact accepted context before touching the record.
+                let _ = mark_reserved_preparation_command_terminal_if_current(
+                    &state,
+                    &accepted_context,
+                    &command.command_id,
+                    completion,
+                    &error.message,
+                )
+                .await;
+                return Err(error);
+            }
+            let _transition = state.current_live_session_transition.lock().await;
+            crate::validate_current_live_request_context(&state, &accepted_context).await?;
+            return publish_completed_preparation_command_impl_with_context_under_transition(
+                Arc::clone(&state),
+                headers,
+                command,
+                &accepted_context,
+            )
+            .await;
+        }
+        if crate::live_accepted_execution::docker_api_only_runtime() && command.kind == "stop" {
+            validate_accepted_command_admission(&state, context, &command).await?;
+            let accepted = crate::live_accepted_execution::submit_live_stop_with_transition(
+                &state,
+                context,
+                &command.command_id,
+                command.reason.as_deref().unwrap_or("user requested stop"),
+            )
+            .await?;
+            command.target = Some(RuntimeCommandTarget::Run {
+                run_id: Some(accepted.run_id),
+            });
+            return publish_accepted_session_command_impl_with_context_under_transition(
+                Arc::clone(&state),
+                headers,
+                command,
+                context,
+            )
+            .await;
+        }
+        if crate::live_accepted_execution::docker_api_only_runtime()
+            && command.kind == "pause"
+        {
+            return reject_session_command_impl_with_context(
+                Arc::clone(&state),
+                headers,
+                command,
+                "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.".into(),
+                // The enclosing transition fence is already held. Passing no
+                // context avoids reacquiring that non-reentrant mutex while
+                // retaining the captured request fence above.
+                None,
+            )
+            .await;
+        }
+        if matches!(command.kind.as_str(), "run" | "relax" | "solve" | "resume") {
+            if let Some(accepted) =
+                crate::live_accepted_execution::submit_live_command_with_transition(
+                    &state,
+                    &command,
+                    context,
+                    command_request_key(headers),
+                )
+                .await?
+            {
+                command.target = Some(RuntimeCommandTarget::Run {
+                    run_id: Some(accepted.run_id),
+                });
+                return publish_accepted_session_command_impl_with_context_under_transition(
+                    Arc::clone(&state),
+                    headers,
+                    command,
+                    context,
+                )
+                .await;
+            }
+        }
+    }
     enqueue_session_command_impl_with_context(state, headers, command, context).await
+}
+
+async fn cached_command_response(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+) -> Option<CommandResponse> {
+    let key = command_request_key(headers)?;
+    state
+        .current_command_responses
+        .lock()
+        .await
+        .iter()
+        .find(|(cached, _)| cached == &key)
+        .map(|(_, response)| response.clone())
 }
 
 async fn validate_optional_request_context(
@@ -200,6 +364,11 @@ async fn fdm_grid_refresh_rejection_reason(
     if !fdm_grid_refresh_targets_active_fdm_lane(snapshot) {
         return Ok(Some(
             "FDM grid refresh is only applicable to an FDM structured-grid session.".into(),
+        ));
+    }
+    if snapshot.scene_document.is_none() {
+        return Ok(Some(
+            "FDM grid refresh requires a materialized authoring scene.".into(),
         ));
     }
     Ok(None)
@@ -522,6 +691,70 @@ fn validate_runtime_command_contract(
     ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     command: &SessionCommand,
 ) -> Result<(), ApiError> {
+    validate_runtime_command_preconditions(snapshot, ledger, command)?;
+
+    if is_stage_control_command(command.kind.as_str()) {
+        validate_stage_control_state(&snapshot, command)?;
+        validate_stage_control_target(&snapshot, command)?;
+    }
+
+    if matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh") {
+        if let Some(reason) = remesh_disabled_reason(Some(snapshot), ledger) {
+            return Err(ApiError::conflict(reason));
+        }
+    } else if is_compute_command(&command.kind) && has_active_mesh_command(ledger) {
+        return Err(ApiError::conflict("A mesh command is already active."));
+    }
+
+    Ok(())
+}
+
+/// Validate an accepted command against the snapshot captured before durable
+/// Run publication. The accepted path must finish this check before it can
+/// bind a command to a RunIntent; the capacity probe is deliberately made on
+/// a clone so a rejected command cannot leave a journal reservation behind.
+fn validate_accepted_command_admission_against_snapshot(
+    snapshot: &SessionStateResponse,
+    ledger: &std::collections::VecDeque<TrackedCommandRecord>,
+    command: &SessionCommand,
+) -> Result<(), ApiError> {
+    if command.kind == "stop" {
+        // Accepted Stop is a durable task cancellation. Its run may still be
+        // waiting for the explicit Compute gate or for FEM preparation, so the
+        // stage-control validator is intentionally narrower than this lane.
+        validate_runtime_command_preconditions(snapshot, ledger, command)?;
+        let run_status = snapshot
+            .run
+            .as_ref()
+            .map(|run| run.status.as_str())
+            .ok_or_else(|| {
+                ApiError::conflict_with_code(
+                    "accepted_control_run_missing",
+                    "accepted Stop requires a durable live run",
+                )
+            })?;
+        if matches!(
+            run_status,
+            "completed" | "succeeded" | "failed" | "cancelled" | "stopped"
+        ) {
+            return Err(ApiError::conflict_with_code(
+                "accepted_control_run_terminal",
+                format!("accepted Stop cannot target terminal run status `{run_status}`"),
+            ));
+        }
+    } else {
+        validate_runtime_command_contract(snapshot, ledger, command)?;
+    }
+    let mut capacity_probe = ledger.clone();
+    reserve_command_ledger_entry(&mut capacity_probe)?;
+    Ok(())
+}
+
+fn validate_runtime_command_preconditions(
+    snapshot: &SessionStateResponse,
+    ledger: &std::collections::VecDeque<TrackedCommandRecord>,
+    command: &SessionCommand,
+) -> Result<(), ApiError> {
     if let Some(precondition) = command.precondition.as_ref() {
         let runtime_state = runtime_state_for_command_validation(&snapshot);
         if precondition
@@ -614,21 +847,46 @@ fn validate_runtime_command_contract(
             }
         }
     }
-
-    if is_stage_control_command(command.kind.as_str()) {
-        validate_stage_control_state(&snapshot, command)?;
-        validate_stage_control_target(&snapshot, command)?;
-    }
-
-    if matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh") {
-        if let Some(reason) = remesh_disabled_reason(Some(snapshot), ledger) {
-            return Err(ApiError::conflict(reason));
-        }
-    } else if is_compute_command(&command.kind) && has_active_mesh_command(ledger) {
-        return Err(ApiError::conflict("A mesh command is already active."));
-    }
-
     Ok(())
+}
+
+/// Validate the command journal admission before an accepted RunIntent is
+/// committed. The accepted path holds the session transition fence while it
+/// calls this helper and performs durable publication, so a full ledger or a
+/// stale mesh/compute precondition cannot leave an executable orphan run.
+pub(crate) async fn validate_accepted_command_admission(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    command: &SessionCommand,
+) -> Result<(), ApiError> {
+    accepted_command_admission_snapshot(state, context, command)
+        .await
+        .map(|_| ())
+}
+
+/// Capture and validate the immutable live snapshot used to admit an accepted
+/// command. Callers that perform an accepted preparation outside the transition
+/// fence retain this snapshot so completion cannot re-interpret its optimistic
+/// preconditions against the preparation's newly published mesh revisions.
+pub(crate) async fn accepted_command_admission_snapshot(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    command: &SessionCommand,
+) -> Result<SessionStateResponse, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let ledger = state.current_command_ledger.lock().await;
+    validate_accepted_command_admission_against_snapshot(snapshot, &ledger, command)?;
+    Ok(snapshot.clone())
 }
 
 async fn attach_frozen_spins_runtime_plan_binding(
@@ -917,7 +1175,17 @@ async fn validate_authoring_gate_for_command_with_context(
     if !should_check_mesh && !should_check_run {
         return Ok(None);
     }
-    let Some(scene) = current_authoring_gate_scene_with_context(state, context).await? else {
+    // Mesh admission must inspect only the already-materialized canonical
+    // scene. Loading a script here mutates the live snapshot before runtime
+    // admission, so a rejected paused/active remesh would no longer be
+    // side-effect free and a missing-scene FDM refresh could be admitted from
+    // an unrelated script path.
+    let scene = if should_check_mesh {
+        current_materialized_authoring_scene_with_context(state, context).await?
+    } else {
+        current_authoring_gate_scene_with_context(state, context).await?
+    };
+    let Some(scene) = scene else {
         return Ok(None);
     };
     let backend_target = GeometryBackendTarget::from_scene(&scene);
@@ -987,6 +1255,26 @@ async fn current_authoring_gate_scene_with_context(
         Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+async fn current_materialized_authoring_scene_with_context(
+    state: &Arc<AppState>,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Option<SceneDocument>, ApiError> {
+    let current = state.current_live_state.read().await;
+    let Some(snapshot) = current.as_ref() else {
+        return Err(ApiError::not_found("no active local live workspace"));
+    };
+    if let Some(context) = context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
+    Ok(snapshot.scene_document.clone())
 }
 
 fn attach_geometry_realization_to_mesh_request(
@@ -1607,11 +1895,6 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
     })
     .await?;
     *next_sequence = seq;
-    state
-        .current_control_queue
-        .lock()
-        .await
-        .push_back(enqueued.clone());
 
     let response = CommandResponse {
         accepted: true,
@@ -1629,6 +1912,11 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
     drop(next_sequence);
     drop(responses);
     drop(current);
+    state
+        .current_control_queue
+        .lock()
+        .await
+        .push_back(enqueued.clone());
     let _ = state.current_control_events.send(seq);
 
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
@@ -1641,6 +1929,510 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
     }
 
     Ok(response)
+}
+
+/// Publish an accepted v2 command into the live command journal without
+/// placing it on the legacy in-memory scratch queue.  The accepted run is
+/// already durable and scheduler-owned; the journal record is only the
+/// sessionless workspace read model for command status and realtime updates.
+async fn publish_accepted_session_command_impl_with_context(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<CommandResponse, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    publish_accepted_session_command_impl_with_context_under_transition(
+        Arc::clone(&state),
+        headers,
+        command,
+        context,
+    )
+    .await
+}
+
+async fn publish_accepted_session_command_impl_with_context_under_transition(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<CommandResponse, ApiError> {
+    publish_accepted_session_command_impl_with_context_under_transition_validated(
+        state, headers, command, context, None,
+    )
+    .await
+}
+
+/// Reserve a Docker preparation command before the bounded receipt poll. The
+/// admission snapshot was validated before the accepted RunIntent changed the
+/// current read model, so use that immutable snapshot for contract validation.
+async fn publish_accepted_preparation_command_impl_with_context_under_transition(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+    admission_snapshot: &SessionStateResponse,
+) -> Result<CommandResponse, ApiError> {
+    publish_accepted_session_command_impl_with_context_under_transition_validated(
+        state,
+        headers,
+        command,
+        context,
+        Some(admission_snapshot),
+    )
+    .await
+}
+
+async fn publish_accepted_session_command_impl_with_context_under_transition_validated(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+    admission_snapshot: Option<&SessionStateResponse>,
+) -> Result<CommandResponse, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+
+    let mut responses = state.current_command_responses.lock().await;
+    let idempotency_key = command_request_key(headers);
+    if let Some(key) = idempotency_key.as_ref() {
+        if let Some((_, response)) = responses.iter().find(|(cached, _)| cached == key) {
+            return Ok(response.clone());
+        }
+    }
+    let mut next_sequence = state.current_control_next_seq.lock().await;
+    let seq = next_sequence
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("current command sequence exhausted"))?;
+    let command_id = command.command_id.clone();
+    let request_id = command_request_id(headers);
+    let accepted_run_id = match command.target.as_ref() {
+        Some(RuntimeCommandTarget::Run {
+            run_id: Some(run_id),
+        }) => run_id.clone(),
+        _ => {
+            return Err(ApiError::internal(
+                "accepted live command is missing its durable run identity",
+            ));
+        }
+    };
+    let accepted_is_stop = command.kind == "stop";
+    crate::live_command_journal::mutate(&state, snapshot, |ledger| {
+        // Docker Stop was admitted against its stage target before the
+        // accepted run identity was attached to the journal command. Reusing
+        // the stage-target validator here would reject the durable Run target
+        // even though the transition fence has not changed.
+        if !accepted_is_stop {
+            validate_runtime_command_contract(
+                admission_snapshot.unwrap_or(snapshot),
+                ledger,
+                &command,
+            )?;
+        }
+        reserve_command_ledger_entry(ledger)?;
+        let mut accepted = command;
+        accepted.seq = seq;
+        ledger.push_back(TrackedCommandRecord {
+            command: accepted,
+            request_id: request_id.clone(),
+            status: CommandLifecycleState::Accepted,
+            dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        });
+        Ok(((), true))
+    })
+    .await?;
+    *next_sequence = seq;
+    drop(next_sequence);
+    drop(responses);
+
+    let accepted_session_status = if accepted_is_stop {
+        "stopping"
+    } else {
+        "waiting_for_compute"
+    };
+    let accepted_total_steps = snapshot
+        .run
+        .as_ref()
+        .filter(|run| run.run_id == accepted_run_id)
+        .map(|run| run.total_steps)
+        .unwrap_or(1);
+
+    // Keep the existing current-workspace read model as the only live status
+    // surface. The accepted run is already durable at this point; this
+    // publication merely moves the current view behind the same scheduler
+    // gate and never makes the legacy scratch queue observable to a worker.
+    drop(current);
+    {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current
+            .as_mut()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        let artifact_dir = snapshot.session.artifact_dir.clone();
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            CurrentLiveSnapshotRequest {
+                session_id: context.session_id.clone(),
+                session: None,
+                session_status: Some(accepted_session_status.into()),
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                simulation_preparation: None,
+                run: Some(RunManifest {
+                    run_id: accepted_run_id,
+                    session_id: context.session_id.clone(),
+                    status: accepted_session_status.into(),
+                    total_steps: accepted_total_steps,
+                    final_time: None,
+                    final_e_ex: None,
+                    final_e_demag: None,
+                    final_e_ext: None,
+                    final_e_ani: None,
+                    final_e_dmi: None,
+                    final_e_rotated_dmi: None,
+                    final_e_total: None,
+                    artifact_dir,
+                }),
+                live_state: None,
+                frozen_spins_runtime_status: None,
+                coupled_checkpoint: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )?;
+    }
+    let response = CommandResponse {
+        accepted: true,
+        command_id,
+        request_id,
+        error: None,
+    };
+    if let Some(key) = idempotency_key {
+        let mut responses = state.current_command_responses.lock().await;
+        responses.push_back((key, response.clone()));
+        while responses.len() > 128 {
+            responses.pop_front();
+        }
+    }
+    // The accepted run is consumed by the durable runtime-service scheduler;
+    // do not wake the legacy scratch consumer with an empty queue entry.
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        let display_revision = state.current_display_selection.read().await.revision;
+        let realtime_state =
+            crate::current_live_realtime_state_from_snapshot(&state, &snapshot, display_revision)
+                .await;
+        crate::publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+            .await?;
+    }
+    Ok(response)
+}
+
+/// Publish a whole-study accepted run created by the Docker startup adapter.
+/// The verifier has already captured the source, loaded the canonical scene,
+/// and materialized preparation; this function only binds that immutable run
+/// to the fenced current-live read model. No command queue or second viewport
+/// is created.
+pub(crate) async fn publish_accepted_live_study_under_transition(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    run_id: &str,
+    step_ids: &[String],
+    status: &str,
+) -> Result<(), ApiError> {
+    if step_ids.is_empty() {
+        return Err(ApiError::internal(
+            "accepted startup study publication has no planned steps",
+        ));
+    }
+    if !matches!(status, "waiting_for_solve" | "waiting_for_compute" | "running") {
+        return Err(ApiError::internal(
+            "accepted startup study publication has an invalid live status",
+        ));
+    }
+    let mut current = state.current_live_state.write().await;
+    let snapshot = current
+        .as_mut()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    if snapshot
+        .run
+        .as_ref()
+        .is_some_and(|existing| existing.run_id != run_id)
+    {
+        return Err(ApiError::conflict(
+            "accepted_live_study_run_replaced_before_publication",
+        ));
+    }
+    let artifact_dir = snapshot.session.artifact_dir.clone();
+    crate::session::apply_current_live_snapshot(
+        snapshot,
+        CurrentLiveSnapshotRequest {
+            session_id: context.session_id.clone(),
+            session: None,
+            session_status: Some(status.to_string()),
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            simulation_preparation: None,
+            run: Some(RunManifest {
+                run_id: run_id.to_string(),
+                session_id: context.session_id.clone(),
+                status: status.to_string(),
+                total_steps: step_ids.len(),
+                final_time: None,
+                final_e_ex: None,
+                final_e_demag: None,
+                final_e_ext: None,
+                final_e_ani: None,
+                final_e_dmi: None,
+                final_e_rotated_dmi: None,
+                final_e_total: None,
+                artifact_dir,
+            }),
+            live_state: None,
+            frozen_spins_runtime_status: None,
+            coupled_checkpoint: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        },
+    )?;
+    drop(current);
+    // The accepted run becomes the new current run as part of this publication,
+    // so the caller's pre-activation context (which is fenced to the temporary
+    // startup/session run) is intentionally stale after the write.  The
+    // transition guard remains held by the caller; subsequent startup steps
+    // must capture/rebind a context carrying `run_id` before reading receipts.
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        let display_revision = state.current_display_selection.read().await.revision;
+        let realtime_state =
+            crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision)
+                .await;
+        crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Publish a mesh/preparation command after its canonical receipt and read
+/// model have been committed. Docker API-only has no legacy queue consumer, so
+/// this command is completed by the preparation adapter itself and remains
+/// visible through the ordinary command journal/realtime resources.
+fn complete_reserved_preparation_command_in_ledger(
+    ledger: &mut std::collections::VecDeque<TrackedCommandRecord>,
+    command_id: &str,
+    completed_at_unix_ms: u128,
+) -> (bool, bool) {
+    let Some(record) = ledger
+        .iter_mut()
+        .find(|record| record.command.command_id == command_id)
+    else {
+        return (false, false);
+    };
+    if matches!(
+        record.status,
+        CommandLifecycleState::Completed
+            | CommandLifecycleState::Failed
+            | CommandLifecycleState::Rejected
+    ) {
+        return (true, false);
+    }
+    record.status = CommandLifecycleState::Completed;
+    record.completed_at_unix_ms = Some(completed_at_unix_ms);
+    record.completion_status = Some(crate::types::CommandCompletionState::Completed);
+    record.error = None;
+    (true, true)
+}
+
+/// Complete only the already-reserved command identified by `command_id`.
+/// Preparation may advance mesh revisions, so this transition intentionally
+/// does not re-run the command's admission preconditions.
+async fn publish_completed_preparation_command_impl_with_context_under_transition(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<CommandResponse, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+
+    let idempotency_key = command_request_key(headers);
+    let cached_response = {
+        let responses = state.current_command_responses.lock().await;
+        idempotency_key.as_ref().and_then(|key| {
+            responses
+                .iter()
+                .find(|(cached, _)| cached == key)
+                .map(|(_, response)| response.clone())
+        })
+    };
+    let command_id = command.command_id.clone();
+    let request_id = command_request_id(headers);
+    let completed_at_unix_ms = crate::session::unix_time_millis_now();
+    let found = crate::live_command_journal::mutate(&state, snapshot, |ledger| {
+        Ok(complete_reserved_preparation_command_in_ledger(
+            ledger,
+            &command_id,
+            completed_at_unix_ms,
+        ))
+    })
+    .await?;
+    if !found {
+        if let Some(response) = cached_response.as_ref() {
+            drop(current);
+            return Ok(response.clone());
+        }
+        return Err(ApiError::conflict(
+            "accepted preparation command journal record is missing",
+        ));
+    }
+    drop(current);
+
+    let had_cached_response = cached_response.is_some();
+    let response = cached_response.unwrap_or_else(|| CommandResponse {
+        accepted: true,
+        command_id,
+        request_id,
+        error: None,
+    });
+    if !had_cached_response {
+        if let Some(key) = idempotency_key {
+            let mut responses = state.current_command_responses.lock().await;
+            responses.push_back((key, response.clone()));
+            while responses.len() > 128 {
+                responses.pop_front();
+            }
+        }
+    }
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        let display_revision = state.current_display_selection.read().await.revision;
+        let realtime_state =
+            crate::current_live_realtime_state_from_snapshot(&state, &snapshot, display_revision)
+                .await;
+        crate::publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+            .await?;
+    }
+    Ok(response)
+}
+
+fn terminalize_reserved_preparation_command_in_ledger(
+    ledger: &mut std::collections::VecDeque<TrackedCommandRecord>,
+    command_id: &str,
+    completion: crate::types::CommandCompletionState,
+    completed_at_unix_ms: u128,
+    error_message: &str,
+) -> bool {
+    let Some(record) = ledger
+        .iter_mut()
+        .find(|record| record.command.command_id == command_id)
+    else {
+        return false;
+    };
+    if matches!(
+        record.status,
+        CommandLifecycleState::Completed
+            | CommandLifecycleState::Failed
+            | CommandLifecycleState::Rejected
+    ) {
+        return false;
+    }
+    record.status = if completion == crate::types::CommandCompletionState::Failed {
+        CommandLifecycleState::Failed
+    } else {
+        CommandLifecycleState::Completed
+    };
+    record.completed_at_unix_ms = Some(completed_at_unix_ms);
+    record.completion_status = Some(completion);
+    record.error = Some(error_message.to_string());
+    true
+}
+
+/// Turn an already-reserved preparation command terminal when the accepted
+/// preparation poll fails. The context fence is checked before the journal
+/// mutation so a replacement session cannot inherit an old command outcome.
+async fn mark_reserved_preparation_command_terminal_if_current(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    command_id: &str,
+    completion: crate::types::CommandCompletionState,
+    error_message: &str,
+) -> Result<(), ApiError> {
+    let current = state.current_live_state.read().await;
+    let Some(snapshot) = current.as_ref() else {
+        return Ok(());
+    };
+    if crate::ensure_current_live_request_context(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )
+    .is_err()
+    {
+        return Ok(());
+    }
+    let completed_at_unix_ms = crate::session::unix_time_millis_now();
+    crate::live_command_journal::mutate(state, snapshot, |ledger| {
+        Ok((
+            (),
+            terminalize_reserved_preparation_command_in_ledger(
+                ledger,
+                command_id,
+                completion,
+                completed_at_unix_ms,
+                error_message,
+            ),
+        ))
+    })
+    .await
 }
 
 fn reserve_command_ledger_entry(
@@ -2164,6 +2956,176 @@ mod tests {
             .expect("resolved registry fixture");
         registry.source = fullmag_runner::QuantityProviderRegistrySource::CompatibilityProfile;
         capabilities
+    }
+
+    fn journal_command(command_id: &str, kind: &str) -> SessionCommand {
+        serde_json::from_value(serde_json::json!({
+            "seq": 7,
+            "command_id": command_id,
+            "kind": kind,
+            "created_at_unix_ms": 1_700_000_000_000u128
+        }))
+        .expect("minimal journal command fixture should deserialize")
+    }
+
+    fn accepted_preparation_record(command_id: &str, kind: &str) -> TrackedCommandRecord {
+        TrackedCommandRecord {
+            command: journal_command(command_id, kind),
+            request_id: Some(format!("request-{command_id}")),
+            status: CommandLifecycleState::Accepted,
+            dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn accepted_preparation_completion_keeps_reserved_record_after_mesh_revision_moves() {
+        let mut command = journal_command("accepted-remesh", "remesh");
+        command.precondition = Some(RuntimeCommandPrecondition {
+            mesh_revision: Some(41),
+            ..RuntimeCommandPrecondition::default()
+        });
+        let mut ledger = std::collections::VecDeque::from([accepted_preparation_record(
+            "accepted-remesh",
+            "remesh",
+        )]);
+        ledger.front_mut().expect("reserved record").command = command.clone();
+
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "preparation-mesh-revision"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut post_preparation = default_current_live_state(&request);
+        post_preparation.mesh_revision = 42;
+        assert!(validate_runtime_command_preconditions(&post_preparation, &ledger, &command)
+            .expect_err("the old optimistic mesh revision is stale after preparation")
+            .message
+            .contains("mesh_revision precondition failed"));
+
+        let (found, changed) = complete_reserved_preparation_command_in_ledger(
+            &mut ledger,
+            "accepted-remesh",
+            1_700_000_001_000,
+        );
+        assert!((found, changed) == (true, true));
+        let record = ledger.front().expect("reserved record remains present");
+        assert_eq!(record.command.command_id, "accepted-remesh");
+        assert_eq!(
+            record
+                .command
+                .precondition
+                .as_ref()
+                .and_then(|precondition| precondition.mesh_revision),
+            Some(41)
+        );
+        assert_eq!(record.status, CommandLifecycleState::Completed);
+        assert_eq!(
+            record.completion_status,
+            Some(crate::types::CommandCompletionState::Completed)
+        );
+        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_001_000));
+        assert!(record.error.is_none());
+    }
+
+    #[test]
+    fn preparation_failure_and_stop_terminalize_only_their_reserved_records() {
+        let mut ledger = std::collections::VecDeque::from([
+            accepted_preparation_record("preparation-failed", "remesh"),
+            accepted_preparation_record("preparation-stop", "stop"),
+        ]);
+
+        assert!(terminalize_reserved_preparation_command_in_ledger(
+            &mut ledger,
+            "preparation-failed",
+            crate::types::CommandCompletionState::Failed,
+            1_700_000_001_100,
+            "native preparation failed",
+        ));
+        let failed = ledger.front().expect("failed preparation record");
+        assert_eq!(failed.status, CommandLifecycleState::Failed);
+        assert_eq!(
+            failed.completion_status,
+            Some(crate::types::CommandCompletionState::Failed)
+        );
+        assert_eq!(failed.error.as_deref(), Some("native preparation failed"));
+        assert_eq!(
+            ledger
+                .get(1)
+                .expect("stop record must remain reserved")
+                .status,
+            CommandLifecycleState::Accepted
+        );
+
+        assert!(terminalize_reserved_preparation_command_in_ledger(
+            &mut ledger,
+            "preparation-stop",
+            crate::types::CommandCompletionState::Cancelled,
+            1_700_000_001_200,
+            "accepted run stopped",
+        ));
+        let stopped = ledger.get(1).expect("stop record");
+        assert_eq!(stopped.status, CommandLifecycleState::Completed);
+        assert_eq!(
+            stopped.completion_status,
+            Some(crate::types::CommandCompletionState::Cancelled)
+        );
+        assert_eq!(stopped.error.as_deref(), Some("accepted run stopped"));
+        assert_eq!(
+            ledger.front().expect("failure record remains isolated").status,
+            CommandLifecycleState::Failed
+        );
+    }
+
+    #[test]
+    fn old_preparation_terminalization_does_not_mutate_replacement_session_ledger() {
+        let mut replacement_ledger = std::collections::VecDeque::from([accepted_preparation_record(
+            "replacement-remesh",
+            "remesh",
+        )]);
+
+        assert!(!terminalize_reserved_preparation_command_in_ledger(
+            &mut replacement_ledger,
+            "old-session-remesh",
+            crate::types::CommandCompletionState::Failed,
+            1_700_000_001_300,
+            "late receipt from replaced session",
+        ));
+        let replacement = replacement_ledger
+            .front()
+            .expect("replacement command remains present");
+        assert_eq!(replacement.command.command_id, "replacement-remesh");
+        assert_eq!(replacement.status, CommandLifecycleState::Accepted);
+        assert!(replacement.completion_status.is_none());
+        assert!(replacement.error.is_none());
+    }
+
+    #[test]
+    fn rejected_accepted_admission_does_not_reserve_a_run_command() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "rejected-pre-admission"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let snapshot = default_current_live_state(&request);
+        let mut command = journal_command("rejected-remesh", "remesh");
+        command.precondition = Some(RuntimeCommandPrecondition {
+            mesh_revision: Some(snapshot.mesh_revision.saturating_add(1)),
+            ..RuntimeCommandPrecondition::default()
+        });
+        let mut ledger = std::collections::VecDeque::new();
+
+        let error = validate_accepted_command_admission_against_snapshot(
+            &snapshot,
+            &ledger,
+            &command,
+        )
+        .expect_err("stale pre-admission must fail before accepted Run publication");
+        assert!(error.message.contains("mesh_revision precondition failed"));
+        assert!(
+            ledger.is_empty(),
+            "a rejected pre-admission must not publish an accepted Run journal record"
+        );
     }
 
     #[test]

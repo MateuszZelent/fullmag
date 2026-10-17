@@ -24,6 +24,10 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the managed frontend runs on Linux
+    fcntl = None
 import hashlib
 import json
 import os
@@ -33,6 +37,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from typing import Any, Mapping, NoReturn
@@ -70,6 +75,7 @@ FREEZE_ROOT = DEVELOPMENT_ROOT / "frozen-inputs"
 FREEZE_PATH = DEVELOPMENT_ROOT / "inputs-freeze.json"
 RECEIPT_PATH = DEVELOPMENT_ROOT / "frontend-dev-receipt.json"
 LOG_PATH = DEVELOPMENT_ROOT / "next.log"
+RUNTIME_LOCK_PATH = FRONTEND_ROOT / ".fullmag-frontend-runtime.lock"
 
 NODE_BINARY = Path("/usr/local/bin/node")
 PNPM_BINARY = Path("/usr/local/bin/pnpm")
@@ -80,6 +86,15 @@ INTERNAL_PORT = 8080
 API_PROXY_TARGET = "http://backend:8081"
 NEXT_DIST_DIR = ".next-control-room-8080"
 NEXT_RELATIVE = Path("node_modules/next/dist/bin/next")
+INSPECTOR_SCHEMA = "fullmag.node-inspector.v1"
+INSPECTOR_PROFILE = "next-dev"
+INSPECTOR_BIND_HOST = "127.0.0.1"
+INSPECTOR_BIND_PORT = 0
+INSPECTOR_FLAG = f"--inspect={INSPECTOR_BIND_HOST}:{INSPECTOR_BIND_PORT}"
+INSPECTOR_LOG_SCAN_BYTES = 64 * 1024
+INSPECTOR_OUTPUT_RE = re.compile(
+    rb"Debugger listening on (?P<address>ws://(?P<host>[^:/\s]+):(?P<port>[0-9]+)/(?P<target>[^\s]+))"
+)
 LIVE_DIRECTORY_NAMES = ("app", "src", "public", "scripts")
 LIVE_DIRECTORY_PATHS = tuple(f"apps/control-room/{name}" for name in LIVE_DIRECTORY_NAMES)
 REQUIRED_MANIFEST_KEYS = frozenset(
@@ -98,7 +113,11 @@ REQUIRED_MANIFEST_KEYS = frozenset(
 # contract.  It is frozen and included in the digest, but never interpreted as
 # a guest path or copied into the workspace.
 OPTIONAL_MANIFEST_KEYS = frozenset(
-    {"source_selection", "source_volume", "configuration_changes", "backend_build"}
+    {
+        "source_selection", "source_volume", "configuration_changes", "backend_build",
+        "worktree_id", "dependency_seed_files", "dependency_seed_sha256",
+        "toolpins", "toolpins_sha256",
+    }
 )
 GENERATED_RELATIVES = frozenset(
     {
@@ -124,12 +143,28 @@ MAX_SEED_FILE_BYTES = 8 * 1024 * 1024
 MAX_SEED_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_SEED_FILES = 4096
 MAX_RELATIVE_BYTES = 512
-INSTALL_TIMEOUT_SECONDS = 30 * 60
-# A Corepack shim may resolve the packageManager declared by the seeded root
-# manifest on its first invocation. Keep that initialization bounded without
-# making a healthy cold container fail during ordinary registry latency.
-TOOL_TIMEOUT_SECONDS = 30
+INSTALL_TIMEOUT_SECONDS = 60 * 60
+# The pinned pnpm executable can pay cold filesystem and initialization I/O on
+# its first invocation. Keep that probe bounded without making a healthy cold
+# container fail during ordinary startup latency.
+TOOL_TIMEOUT_SECONDS = 120
 STOP_TIMEOUT_SECONDS = 15
+LOG_TAIL_CHUNK_BYTES = 8 * 1024
+LOG_TAIL_POLL_SECONDS = 0.25
+LOG_TAIL_STOP_TIMEOUT_SECONDS = 1.0
+WATCHPACK_POLLING_ENV = "FULLMAG_WATCHPACK_POLLING_MS"
+# Docker Desktop's Windows source mount pays a metadata round trip for each
+# Watchpack poll. Five seconds bounds overlapping scans while keeping the HMR
+# latency explicit; operators can provide a validated workspace override.
+WATCHPACK_POLLING_DEFAULT_MS = 5000
+WATCHPACK_POLLING_MIN_MS = 250
+WATCHPACK_POLLING_MAX_MS = 10000
+NODE_FS_THREADS_ENV = "UV_THREADPOOL_SIZE"
+# Keep asynchronous filesystem work bounded for the two-CPU frontend.  The
+# live Windows source mount is backed by Docker Desktop's 9p bridge, where a
+# large libuv pool turns metadata latency into host kernel contention instead
+# of improving cold compilation.
+NODE_FS_THREADS = 8
 PROCESS_IDENTITY_FIELDS = (
     "pid_namespace",
     "process_start_time_ticks",
@@ -177,9 +212,12 @@ class FrontendHandle:
     owner_token: str
     log_path: Path
     log_stream: Any | None = None
+    log_tailer: Any | None = None
+    runtime_lock: Any | None = None
     stopped: bool = False
     process_group_id: int | None = None
     process_identity: Mapping[str, Any] | None = None
+    inspector_log_offset: int | None = None
 
 
 def enabled(environment: Mapping[str, str] | None = None) -> bool:
@@ -819,12 +857,18 @@ def _validate_managed_frontend_layout(inputs: DevelopmentInputs) -> None:
         FRONTEND_ROOT / "next" / f"dev-{INTERNAL_PORT}",
         "development Next cache",
     )
+    _validate_managed_link(
+        FRONTEND_ROOT / "node_modules",
+        app_root / "node_modules",
+        "frontend dependency resolution",
+    )
 
 
 def _prepare_managed_frontend(inputs: DevelopmentInputs) -> Path:
     app_root = inputs.workspace_root / "apps" / "control-room"
     _assert_no_links(app_root, "Control Room app root")
     _ensure_cache_layout(inputs)
+    node_modules_target = _ensure_node_modules_layout(inputs)
     _ensure_managed_link(app_root / ".fullmag-frontend", FRONTEND_ROOT, "frontend root")
     _ensure_managed_link(app_root / "out", FRONTEND_ROOT / "out", "static output")
     _ensure_managed_link(app_root / ".next", FRONTEND_ROOT / "next" / "default", "default Next cache")
@@ -833,7 +877,12 @@ def _prepare_managed_frontend(inputs: DevelopmentInputs) -> Path:
         FRONTEND_ROOT / "next" / f"dev-{INTERNAL_PORT}",
         "development Next cache",
     )
-    return _ensure_node_modules_layout(inputs)
+    _ensure_managed_link(
+        FRONTEND_ROOT / "node_modules",
+        app_root / "node_modules",
+        "frontend dependency resolution",
+    )
+    return node_modules_target
 
 
 def _validate_live_directories(inputs: DevelopmentInputs) -> None:
@@ -852,6 +901,36 @@ def _validate_live_directories(inputs: DevelopmentInputs) -> None:
             _fail(f"read-only live directory is not a directory: {name}")
 
 
+def _write_tool_probe_log(log_stream: Any | None, message: str) -> None:
+    """Append one bounded probe event without changing probe admission."""
+
+    if log_stream is None:
+        return
+    try:
+        log_stream.write(f"{message}\n".encode("utf-8"))
+        log_stream.flush()
+    except (AttributeError, OSError, TypeError):
+        # A probe failure must retain its exact tool error even if the
+        # diagnostic stream is unavailable or has just been closed.
+        return
+
+
+def _emit_tool_probe_event(log_stream: Any | None, event: str, **fields: Any) -> None:
+    """Emit one probe event to both the durable log and supervisor stdout."""
+
+    def log_value(key: str, value: Any) -> str:
+        if key in {"output", "version", "expected"}:
+            return repr(value)
+        return str(value)
+
+    values = " ".join(f"{key}={log_value(key, value)}" for key, value in fields.items())
+    message = f"frontend tool probe {event}"
+    if values:
+        message = f"{message} {values}"
+    _write_tool_probe_log(log_stream, message)
+    _write_lifecycle_log(f"tool_probe_{event}", **fields)
+
+
 def _tool_version(
     executable: Path,
     expected: str,
@@ -859,9 +938,32 @@ def _tool_version(
     *,
     cwd: Path | None = None,
     environment: Mapping[str, str] | None = None,
+    log_stream: Any | None = None,
 ) -> str:
+    started = time.monotonic()
+    _emit_tool_probe_event(
+        log_stream,
+        "start",
+        name=name,
+        executable=executable,
+        budget_seconds=TOOL_TIMEOUT_SECONDS,
+    )
+
+    def emit_result(status: str, **fields: Any) -> None:
+        _emit_tool_probe_event(
+            log_stream,
+            "result",
+            name=name,
+            status=status,
+            elapsed_seconds=f"{time.monotonic() - started:.3f}",
+            budget_seconds=TOOL_TIMEOUT_SECONDS,
+            **fields,
+        )
+
     if not executable.is_file() or not os.access(executable, os.X_OK):
-        _fail(f"pinned {name} executable is missing or not executable: {executable}")
+        error = f"pinned {name} executable is missing or not executable: {executable}"
+        emit_result("missing", error=error)
+        _fail(error)
     try:
         result = subprocess.run(
             [str(executable), "--version"],
@@ -875,17 +977,59 @@ def _tool_version(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
+        status = "timeout" if isinstance(error, subprocess.TimeoutExpired) else "error"
+        emit_result(status, error=str(error))
+        if isinstance(error, subprocess.TimeoutExpired):
+            elapsed = time.monotonic() - started
+            _fail(
+                f"pinned {name} version probe timed out after {elapsed:.3f}s "
+                f"(budget {TOOL_TIMEOUT_SECONDS}s)"
+            )
         _fail(f"pinned {name} version probe failed: {error}")
     version = result.stdout.strip()
     if result.returncode != 0 or not version:
+        emit_result("error", output=version, returncode=result.returncode)
         _fail(f"pinned {name} version probe returned {version!r}")
     if version != expected:
+        emit_result("mismatch", version=version, expected=expected)
         _fail(f"pinned {name} version is {version!r}; expected {expected!r}")
+    emit_result("ok", version=version)
     return version
 
 
-def _safe_environment(inputs: DevelopmentInputs) -> dict[str, str]:
-    browser_origin = f"http://localhost:{inputs.host_port}"
+def _validate_watchpack_polling_ms(value: int) -> int:
+    if (
+        type(value) is not int
+        or not WATCHPACK_POLLING_MIN_MS <= value <= WATCHPACK_POLLING_MAX_MS
+    ):
+        _fail(
+            f"{WATCHPACK_POLLING_ENV} must be an integer between "
+            f"{WATCHPACK_POLLING_MIN_MS} and {WATCHPACK_POLLING_MAX_MS} ms; got {value!r}"
+        )
+    return value
+
+
+def _watchpack_polling_ms(environment: Mapping[str, str] | None = None) -> int:
+    source = os.environ if environment is None else environment
+    raw = source.get(WATCHPACK_POLLING_ENV, str(WATCHPACK_POLLING_DEFAULT_MS))
+    if not isinstance(raw, str) or re.fullmatch(r"[0-9]+", raw.strip()) is None:
+        _fail(
+            f"{WATCHPACK_POLLING_ENV} must be an integer between "
+            f"{WATCHPACK_POLLING_MIN_MS} and {WATCHPACK_POLLING_MAX_MS} ms; got {raw!r}"
+        )
+    return _validate_watchpack_polling_ms(int(raw.strip(), 10))
+
+
+def _safe_environment(
+    inputs: DevelopmentInputs,
+    *,
+    watchpack_polling_ms: int | None = None,
+) -> dict[str, str]:
+    polling_ms = (
+        _watchpack_polling_ms()
+        if watchpack_polling_ms is None
+        else _validate_watchpack_polling_ms(watchpack_polling_ms)
+    )
     environment = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "HOME": str(HOME_ROOT),
@@ -894,15 +1038,20 @@ def _safe_environment(inputs: DevelopmentInputs) -> dict[str, str]:
         "FULLMAG_DOCKER_FRONTEND": "dev",
         "FULLMAG_FRONTEND_ROOT": str(FRONTEND_ROOT),
         "FULLMAG_NEXT_DIST_DIR": NEXT_DIST_DIR,
-        "WATCHPACK_POLLING": "500",
+        "WATCHPACK_POLLING": str(polling_ms),
+        # Keep Node's filesystem worker pool explicit for the Windows bind
+        # mount.  This is deliberately independent of NODE_OPTIONS and is not
+        # inherited from the container/operator environment.
+        NODE_FS_THREADS_ENV: str(NODE_FS_THREADS),
         "FULLMAG_API_PROXY_TARGET": API_PROXY_TARGET,
         "FULLMAG_API_URL": API_PROXY_TARGET,
         "FULLMAG_WEB_PUBLIC_HOST": "localhost",
         "FULLMAG_WEB_PUBLIC_PORT": str(inputs.host_port),
-        "NEXT_PUBLIC_API_URL": browser_origin,
-        "NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL": browser_origin,
-        "NEXT_PUBLIC_FULLMAG_API_URL": browser_origin,
-        "NEXT_PUBLIC_RUNTIME_HTTP_BASE": browser_origin,
+        # Leave the browser API-base variables unset.  The control-room
+        # resolver then uses window.location.origin, so a host browser that
+        # reaches the published port through either localhost or 127.0.0.1
+        # stays same-origin and uses the Next proxy.  The server-side proxy
+        # remains pinned separately by FULLMAG_API_PROXY_TARGET above.
         "PNPM_HOME": str(PNPM_HOME),
         "COREPACK_HOME": str(COREPACK_HOME),
         # Keep Corepack on the exact packageManager selected by the seeded
@@ -923,7 +1072,17 @@ def _safe_environment(inputs: DevelopmentInputs) -> dict[str, str]:
     return environment
 
 
-def _receipt_base(inputs: DevelopmentInputs, previous: Mapping[str, Any] | None) -> dict[str, Any]:
+def _receipt_base(
+    inputs: DevelopmentInputs,
+    previous: Mapping[str, Any] | None,
+    *,
+    watchpack_polling_ms: int | None = None,
+) -> dict[str, Any]:
+    polling_ms = (
+        _watchpack_polling_ms()
+        if watchpack_polling_ms is None
+        else _validate_watchpack_polling_ms(watchpack_polling_ms)
+    )
     receipt: dict[str, Any] = {
         "schema": RECEIPT_SCHEMA,
         "source_root": inputs.source_root,
@@ -939,6 +1098,15 @@ def _receipt_base(inputs: DevelopmentInputs, previous: Mapping[str, Any] | None)
         "generated_paths": sorted(GENERATED_RELATIVES),
         "log_path": str(LOG_PATH),
         "tool_probe_timeout_seconds": TOOL_TIMEOUT_SECONDS,
+        "watchpack_polling_ms": polling_ms,
+        "uv_threadpool_size": NODE_FS_THREADS,
+        "inspector": {
+            "schema": INSPECTOR_SCHEMA,
+            "profile": INSPECTOR_PROFILE,
+            "state": "configured",
+            "bind_host": INSPECTOR_BIND_HOST,
+            "bind_port": INSPECTOR_BIND_PORT,
+        },
     }
     failure = _receipt_failure(previous)
     if failure is not None:
@@ -948,6 +1116,53 @@ def _receipt_base(inputs: DevelopmentInputs, previous: Mapping[str, Any] | None)
 
 def _publish_receipt(receipt: Mapping[str, Any]) -> None:
     _atomic_json(RECEIPT_PATH, dict(receipt), "frontend development receipt")
+
+
+def _acquire_runtime_lock() -> Any:
+    """Own this cache key across dependency installation and the Next process."""
+
+    if fcntl is None:
+        _fail("frontend cache runtime locking is unavailable")
+    _assert_no_links(RUNTIME_LOCK_PATH.parent, "frontend runtime lock parent")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            RUNTIME_LOCK_PATH,
+            os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise FrontendDevError("frontend runtime lock is not a regular file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise FrontendDevError("frontend cache is already held by an active consumer") from error
+        return os.fdopen(descriptor, "a+b", buffering=0)
+    except FrontendDevError:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+    except FileNotFoundError as error:
+        _fail(f"frontend runtime lock is missing: {RUNTIME_LOCK_PATH}")
+    except OSError as error:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        _fail(f"cannot acquire frontend runtime lock: {error}")
+
+
+def _release_runtime_lock(lock: Any | None) -> None:
+    if lock is None:
+        return
+    try:
+        lock.close()
+    except OSError:
+        pass
 
 
 def _log_stream() -> Any:
@@ -970,11 +1185,247 @@ def _log_stream() -> Any:
         _fail(f"cannot open frontend development log: {error}")
 
 
+def _log_file_offset(log_stream: Any) -> int | None:
+    """Return the append-log boundary before a new Next child is spawned."""
+
+    try:
+        return int(os.fstat(log_stream.fileno()).st_size)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _read_log_region(log_path: Path, offset: int | None) -> bytes:
+    """Read this child's bounded log tail without following links."""
+
+    if offset is None:
+        return b""
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        _fail("frontend inspector log offset is invalid")
+    _assert_no_links(log_path.parent, "frontend development log parent")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            log_path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            _fail("frontend development log is not a regular file")
+        if metadata.st_size < offset:
+            return b""
+        start = max(offset, metadata.st_size - INSPECTOR_LOG_SCAN_BYTES)
+        os.lseek(descriptor, start, os.SEEK_SET)
+        return os.read(descriptor, INSPECTOR_LOG_SCAN_BYTES)
+    except FileNotFoundError:
+        return b""
+    except OSError as error:
+        _fail(f"cannot read frontend development log for inspector address: {error}")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _parse_inspector_output(data: bytes) -> dict[str, Any] | None:
+    """Parse the local Node inspector endpoint emitted by the Next child."""
+
+    if not isinstance(data, bytes):
+        _fail("frontend inspector output must be bytes")
+    marker = b"Debugger listening on "
+    observed: dict[str, Any] | None = None
+    for line in data.splitlines():
+        if marker not in line:
+            continue
+        match = INSPECTOR_OUTPUT_RE.search(line)
+        if match is None:
+            _fail("Next emitted an invalid Node inspector address")
+        try:
+            address = match.group("address").decode("ascii")
+            host = match.group("host").decode("ascii")
+            port = int(match.group("port"))
+            target = match.group("target").decode("ascii")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise FrontendDevError("Next emitted an undecodable Node inspector address") from error
+        if host != INSPECTOR_BIND_HOST:
+            _fail("Next Node inspector must bind to the container loopback address")
+        if not 1 <= port <= 65535 or not target:
+            _fail("Next emitted an invalid Node inspector port or target")
+        observed = {
+            "address": address,
+            "host": host,
+            "port": port,
+        }
+    return observed
+
+
+def _inspector_observation_warning(pid: int, error: Exception) -> None:
+    """Report bounded inspector telemetry failures without affecting Next."""
+
+    message = str(error).strip() or error.__class__.__name__
+    _write_lifecycle_log(
+        "next_inspector",
+        status="observation-warning",
+        launcher_pid=pid,
+        error=message[-512:],
+    )
+
+
+def _refresh_inspector_receipt(
+    receipt: dict[str, Any],
+    *,
+    pid: int,
+    log_path: Path,
+    log_offset: int | None,
+    publish: bool,
+) -> bool:
+    """Publish the endpoint when available; never gate the owned Next process."""
+
+    try:
+        observed = _parse_inspector_output(_read_log_region(log_path, log_offset))
+        if observed is None:
+            return False
+        configured = receipt.get("inspector")
+        if not isinstance(configured, dict):
+            _fail("frontend receipt is missing the Next inspector configuration")
+        recorded_launcher_pid = configured.get("launcher_pid")
+        if (
+            recorded_launcher_pid not in (None, pid)
+            or configured.get("profile") != INSPECTOR_PROFILE
+        ):
+            _fail("frontend receipt Node inspector identity differs from the owned process")
+        previous_address = configured.get("address")
+        if previous_address == observed["address"] and configured.get("state") == "ready":
+            return False
+        inspector = dict(configured)
+        inspector.pop("pid", None)
+        inspector.update(state="ready", launcher_pid=pid, **observed)
+        receipt["inspector"] = inspector
+        _write_lifecycle_log(
+            "next_inspector",
+            status="ready",
+            launcher_pid=pid,
+            address=observed["address"],
+            bind_host=INSPECTOR_BIND_HOST,
+        )
+        if publish:
+            _publish_receipt(receipt)
+        return True
+    except Exception as error:
+        _inspector_observation_warning(pid, error)
+        return False
+
+
+def _write_lifecycle_log(event: str, **fields: Any) -> None:
+    """Write a short current-phase marker to the container supervisor stdout."""
+
+    values = " ".join(f"{key}={value}" for key, value in fields.items())
+    line = f"[fullmag-frontend] lifecycle event={event}"
+    if values:
+        line = f"{line} {values}"
+    try:
+        print(line, flush=True)
+    except (BrokenPipeError, OSError):
+        # Supervisor diagnostics must not change the process ownership or
+        # fail-closed startup decisions when stdout is being closed.
+        return
+
+
+class _LogTailer:
+    """Bounded read-only tail of the owned log file for Docker stdout."""
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self._stopping = threading.Event()
+        self._stdout_enabled = True
+        self._thread = threading.Thread(
+            target=self._run,
+            name="fullmag-frontend-log-tail",
+            daemon=True,
+        )
+
+    @classmethod
+    def start(cls) -> "_LogTailer":
+        _assert_no_links(LOG_PATH, "frontend development log")
+        descriptor: int | None = None
+        stream: Any | None = None
+        try:
+            descriptor = os.open(
+                LOG_PATH,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+            )
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise FrontendDevError("frontend development log is not a regular file")
+            stream = os.fdopen(descriptor, "rb")
+            descriptor = None
+            stream.seek(0, os.SEEK_END)
+            tailer = cls(stream)
+            tailer._thread.start()
+            return tailer
+        except (FrontendDevError, OSError, RuntimeError):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            raise
+
+    def _write_stdout(self, chunk: bytes) -> None:
+        if not self._stdout_enabled:
+            return
+        try:
+            binary = getattr(sys.stdout, "buffer", None)
+            if binary is not None:
+                binary.write(chunk)
+                binary.flush()
+            else:
+                sys.stdout.write(chunk.decode("utf-8", errors="replace"))
+                sys.stdout.flush()
+        except (BrokenPipeError, OSError, TypeError, ValueError):
+            # Diagnostics must not affect the owned child or startup result.
+            self._stdout_enabled = False
+
+    def _run(self) -> None:
+        try:
+            while not self._stopping.is_set():
+                chunk = self._stream.read(LOG_TAIL_CHUNK_BYTES)
+                if chunk:
+                    self._write_stdout(chunk)
+                    continue
+                self._stopping.wait(LOG_TAIL_POLL_SECONDS)
+        finally:
+            self._stream.close()
+
+    def stop(self) -> None:
+        self._stopping.set()
+        self._thread.join(LOG_TAIL_STOP_TIMEOUT_SECONDS)
+
+
+def _start_log_tailer() -> _LogTailer | None:
+    try:
+        return _LogTailer.start()
+    except (FrontendDevError, OSError, RuntimeError) as error:
+        _write_lifecycle_log("log_tail", status="disabled", error=str(error))
+        return None
+
+
+def _stop_log_tailer(log_tailer: _LogTailer | None) -> None:
+    if log_tailer is not None:
+        log_tailer.stop()
+
+
 def _run_pnpm_install(
     inputs: DevelopmentInputs,
     stopping_event: Any,
     log_stream: Any,
     receipt: dict[str, Any],
+    runtime_lock: Any,
 ) -> None:
     app_root = inputs.workspace_root / "apps" / "control-room"
     environment = _safe_environment(inputs)
@@ -989,6 +1440,12 @@ def _run_pnpm_install(
     ]
     receipt.update(state="installing", dependency_install="initial-frozen-pnpm", command=command)
     _publish_receipt(receipt)
+    install_started = time.monotonic()
+    _write_lifecycle_log(
+        "frozen_install_start",
+        budget_seconds=INSTALL_TIMEOUT_SECONDS,
+        log_path=LOG_PATH,
+    )
     try:
         process = subprocess.Popen(
             command,
@@ -1000,9 +1457,23 @@ def _run_pnpm_install(
             start_new_session=True,
         )
     except OSError as error:
+        _write_lifecycle_log(
+            "frozen_install_result",
+            status="failed",
+            elapsed_seconds=f"{time.monotonic() - install_started:.3f}",
+            budget_seconds=INSTALL_TIMEOUT_SECONDS,
+            error=str(error),
+        )
         _fail(f"frozen pnpm install could not start: {error}")
     try:
-        install_handle = _new_handle(process, inputs, stopping_event, "pnpm-install", log_stream)
+        install_handle = _new_handle(
+            process,
+            inputs,
+            stopping_event,
+            "pnpm-install",
+            log_stream,
+            runtime_lock=runtime_lock,
+        )
     except Exception as error:
         owned_handle = getattr(error, "frontend_handle", None)
         if isinstance(owned_handle, FrontendHandle):
@@ -1011,12 +1482,26 @@ def _run_pnpm_install(
                 _publish_receipt(receipt)
             except Exception:
                 pass
+        _write_lifecycle_log(
+            "frozen_install_result",
+            status="failed",
+            elapsed_seconds=f"{time.monotonic() - install_started:.3f}",
+            budget_seconds=INSTALL_TIMEOUT_SECONDS,
+            error=str(error),
+        )
         raise
     _record_handle_identity(receipt, install_handle)
     try:
         _publish_receipt(receipt)
     except Exception as error:
         _attach_frontend_handle(error, install_handle)
+        _write_lifecycle_log(
+            "frozen_install_result",
+            status="failed",
+            elapsed_seconds=f"{time.monotonic() - install_started:.3f}",
+            budget_seconds=INSTALL_TIMEOUT_SECONDS,
+            error=str(error),
+        )
         raise
     deadline = time.monotonic() + INSTALL_TIMEOUT_SECONDS
     try:
@@ -1044,6 +1529,13 @@ def _run_pnpm_install(
                     )
                     _attach_frontend_handle(error, install_handle)
                     raise error
+                _write_lifecycle_log(
+                    "frozen_install_result",
+                    status="ready",
+                    elapsed_seconds=f"{time.monotonic() - install_started:.3f}",
+                    budget_seconds=INSTALL_TIMEOUT_SECONDS,
+                    log_path=LOG_PATH,
+                )
                 return
             if getattr(stopping_event, "is_set", lambda: False)():
                 try:
@@ -1066,6 +1558,13 @@ def _run_pnpm_install(
             time.sleep(0.1)
     except Exception as error:
         _attach_frontend_handle(error, install_handle)
+        _write_lifecycle_log(
+            "frozen_install_result",
+            status="failed",
+            elapsed_seconds=f"{time.monotonic() - install_started:.3f}",
+            budget_seconds=INSTALL_TIMEOUT_SECONDS,
+            error=str(error),
+        )
         raise
 
 
@@ -1086,6 +1585,21 @@ def _next_binary(inputs: DevelopmentInputs) -> Path:
     return binary
 
 
+def _dependency_tree_ready(inputs: DevelopmentInputs) -> bool:
+    """Require a real state-owned dependency tree before trusting its receipt."""
+
+    _require_real_directory(inputs.workspace_root / "node_modules", "workspace node_modules")
+    app_root = inputs.workspace_root / "apps" / "control-room"
+    _require_real_directory(app_root / "node_modules", "Control Room node_modules")
+    binary = app_root / NEXT_RELATIVE
+    try:
+        binary.lstat()
+    except FileNotFoundError:
+        return False
+    _next_binary(inputs)
+    return True
+
+
 def _attach_frontend_handle(error: Exception, handle: FrontendHandle) -> None:
     setattr(error, "frontend_handle", handle)
 
@@ -1096,6 +1610,9 @@ def _new_handle(
     stopping_event: Any,
     kind: str,
     log_stream: Any,
+    log_tailer: _LogTailer | None = None,
+    runtime_lock: Any | None = None,
+    inspector_log_offset: int | None = None,
 ) -> FrontendHandle:
     handle = FrontendHandle(
         process=process,
@@ -1106,6 +1623,9 @@ def _new_handle(
         owner_token=str(uuid.uuid4()),
         log_path=LOG_PATH,
         log_stream=log_stream,
+        log_tailer=log_tailer,
+        runtime_lock=runtime_lock,
+        inspector_log_offset=inspector_log_offset,
     )
     try:
         identity = _read_process_identity(process.pid)
@@ -1213,25 +1733,64 @@ def _assert_not_stopping(stopping_event: Any) -> None:
         raise FrontendDevUnknown("frontend startup was cancelled during shutdown")
 
 
-def _start_next(
-    inputs: DevelopmentInputs,
-    stopping_event: Any,
-    log_stream: Any,
-    receipt: dict[str, Any],
-) -> FrontendHandle:
-    _next_binary(inputs)
-    app_root = inputs.workspace_root / "apps" / "control-room"
-    command = [
+def _next_command() -> list[str]:
+    """Run the pinned Next CLI with a local, ephemeral Node inspector."""
+
+    return [
         str(NODE_BINARY),
         str(NEXT_RELATIVE),
         "dev",
         "--webpack",
+        INSPECTOR_FLAG,
         "--hostname",
         "0.0.0.0",
         "--port",
         str(INTERNAL_PORT),
     ]
-    environment = _safe_environment(inputs)
+
+
+def _start_next(
+    inputs: DevelopmentInputs,
+    stopping_event: Any,
+    log_stream: Any,
+    log_tailer: _LogTailer | None,
+    receipt: dict[str, Any],
+    runtime_lock: Any,
+) -> FrontendHandle:
+    _next_binary(inputs)
+    receipt_polling_ms = receipt.get("watchpack_polling_ms")
+    if type(receipt_polling_ms) is not int:
+        _fail("frontend receipt is missing the bounded Watchpack polling value")
+    watchpack_polling_ms = _validate_watchpack_polling_ms(receipt_polling_ms)
+    if receipt.get("uv_threadpool_size") != NODE_FS_THREADS:
+        _fail("frontend receipt is missing the pinned Node filesystem thread count")
+    app_root = inputs.workspace_root / "apps" / "control-room"
+    command = _next_command()
+    environment = _safe_environment(inputs, watchpack_polling_ms=watchpack_polling_ms)
+    inspector_log_offset = _log_file_offset(log_stream)
+    inspector = receipt.get("inspector")
+    inspector_configuration_error: FrontendDevError | None = None
+    if not isinstance(inspector, dict):
+        inspector_configuration_error = FrontendDevError(
+            "frontend receipt is missing the Next inspector configuration"
+        )
+        inspector = {
+            "schema": INSPECTOR_SCHEMA,
+            "profile": INSPECTOR_PROFILE,
+            "state": "configured",
+            "bind_host": INSPECTOR_BIND_HOST,
+            "bind_port": INSPECTOR_BIND_PORT,
+        }
+    next_started = time.monotonic()
+    _write_lifecycle_log(
+        "next_start",
+        url=f"http://localhost:{inputs.host_port}",
+        internal_port=INTERNAL_PORT,
+        inspector_bind=f"{INSPECTOR_BIND_HOST}:{INSPECTOR_BIND_PORT}",
+        watchpack_polling_ms=watchpack_polling_ms,
+        uv_threadpool_size=NODE_FS_THREADS,
+        log_path=LOG_PATH,
+    )
     try:
         process = subprocess.Popen(
             command,
@@ -1242,10 +1801,35 @@ def _start_next(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+        inspector = dict(inspector)
+        inspector.pop("pid", None)
+        inspector.update(state="pending", launcher_pid=process.pid)
+        receipt["inspector"] = inspector
+        if inspector_configuration_error is not None:
+            _inspector_observation_warning(process.pid, inspector_configuration_error)
     except OSError as error:
+        _write_lifecycle_log(
+            "next_result",
+            status="failed",
+            elapsed_seconds=f"{time.monotonic() - next_started:.3f}",
+            url=f"http://localhost:{inputs.host_port}",
+            inspector_bind=f"{INSPECTOR_BIND_HOST}:{INSPECTOR_BIND_PORT}",
+            watchpack_polling_ms=watchpack_polling_ms,
+            uv_threadpool_size=NODE_FS_THREADS,
+            error=str(error),
+        )
         _fail(f"Next development process could not start: {error}")
     try:
-        handle = _new_handle(process, inputs, stopping_event, "next", log_stream)
+        handle = _new_handle(
+            process,
+            inputs,
+            stopping_event,
+            "next",
+            log_stream,
+            log_tailer,
+            runtime_lock=runtime_lock,
+            inspector_log_offset=inspector_log_offset,
+        )
     except Exception as error:
         owned_handle = getattr(error, "frontend_handle", None)
         if isinstance(owned_handle, FrontendHandle):
@@ -1254,7 +1838,24 @@ def _start_next(
                 _publish_receipt(receipt)
             except Exception:
                 pass
+        _write_lifecycle_log(
+            "next_result",
+            status="failed",
+            elapsed_seconds=f"{time.monotonic() - next_started:.3f}",
+            url=f"http://localhost:{inputs.host_port}",
+            inspector_bind=f"{INSPECTOR_BIND_HOST}:{INSPECTOR_BIND_PORT}",
+            watchpack_polling_ms=watchpack_polling_ms,
+            uv_threadpool_size=NODE_FS_THREADS,
+            error=str(error),
+        )
         raise
+    _refresh_inspector_receipt(
+        receipt,
+        pid=handle.pid,
+        log_path=handle.log_path,
+        log_offset=handle.inspector_log_offset,
+        publish=False,
+    )
     receipt.update(
         state="running",
         command=command,
@@ -1267,6 +1868,17 @@ def _start_next(
     except Exception as error:
         _attach_frontend_handle(error, handle)
         raise
+    _write_lifecycle_log(
+        "next_result",
+        status="started",
+        readiness="owned_process",
+        elapsed_seconds=f"{time.monotonic() - next_started:.3f}",
+        url=f"http://localhost:{inputs.host_port}",
+        inspector_bind=f"{INSPECTOR_BIND_HOST}:{INSPECTOR_BIND_PORT}",
+        watchpack_polling_ms=watchpack_polling_ms,
+        uv_threadpool_size=NODE_FS_THREADS,
+        log_path=LOG_PATH,
+    )
     return handle
 
 
@@ -1286,15 +1898,34 @@ def start(stopping_event: Any) -> FrontendHandle:
     _prepare_state_directories()
     _validate_live_directories(inputs)
     _freeze_inputs(inputs, allow_generated=allow_generated)
-    node_modules_target = _prepare_managed_frontend(inputs)
-    tool_environment = _safe_environment(inputs)
-    receipt = _receipt_base(inputs, previous)
-    receipt.update(
-        state="starting",
-        dependency_root=str(node_modules_target),
-        generated_files_gate=("next-started-v1" if allow_generated else "seed-only-v1"),
-    )
-    _publish_receipt(receipt)
+    watchpack_polling_ms = _watchpack_polling_ms()
+    runtime_lock = _acquire_runtime_lock()
+    try:
+        node_modules_target = _prepare_managed_frontend(inputs)
+        tool_environment = _safe_environment(
+            inputs, watchpack_polling_ms=watchpack_polling_ms
+        )
+        receipt = _receipt_base(
+            inputs, previous, watchpack_polling_ms=watchpack_polling_ms
+        )
+        receipt.update(
+            state="starting",
+            dependency_root=str(node_modules_target),
+            generated_files_gate=("next-started-v1" if allow_generated else "seed-only-v1"),
+        )
+        _publish_receipt(receipt)
+        _write_lifecycle_log(
+            "frontend_start",
+            tool_probe_budget_seconds=TOOL_TIMEOUT_SECONDS,
+            install_budget_seconds=INSTALL_TIMEOUT_SECONDS,
+            watchpack_polling_ms=watchpack_polling_ms,
+            log_path=LOG_PATH,
+            url=f"http://localhost:{inputs.host_port}",
+        )
+        log_stream = _log_stream()
+    except Exception:
+        _release_runtime_lock(runtime_lock)
+        raise
     try:
         node_version = _tool_version(
             NODE_BINARY,
@@ -1302,6 +1933,7 @@ def start(stopping_event: Any) -> FrontendHandle:
             "Node",
             cwd=inputs.workspace_root,
             environment=tool_environment,
+            log_stream=log_stream,
         )
         receipt["tool_versions"] = {"node": node_version}
         _publish_receipt(receipt)
@@ -1312,6 +1944,7 @@ def start(stopping_event: Any) -> FrontendHandle:
             "pnpm",
             cwd=inputs.workspace_root,
             environment=tool_environment,
+            log_stream=log_stream,
         )
         receipt["tool_versions"]["pnpm"] = pnpm_version
         _publish_receipt(receipt)
@@ -1326,12 +1959,26 @@ def start(stopping_event: Any) -> FrontendHandle:
             _publish_receipt(receipt)
         except Exception:
             pass
+        try:
+            log_stream.close()
+        except OSError:
+            pass
+        _release_runtime_lock(runtime_lock)
         raise
-    log_stream = _log_stream()
+    log_tailer = _start_log_tailer()
     handle: FrontendHandle | None = None
     try:
-        if previous is None or previous.get("dependency_install") != "ready":
-            _run_pnpm_install(inputs, stopping_event, log_stream, receipt)
+        needs_install = previous is None or previous.get("dependency_install") != "ready"
+        if not needs_install and not _dependency_tree_ready(inputs):
+            needs_install = True
+            _write_lifecycle_log(
+                "dependency_install_reconcile",
+                status="missing",
+                reason="state-owned dependency tree is absent",
+                log_path=LOG_PATH,
+            )
+        if needs_install:
+            _run_pnpm_install(inputs, stopping_event, log_stream, receipt, runtime_lock)
             # pnpm owns the real dependency directories below the writable
             # workspace. Re-validate that layout before resolving Next so a
             # package-manager change cannot redirect execution into the
@@ -1340,7 +1987,7 @@ def start(stopping_event: Any) -> FrontendHandle:
         _assert_not_stopping(stopping_event)
         _next_binary(inputs)
         _assert_not_stopping(stopping_event)
-        handle = _start_next(inputs, stopping_event, log_stream, receipt)
+        handle = _start_next(inputs, stopping_event, log_stream, log_tailer, receipt, runtime_lock)
         return handle
     except Exception as error:
         owned_handle = handle or getattr(error, "frontend_handle", None)
@@ -1355,8 +2002,10 @@ def start(stopping_event: Any) -> FrontendHandle:
             _publish_receipt(receipt)
         except Exception:
             pass
+        _stop_log_tailer(log_tailer)
         if not isinstance(owned_handle, FrontendHandle):
             log_stream.close()
+            _release_runtime_lock(runtime_lock)
         raise
 
 
@@ -1414,6 +2063,13 @@ def check(handle: FrontendHandle) -> None:
                     f"{error}; publishing unknown owner receipt failed: {publish_error}"
                 ) from publish_error
             raise
+        _refresh_inspector_receipt(
+            receipt,
+            pid=handle.pid,
+            log_path=handle.log_path,
+            log_offset=handle.inspector_log_offset,
+            publish=True,
+        )
         return
     if receipt is None:
         receipt = _receipt_base(handle.inputs, None)
@@ -1571,9 +2227,14 @@ def stop(handle: FrontendHandle, *, timeout: float = STOP_TIMEOUT_SECONDS) -> di
         )
 
     handle.stopped = True
+    if handle.log_tailer is not None:
+        handle.log_tailer.stop()
+        handle.log_tailer = None
     if handle.log_stream is not None:
         handle.log_stream.close()
         handle.log_stream = None
+    runtime_lock = handle.runtime_lock
+    handle.runtime_lock = None
     if had_failure or (not was_running and returncode not in (None, 0)):
         receipt.update(
             state="stopped-after-failure",
@@ -1584,7 +2245,10 @@ def stop(handle: FrontendHandle, *, timeout: float = STOP_TIMEOUT_SECONDS) -> di
         )
     else:
         receipt.update(state="stopped", exit_code=returncode, stopped_at=time.time())
-    _publish_receipt(receipt)
+    try:
+        _publish_receipt(receipt)
+    finally:
+        _release_runtime_lock(runtime_lock)
     return receipt
 
 

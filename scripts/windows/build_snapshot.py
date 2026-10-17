@@ -45,6 +45,7 @@ from fullmag_storage import identifier
 from windows.workspace_backend_identity import (
     DEPENDENCY_INPUTS, INPUTS, fingerprint, is_native_workspace_input,
 )
+from windows.stage_workspace_frontend import is_patch_relative, patch_file_relatives
 
 SCHEMA = "fullmag.windows-build-snapshot.v1"
 HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -148,8 +149,29 @@ def _git(repo, *arguments):
 
 def _paths(repo, inputs=()):
     raw = _git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *inputs)
-    return sorted({entry.decode("utf-8") for entry in raw.split(b"\0")
-                   if entry and (not inputs or is_native_workspace_input(entry.decode("utf-8")))})
+    normalized_inputs = tuple(str(value).replace("\\", "/") for value in inputs)
+    patch_requested = any(
+        value == "patches" or value.startswith("patches/") for value in normalized_inputs
+    )
+    paths = {
+        relative
+        for entry in raw.split(b"\0")
+        if entry
+        for relative in (entry.decode("utf-8"),)
+        if (not inputs or is_native_workspace_input(relative))
+        and (
+            not patch_requested
+            or not relative.startswith("patches/")
+            or is_patch_relative(relative)
+        )
+    }
+    try:
+        canonical_patch_paths = patch_file_relatives(repo)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise SnapshotError(f"Cannot inventory pnpm patch inputs: {error}") from error
+    if not inputs or patch_requested:
+        paths.update(path.as_posix() for path in canonical_patch_paths)
+    return sorted(paths)
 
 
 def _gitlinks(repo):

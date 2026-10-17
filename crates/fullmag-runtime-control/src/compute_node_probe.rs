@@ -4,14 +4,16 @@
 //! A sample is observation only; it never creates a scheduler offer.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
 use crate::process_environment::remove_local_compute_operator_token;
+use anyhow::{bail, Context, Result};
+use sha2::{Digest, Sha256};
 use chrono::{DateTime, Utc};
 use fullmag_session::{
     compute_node_snapshot::{
@@ -20,10 +22,12 @@ use fullmag_session::{
         EnforcementStatus, GpuDeviceSnapshot, GpuPartition, MemorySnapshot, Observation, Reported,
         SampleSource, UnavailableReason,
     },
-    host_resource_ledger::{HostInventoryOwnerDescriptor, HostResourceLedger},
+    host_resource_ledger::{HostInventoryOwnerDescriptor, HostResourceLedger, HostRuntimeReadiness},
+    repository_path::read_bounded_regular_file,
 };
 
 const NVIDIA_SAMPLE_TIMEOUT: Duration = Duration::from_secs(2);
+const NVIDIA_NVML_SAMPLE_TIMEOUT: Duration = Duration::from_secs(5);
 const NVIDIA_MEMORY_MIB: u64 = 1024 * 1024;
 
 /// Collect one bounded host sample and assign its durable revisions from the
@@ -32,7 +36,16 @@ pub fn sample_compute_node(
     ledger: &HostResourceLedger,
     previous: Option<&ComputeNodeSnapshot>,
 ) -> Result<ComputeNodeSnapshot> {
-    sample_compute_node_inner(ledger, None, previous)
+    sample_compute_node_with_advanced_timestamp(previous, move || {
+        sample_compute_node_inner(
+            ledger.node_id(),
+            ledger.owner_id(),
+            ledger.policy().owner_epoch,
+            None,
+            previous,
+            None,
+        )
+    })
 }
 
 /// Collect one host observation pinned to the active shared-host inventory owner.
@@ -41,13 +54,315 @@ pub fn sample_compute_node_for_owner(
     owner: &HostInventoryOwnerDescriptor,
     previous: Option<&ComputeNodeSnapshot>,
 ) -> Result<ComputeNodeSnapshot> {
-    sample_compute_node_inner(ledger, Some(owner), previous)
+    sample_compute_node_with_advanced_timestamp(previous, move || {
+        sample_compute_node_inner(
+            ledger.node_id(),
+            ledger.owner_id(),
+            ledger.policy().owner_epoch,
+            Some(owner),
+            previous,
+            None,
+        )
+    })
+}
+
+/// Collect a host observation with the typed native FEM/GPU ABI result. The
+/// readiness result is injected rather than inferred from `nvidia-smi`.
+pub fn sample_compute_node_for_owner_with_readiness(
+    ledger: &HostResourceLedger,
+    owner: &HostInventoryOwnerDescriptor,
+    previous: Option<&ComputeNodeSnapshot>,
+    readiness: &HostRuntimeReadiness,
+) -> Result<ComputeNodeSnapshot> {
+    sample_compute_node_with_advanced_timestamp(previous, move || {
+        sample_compute_node_inner(
+            ledger.node_id(),
+            ledger.owner_id(),
+            ledger.policy().owner_epoch,
+            Some(owner),
+            previous,
+            Some(readiness),
+        )
+    })
+}
+
+/// Probe a host before a ledger exists, using identities supplied by the
+/// canonical host-profile initializer.
+pub fn sample_compute_node_for_identity(
+    node_id: String,
+    runtime_owner_id: String,
+    owner_epoch: u64,
+    host_owner: &HostInventoryOwnerDescriptor,
+    previous: Option<&ComputeNodeSnapshot>,
+    readiness: &HostRuntimeReadiness,
+) -> Result<ComputeNodeSnapshot> {
+    sample_compute_node_with_advanced_timestamp(previous, move || {
+        sample_compute_node_inner(
+            node_id.clone(),
+            runtime_owner_id.clone(),
+            owner_epoch,
+            Some(host_owner),
+            previous,
+            Some(readiness),
+        )
+    })
+}
+
+const SAMPLE_TIMESTAMP_RETRY_WINDOW: Duration = Duration::from_secs(5);
+const SAMPLE_TIMESTAMP_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+
+fn sample_compute_node_with_advanced_timestamp(
+    previous: Option<&ComputeNodeSnapshot>,
+    capture: impl FnMut() -> Result<ComputeNodeSnapshot>,
+) -> Result<ComputeNodeSnapshot> {
+    retry_sample_until_timestamp_advances(
+        capture,
+        move |candidate| {
+            let previous = previous?;
+            candidate.sample_does_not_advance(previous).then(|| {
+                format!(
+                    "previous_boot_monotonic_ns={:?}, current_boot_monotonic_ns={:?}, previous_collected_at={}, current_collected_at={}",
+                    previous.sample.boot_monotonic_ns,
+                    candidate.sample.boot_monotonic_ns,
+                    previous.sample.collected_at.to_rfc3339(),
+                    candidate.sample.collected_at.to_rfc3339(),
+                )
+            })
+        },
+        Instant::now,
+        thread::sleep,
+    )
+}
+
+fn retry_sample_until_timestamp_advances<T, Capture, RetryReason, Clock, Wait>(
+    mut capture: Capture,
+    mut retry_reason: RetryReason,
+    mut now: Clock,
+    mut wait: Wait,
+) -> Result<T>
+where
+    Capture: FnMut() -> Result<T>,
+    RetryReason: FnMut(&T) -> Option<String>,
+    Clock: FnMut() -> Instant,
+    Wait: FnMut(Duration),
+{
+    // This is a retry budget measured between capture attempts. A capture is
+    // not interruptible, so the complete call may outlast the window; an
+    // advancing result from a slow capture remains valid.
+    let deadline = now() + SAMPLE_TIMESTAMP_RETRY_WINDOW;
+    loop {
+        let candidate = capture()?;
+        let Some(reason) = retry_reason(&candidate) else {
+            return Ok(candidate);
+        };
+        if now() >= deadline {
+            bail!(
+                "compute-node sample retry window elapsed after a non-advancing timestamp: {reason}"
+            );
+        }
+        // The timestamp is taken again after a fresh probe. Waiting here
+        // handles a short wall-clock rollback or coarse host clock without
+        // fabricating a timestamp or relaxing the ledger's monotonicity rule.
+        wait(SAMPLE_TIMESTAMP_RETRY_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+fn sample_timestamp_is_non_advancing(
+    previous: Option<(&str, &str, &DateTime<Utc>)>,
+    candidate: (&str, &str, &DateTime<Utc>),
+) -> bool {
+    let Some((previous_node_id, previous_boot_id, previous_collected_at)) = previous else {
+        return false;
+    };
+    previous_node_id == candidate.0
+        && previous_boot_id == candidate.1
+        && candidate.2 <= previous_collected_at
+}
+
+/// Read and validate the bounded typed native FEM/GPU readiness ABI result.
+/// Query the in-process native FEM/GPU ABI and the current physical GPU
+/// inventory.  This is the production initializer path; a JSON readiness file
+/// remains available only for typed fixture tests and is never its authority.
+pub fn probe_native_fem_gpu_readiness() -> Result<HostRuntimeReadiness> {
+    let build = fullmag_build_info::identity();
+    let source_snapshot_sha256 = build.source_snapshot_sha256.to_owned();
+    let status = fullmag_runner::native_fem_gpu_status();
+    if !fullmag_runner::is_native_fem_gpu_available() || !status.available {
+        bail!(
+            "native FEM/GPU ABI is unavailable: {}",
+            status.reason_gpu
+        );
+    }
+    if !status.cpu_available {
+        bail!("native FEM/GPU ABI has no usable FEM CPU lane");
+    }
+    if status.visible_cuda_device_count != 1 || status.resolved_gpu_index < 0 {
+        bail!(
+            "native FEM/GPU ABI must expose exactly one resolved CUDA device (visible={}, resolved={})",
+            status.visible_cuda_device_count,
+            status.resolved_gpu_index
+        );
+    }
+    if status.memory_total_bytes == 0 || status.memory_free_bytes > status.memory_total_bytes {
+        bail!("native FEM/GPU ABI returned invalid CUDA memory bounds");
+    }
+
+    let devices = discover_nvidia_gpus()?;
+    if devices.len() != usize::try_from(status.visible_cuda_device_count)? {
+        bail!(
+            "native CUDA visibility ({}) differs from the current NVIDIA inventory ({})",
+            status.visible_cuda_device_count,
+            devices.len()
+        );
+    }
+    let mut gpu_runtime_compatibility = BTreeMap::new();
+    for device in devices {
+        if !matches!(
+            &device.partition,
+            Reported::Available {
+                value: GpuPartition::FullDevice
+            }
+        ) {
+            bail!(
+                "native FEM/GPU readiness requires a full physical GPU partition for {}",
+                device.uuid
+            );
+        }
+        if !matches!(
+            &device.vram_bytes,
+            Reported::Available { value } if *value > 0
+        ) {
+            bail!(
+                "native FEM/GPU readiness requires positive VRAM for {}",
+                device.uuid
+            );
+        }
+        gpu_runtime_compatibility.insert(device.uuid, vec!["fem.gpu".to_owned()]);
+    }
+    if gpu_runtime_compatibility.is_empty() {
+        bail!("native FEM/GPU ABI exposed no physical GPU UUID");
+    }
+    let cuda_uuids = crate::cuda_device_identity::discover_cuda_device_uuids()?;
+    let cuda_uuid_set = cuda_uuids.into_iter().collect::<BTreeSet<_>>();
+    let nvidia_uuid_set = gpu_runtime_compatibility
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if cuda_uuid_set != nvidia_uuid_set {
+        bail!(
+            "CUDA Driver API UUIDs differ from the current NVIDIA inventory"
+        );
+    }
+
+    // Keep this identity independent of transient free memory and probe
+    // diagnostics. It binds persisted readiness to this build and the ABI
+    // selection/enforcement result that was actually observed.
+    let runtime_identity_sha256 = native_fem_gpu_runtime_identity(
+        build.git_commit,
+        &source_snapshot_sha256,
+        &status,
+    );
+    let readiness = HostRuntimeReadiness {
+        schema_version: fullmag_session::host_resource_ledger::HOST_RUNTIME_READINESS_SCHEMA_V1
+            .to_owned(),
+        status: "ready".to_owned(),
+        source_kind: "native_fem_gpu_abi".to_owned(),
+        source_snapshot_sha256,
+        runtime_identity_sha256,
+        capabilities: vec!["fem.gpu".to_owned()],
+        gpu_runtime_compatibility,
+        gpu_visibility: EnforcementStatus::Supported,
+        inventory_sha256: None,
+        capabilities_sha256: None,
+    };
+    readiness.validate_probe()?;
+    Ok(readiness)
+}
+
+/// Revalidate the persisted native ABI identity against this exact binary.
+/// The caller-provided readiness record cannot manufacture a current GPU
+/// capability or silently survive a source/runtime image change.
+pub fn validate_native_fem_gpu_readiness(readiness: &HostRuntimeReadiness) -> Result<()> {
+    readiness.validate_probe()?;
+    let build = fullmag_build_info::identity();
+    if readiness.source_snapshot_sha256 != build.source_snapshot_sha256 {
+        bail!(
+            "native readiness source identity differs from the running build"
+        );
+    }
+    let status = fullmag_runner::native_fem_gpu_status();
+    if !fullmag_runner::is_native_fem_gpu_available()
+        || !status.available
+        || !status.cpu_available
+    {
+        bail!(
+            "native FEM/GPU ABI is no longer available: {}",
+            status.reason_gpu
+        );
+    }
+    if status.visible_cuda_device_count != 1 || status.resolved_gpu_index < 0 {
+        bail!(
+            "native FEM/GPU ABI no longer exposes exactly one resolved CUDA device"
+        );
+    }
+    let expected_runtime_identity = native_fem_gpu_runtime_identity(
+        build.git_commit,
+        build.source_snapshot_sha256,
+        &status,
+    );
+    if readiness.runtime_identity_sha256 != expected_runtime_identity {
+        bail!(
+            "native readiness runtime identity differs from the running FEM/GPU ABI"
+        );
+    }
+    Ok(())
+}
+
+fn native_fem_gpu_runtime_identity(
+    git_commit: &str,
+    source_snapshot_sha256: &str,
+    status: &fullmag_runner::NativeFemGpuStatus,
+) -> String {
+    let runtime_material = format!(
+        "fullmag.native-fem-gpu.v1\ngit={git_commit}\nsource={source_snapshot_sha256}\navailable={}\ncpu_available={}\nvisible={}\nrequested={}\nresolved={}\n",
+        status.available,
+        status.cpu_available,
+        status.visible_cuda_device_count,
+        status.requested_gpu_index,
+        status.resolved_gpu_index,
+    );
+    format!("{:x}", Sha256::digest(runtime_material.as_bytes()))
+}
+
+pub fn load_native_fem_gpu_readiness(path: &Path) -> Result<HostRuntimeReadiness> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("native FEM/GPU readiness path must be absolute without parent traversal");
+    }
+    let parent = path.parent().context("native readiness path has no parent")?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("native readiness file name is not UTF-8")?;
+    let bytes = read_bounded_regular_file(parent, name, 256 * 1024)
+        .context("read native FEM/GPU readiness ABI result")?;
+    let readiness: HostRuntimeReadiness = serde_json::from_slice(&bytes)
+        .context("parse native FEM/GPU readiness ABI result")?;
+    readiness.validate_probe()?;
+    Ok(readiness)
 }
 
 fn sample_compute_node_inner(
-    ledger: &HostResourceLedger,
+    node_id: String,
+    runtime_owner_id: String,
+    owner_epoch: u64,
     host_owner: Option<&HostInventoryOwnerDescriptor>,
     previous: Option<&ComputeNodeSnapshot>,
+    readiness: Option<&HostRuntimeReadiness>,
 ) -> Result<ComputeNodeSnapshot> {
     let cpu_topology_probe = observe_cpu_topology();
     let allowed_cpu_ids_probe = match &cpu_topology_probe {
@@ -76,6 +391,7 @@ fn sample_compute_node_inner(
     let memory = observe_memory();
     let gpus = discover_nvidia_gpus();
     let now = Utc::now();
+    let boot_monotonic_ns = current_boot_monotonic_ns()?;
     let boot_id = current_host_boot_id(now.clone())?;
 
     let cpu_failed = cpu_capacity.is_err()
@@ -111,12 +427,59 @@ fn sample_compute_node_inner(
             },
         ),
     };
-    let gpu_inventory = match gpus {
-        Ok(devices) => Reported::Available { value: devices },
-        Err(error) => Reported::Unavailable {
-            reason: gpu_failure_reason(&error),
-            last_known: previous.and_then(|snapshot| snapshot.gpus.known_value().cloned()),
-        },
+    let (gpu_inventory, capabilities, gpu_visibility) = match (gpus, readiness) {
+        (Ok(mut devices), Some(readiness)) => {
+            readiness.validate_probe()?;
+            let observed = devices
+                .iter()
+                .map(|device| device.uuid.clone())
+                .collect::<BTreeSet<_>>();
+            let expected = readiness
+                .gpu_runtime_compatibility
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if observed != expected {
+                bail!("native FEM/GPU readiness UUIDs differ from current NVIDIA inventory");
+            }
+            for device in &mut devices {
+                let compatibility = readiness
+                    .gpu_runtime_compatibility
+                    .get(&device.uuid)
+                    .context("native readiness is missing a current GPU UUID")?
+                    .clone();
+                device.runtime_compatibility = Reported::Available {
+                    value: compatibility,
+                };
+            }
+            (
+                Reported::Available { value: devices },
+                Reported::Available {
+                    value: readiness.capabilities.clone(),
+                },
+                readiness.gpu_visibility,
+            )
+        }
+        (Ok(devices), None) => (
+            Reported::Available { value: devices },
+            Reported::Unavailable {
+                reason: UnavailableReason::NotReported,
+                last_known: previous.and_then(|snapshot| snapshot.capabilities.known_value().cloned()),
+            },
+            EnforcementStatus::Unavailable,
+        ),
+        (Err(error), Some(_)) => return Err(error).context("native FEM/GPU readiness requires a current NVIDIA inventory"),
+        (Err(error), None) => (
+            Reported::Unavailable {
+                reason: gpu_failure_reason(&error),
+                last_known: previous.and_then(|snapshot| snapshot.gpus.known_value().cloned()),
+            },
+            Reported::Unavailable {
+                reason: UnavailableReason::NotReported,
+                last_known: previous.and_then(|snapshot| snapshot.capabilities.known_value().cloned()),
+            },
+            EnforcementStatus::Unavailable,
+        ),
     };
 
     let topology = reported_probe(
@@ -135,18 +498,14 @@ fn sample_compute_node_inner(
             .and_then(|snapshot| snapshot.cpu.os_constraints.quota.known_value())
             .cloned(),
     );
-    let capabilities = Reported::Unavailable {
-        reason: UnavailableReason::NotReported,
-        last_known: previous.and_then(|snapshot| snapshot.capabilities.known_value().cloned()),
-    };
     let sample_error = (cpu_failed && memory_failed && gpu_failed)
         .then_some(UnavailableReason::ProbeFailed);
 
     let data = ComputeNodeSnapshotData {
-        node_id: ledger.node_id(),
+        node_id,
         boot_id,
-        runtime_owner_id: ledger.owner_id(),
-        owner_epoch: ledger.policy().owner_epoch,
+        runtime_owner_id,
+        owner_epoch,
         host_owner_id: host_owner.map(|owner| owner.host_owner_id.clone()),
         host_owner_epoch: host_owner.map(|owner| owner.host_owner_epoch),
         inventory_revision: 1,
@@ -168,14 +527,15 @@ fn sample_compute_node_inner(
         },
         gpus: gpu_inventory,
         capabilities,
-        sample: ComputeNodeSample::new(SampleSource::HostOs, now.clone(), sample_error, now.clone()),
+        sample: ComputeNodeSample::new(SampleSource::HostOs, now.clone(), sample_error, now.clone())
+            .with_boot_monotonic_ns(boot_monotonic_ns),
         enforcement: EnforcementSnapshot {
             cpu_affinity: EnforcementStatus::Unavailable,
             cpu_quota: EnforcementStatus::Advisory,
             memory_cap: EnforcementStatus::Advisory,
-            // Inventory visibility is not proof that a worker launch enforces
-            // a UUID mask; E3 must publish that evidence separately.
-            gpu_visibility: EnforcementStatus::Unavailable,
+            // Native readiness is the only accepted proof for v2 GPU
+            // visibility; v1 keeps the historical explicit-unavailable state.
+            gpu_visibility,
             storage_quota: EnforcementStatus::Advisory,
         },
     };
@@ -1236,7 +1596,42 @@ fn discover_nvidia_gpus() -> Result<Vec<GpuDeviceSnapshot>> {
         Err(error) => return Err(error),
     };
     let stdout = String::from_utf8(output).context("nvidia-smi output is not UTF-8")?;
-    parse_nvidia_smi_output(&stdout, includes_mig_mode)
+    let mut devices = parse_nvidia_smi_output(&stdout, includes_mig_mode)?;
+    // NVML is a separate, bounded evidence path. Do not spend the remaining
+    // nvidia-smi budget on a child probe: a slow SMI query must not turn a
+    // valid physical GPU into an unobserved partition.
+    let nvml_deadline = Instant::now() + NVIDIA_NVML_SAMPLE_TIMEOUT;
+    for device in &mut devices {
+        if matches!(
+            &device.partition,
+            Reported::Available {
+                value: GpuPartition::Unknown
+            }
+        ) {
+            let report = crate::nvml_gpu_partition::full_device_probe_until(
+                &device.uuid,
+                nvml_deadline,
+            );
+            match report.outcome {
+                crate::nvml_gpu_partition::FullDeviceProbeOutcome::FullDevice => {
+                    device.partition = Reported::Available {
+                        value: GpuPartition::FullDevice,
+                    };
+                }
+                crate::nvml_gpu_partition::FullDeviceProbeOutcome::NotFullDevice => {}
+                crate::nvml_gpu_partition::FullDeviceProbeOutcome::Inconclusive(reason) => {
+                    eprintln!(
+                        "[fullmag-runtime-control] NVML GPU partition probe inconclusive: uuid={} reason={} attempts={} timed_out={}",
+                        device.uuid,
+                        reason.as_str(),
+                        report.attempts,
+                        report.timed_out,
+                    );
+                }
+            }
+        }
+    }
+    Ok(devices)
 }
 
 fn query_nvidia_smi(query: &str, deadline: Instant) -> Result<Vec<u8>> {
@@ -1409,6 +1804,43 @@ fn gpu_failure_reason(error: &anyhow::Error) -> UnavailableReason {
     }
 }
 
+/// Nanoseconds since boot from `CLOCK_BOOTTIME`, which includes suspend and
+/// is never stepped by wall-clock synchronization.
+#[cfg(target_os = "linux")]
+pub fn current_boot_monotonic_ns() -> Result<u64> {
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `value` is a valid, writable timespec for the duration of the call.
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut value) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("read Linux CLOCK_BOOTTIME");
+    }
+    let seconds = u64::try_from(value.tv_sec).context("CLOCK_BOOTTIME seconds are negative")?;
+    let nanoseconds =
+        u64::try_from(value.tv_nsec).context("CLOCK_BOOTTIME nanoseconds are negative")?;
+    seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(nanoseconds))
+        .context("CLOCK_BOOTTIME overflow")
+}
+
+/// Milliseconds since boot scaled to nanoseconds; the tick counter is never
+/// adjusted by wall-clock synchronization.
+#[cfg(windows)]
+pub fn current_boot_monotonic_ns() -> Result<u64> {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+
+    unsafe { GetTickCount64() }
+        .checked_mul(1_000_000)
+        .context("Windows tick count overflow")
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn current_boot_monotonic_ns() -> Result<u64> {
+    bail!("boot-relative monotonic time is unsupported on this operating system")
+}
+
 #[cfg(target_os = "linux")]
 pub fn current_host_boot_id(_now: DateTime<Utc>) -> Result<String> {
     let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
@@ -1449,6 +1881,117 @@ pub fn current_host_boot_id(_now: DateTime<Utc>) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_timestamp_retry_only_applies_to_the_same_node_and_boot() {
+        let previous = Utc::now();
+        assert!(sample_timestamp_is_non_advancing(
+            Some(("node", "boot", &previous)),
+            ("node", "boot", &previous),
+        ));
+        let before = previous - chrono::Duration::milliseconds(1);
+        assert!(sample_timestamp_is_non_advancing(
+            Some(("node", "boot", &previous)),
+            ("node", "boot", &before),
+        ));
+        let after = previous + chrono::Duration::milliseconds(1);
+        assert!(!sample_timestamp_is_non_advancing(
+            Some(("node", "boot", &previous)),
+            ("node", "boot", &after),
+        ));
+        assert!(!sample_timestamp_is_non_advancing(
+            Some(("node", "boot", &previous)),
+            ("node", "new-boot", &before),
+        ));
+        assert!(!sample_timestamp_is_non_advancing(
+            None,
+            ("node", "boot", &before),
+        ));
+    }
+
+    #[test]
+    fn timestamp_retry_reprobes_equal_and_backwards_samples_until_advance() {
+        let previous = Utc::now();
+        let before = previous - chrono::Duration::milliseconds(1);
+        let after = previous + chrono::Duration::milliseconds(1);
+        let mut candidates = std::collections::VecDeque::from([
+            previous.clone(),
+            before,
+            after.clone(),
+        ]);
+        let mut captures = 0;
+        let mut waits = 0;
+        let start = Instant::now();
+        let clock = std::cell::Cell::new(start);
+
+        let result = retry_sample_until_timestamp_advances(
+            || {
+                captures += 1;
+                candidates
+                    .pop_front()
+                    .ok_or_else(|| anyhow::anyhow!("candidate sequence exhausted"))
+            },
+            |candidate| {
+                sample_timestamp_is_non_advancing(
+                    Some(("node", "boot", &previous)),
+                    ("node", "boot", candidate),
+                )
+                .then(|| "timestamp did not advance".to_owned())
+            },
+            || clock.get(),
+            |duration| {
+                waits += 1;
+                clock.set(clock.get() + duration);
+            },
+        )
+        .expect("the advancing sample should be returned");
+
+        assert_eq!(result, after);
+        assert_eq!(captures, 3);
+        assert_eq!(waits, 2);
+    }
+
+    #[test]
+    fn timestamp_retry_times_out_without_sleeping() {
+        let start = Instant::now();
+        let clock = std::cell::Cell::new(start);
+        let mut captures = 0;
+        let mut waits = 0;
+
+        let error = retry_sample_until_timestamp_advances(
+            || {
+                captures += 1;
+                Ok::<_, anyhow::Error>(0_u8)
+            },
+            |_| Some("timestamp did not advance".to_owned()),
+            || clock.get(),
+            |_| {
+                waits += 1;
+                clock.set(start + SAMPLE_TIMESTAMP_RETRY_WINDOW);
+            },
+        )
+        .expect_err("a permanently non-advancing sample must fail closed");
+
+        assert!(error.to_string().contains("retry window elapsed"));
+        assert_eq!(captures, 2);
+        assert_eq!(waits, 1);
+    }
+
+    #[test]
+    fn timestamp_retry_propagates_capture_error_without_waiting() {
+        let mut waits = 0;
+
+        let error = retry_sample_until_timestamp_advances(
+            || Err::<u8, _>(anyhow::anyhow!("probe failed")),
+            |_| panic!("retry reason must not run after a capture error"),
+            Instant::now,
+            |_: Duration| waits += 1,
+        )
+        .expect_err("capture errors must be returned immediately");
+
+        assert!(error.to_string().contains("probe failed"));
+        assert_eq!(waits, 0);
+    }
 
     #[cfg(all(windows, target_pointer_width = "64"))]
     #[test]

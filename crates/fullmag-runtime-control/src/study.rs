@@ -504,6 +504,9 @@ pub fn queue_accepted_study_task(
     step_id: &str,
     inputs: std::collections::BTreeMap<String, ResolvedInput>,
 ) -> Result<QueuedAcceptedStudyTask> {
+    if !store.accepted_run_start_permitted(run_id.as_str())? {
+        bail!("accepted run is waiting for explicit Compute release");
+    }
     let accepted = load_accepted_study_snapshot(store, run_id, project_id)?;
     let study_step = accepted
         .study
@@ -3089,6 +3092,285 @@ fn device_name(device: ExecutionDevice) -> &'static str {
         ExecutionDevice::Auto => "auto",
         ExecutionDevice::Cpu => "cpu",
         ExecutionDevice::Gpu => "gpu",
+    }
+}
+
+#[cfg(test)]
+mod accepted_start_preparation_tests {
+    use super::*;
+    use fullmag_application::{
+        ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, RunId,
+        RunSpecification, StudyId, StudyReference,
+    };
+    use fullmag_authoring::{
+        PrimitiveStageNode, StudyDiscretizationReference, StudyExecutionProfileReference,
+        StudyModelReference, StudyPipelineDocument, StudyPipelineNode, StudyPipelineNodeSource,
+        StudyPlanMigrationDefaults, StudyPrimitiveStageKind, StudySolverConfigReference,
+    };
+    use fullmag_ir::{BackendTarget, ProblemIR};
+    use fullmag_plan::{lower_study_plan_with_catalog, StudyProblemCatalog, StudyProblemCatalogEntry};
+    use fullmag_session::FmsRunIntent;
+    use serde_json::json;
+
+    fn manual_run_snapshot(
+        mut problem: ProblemIR,
+        backend: &str,
+        run_id: &str,
+    ) -> AcceptedStudySnapshot {
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".into(), json!({"device": "cpu", "precision": "double"}));
+        let study = fullmag_authoring::StudyPlan::from_pipeline(
+            format!("{run_id}-study"),
+            1,
+            &StudyPipelineDocument {
+                version: "study_pipeline.v2".into(),
+                nodes: vec![StudyPipelineNode::Primitive(PrimitiveStageNode {
+                    id: "step:run".into(),
+                    label: "Run".into(),
+                    enabled: true,
+                    notes: None,
+                    source: Some(StudyPipelineNodeSource::UiAuthored),
+                    stage_kind: StudyPrimitiveStageKind::Run,
+                    payload: [("until_seconds".into(), json!("1e-9"))]
+                        .into_iter()
+                        .collect(),
+                })],
+            },
+            &StudyPlanMigrationDefaults {
+                model: StudyModelReference {
+                    model_id: "model:one".into(),
+                    version: "v1".into(),
+                },
+                solver_config: StudySolverConfigReference {
+                    preset_id: "solver:default".into(),
+                    version: "v1".into(),
+                },
+                discretization: StudyDiscretizationReference {
+                    recipe_id: "mesh:default".into(),
+                    version: "v1".into(),
+                },
+                execution_profile: StudyExecutionProfileReference {
+                    profile_id: "exec:auto".into(),
+                    version: "v1".into(),
+                },
+            },
+        )
+        .expect("accepted preparation study fixture is valid");
+        let catalog = StudyProblemCatalog::from_entries(
+            &study,
+            study
+                .steps
+                .iter()
+                .map(|step| StudyProblemCatalogEntry::from_step(step, problem.clone()))
+                .collect(),
+        )
+        .expect("accepted preparation catalog is valid");
+        let lowered = lower_study_plan_with_catalog(&study, &catalog)
+            .expect("accepted preparation plan is valid");
+        let mut specification = RunSpecification::new(
+            ProjectSnapshot {
+                project_id: ProjectId::new(),
+                definition_revision: 1,
+                definition_sha256: "a".repeat(64),
+            },
+            StudyReference {
+                study_id: StudyId::parse(study.study_id.clone()).unwrap(),
+                plan_version: study.schema_version.clone(),
+                plan_sha256: "b".repeat(64),
+            },
+            "c".repeat(64),
+            json!({
+                (fullmag_session::ACCEPTED_RUN_START_POLICY_KEY): {
+                    "schema_version": "accepted_run_start_policy.v1",
+                    "mode": "manual"
+                }
+            }),
+            RequestedExecution {
+                backend: backend.into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
+            },
+        );
+        specification.run_id = RunId::parse(run_id).expect("accepted preparation run id is valid");
+        let intent = FmsRunIntent::new(
+            run_id,
+            format!("intent-{run_id}"),
+            serde_json::to_value(&specification).unwrap(),
+        );
+        AcceptedStudySnapshot {
+            run: crate::AcceptedRunSnapshot {
+                intent,
+                specification,
+                definition_bytes: Vec::new(),
+            },
+            study,
+            catalog,
+            lowered,
+        }
+    }
+
+    fn fem_problem_with_mesh_asset() -> ProblemIR {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.air_box_policy = Some(fullmag_ir::AirBoxPolicyIR {
+            boundary_marker: Some(99),
+            ..Default::default()
+        });
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: Vec::new(),
+            fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "preparation-strip".into(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0e-9, 0.0, 0.0],
+                        [0.0, 1.0e-9, 0.0],
+                        [0.0, 0.0, 1.0e-9],
+                        [-2.0e-9, -2.0e-9, -2.0e-9],
+                        [2.0e-9, -2.0e-9, -2.0e-9],
+                        [-2.0e-9, 2.0e-9, -2.0e-9],
+                        [-2.0e-9, -2.0e-9, 2.0e-9],
+                    ],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                        [0, 1, 2, 3],
+                        [4, 5, 6, 7],
+                    ]),
+                    element_markers: vec![1, 0],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                        [0, 1, 2],
+                        [4, 5, 6],
+                    ]),
+                    boundary_markers: vec![1, 99],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+                region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "strip".into(),
+                    marker: 1,
+                }],
+                object_region_markers: Vec::new(),
+                build_report: None,
+            }),
+        });
+        problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+        if let fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. },
+            ..
+        } = &mut problem.study
+        {
+            *fixed_timestep = Some(1.0e-15);
+        }
+        problem
+    }
+
+    fn fingerprint(hex: char) -> String {
+        format!("sha256:{}", hex.to_string().repeat(64))
+    }
+
+    fn native_evidence_for_problem(
+        problem: &ProblemIR,
+    ) -> fullmag_plan::NativeFemMeshSpaceEvidence {
+        let execution_plan = fullmag_plan::plan(problem).expect("FEM fixture plans");
+        let fullmag_ir::BackendPlanIR::Fem(fem) = execution_plan.backend_plan else {
+            panic!("FEM fixture must resolve to FEM");
+        };
+        let mesh = fem.mesh;
+        fullmag_plan::NativeFemMeshSpaceEvidence {
+            abi_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_ABI_VERSION,
+            producer_id: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_PRODUCER_ID.into(),
+            schema_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_SCHEMA_VERSION.into(),
+            producer_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_PRODUCER_VERSION
+                .into(),
+            mesh_matches_canonical_input: true,
+            canonical_mesh_fingerprint: mesh.topology_fingerprint_v6(),
+            topology_fingerprint: fingerprint('8'),
+            marker_map_fingerprint: fingerprint('9'),
+            quality_fingerprint: fingerprint('a'),
+            space_fingerprint: fingerprint('b'),
+            mesh_dimension: 3,
+            fe_family: "H1".into(),
+            fe_order: fem.fe_order,
+            node_count: mesh.nodes.len() as u64,
+            cell_count: mesh.cells.len() as u64,
+            boundary_element_count: mesh.facets.len() as u64,
+            local_dof_count: mesh.nodes.len() as u64,
+            true_dof_count: mesh.nodes.len() as u64,
+            quality_sample_count: 4,
+            invalid_cell_count: 0,
+            min_jacobian_determinant: 1.0e-27,
+            max_jacobian_determinant: 2.0e-27,
+        }
+    }
+
+    #[test]
+    fn manual_accepted_run_allows_fdm_and_fem_preparation_before_release() {
+        let mut fdm_problem = ProblemIR::bootstrap_example();
+        fdm_problem.backend_policy.requested_backend = BackendTarget::Fdm;
+        fdm_problem.object_regions.push(fullmag_ir::ObjectRegionIR {
+            region_id: "strip:core".into(),
+            owner_object: "strip".into(),
+            name: "core".into(),
+            shape: fullmag_ir::RegionShapeIR::Box {
+                size: [200e-9, 20e-9, 6e-9],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: 1,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            material_transition: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+        });
+        let fdm = manual_run_snapshot(
+            fdm_problem,
+            "fdm",
+            "run-manual-fdm-preparation",
+        );
+        let fdm_receipt = fdm
+            .materialize_fdm_preparation_receipt("prep-manual-fdm", "step:run")
+            .expect("manual FDM preparation must remain independent of Compute release");
+        assert_eq!(fdm_receipt.plan.resolved_backend, BackendTarget::Fdm);
+        assert_eq!(
+            fdm_receipt
+                .accepted_run_source
+                .as_ref()
+                .map(|source| source.run_id.as_str()),
+            Some("run-manual-fdm-preparation")
+        );
+
+        let fem_problem = fem_problem_with_mesh_asset();
+        let fem = manual_run_snapshot(
+            fem_problem,
+            "fem",
+            "run-manual-fem-preparation",
+        );
+        let native = native_evidence_for_problem(fem.catalog.entries()[0].problem());
+        let fem_receipt = fem
+            .materialize_fem_preparation_receipt("prep-manual-fem", "step:run", &native)
+            .expect("manual FEM preparation must remain independent of Compute release");
+        assert_eq!(fem_receipt.plan.requested_backend, BackendTarget::Fem);
+        assert_eq!(fem_receipt.plan.resolved_backend, BackendTarget::Fem);
+        assert_eq!(
+            fem_receipt
+                .accepted_run_source
+                .as_ref()
+                .map(|source| source.run_id.as_str()),
+            Some("run-manual-fem-preparation")
+        );
     }
 }
 

@@ -1,5 +1,6 @@
 //! System endpoints — health, capabilities, engine_log, gpu_telemetry.
 
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -40,14 +41,50 @@ pub async fn get_health(State(state): State<Arc<AppState>>) -> Json<HealthRespon
     path = "/v2/platform/capabilities",
     responses(
         (status = 200, description = "Runtime capabilities", body = RuntimeCapabilityMatrix),
+        (status = 500, description = "Invalid runtime package root configuration"),
     ),
     tag = "platform"
 )]
 pub async fn get_capabilities(
     State(state): State<Arc<AppState>>,
-) -> Json<fullmag_runner::HostCapabilityMatrix> {
-    let runtimes_dir = state.repo_root.join("runtimes");
-    Json(fullmag_runner::RuntimeRegistry::discover(&runtimes_dir).capability_matrix())
+) -> Result<Json<fullmag_runner::HostCapabilityMatrix>, ApiError> {
+    let configured_runtime_root =
+        std::env::var_os("FULLMAG_RUNTIME_PACKAGE_ROOT").map(PathBuf::from);
+    let runtime_root = resolve_runtime_root(&state.repo_root, configured_runtime_root.as_deref())?;
+    let runtimes_dir = runtime_root.join("runtimes");
+    Ok(Json(
+        fullmag_runner::RuntimeRegistry::discover(&runtimes_dir).capability_matrix(),
+    ))
+}
+
+fn resolve_runtime_root(repo_root: &Path, configured: Option<&Path>) -> Result<PathBuf, ApiError> {
+    let Some(path) = configured else {
+        return Ok(repo_root.to_path_buf());
+    };
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ApiError::internal(
+            "FULLMAG_RUNTIME_PACKAGE_ROOT must be an absolute path without parent traversal",
+        ));
+    }
+    if !path.is_dir() {
+        return Err(ApiError::internal(
+            "FULLMAG_RUNTIME_PACKAGE_ROOT must point to an existing package directory",
+        ));
+    }
+    let runtimes_dir = path.join("runtimes");
+    if !runtimes_dir.is_dir() {
+        return Err(ApiError::internal(
+            "FULLMAG_RUNTIME_PACKAGE_ROOT must contain a runtimes directory",
+        ));
+    }
+    std::fs::read_dir(&runtimes_dir).map_err(|_| {
+        ApiError::internal("FULLMAG_RUNTIME_PACKAGE_ROOT runtimes directory is not readable")
+    })?;
+    Ok(path.to_path_buf())
 }
 
 #[utoipa::path(
@@ -219,4 +256,64 @@ pub async fn get_solver_profile(
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_root_without_configuration_uses_repo_root() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(resolve_runtime_root(&repo_root, None).unwrap(), repo_root);
+    }
+
+    #[test]
+    fn runtime_root_accepts_absolute_configured_package_root() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture = tempfile::tempdir().unwrap();
+        let package_root = fixture.path().join("immutable-package");
+        std::fs::create_dir_all(package_root.join("runtimes")).unwrap();
+        assert_eq!(
+            resolve_runtime_root(&repo_root, Some(&package_root)).unwrap(),
+            package_root
+        );
+    }
+
+    #[test]
+    fn runtime_root_rejects_relative_and_parent_traversal_configuration() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        for configured in [
+            PathBuf::from("immutable-package"),
+            repo_root.join("..").join("immutable-package"),
+        ] {
+            assert!(resolve_runtime_root(&repo_root, Some(&configured)).is_err());
+        }
+    }
+
+    #[test]
+    fn runtime_root_rejects_missing_configured_package_root() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture = tempfile::tempdir().unwrap();
+        let missing = fixture.path().join("missing-package");
+        assert!(resolve_runtime_root(&repo_root, Some(&missing)).is_err());
+    }
+
+    #[test]
+    fn runtime_root_rejects_configured_file() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture = tempfile::tempdir().unwrap();
+        let file = fixture.path().join("package-file");
+        std::fs::write(&file, b"fixture").unwrap();
+        assert!(resolve_runtime_root(&repo_root, Some(&file)).is_err());
+    }
+
+    #[test]
+    fn runtime_root_rejects_package_without_runtimes_directory() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture = tempfile::tempdir().unwrap();
+        let package_root = fixture.path().join("immutable-package");
+        std::fs::create_dir(&package_root).unwrap();
+        assert!(resolve_runtime_root(&repo_root, Some(&package_root)).is_err());
+    }
 }

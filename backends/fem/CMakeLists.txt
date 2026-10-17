@@ -360,8 +360,10 @@ if(FULLMAG_USE_MFEM_STACK)
 endif()
 
 # A managed capsule is identified by content rather than preserved mtimes.
-# Changing this definition forces CMake to rebuild native objects without
-# deleting caches, even when a later snapshot has older source timestamps.
+# Legacy managed-capsule builds keep this definition target-wide: changing it
+# forces CMake to rebuild native objects without deleting caches, even when a
+# later snapshot has older source timestamps. Direct Compose has an explicitly
+# fresh source tree, so it scopes the identity definition to the metadata TU.
 set(FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 "" CACHE STRING
     "Managed source snapshot bound to the native FEM build")
 if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
@@ -371,11 +373,37 @@ if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
         message(FATAL_ERROR "FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 must be lowercase SHA-256")
     endif()
 endif()
-add_library(fullmag_fem SHARED ${FEM_SOURCES})
-if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
-    target_compile_definitions(fullmag_fem PRIVATE
-        FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}")
+set(FULLMAG_DIRECT_COMPOSE "0" CACHE STRING
+    "Use source-specific FEM provenance for direct Compose builds")
+if(NOT FULLMAG_DIRECT_COMPOSE STREQUAL "0" AND
+   NOT FULLMAG_DIRECT_COMPOSE STREQUAL "1")
+    message(FATAL_ERROR "FULLMAG_DIRECT_COMPOSE must be 0 or 1")
 endif()
+function(fullmag_configure_runtime_source_snapshot target)
+    if(FULLMAG_DIRECT_COMPOSE STREQUAL "1")
+        # Keep the include directory stable; only the generated metadata header
+        # changes when the direct-Compose source snapshot changes.
+        set(generated_include_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        file(MAKE_DIRECTORY "${generated_include_dir}")
+        configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/cpu/mfem/runtime/runtime_build_info_snapshot.hpp.in"
+            "${generated_include_dir}/fullmag_fem_runtime_source_snapshot.hpp"
+            @ONLY
+        )
+        set_property(
+            SOURCE cpu/mfem/runtime/runtime_build_info.cpp
+            APPEND PROPERTY INCLUDE_DIRECTORIES "${generated_include_dir}"
+        )
+    elseif(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
+        # Legacy managed capsules intentionally keep the target-wide guard:
+        # their source mtimes are not trusted for incremental native builds.
+        target_compile_definitions(${target} PRIVATE
+            FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}")
+    endif()
+endfunction()
+
+add_library(fullmag_fem SHARED ${FEM_SOURCES})
+fullmag_configure_runtime_source_snapshot(fullmag_fem)
 target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
 
 if(FULLMAG_ENABLE_NVTX)

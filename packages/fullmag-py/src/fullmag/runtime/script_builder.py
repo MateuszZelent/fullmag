@@ -10312,9 +10312,16 @@ def _runtime_device_spec(runtime) -> str:
     device = runtime.device_target.value
     if device == "cpu":
         return "cpu"
-    if device in {"cuda", "gpu"}:
+    if device == "cuda":
         index = runtime.device_index if runtime.device_index is not None else 0
         return f"cuda:{index}"
+    if device == "gpu":
+        # SceneDocument and run-intent use the public ``gpu`` token.  An
+        # explicitly indexed RuntimeSelection remains on the legacy CUDA
+        # spelling because that is the only script syntax carrying an ordinal.
+        if runtime.device_index is not None:
+            return f"cuda:{runtime.device_index}"
+        return "gpu"
     return device
 
 

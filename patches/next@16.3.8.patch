@@ -1,0 +1,28 @@
+diff --git a/dist/esm/server/lib/router-server.js b/dist/esm/server/lib/router-server.js
+index 47195b4b68a7e45ce4527c49c5605374b790cde1..8ce261c93c1a402dc63c302cb3227ddf237a4ef1 100644
+--- a/dist/esm/server/lib/router-server.js
++++ b/dist/esm/server/lib/router-server.js
+@@ -566,6 +566,9 @@ export async function initialize(opts) {
+     renderServerOpts.serverFields.routerServerHandler = requestHandlerImpl;
+     // pre-initialize workers
+     const handlers = await renderServer.instance.initialize(renderServerOpts);
++    if (opts.dev && development && development.bundler && development.bundler.serverFields && development.bundler.serverFields.appPathRoutes) {
++        await renderServer.instance.propagateServerField(opts.dir, 'appPathRoutes', development.bundler.serverFields.appPathRoutes);
++    }
+     // this must come after initialize of render server since it's
+     // using initialized methods
+     if (!routerServerGlobal[RouterServerContextSymbol]) {
+diff --git a/dist/server/lib/router-server.js b/dist/server/lib/router-server.js
+index 53b77458f62b9169567ec2d651476aca0056bd9b..691a51e05998af4fd3bb8befbca01a6c13f9629c 100644
+--- a/dist/server/lib/router-server.js
++++ b/dist/server/lib/router-server.js
+@@ -621,6 +621,9 @@ async function initialize(opts) {
+     renderServerOpts.serverFields.routerServerHandler = requestHandlerImpl;
+     // pre-initialize workers
+     const handlers = await renderServer.instance.initialize(renderServerOpts);
++    if (opts.dev && development && development.bundler && development.bundler.serverFields && development.bundler.serverFields.appPathRoutes) {
++        await renderServer.instance.propagateServerField(opts.dir, 'appPathRoutes', development.bundler.serverFields.appPathRoutes);
++    }
+     // this must come after initialize of render server since it's
+     // using initialized methods
+     if (!_routerservercontext.routerServerGlobal[_routerservercontext.RouterServerContextSymbol]) {

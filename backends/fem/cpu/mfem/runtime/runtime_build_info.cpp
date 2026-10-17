@@ -2,12 +2,32 @@
 
 #include <cstdio>
 
+#ifdef __has_include
+#  if __has_include("fullmag_fem_runtime_source_snapshot.hpp")
+#    include "fullmag_fem_runtime_source_snapshot.hpp"
+#    define FULLMAG_FEM_HAS_GENERATED_SOURCE_SNAPSHOT 1
+#  endif
+#endif
+
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
 #include <HYPRE.h>
 #endif
 
+#ifndef FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256
+#define FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 ""
+#endif
+
 namespace fullmag::fem {
+
+const char *runtime_source_snapshot_sha256() noexcept
+{
+#if defined(FULLMAG_FEM_HAS_GENERATED_SOURCE_SNAPSHOT)
+    return detail::kRuntimeSourceSnapshotSha256;
+#else
+    return FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256;
+#endif
+}
 
 bool runtime_build_info(fullmag_fem_runtime_build_info &out_info)
 {

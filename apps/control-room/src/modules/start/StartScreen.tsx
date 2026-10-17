@@ -91,9 +91,13 @@ export function StartScreen({ kernel }: ModuleProps) {
     startScreenStore.getSnapshot,
     startScreenStore.getServerSnapshot,
   );
-  // Over an open workspace the tiles still create or open; the problem dialog
-  // owns the "replace the current session" confirmation.
-  const canCreateProblem = sessions.state === "no-session" || sessions.state === "ready";
+  // An empty collection is a confirmed no-session. A non-empty collection
+  // requires a matching current-status identity before replacement can be
+  // offered; a ready collection with a failed or mismatched status must stay
+  // fail-closed until the user retries.
+  const canCreateProblem =
+    sessions.state === "no-session" ||
+    (sessions.state === "ready" && sessionIdentity !== null);
 
   const host = useMemo<StartScreenHost>(
     () => ({

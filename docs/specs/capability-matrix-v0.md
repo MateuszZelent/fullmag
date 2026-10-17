@@ -38,6 +38,27 @@ Every product-facing feature should be described with one of these statuses:
 | **`production_executable`** | Executable on the intended production lane. For `Relaxation(*)`, this label additionally requires an exact source-bound managed receipt. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. For `Relaxation(*)`, this additionally requires an exact source-bound managed receipt. |
 
+### Docker accepted Workspace GPU
+
+[ADR 0060](../adr/0060-accepted-fem-gpu-docker-workspace.md) opisuje
+rozszerzenie accepted producer FEM GPU. Jest to stan `implemented` w toku
+kwalifikacji, z runtime **NOT VERIFIED**; nie przyznaje statusu
+`production_executable` ani `validated` żadnej interakcji. Wspólny Workspace
+korzysta z istniejącego API v2, compute profiles i typed study outputs.
+GPU oferta musi pochodzić z aktualnego natywnego probe i host ledgeru,
+a forced GPU nie może konsumować lease CPU.
+
+Pierwszy accepted FEM GPU zakres obejmuje H1/P1, double, strict, time evolution,
+LLG-overdamped relaxation oraz jawnie wybrany FEM `ProjectedGradientBb` z
+realizacją `native_cuda_pgbb`, `final_state` i opcjonalnym `total_energy`.
+Native strict-device receipt, mapa węzłów, indexed geometry i zegar finalnego
+snapshotu są wymagane do publikacji; ich brak kończy attempt failure.
+Bez odpowiedniego profilu hosta GPU pozostaje niedostępne dla accepted runs,
+nawet gdy istniejący managed CLI umie je wykonać. FDM GPU zachowuje własny
+worker i ograniczenia capability; wspólny profil zasobów nie jest dowodem
+wykonania ani parytetu fizyki. Requested `auto` jest zachowane osobno od
+resolved execution i rzeczywistego UUID.
+
 ### Fixed-step ABM3 capability
 
 `time_integrator.abm3.fixed.v1` is `reference_executable` only for the FDM CPU

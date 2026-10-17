@@ -34,6 +34,25 @@ jobs:
         run: python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0600-fem-eigenmodes-linearized-llg.source-map.json --repo-root .
       - name: Run scientific documentation contract regressions
         run: python -B -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+      - name: Resolve storage for runner artifact fixtures
+        run: |
+          python -B - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
+               "--profile", "ci-runner-source-contracts", "--create"],
+              check=True, capture_output=True, text=True,
+          )
+          layout = json.loads(result.stdout)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(
+                  f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
+              )
+          PY
       - name: Run complete default-feature runner contracts
         env:
           RUST_MIN_STACK: 16777216

@@ -3892,6 +3892,7 @@ pub enum FemGpuExecutionClass {
 /// The resolved and executed fields are derived only from the versioned
 /// native receipt. The Rust planner is not an execution oracle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct FemGpuExecutionReceipt {
     pub requested: String,
     pub resolved: String,
@@ -3915,6 +3916,18 @@ pub struct FemGpuExecutionReceipt {
     pub hot_loop_compute_d2h_bytes: u64,
     pub hot_loop_compute_host_sync_count: u64,
     pub accounting_valid: bool,
+}
+
+impl FemGpuExecutionReceipt {
+    /// Validate the native receipt for the fail-closed device-resident lane.
+    ///
+    /// The rule set remains owned by the runner's native receipt validator;
+    /// this public adapter only exposes its stable error token to API state
+    /// identity code.
+    pub fn validate_strict_device(&self) -> Result<(), &'static str> {
+        crate::fem::execution_receipt::validate_strict_fem_gpu_execution_receipt(self)
+            .map_err(|error| error.token())
+    }
 }
 
 #[cfg(test)]
@@ -3957,6 +3970,50 @@ mod fem_gpu_execution_receipt_contract_tests {
         assert_eq!(receipt["execution_class"], "hybrid_cpu_poisson");
         assert_eq!(receipt["executed_host_operator_mask"], 0x204);
         assert_eq!(receipt["hot_loop_compute_d2h_bytes"], 24);
+    }
+
+    #[test]
+    fn public_strict_device_validator_delegates_stable_native_token() {
+        let receipt = strict_device_receipt_fixture();
+        assert_eq!(receipt.validate_strict_device(), Ok(()));
+
+        let mut rejected = receipt.clone();
+        rejected.executed_host_operator_mask = 1;
+        assert_eq!(
+            rejected.validate_strict_device(),
+            Err("fem_gpu_receipt_host_operator_executed")
+        );
+
+        let mut raw = serde_json::to_value(receipt).expect("serialize receipt");
+        raw["future_field"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<FemGpuExecutionReceipt>(raw).is_err());
+    }
+
+    fn strict_device_receipt_fixture() -> FemGpuExecutionReceipt {
+        FemGpuExecutionReceipt {
+            requested: "strict_device".into(),
+            resolved: "device_resident".into(),
+            executed: "cuda_fem".into(),
+            execution_class: FemGpuExecutionClass::DeviceResident,
+            device_ordinal: 0,
+            precision: "double".into(),
+            integrator: "heun".into(),
+            required_operator_mask: 0x3ff,
+            resolved_device_operator_mask: 0x3ff,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x3ff,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 1,
+            rejected_attempt_count: 0,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+            accounting_valid: true,
+        }
     }
 }
 /// Attestation returned by the native modal boundary after planner selection.

@@ -18,11 +18,13 @@ COPY windows_folder_probe.py /opt/fullmag/windows_folder_probe.py
 COPY runtime_service.py /opt/fullmag/runtime_service.py
 COPY frontend_dev.py /opt/fullmag/frontend_dev.py
 COPY healthcheck.py /opt/fullmag/healthcheck.py
+COPY docker_startup_script.py /opt/fullmag/docker_startup_script.py
+COPY fullmag_storage.py /opt/fullmag/fullmag_storage.py
 
 # The pinned builder already prepared pnpm 10.8.1. Publish that immutable tool
 # for the unprivileged frontend instead of extracting it into Windows per run.
-RUN mkdir -p /opt/fullmag/tooling && \
-    cp -a /root/.cache/node/corepack/v1/pnpm/10.8.1 /opt/fullmag/tooling/pnpm && \
+RUN mkdir -p /opt/fullmag/tooling/pnpm && \
+    cp -a /root/.cache/node/corepack/v1/pnpm/10.8.1/. /opt/fullmag/tooling/pnpm/ && \
     ln -sf /opt/fullmag/tooling/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm && \
     chmod -R a+rX /opt/fullmag/tooling && \
     chmod 755 /opt/fullmag/tooling/pnpm/bin/pnpm.cjs && \
@@ -32,7 +34,8 @@ RUN mkdir -p /opt/fullmag/tooling && \
 # package, provenance, state, and the Windows host certificate.
 RUN mkdir -p /opt/fullmag/source /opt/fullmag/package /state /run/fullmag && \
     touch /opt/fullmag/provenance.json && \
-    chown 65532:65532 /opt/fullmag /state /run/fullmag && \
+    chown 65532:65532 /state /run/fullmag && \
+    chown root:root /opt/fullmag /opt/fullmag/docker_startup_script.py /opt/fullmag/fullmag_storage.py && \
     chmod 0755 /opt/fullmag /opt/fullmag/source /opt/fullmag/package /state /run/fullmag && \
     chmod 0644 /opt/fullmag/provenance.json && \
     chmod -R a+rX /opt/fullmag
@@ -73,5 +76,5 @@ USER 65532:65532
 RUN test "$(id -u)" = "65532" && test "$(/usr/local/bin/pnpm --version)" = "10.8.1"
 EXPOSE 8080 8081
 ENTRYPOINT ["/usr/local/bin/python3", "/opt/fullmag/entrypoint.py"]
-HEALTHCHECK --interval=5s --timeout=5s --start-period=30s --retries=6 \
+HEALTHCHECK --interval=5s --timeout=10s --start-period=390s --retries=6 \
     CMD /usr/local/bin/python3 /opt/fullmag/healthcheck.py

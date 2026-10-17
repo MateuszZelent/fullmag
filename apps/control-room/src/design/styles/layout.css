@@ -38,8 +38,9 @@
   height: 100%;
 }
 
-/* No ribbon and no status bar exist without a session, so the start screen
-   owns every row below the menu. The session-error banner stacks above it. */
+/* No ribbon and no status bar exist without a session, so Home owns every row
+   below the menu. Session reconnect information stays in a compact, stable
+   row and never replaces or remounts the Home module. */
 .fm-start-host {
   display: grid;
   grid-row: 2 / -1;
@@ -48,8 +49,26 @@
   min-width: 0;
 }
 
-.fm-start-host[data-state="session-error"] {
+.fm-start-host[data-state="home-session-reconnecting"] {
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fm-start-session-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--fm-space-2);
+  min-height: var(--fm-control-height-compact);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-surface);
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-2xs);
+  padding: var(--fm-space-1) var(--fm-space-3);
+}
+
+.fm-start-session-status .fm-button {
+  min-height: var(--fm-control-height-compact);
+  padding-inline: var(--fm-space-2);
 }
 
 /* Home over an open workspace: it takes the rows below the menu while the

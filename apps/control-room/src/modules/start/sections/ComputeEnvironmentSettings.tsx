@@ -276,7 +276,7 @@ function ComputeDetails({ compute }: { readonly compute: ComputeEnvironment }) {
           <h3 id="fm-start-compute-lanes-title">Solver runtime lanes</h3>
         </div>
         <p className="fm-start-compute-settings__lane-note">
-          Availability and precision reported by the runtime for each backend and device.
+          Availability and precision reported by the runtime for each backend and device. Experimental entries are diagnostic only and do not make a production lane selectable.
         </p>
         <div className="fm-start-compute-settings__lanes">
           {LANE_ORDER.map((lane) => (
@@ -356,19 +356,28 @@ function RuntimeLaneCard({
     (candidate) => candidate.backend === laneKey.backend && candidate.device === laneKey.device,
   );
   const availability = lane?.availability ?? "unknown";
+  const diagnostic = availability === "unknown" ? lane?.diagnostic : undefined;
   const status =
     availability === "available"
       ? "Available"
       : availability === "unavailable"
         ? "Unavailable"
-        : "Not reported";
+        : diagnostic?.state === "available"
+          ? "Experimental"
+          : diagnostic?.state === "unavailable"
+            ? "Experimental unavailable"
+            : "Not reported";
   const laneReason =
-    lane?.reason ??
-    (lane === undefined
-      ? "Runtime did not report this lane."
-      : availability === "unknown"
-        ? "Runtime did not determine availability."
-        : "No additional runtime reason was reported.");
+    diagnostic?.state === "unavailable"
+      ? diagnostic.reason ?? "Experimental runtime is unavailable."
+      : diagnostic?.state === "available"
+        ? "Experimental runtime is available for diagnostics only; production availability is not asserted."
+        : lane?.reason ??
+          (lane === undefined
+            ? "Runtime did not report this lane."
+            : availability === "unknown"
+              ? "Runtime did not determine availability."
+              : "No additional runtime reason was reported.");
 
   return (
     <article className="fm-start-compute-settings__lane" data-availability={availability}>
@@ -376,7 +385,11 @@ function RuntimeLaneCard({
         <h4>
           {laneKey.backend} · {laneKey.device}
         </h4>
-        <span className="fm-start-compute-settings__status" data-state={availability}>
+        <span
+          className="fm-start-compute-settings__status"
+          data-diagnostic-state={diagnostic?.state}
+          data-state={availability}
+        >
           {status}
         </span>
       </div>

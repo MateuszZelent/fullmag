@@ -38,6 +38,12 @@ export interface ComputeRuntimeLane {
   readonly availability: "available" | "unavailable" | "unknown";
   readonly precisions: readonly string[];
   readonly reason?: string;
+  /** Display-only qualification; never used for selection or admission. */
+  readonly diagnostic?: {
+    readonly kind: "experimental";
+    readonly state: "available" | "unavailable";
+    readonly reason?: string;
+  };
 }
 
 export interface ComputeEnvironment {

@@ -17945,6 +17945,13 @@ export interface operations {
                     "application/json": components["schemas"]["RuntimeCapabilityMatrix"];
                 };
             };
+            /** @description Invalid runtime package root configuration */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     platform_get_platform_compute_nodes: {

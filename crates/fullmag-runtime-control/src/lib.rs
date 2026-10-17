@@ -6,6 +6,7 @@ pub mod application_attach;
 pub mod application_service_status;
 pub mod compute_node_probe;
 pub mod cuda_device_identity;
+pub(crate) mod nvml_gpu_partition;
 pub mod development_cold_idle;
 pub mod host_allocation;
 pub mod host_runtime;

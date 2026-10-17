@@ -113,6 +113,21 @@ class SetupDockerChecks(unittest.TestCase):
             self.assertEqual((main / ".env").read_bytes(), original)
             self.assertEqual(sorted(p.name for p in main.iterdir()), [".env"])
 
+    def test_unqualified_source_volume_is_rejected_before_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory).resolve()
+            main = project / "repo"
+            main.mkdir()
+            context = {"repo": main, "main": main, "project": project, "checkouts": [main]}
+            def admit(path):
+                if path == main:
+                    raise setup.SetupError("source volume is not local Windows")
+            with patch.object(setup, "checkout_context", return_value=context), patch.object(setup, "validate_windows_volume", side_effect=admit):
+                with self.assertRaisesRegex(setup.SetupError, "source volume"):
+                    setup.plan(main, str(project / "storage"), str(main), 3197)
+            self.assertFalse((main / ".env").exists())
+            self.assertFalse((project / "storage").exists())
+
     def test_new_clone_configuration_roundtrip_with_real_resolver(self):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory).resolve()

@@ -3359,7 +3359,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .expect("accepted final state bytes are stored in CAS");
     let state_artifact: serde_json::Value = serde_json::from_slice(&output_bytes).unwrap();
     let execution_resolution = &state_artifact["provenance"]["execution_resolution"];
-    assert_eq!(execution_resolution["authored_request"]["device"], "cpu");
+    assert_eq!(execution_resolution["authored_request"]["device"], "auto");
     assert_eq!(execution_resolution["effective_request"]["device"], "cpu");
     assert_eq!(execution_resolution["resolved_execution"]["device"], "cpu");
     assert_eq!(execution_resolution["resolved_execution"]["backend"], "fdm");

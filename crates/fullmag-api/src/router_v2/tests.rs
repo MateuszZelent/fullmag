@@ -12561,7 +12561,9 @@ async fn fdm_grid_refresh_command_rejects_missing_authoring_scene_without_queuei
                 .method("POST")
                 .uri("/v2/sessions/current/simulation/commands")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"kind":"fdm_grid_refresh"}"#))
+                .body(Body::from(
+                    r#"{"kind":"fdm_grid_refresh","mesh_options":{"scene_problem_patch":{"forged":true}}}"#
+                ))
                 .unwrap(),
         )
         .await
@@ -12575,6 +12577,12 @@ async fn fdm_grid_refresh_command_rejects_missing_authoring_scene_without_queuei
         "FDM grid refresh requires a materialized authoring scene."
     );
     assert!(state.current_control_queue.lock().await.is_empty());
+    assert!(state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.scene_document.is_none()));
     assert_eq!(
         state
             .current_command_ledger

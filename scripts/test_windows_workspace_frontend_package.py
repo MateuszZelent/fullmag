@@ -163,6 +163,7 @@ def test_nested_frontend_source_requires_matching_intact_snapshot(frozen_fronten
 
 def test_static_staging_is_fresh_hash_pinned_and_excludes_generated_trees(tmp_path):
     repo, build_root = _fixture(tmp_path)
+    _write(repo / "patches" / "next.patch", b"patch bytes\n")
     preserved = build_root / "frontend-sources" / "previous" / "keep.txt"
     _write(preserved, "preserve\n")
 
@@ -179,6 +180,7 @@ def test_static_staging_is_fresh_hash_pinned_and_excludes_generated_trees(tmp_pa
     assert preserved.read_text(encoding="utf-8") == "preserve\n"
     assert (workspace / "package.json").is_file()
     assert (workspace / "pnpm-lock.yaml").is_file()
+    assert (workspace / "patches" / "next.patch").read_bytes() == b"patch bytes\n"
     assert (workspace / "apps" / "runner-console" / "package.json").is_file()
     assert (workspace / "apps" / "desktop" / "package.json").is_file()
     assert (app / "src" / "untracked-source.ts").is_file()

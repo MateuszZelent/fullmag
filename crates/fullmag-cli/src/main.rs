@@ -190,6 +190,20 @@ fn main() -> Result<()> {
                 )?)?
             );
         }
+        Command::Runtime(RuntimeCommand::ServiceRecover {
+            config,
+            request,
+            request_sha256,
+        }) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&runtime_service_client::recover_unknown_empty(
+                    &config,
+                    &request,
+                    &request_sha256,
+                )?)?
+            );
+        }
         Command::Runtime(RuntimeCommand::VerifyDevelopmentHandoffCommit {
             store,
             corrupt_store,

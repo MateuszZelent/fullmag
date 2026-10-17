@@ -80,6 +80,12 @@ export function resolveHydrationSafeHeaderSessionSource(
   return hydrated ? status : HYDRATING_HEADER_SESSION_SOURCE;
 }
 
+export function resolveNoSessionSubtitle(
+  state: "error" | "loading" | "no-session",
+): string {
+  return state === "no-session" ? "No active session" : "Home";
+}
+
 function readString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }

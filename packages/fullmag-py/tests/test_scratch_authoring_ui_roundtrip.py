@@ -801,7 +801,8 @@ def test_scene_document_preserves_execution_intent_and_zero_random_seed() -> Non
     assert build_builder_from_scene_document(scene)["requested_precision"] == "single"
 
     source = render_scene_document_as_script(scene)
-    assert 'study.device("cuda:0", precision="single")' in source
+    assert 'study.device("gpu", precision="single")' in source
+    assert "cuda:0" not in source
     assert 'preset_kind="random"' in source
     assert 'params={"seed": 0}' in source
     assert "preset_version=1" in source

@@ -285,3 +285,123 @@ a samo requested nie potwierdza zakończenia ani nie zwalnia capacity.
 Wire contract zachowuje dotychczasowy Stop dla rzeczywistego claimu; nowa gałąź
 pre-claim wymaga odrębnego wyniku i odbioru API/OpenAPI/UI. Reguły i aktualne
 ograniczenia określa sekcja 13.28 specyfikacji; pełna integracja jest w toku.
+
+## Planowana generacja runtime dla kontrolowanego upgrade'u Docker ABI (2026-10-16)
+
+Status: **PLANOWANE — NIEZAIMPLEMENTOWANE**.
+
+### Problem i granica decyzji
+
+Kontrolowany Docker backend może zmienić ABI obrazu i natywnego runtime'u w
+czasie, gdy wspólny `HostResourceLedger` przechowuje dane Windows oraz stan
+admission. Sama wersja obrazu albo nazwa taga nie jest dowodem, że odczyt GPU,
+snapshot i permit należą do tej samej generacji runtime. Potrzebny jest mały,
+content-addressed fence, który przeżywa restart i nie powiększa głównego
+payloadu ledgera.
+
+Ta sekcja jest **decyzją planowaną**. Nie jest dowodem implementacji, nie
+otwiera obecnego runtime/HMR i nie zmienia jeszcze ABI, schematów Rust ani
+obrazu Docker.
+
+### Decyzja
+
+1. `HostResourceLedgerDocument` otrzyma schemat V4 z małym, typowanym
+   `runtime_state` zawierającym wyłącznie wskaźniki:
+
+   ```json
+   {
+     "schema_version": "host_runtime_state.v1",
+     "readiness_sha256": "<64-lowercase-hex>",
+     "snapshot_sha256": null
+   }
+   ```
+
+   `readiness_sha256` wskazuje immutable, typowany i bounded CAS blob świeżej
+   gotowości runtime/GPU. `snapshot_sha256` jest opcjonalnym wskaźnikiem do
+   immutable, typowanego i bounded CAS blobu snapshotu węzła; `null` oznacza,
+   że dla nowej generacji nie opublikowano jeszcze snapshotu. Policy,
+   reservations i `NodePolicy` pozostają bez zmian i nie są przenoszone do
+   blobów.
+
+2. Upgrade wykonuje się pod hostowym writerem oraz wyłączną bramką inventory.
+   Jest dopuszczalny wyłącznie po potwierdzeniu `allReleased` dla rezerwacji i
+   przy braku aktywnego host inventory ownera. Najpierw publikuje kompletny,
+   zweryfikowany blob świeżej gotowości GPU. Następnie publikuje **jedną
+   atomiczną** wersję dokumentu z nowym `runtime_state`, nowym
+   `readiness_sha256` i `snapshot_sha256: null`. Nie ma pośredniego dokumentu
+   z częściowym payloadem ani wieloplikowego WAL.
+
+3. Publikacja snapshotu ma ten sam porządek: najpierw immutable blob i jego
+   trwałe potwierdzenie, potem jedna atomiczna publikacja dokumentu wskazująca
+   `snapshot_sha256`. Odczyt nie ufa plikowi widocznemu bez zgodnego digestu i
+   nie używa starego snapshotu jako bieżącego dowodu nowej generacji. Po udanej
+   publikacji writer może wykonać bounded GC katalogu snapshot CAS: usuwa tylko
+   nieosiągalne, regularne pliki o dokładnej nazwie digestu, zachowując aktualny
+   pointer, readiness CAS, legacy files i dane historyczne. Przerwane lub
+   niepełne sprzątanie jest bezpieczne i wznawia się przy następnej publikacji
+   albo inicjalizacji; nie jest to globalny prune storage.
+
+4. Nowa konfiguracja usługi, host binding, admission i każdy worker launch
+   permit muszą przypinać `runtime_generation_sha256`. Wartość jest równa
+   `runtime_state.readiness_sha256` i ma dokładnie 64 znaki lowercase hex, bez
+   prefiksu `sha256:`; nie wprowadzamy drugiego, równoległego źródła generacji.
+   Stary digest, brak digestu oraz permit bez zgodnego digestu dają
+   fail-closed. Żądanie v2 bez ownera inventory jest zabronione.
+
+5. Binaria rozumiejące V1–V3 odrzucają dokument V4 przed odczytem zasobów.
+   Istniejące pliki legacy pozostają zachowane jako dane historyczne i
+   dowód migracji; nie nadają bieżącej v4 admission, jeśli nie ma zgodnego
+   `runtime_state` i wskazanych blobów. Nie wykonujemy cichej migracji przez
+   discovery ani przez samo otwarcie `APPLICATION.json`.
+
+6. Obowiązują istniejące granice rozmiaru: blob gotowości pozostaje ograniczony
+   do 256 KiB, blob snapshotu do 4 MiB. Dokument V4 zachowuje limit dokumentu
+   ledgera, a test serializacji ma jawnie sprawdzać mały budżet wskaźników i
+   pozostawioną rezerwę, zamiast dopuszczać inline payload.
+
+### Obowiązki implementacyjne
+
+Implementacja musi objąć, z zachowaniem obecnego lock order i provenance:
+
+- `crates/fullmag-session/src/host_resource_ledger.rs` — V4 document,
+  typed runtime pointers, immutable CAS blob publication/readback, atomic
+  pointer publication i upgrade preconditions;
+- `crates/fullmag-session/src/runtime_service_host.rs` oraz
+  `crates/fullmag-session/src/types.rs` — generation digest w konfiguracji,
+  bindingach, requestach i permitach oraz kompatybilność wire;
+- `crates/fullmag-runtime-control/src/host_runtime.rs` i
+  `crates/fullmag-api/src/runtime_service_main.rs` — admission/start guards,
+  owner lifecycle i odmowa stale/ownerless generation;
+- worker/preparer paths (`crates/fullmag-api/src/accepted_fem_preparer.rs`,
+  supervisor/worker launch paths) — przekazanie i weryfikacja tego samego
+  digestu przed native start;
+- Docker runtime helper (`docker/all-in-one/runtime_service.py` i konsument
+  `docker/all-in-one/entrypoint.py`) — jawne przypięcie natywnego profilu do
+  generation digestu podczas inicjalizacji fizycznego hosta, bez retagowania
+  starego obrazu i bez cichego fallbacku. Build obrazu nie zgaduje generacji
+  zmiennego stanu hosta.
+
+Nie wolno wprowadzić drugiej kolejki, dużego inline payloadu ani niezależnego
+hasha obrazu, który zastępowałby typed readiness digest.
+
+### Odbiór, awarie i rollback
+
+Przed otwarciem tej ścieżki wymagane są regresje/fault injection dla:
+
+- upgrade'u w stanie idle oraz restartu, który zachowuje Windows storage,
+  istniejące sesje i wyniki;
+- odmowy przy aktywnej rezerwacji, rezerwacji quarantined, aktywnym ownerze,
+  niezgodnym GPU, uszkodzonym lub brakującym CAS blobie, starym configu,
+  stale generation i stale launch permicie;
+- awarii przed publikacją blobu, po publikacji blobu lecz przed atomicznym
+  dokumentem oraz po atomicznej publikacji. Każdy odczyt musi zobaczyć albo
+  poprzedni kompletny stan, albo nowy kompletny stan, nigdy mieszane wskaźniki;
+- granicy rozmiaru dokumentu z rezerwą na wskaźniki oraz limitów 256 KiB/4 MiB
+  blobów.
+
+Rollback zatrzymuje nowe v4 admission i zachowuje aktywne wyniki oraz pliki
+legacy; nie przepisuje dokumentu wstecz na podstawie taga obrazu ani wieku
+owner record. Reconciliation musi pozostać oparte na exact digestach i
+immutable blobach. Do czasu spełnienia tych bramek V4 i Docker ABI upgrade są
+planowane, a obecne runtime/HMR oraz kwalifikacja GPU pozostają poza zakresem
+tej decyzji.

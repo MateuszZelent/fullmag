@@ -636,6 +636,163 @@ def _validate_storage_attestation(
     }
 
 
+def _validate_host_ledger_attestation(
+    receipt: Mapping[str, Any],
+    document: Mapping[str, Any],
+    run_root: Path,
+    docker_callable=None,
+) -> dict[str, Any]:
+    """Re-attest the persistent host-ledger binding recorded by the launcher.
+
+    The launcher already ran the privileged maintenance ``ensure`` and stored
+    its immutable adapter receipt.  Runtime verification must correlate that
+    receipt with the running backend and use the adapter's canonical validator,
+    but must not run the maintenance Compose service again.  Removing only
+    ``maintenance_compose`` from the validator input leaves its guest-side
+    probe and all bind/isolation checks active while forcing it to use the
+    recorded host receipt.
+    """
+    import docker_host_ledger as host_ledger
+
+    profile = receipt.get("host_ledger")
+    attestation = receipt.get("host_ledger_attestation")
+    if not isinstance(profile, Mapping):
+        raise VerificationError("run receipt lacks the host-ledger adapter receipt")
+    if not isinstance(attestation, Mapping):
+        raise VerificationError("run receipt lacks the host-ledger container attestation")
+    if profile.get("schema") != host_ledger.SCHEMA or profile.get("profile") != host_ledger.PROFILE:
+        raise VerificationError("host-ledger adapter schema/profile is unsupported")
+    if profile.get("state") != "ready":
+        raise VerificationError("host-ledger adapter receipt is not ready")
+    image = _image(receipt.get("image_id"), "run receipt image_id")
+    if profile.get("image_id") != image:
+        raise VerificationError("host-ledger adapter image differs from the runtime image")
+    required_profile_fields = (
+        "run_root", "run_id", "project_id", "mount_root", "ledger_root",
+        "ledger_root_daemon", "backing_image", "receipt", "receipt_sha256",
+        "host_receipt", "environment",
+    )
+    if any(profile.get(key) in (None, "") for key in required_profile_fields):
+        raise VerificationError("host-ledger adapter profile is incomplete")
+    if not _same_path(Path(profile["run_root"]), run_root):
+        raise VerificationError("host-ledger adapter run root differs from the owned run root")
+
+    environment = profile.get("environment")
+    if not isinstance(environment, Mapping):
+        raise VerificationError("host-ledger adapter environment is missing")
+    fixed_environment = {
+        "FULLMAG_HOST_LEDGER_PROFILE": host_ledger.PROFILE,
+        "FULLMAG_HOST_LEDGER_ROOT": host_ledger.LEDGER_ROOT,
+        "FULLMAG_HOST_LEDGER_MOUNT_TARGET": host_ledger.MOUNT_TARGET,
+        "FULLMAG_HOST_LEDGER_MOUNT_ROOT": profile.get("mount_root"),
+        "FULLMAG_HOST_LEDGER_LEDGER_ROOT": profile.get("ledger_root_daemon"),
+        "FULLMAG_HOST_LEDGER_BACKING_IMAGE": profile.get("backing_image"),
+        "FULLMAG_HOST_LEDGER_PROJECT_ID": profile.get("project_id"),
+    }
+    if any(not isinstance(value, str) or not value for value in fixed_environment.values()):
+        raise VerificationError("host-ledger adapter profile has incomplete fixed paths")
+    if any(environment.get(key) != value for key, value in fixed_environment.items()):
+        raise VerificationError("host-ledger adapter environment differs from its resolved profile")
+
+    adapter_value = profile.get("receipt")
+    if not isinstance(adapter_value, str):
+        raise VerificationError("host-ledger adapter receipt path is missing")
+    adapter_path = _owned_path(adapter_value, run_root, "host-ledger adapter receipt")
+    adapter = _read_json(adapter_path, "host-ledger adapter receipt")
+    if (
+        adapter.get("schema") != host_ledger.RECEIPT_SCHEMA
+        or adapter.get("profile") != host_ledger.PROFILE
+        or adapter.get("state") != "ready"
+    ):
+        raise VerificationError("host-ledger adapter receipt is not a ready v1 receipt")
+    if profile.get("receipt_sha256") != digest(adapter_path):
+        raise VerificationError("host-ledger adapter receipt digest differs from the launcher profile")
+    if adapter.get("receipt_path") != str(adapter_path):
+        raise VerificationError("host-ledger adapter receipt path differs from its frozen path")
+    for key in ("run_id", "project_id", "image_id", "backing_image", "mount_root", "ledger_root"):
+        if adapter.get(key) != profile.get(key):
+            raise VerificationError(f"host-ledger adapter receipt differs at {key}")
+    if adapter.get("environment") != environment:
+        raise VerificationError("host-ledger adapter receipt environment differs from the launcher profile")
+    ensure_host_receipt = profile.get("host_receipt")
+    if not isinstance(ensure_host_receipt, Mapping) or adapter.get("host_receipt") != ensure_host_receipt:
+        raise VerificationError("host-ledger maintenance receipt is missing or differs from the adapter receipt")
+    required_host_receipt_fields = (
+        "schema", "profile", "state", "project_id", "backing_image", "mount_root",
+        "mount_target", "ledger_root", "filesystem", "filesystem_uuid",
+        "image_size_bytes", "loop_device", "mount_active",
+    )
+    if any(ensure_host_receipt.get(key) in (None, "") for key in required_host_receipt_fields):
+        raise VerificationError("host-ledger maintenance receipt is incomplete")
+    if (
+        ensure_host_receipt.get("schema") != host_ledger.HOST_RECEIPT_SCHEMA
+        or ensure_host_receipt.get("profile") != host_ledger.PROFILE
+        or ensure_host_receipt.get("state") != "ready"
+        or ensure_host_receipt.get("filesystem") != "ext4"
+        or ensure_host_receipt.get("mount_active") is not True
+        or ensure_host_receipt.get("mount_target") != host_ledger.MOUNT_TARGET
+        or ensure_host_receipt.get("image_size_bytes") != host_ledger.IMAGE_SIZE_BYTES
+        or ensure_host_receipt.get("project_id") != profile.get("project_id")
+        or ensure_host_receipt.get("mount_root") != profile.get("mount_root")
+        or ensure_host_receipt.get("ledger_root") != profile.get("mount_root") + "/ledger"
+        or ensure_host_receipt.get("backing_image") != profile.get("backing_image")
+    ):
+        raise VerificationError("host-ledger ensure receipt identity is invalid")
+
+    verify_host_receipt = attestation.get("host_receipt")
+    if not isinstance(verify_host_receipt, Mapping):
+        raise VerificationError("host-ledger container attestation lacks its verify receipt")
+    if any(verify_host_receipt.get(key) in (None, "") for key in required_host_receipt_fields):
+        raise VerificationError("host-ledger verify receipt is incomplete")
+    stable_host_receipt_fields = (
+        "schema", "profile", "project_id", "backing_image", "mount_root", "mount_target",
+        "ledger_root", "filesystem", "filesystem_uuid", "image_size_bytes", "loop_device",
+        "mount_active",
+    )
+    if any(verify_host_receipt.get(key) != ensure_host_receipt.get(key) for key in stable_host_receipt_fields):
+        raise VerificationError("host-ledger verify receipt identity differs from ensure")
+    if (
+        verify_host_receipt.get("schema") != host_ledger.HOST_RECEIPT_SCHEMA
+        or verify_host_receipt.get("profile") != host_ledger.PROFILE
+        or verify_host_receipt.get("state") != "validated"
+        or verify_host_receipt.get("filesystem") != "ext4"
+        or verify_host_receipt.get("mount_active") is not True
+        or verify_host_receipt.get("created_image") is not False
+    ):
+        raise VerificationError("host-ledger verify receipt does not describe a validated verify action")
+
+    expected_attestation = {
+        "schema": "fullmag.docker-host-ledger-attestation.v1",
+        "profile": host_ledger.PROFILE,
+        "backend_container_id": _container_id(receipt.get("container_id")),
+        "mount_target": host_ledger.MOUNT_TARGET,
+        "ledger_root": host_ledger.LEDGER_ROOT,
+        "filesystem": "ext4",
+        "filesystem_uuid": verify_host_receipt.get("filesystem_uuid"),
+        "loop_device": verify_host_receipt.get("loop_device"),
+        "backing_image": verify_host_receipt.get("backing_image"),
+        "backend_verification": "PASS",
+        "host_verification": "PASS",
+        "host_receipt": verify_host_receipt,
+    }
+    if any(attestation.get(key) != value for key, value in expected_attestation.items()):
+        raise VerificationError("host-ledger container attestation differs from the launcher evidence")
+
+    validation_profile = dict(profile)
+    validation_profile.pop("maintenance_compose", None)
+    validation_profile["host_receipt"] = dict(verify_host_receipt)
+    if docker_callable is None:
+        def docker_callable(*args, timeout=60, **_kwargs):
+            return _decode(_docker_checked(*args, timeout=timeout).stdout)
+    try:
+        validated = host_ledger.validate_container(document, validation_profile, docker_callable)
+    except Exception as error:
+        raise VerificationError(f"host-ledger live container validation failed: {error}") from error
+    if validated != dict(attestation):
+        raise VerificationError("host-ledger canonical validation differs from launcher attestation")
+    return dict(validated)
+
+
 def _runtime_topology(receipt: Mapping[str, Any]) -> tuple[str, int, str | None]:
     mode = receipt.get("frontend_mode")
     if mode not in {"static", "dev"}:
@@ -1303,6 +1460,9 @@ def verify(repo: Path, run_receipt: Path, *, timeout_seconds: int = 3600) -> dic
             )
             document, container_attestation = _validate_container(
                 receipt, assembly, run_root, state, verification_root
+            )
+            verifier["host_ledger_attestation"] = _validate_host_ledger_attestation(
+                receipt, document, run_root
             )
             verifier["container_attestation"] = {
                 "running": document["State"]["Running"],

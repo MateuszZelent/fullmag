@@ -131,6 +131,48 @@ class SnapshotChecks(unittest.TestCase):
         self.assertEqual(build_snapshot.create_snapshot(self.repo, self.build), metadata)
         self.assertFalse((frozen / ".git").exists())
 
+    def test_ignored_patch_notes_do_not_change_dependency_identity_or_snapshot(self):
+        from windows.workspace_backend_identity import DEPENDENCY_INPUTS, fingerprint
+
+        patch = self.repo / "patches" / "next.patch"
+        patch.parent.mkdir(parents=True)
+        patch.write_bytes(b"patch input\n")
+        exclude = self.repo / ".git" / "info" / "exclude"
+        exclude.write_text("patches/*.md\n")
+        notes = self.repo / "patches" / "README.md"
+        notes.write_text("first note\n")
+        first = self.make()
+        dependency_before = fingerprint(self.repo, DEPENDENCY_INPUTS)["sha256"]
+
+        notes.write_text("edited note\n")
+        self.assertEqual(fingerprint(self.repo, DEPENDENCY_INPUTS)["sha256"], dependency_before)
+        second = self.make()
+
+        self.assertEqual(second, first)
+        record = json.loads(Path(second["record_path"]).read_text())
+        self.assertIn("patches/next.patch", record["dependency_input_paths"])
+        self.assertNotIn("patches/README.md", record["dependency_input_paths"])
+
+    def test_deleted_tracked_patch_changes_snapshot_but_remains_a_sealed_dependency_path(self):
+        patch = self.repo / "patches" / "next.patch"
+        patch.parent.mkdir(parents=True)
+        patch.write_bytes(b"patch input\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "tracked patch fixture")
+        first = self.make()
+
+        patch.unlink()
+        second = self.make()
+
+        self.assertNotEqual(second["snapshot_id"], first["snapshot_id"])
+        self.assertNotEqual(second["dependency_source_sha256"], first["dependency_source_sha256"])
+        record = json.loads(Path(second["record_path"]).read_text())
+        self.assertIn("patches/next.patch", record["dependency_input_paths"])
+        self.assertNotIn(
+            "patches/next.patch", {entry["path"] for entry in record["inventory"]}
+        )
+        self.assertEqual(build_snapshot.verify_snapshot(first, self.build), first)
+
     def test_origin_changes_do_not_affect_verification(self):
         metadata = self.make()
         self.file.write_text("changed origin")

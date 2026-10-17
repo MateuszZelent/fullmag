@@ -27,6 +27,25 @@ class ManagedFemLibrarySelectionTests(unittest.TestCase):
         cache.write_text(f"FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256:STRING={snapshot}\n", encoding="utf-8")
         return library.parent
 
+    def test_selected_profile_does_not_scan_other_profile(self):
+        expected = self.candidate("backend", self.snapshot, b"backend", profile="backend-dev")
+        self.candidate("release", self.snapshot, b"release", profile="release")
+        self.assertEqual(
+            select_library(self.root, self.snapshot, profile="backend-dev"), expected
+        )
+
+    def test_unknown_profile_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unsupported FEM profile"):
+            select_library(self.root, self.snapshot, profile="debug")
+
+    def test_profile_alias_is_rejected(self):
+        self.candidate("release", self.snapshot)
+        (self.root / "backend-dev").symlink_to(
+            self.root / "release", target_is_directory=True
+        )
+        with self.assertRaisesRegex(ValueError, "profile directory is a symlink"):
+            select_library(self.root, self.snapshot, profile="backend-dev")
+
     def test_current_older_library_wins_over_newer_stale_and_unbound(self):
         current = self.candidate("current", self.snapshot, mtime=1000)
         self.candidate("stale", "b" * 64, b"stale", mtime=2000)
@@ -84,7 +103,7 @@ class ManagedFemLibrarySelectionTests(unittest.TestCase):
         body = text[start:end].replace("\t", "").replace("$$", "$")
         directory = self.candidate("current", self.snapshot)
         script = (
-            'set -e\nbuild_mode=fem-cpu\ncargo_target_dir="$1"\ncandidate_library="$2"\n'
+            'set -e\nbuild_mode=fem-cpu\ncargo_profile_dir=release\ncargo_target_dir="$1"\ncandidate_library="$2"\n'
             'python3() { printf "%s\\n" "$candidate_library"; }\n'
             'cp() { printf "copy-attempt\\n" >&2; return 17; }\n'
             + body + '\nprintf "published\\n"\n'
