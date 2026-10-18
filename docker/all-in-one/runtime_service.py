@@ -26,6 +26,8 @@ SOURCE_ROOT = Path("/opt/fullmag/source")
 PACKAGE_ROOT = Path("/opt/fullmag/package")
 IMAGE_ROOT = Path("/opt/fullmag")
 HOST_CERTIFICATE = Path("/run/fullmag/windows-folder-host.json")
+LEGACY_PROVENANCE_PATH = IMAGE_ROOT / "provenance.json"
+BUILD_CONTROL_PROVENANCE_PATH = Path("/build/control/provenance.json")
 WORKTREE_ID = TARGET_ID = "docker-all"
 COMPUTE_POOL_ID = "docker-all.compute"
 PREPARATION_POOL_ID = "docker-all.preparation"
@@ -159,7 +161,7 @@ class RuntimePaths:
     source: Path = SOURCE_ROOT
     package: Path = PACKAGE_ROOT
     config: Path = STATE_ROOT / CONFIG_RELATIVE
-    provenance: Path = IMAGE_ROOT / "provenance.json"
+    provenance: Path = LEGACY_PROVENANCE_PATH
     host_certificate: Path = HOST_CERTIFICATE
 
 
@@ -469,6 +471,13 @@ def canonical_paths(environment: Mapping[str, str] | None = None) -> RuntimePath
     state_root = _env_path(environment, "FULLMAG_STATE_ROOT", state / ".fullmag")
     source = _env_path(environment, "FULLMAG_REPO_ROOT", SOURCE_ROOT)
     package = _env_path(environment, "FULLMAG_RUNTIME_ROOT", PACKAGE_ROOT)
+    provenance = _env_path(
+        environment, "FULLMAG_PACKAGE_PROVENANCE", LEGACY_PROVENANCE_PATH
+    )
+    if provenance not in {LEGACY_PROVENANCE_PATH, BUILD_CONTROL_PROVENANCE_PATH}:
+        _fail(
+            "FULLMAG_PACKAGE_PROVENANCE must use a canonical legacy or build-control path"
+        )
     config = state / CONFIG_RELATIVE
     if state != STATE_ROOT or storage != STATE_ROOT:
         _fail("all-in-Docker accepted storage is fixed to /state")
@@ -497,7 +506,7 @@ def canonical_paths(environment: Mapping[str, str] | None = None) -> RuntimePath
         source=source,
         package=package,
         config=config,
-        provenance=IMAGE_ROOT / "provenance.json",
+        provenance=provenance,
         host_certificate=HOST_CERTIFICATE,
     )
 
@@ -541,6 +550,7 @@ def api_environment(paths: RuntimePaths, config_path: Path | None = None) -> dic
         "FULLMAG_STATE_DIR": str(paths.state_root),
         "FULLMAG_REPO_ROOT": str(paths.source),
         "FULLMAG_RUNTIME_ROOT": str(paths.package),
+        "FULLMAG_PACKAGE_PROVENANCE": str(paths.provenance),
         "FULLMAG_SESSION_STORAGE_PROFILE": WINDOWS_STORAGE_PROFILE,
         "FULLMAG_RUNTIME_SERVICE_CONFIG": str(config_path),
     }

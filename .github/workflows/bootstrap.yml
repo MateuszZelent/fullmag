@@ -1079,6 +1079,7 @@ jobs:
   docker-development-volumes-contracts:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'docker-development-volumes' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1101,9 +1102,27 @@ jobs:
             scripts/test_docker_backend_volume_cache.py \
             scripts/test_fullmag_docker_runtime.py \
             scripts/test_docker_host_ledger.py \
-            scripts/test_docker_dev_volume_contracts.py; do
+            scripts/test_docker_dev_volume_contracts.py \
+            scripts/test_windows_folder_evidence.py \
+            scripts/test_windows_folder_probe.py \
+            scripts/test_docker_runtime_provenance.py \
+            scripts/test_docker_backend_dev.py; do
             echo "::group::$test_file"
             python -B "$test_file" || failed=1
             echo "::endgroup::"
           done
           exit "$failed"
+
+      - name: Install Rust for storage delegation contracts
+        if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust storage contracts
+        if: ${{ !cancelled() }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docker-development-volume-storage
+
+      - name: Verify native storage delegation contracts
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p fullmag-session --lib docker_desktop_storage::tests --no-fail-fast

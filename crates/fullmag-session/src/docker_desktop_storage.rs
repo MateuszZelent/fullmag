@@ -26,6 +26,7 @@ const CONTAINER_ROOT: &str = "/state";
 const GRANT_NAME: &str = ".fullmag-windows-folder-grant.json";
 const DEVELOPMENT_PACKAGE_ROOT: &str = "/opt/fullmag/package";
 const DEVELOPMENT_PROVENANCE_PATH: &str = "/opt/fullmag/provenance.json";
+const DEVELOPMENT_CONTROL_PROVENANCE_PATH: &str = "/build/control/provenance.json";
 const DEVELOPMENT_RECEIPT_PATH: &str = "/opt/fullmag/package/backend-build-receipt.json";
 const DEVELOPMENT_BUILD_SCHEMA: &str = "fullmag.windows-folder-development-build.v1";
 #[cfg(windows)]
@@ -269,7 +270,8 @@ fn validate_development_build(delegation: &DevelopmentBuildDelegation) -> Result
     if delegation.schema != DEVELOPMENT_BUILD_SCHEMA
         || delegation.cargo_profile != "backend-dev"
         || delegation.package_root != DEVELOPMENT_PACKAGE_ROOT
-        || delegation.provenance_path != DEVELOPMENT_PROVENANCE_PATH
+        || (delegation.provenance_path != DEVELOPMENT_PROVENANCE_PATH
+            && delegation.provenance_path != DEVELOPMENT_CONTROL_PROVENANCE_PATH)
     {
         bail!("Windows-folder development delegation scope is invalid");
     }
@@ -659,7 +661,9 @@ fn validate_development_runtime_identity(
         bail!("development delegation group identity differs from the Compose project");
     }
 
-    let provenance = read_json_document(DEVELOPMENT_PROVENANCE_PATH, "runtime provenance")?;
+    // validate_development_build restricts this to the legacy package path or
+    // the canonical backend build-volume path before selecting the file.
+    let provenance = read_json_document(&delegation.provenance_path, "runtime provenance")?;
     if required_json_string(&provenance, "schema", "runtime provenance")?
         != "fullmag.docker-all-image.v1"
         || required_json_string(&provenance, "state", "runtime provenance")? != "succeeded"
@@ -1250,6 +1254,28 @@ mod tests {
                 .source_identity
                 .commit
         );
+    }
+
+    #[test]
+    fn development_delegation_accepts_only_canonical_provenance_paths() {
+        for path in [
+            DEVELOPMENT_PROVENANCE_PATH,
+            DEVELOPMENT_CONTROL_PROVENANCE_PATH,
+        ] {
+            let mut delegation = development_delegation();
+            delegation.provenance_path = path.into();
+            validate_development_build(&delegation).unwrap();
+        }
+
+        for path in [
+            "/build/control/../provenance.json",
+            "/build/control/nested/provenance.json",
+            "/tmp/provenance.json",
+        ] {
+            let mut delegation = development_delegation();
+            delegation.provenance_path = path.into();
+            assert!(validate_development_build(&delegation).is_err());
+        }
     }
 
     #[test]

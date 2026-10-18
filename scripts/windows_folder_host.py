@@ -402,7 +402,10 @@ def _validate_development_build(development_build):
         raise ValueError("Development build delegation toolchain image is invalid")
     if development_build.get("package_root") != "/opt/fullmag/package":
         raise ValueError("Development build delegation package root is invalid")
-    if development_build.get("provenance_path") != "/opt/fullmag/provenance.json":
+    if development_build.get("provenance_path") not in (
+        "/opt/fullmag/provenance.json",
+        "/build/control/provenance.json",
+    ):
         raise ValueError("Development build delegation provenance path is invalid")
     group_identity = development_build.get("group_identity")
     if (not isinstance(group_identity, str) or not group_identity or len(group_identity) > 256

@@ -148,6 +148,31 @@ class WindowsFolderEvidence(unittest.TestCase):
         self.assertEqual(certificate["development_build"], development_build)
         publish.assert_called_once()
 
+    def test_development_build_provenance_path_whitelist(self):
+        for provenance_path in (
+            "/opt/fullmag/provenance.json",
+            "/build/control/provenance.json",
+        ):
+            with self.subTest(provenance_path=provenance_path):
+                delegation = self._development_build({"fullmag": "e" * 64})
+                delegation["provenance_path"] = provenance_path
+                self.assertEqual(
+                    host._validate_development_build(delegation), delegation
+                )
+
+        for provenance_path in (
+            "/build/control/../provenance.json",
+            "/build/control/nested/provenance.json",
+            "/tmp/provenance.json",
+            ["/build/control/provenance.json"],
+            {"path": "/build/control/provenance.json"},
+        ):
+            with self.subTest(provenance_path=provenance_path):
+                delegation = self._development_build({"fullmag": "e" * 64})
+                delegation["provenance_path"] = provenance_path
+                with self.assertRaisesRegex(ValueError, "provenance path is invalid"):
+                    host._validate_development_build(delegation)
+
     def test_attest_legacy_certificate_has_no_development_delegation(self):
         binary_hashes = {"fullmag": "e" * 64}
         native = {

@@ -343,7 +343,12 @@ class BackendPackageTests(unittest.TestCase):
             self.assertIn(token, backend_block)
         for removed_token in ("/input/manifest.json", "--manifest", "--source-tar"):
             self.assertNotIn(removed_token, backend_block)
-        self.assertIn("read_only: false", backend_block)
+        self.assertNotIn("read_only: false", backend_block)
+        self.assertIn("read_only: true", backend_block)
+        self.assertIn("source: backend-cache-build\n        target: /build", backend_block)
+        self.assertIn("source: build-control\n        target: /run/fullmag/control\n        read_only: true", backend_block)
+        self.assertIn("FULLMAG_PACKAGE_PROVENANCE: /build/control/provenance.json", backend_block)
+        self.assertNotIn("/opt/fullmag/provenance.json", backend_block)
         self.assertIn("start_period: 14400s", backend_block)
         self.assertIn(
             "PYTHONPATH: /build/workspace/packages/fullmag-py/src:/opt/fullmag/package",
@@ -389,7 +394,7 @@ class BackendPackageTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     execvpe.call_args_list[0].args[2]["FULLMAG_PACKAGE_PROVENANCE"],
-                    "/opt/fullmag/provenance.json",
+                    "/build/control/provenance.json",
                 )
 
                 manifest = output / "runtimes/fem-gpu/manifest.json"
@@ -591,6 +596,22 @@ class BackendPackageTests(unittest.TestCase):
             finally:
                 backend.PACKAGE_ROOT = original_package_root
                 backend.PROVENANCE_PATH = original_provenance_path
+
+    def test_bound_provenance_fsync_failure_cleans_temp_and_preserves_previous(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provenance = root / "control" / "provenance.json"
+            provenance.parent.mkdir(parents=True)
+            previous = b'{"state":"previous"}\n'
+            provenance.write_bytes(previous)
+
+            with patch.object(backend, "PROVENANCE_PATH", provenance), \
+                    patch.object(backend.os, "fsync", side_effect=OSError("injected provenance fsync failure")):
+                with self.assertRaisesRegex(OSError, "injected provenance fsync failure"):
+                    backend._write_bound_bytes(provenance, b'{"state":"new"}\n', "runtime provenance")
+
+            self.assertEqual(provenance.read_bytes(), previous)
+            self.assertEqual(list(provenance.parent.iterdir()), [provenance])
 
     def test_start_rejects_known_insufficient_cache_before_prepare(self):
         with tempfile.TemporaryDirectory() as directory:
