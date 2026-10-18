@@ -220,6 +220,122 @@ def compose_project(layout, *, direct_development=False):
     return compose_project_identity(layout)["project_name"]
 
 
+def _direct_input_manifest(repo):
+    """Observe allow-listed inputs without generating a host context."""
+    names = tracked_input_files(repo)
+    result = [{"path": name.as_posix(), "sha256": hashlib.sha256(read_input(repo, name)).hexdigest()}
+              for name in names]
+    if tracked_input_files(repo) != names:
+        raise BootstrapError("Toolchain input inventory changed during observation")
+    return result
+
+
+def _build_direct(repo, layout):
+    """Compose/BuildKit dependency build; all generated documents remain in Docker."""
+    from docker_build_volume_io import (BuildDocument, control_store, compose_capture,
+                                       compose_build, VolumeBuildTerminalError)
+    from docker_compose_identity import compose_project_identity
+
+    identity = compose_project_identity(layout)
+    project = identity["project_name"]
+    root = Path(layout["storage_root"])
+    store = control_store(layout, repo)
+    capacity = store.capacity()
+    import shutil
+    host_free = shutil.disk_usage(root).free
+    if capacity.available_bytes <= 0 or host_free <= 0:
+        raise BootstrapError("Docker or its backing host volume has no available space")
+    index = BuildDocument(store, "index/docker-toolchain-bootstrap.json")
+    run = BuildDocument(store, "toolchain/" + uuid.uuid4().hex)
+    receipt = {"schema": "fullmag.docker-toolchain-bootstrap.v2", "state": "preparing",
+               "repo_root": str(repo), "worktree_id": layout["worktree_id"],
+               "source_commit": storage.git(repo, "rev-parse", "HEAD"),
+               "receipt_path": str(run / "receipt.json"), "qualification": "NOT VERIFIED",
+               "build_route": "direct-development", "compose_project": project,
+               "build_control_volume": store.volume_name, "helper_image_id": store.image_id,
+               "docker_volume_total_bytes": capacity.total_bytes,
+               "docker_volume_available_bytes": capacity.available_bytes,
+               "host_storage_available_bytes": host_free,
+               "build_data_location": "docker-named-volumes-and-buildkit"}
+
+    def publish():
+        (run / "receipt.json").write_json(receipt)
+        index.write_json(receipt)
+
+    lock = storage.validate_path(root / "locks/fullmag-heavy.lock", root)
+    with storage.file_lock(lock, "Docker Compose dependency toolchain build"):
+        # A client timeout never grants permission to submit the same intent
+        # again. Keep the last volume-backed intent until reconciled.
+        if index.exists():
+            previous = json.loads(index.read_bytes())
+            if previous.get("state") not in {"built", "failed_confirmed"}:
+                raise BootstrapError("Previous Compose toolchain outcome requires explicit reconciliation")
+        publish()
+        try:
+            manifest = _direct_input_manifest(repo)
+            definitions = ["compose", "--project-name", project, "--project-directory", str(repo),
+                           "-f", str(repo / "compose.toolchain.yaml"), "--profile", "toolchain"]
+            configured = json.loads(docker(*definitions, "config", "--format", "json"))
+            if configured.get("name") != project or set(configured.get("services", {})) != {SERVICE}:
+                raise BootstrapError("Toolchain Compose group or services differ from the selected checkout")
+            service = configured["services"][SERVICE]
+            build_spec = service.get("build", {})
+            if (Path(build_spec.get("context", "")).resolve() != repo
+                    or build_spec.get("dockerfile") != "docker/fem-gpu/Dockerfile"
+                    or build_spec.get("target") != "fem-gpu-dev"):
+                raise BootstrapError("Toolchain build changed the canonical context/Dockerfile/target")
+            # Group-local image tag avoids one checkout replacing another's
+            # dependency selection. BuildKit still shares identical layers.
+            service["image"] = f"fullmag/{project}-toolchain:cuda12.6.3"
+            receipt.update(state="building", source_inputs=manifest, image=service["image"],
+                           compose_file=str(run / "compose.json"),
+                           compose_sha256=hashlib.sha256(json.dumps(configured, sort_keys=True).encode()).hexdigest())
+            (run / "compose.json").write_json(configured)
+            publish()
+            compose_build(repo, project, configured, SERVICE, run / "build-log.json")
+            receipt["exit_code"] = 0
+            if _direct_input_manifest(repo) != manifest:
+                raise BootstrapError("Toolchain source inputs changed while BuildKit was building")
+            observed = json.loads(docker("image", "inspect", service["image"]))
+            if len(observed) != 1 or not re.fullmatch(r"sha256:[a-f0-9]{64}", observed[0].get("Id", "")):
+                raise BootstrapError("Built image has no immutable identity")
+            image_id = observed[0]["Id"]
+            receipt.update(state="reading_dependency_manifest", image_id=image_id)
+            publish()
+            probe = {"name": project, "services": {"toolchain-manifest-probe": {
+                "image": image_id, "pull_policy": "never", "user": "65532:65532",
+                "read_only": True, "network_mode": "none", "runtime": "runc",
+                "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
+                "pids_limit": 16, "mem_limit": "64m", "cpus": 0.25,
+                "environment": {"NVIDIA_VISIBLE_DEVICES": "void"},
+                "entrypoint": ["/bin/cat"], "command": [DEPENDENCY_MANIFEST]}}}
+            raw = compose_capture(repo, project, probe,
+                                  ["run", "--rm", "--no-deps", "-T", "toolchain-manifest-probe"])
+            if len(raw.encode()) > 2 * 1024 * 1024:
+                raise BootstrapError("Dependency manifest exceeds its bound")
+            installed = json.loads(raw)
+            if (installed.get("schema") != "fullmag.docker.fem-gpu-dependencies.v1"
+                    or installed.get("build", {}).get("phase") != "runtime"
+                    or not isinstance(installed.get("actual"), dict)):
+                raise BootstrapError("Built image lacks a runtime dependency manifest")
+            (run / "dependency-versions.json").write_bytes(raw.encode())
+            receipt.update(state="built", dependency_manifest=DEPENDENCY_MANIFEST,
+                           installed_manifest=str(run / "dependency-versions.json"),
+                           installed_manifest_sha256=hashlib.sha256(raw.encode()).hexdigest(),
+                           next_step="Start the same checkout Compose backend/frontend; GPU execution is not yet verified")
+        except BaseException as error:
+            if isinstance(error, VolumeBuildTerminalError):
+                receipt['exit_code'] = error.exit_code
+            uncertain = (receipt["state"] in {"building", "reading_dependency_manifest"}
+                         and not isinstance(error, VolumeBuildTerminalError))
+            receipt.update(state="outcome_unknown_resources_retained" if uncertain else "failed_confirmed", error=str(error))
+            raise
+        finally:
+            publish()
+            print(json.dumps(receipt, indent=2))
+    return receipt
+
+
 def build(repo, *, direct_development=False):
     if os.name != "nt":
         raise BootstrapError("Use PowerShell in the Windows checkout for this host bootstrap")
@@ -231,6 +347,8 @@ def build(repo, *, direct_development=False):
     if docker("info", "--format", "{{.OSType}}").strip() != "linux":
         raise BootstrapError("Docker Desktop must use the Linux engine")
     initialize_host_storage(layout, local_volume)
+    if direct_development:
+        return _build_direct(repo, layout)
     root = Path(layout["storage_root"])
     admission_check = assert_bootstrap_reconciled if direct_development else assert_fresh_host
     admission_check(root)

@@ -1,0 +1,54 @@
+# One-shot control-plane RPC. Build inputs, receipts, and temporary writes live
+# in the external named volume; the helper source is a readonly checkout bind.
+services:
+  build-control:
+    image: "${FULLMAG_BUILD_CONTROL_IMAGE_ID:?A full immutable helper image ID is required}"
+    pull_policy: never
+    user: "65532:65532"
+    read_only: true
+    privileged: false
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    stdin_open: true
+    tty: false
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 0.25
+    entrypoint: ["python3", "-B", "/opt/fullmag/build_control.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      FULLMAG_BUILD_CONTROL_SCHEMA: "${FULLMAG_BUILD_CONTROL_SCHEMA:?Build-control schema is required}"
+      FULLMAG_BUILD_CONTROL_OWNER_SCHEMA: "${FULLMAG_BUILD_CONTROL_OWNER_SCHEMA:?Owner schema is required}"
+      FULLMAG_BUILD_CONTROL_PROJECT: "${FULLMAG_BUILD_CONTROL_PROJECT:?Canonical Compose project is required}"
+      FULLMAG_BUILD_CONTROL_WORKTREE_ID: "${FULLMAG_BUILD_CONTROL_WORKTREE_ID:?Worktree identity is required}"
+      FULLMAG_BUILD_CONTROL_ROLE: "${FULLMAG_BUILD_CONTROL_ROLE:?Volume role is required}"
+      FULLMAG_BUILD_CONTROL_OWNER_ID: "${FULLMAG_BUILD_CONTROL_OWNER_ID:?Owner identity is required}"
+      FULLMAG_BUILD_CONTROL_CREATION_ID: "${FULLMAG_BUILD_CONTROL_CREATION_ID:?Volume creation identity is required}"
+      FULLMAG_BUILD_CONTROL_VOLUME: "${FULLMAG_BUILD_CONTROL_VOLUME:?Named volume is required}"
+      FULLMAG_BUILD_CONTROL_UID: "${FULLMAG_BUILD_CONTROL_UID:?Volume UID is required}"
+      FULLMAG_BUILD_CONTROL_GID: "${FULLMAG_BUILD_CONTROL_GID:?Volume GID is required}"
+    labels:
+      com.fullmag.build-control.schema: "${FULLMAG_BUILD_CONTROL_SCHEMA:?Build-control schema is required}"
+      com.fullmag.build-control.project: "${FULLMAG_BUILD_CONTROL_PROJECT:?Canonical Compose project is required}"
+      com.fullmag.build-control.worktree-id: "${FULLMAG_BUILD_CONTROL_WORKTREE_ID:?Worktree identity is required}"
+      com.fullmag.build-control.role: "${FULLMAG_BUILD_CONTROL_ROLE:?Volume role is required}"
+      com.fullmag.build-control.owner-id: "${FULLMAG_BUILD_CONTROL_OWNER_ID:?Owner identity is required}"
+      com.fullmag.build-control.creation-id: "${FULLMAG_BUILD_CONTROL_CREATION_ID:?Volume creation identity is required}"
+    volumes:
+      - type: volume
+        source: build-control-data
+        target: /control
+        read_only: false
+        volume: {nocopy: true}
+      - type: bind
+        source: "${FULLMAG_BUILD_CONTROL_HELPER:?Readonly helper source is required}"
+        target: /opt/fullmag/build_control.py
+        read_only: true
+        bind: {create_host_path: false}
+
+volumes:
+  build-control-data:
+    name: "${FULLMAG_BUILD_CONTROL_VOLUME:?Deterministic control volume is required}"
+    external: true
