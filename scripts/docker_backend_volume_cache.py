@@ -369,6 +369,8 @@ def _plan(
     source_root: str | os.PathLike[str],
     toolchain_image: str,
     cargo_profile: str,
+    receipt_store=None,
+    receipt_relative: str | None = None,
 ) -> dict[str, Any]:
     repo_path = Path(repo)
     if not repo_path.is_absolute() or repo_path.is_symlink() or not repo_path.is_dir():
@@ -377,7 +379,12 @@ def _plan(
     toolchain_image = _require_image_id(toolchain_image, "toolchain image")
     worktree_id = _require_identifier(str(layout.get("worktree_id", "")), "worktree_id")
     project_id = _safe_project_id(layout)
-    receipt = _receipt_path(layout, runroot)
+    if receipt_store is not None:
+        if not isinstance(receipt_relative, str):
+            raise BackendVolumeCacheError('Docker cache receipt needs an explicit control-relative path')
+        receipt = receipt_store.uri(receipt_relative)
+    else:
+        receipt = _receipt_path(layout, runroot)
     identity = cache_key(source_root, worktree_id, toolchain_image, cargo_profile)
     unit_key = _sha256({
         "schema": SCHEMA,
@@ -421,13 +428,14 @@ def _plan(
         "build_root": BUILD_TARGET,
         "package_root": PACKAGE_TARGET,
         "receipt_path": str(receipt),
-        "host_receipt_path": str(receipt),
+        "host_receipt_path": None if receipt_store is not None else str(receipt),
         "environment": {},
     }
     profile["environment"] = _cache_environment(profile)
     profile["mounts"] = _mount_specs(profile)
     profile["maintenance_service"] = _maintenance_service(profile)
     return profile
+
 
 
 def prepare(
@@ -442,6 +450,8 @@ def prepare(
     cargo_profile: str = "backend-dev",
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
+    receipt_store=None,
+    receipt_relative: str | None = None,
 ) -> dict[str, Any]:
     """Build the v2 plan and optionally create only its exact missing pair.
 
@@ -454,12 +464,14 @@ def prepare(
     profile = _plan(
         layout, repo, image, runroot, source_root=source_root,
         toolchain_image=toolchain_image, cargo_profile=cargo_profile,
+        receipt_store=receipt_store, receipt_relative=receipt_relative,
     )
     if docker is not None:
         profile["volume_documents"] = ensure_volume_pair(
             docker, profile, active_consumers=active_consumers
         )
     return profile
+
 
 
 def prepare_ready(
@@ -475,6 +487,8 @@ def prepare_ready(
     cargo_profile: str = "backend-dev",
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
+    receipt_store=None,
+    receipt_relative: str | None = None,
 ) -> dict[str, Any]:
     """Prepare and admit a pair after a managed guest maintenance callback.
 
@@ -493,6 +507,7 @@ def prepare_ready(
         source_root=source_root,
         toolchain_image=toolchain_image,
         cargo_profile=cargo_profile,
+        receipt_store=receipt_store, receipt_relative=receipt_relative,
         active_consumers=active_consumers,
     )
     if not isinstance(profile.get("volume_documents"), Mapping):
@@ -502,7 +517,9 @@ def prepare_ready(
     receipt = maintenance(profile, maintenance_overlay(profile))
     if not isinstance(receipt, Mapping):
         raise BackendVolumeCacheError("maintenance callback returned no JSON receipt")
-    return validate(profile, profile["volume_documents"], receipt, active_consumers)
+    return validate(profile, profile["volume_documents"], receipt, active_consumers,
+                    receipt_store=receipt_store, receipt_relative=receipt_relative)
+
 
 
 def _normal_volume_document(value: Any, expected_name: str) -> dict[str, Any]:
@@ -891,6 +908,8 @@ def validate(
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
     *,
     receipt_path: str | os.PathLike[str] | None = None,
+    receipt_store=None,
+    receipt_relative: str | None = None,
 ) -> dict[str, Any]:
     """Admit exact inspected volumes and a fixed maintenance probe receipt."""
 
@@ -907,8 +926,16 @@ def validate(
         checked_profile, _active_consumer_snapshot(active_consumers)
     )
     maintenance = _validate_maintenance_receipt(maintenance_receipt, profile)
-    path = Path(receipt_path or profile["receipt_path"])
-    expected_path = Path(profile["receipt_path"])
+    if receipt_store is not None:
+        if not isinstance(receipt_relative, str) or receipt_path is not None:
+            raise BackendVolumeCacheError('Docker receipt transport is incomplete or ambiguous')
+        path = receipt_store.uri(receipt_relative)
+        expected_path = profile['receipt_path']
+    else:
+        if str(profile['receipt_path']).startswith('docker-volume:'):
+            raise BackendVolumeCacheError('Docker receipt requires its control-volume writer')
+        path = Path(receipt_path or profile['receipt_path'])
+        expected_path = Path(profile['receipt_path'])
     if path != expected_path:
         raise BackendVolumeCacheError("backend cache receipt must use the canonical run path")
     receipt = {
@@ -929,21 +956,25 @@ def validate(
         "build_root": BUILD_TARGET,
         "volume_documents": inspected,
         "maintenance_receipt": maintenance,
-        "host_receipt_path": str(path),
+        "host_receipt_path": None if receipt_store is not None else str(path),
     }
-    _write_json(path, receipt)
+    if receipt_store is not None:
+        receipt_store.write_json(receipt_relative, receipt)
+    else:
+        _write_json(path, receipt)
     result = dict(profile)
     result.update({
         "state": "ready",
         "volume_documents": inspected,
         "maintenance_receipt": maintenance,
         "receipt_path": str(path),
-        "host_receipt_path": str(path),
+        "host_receipt_path": None if receipt_store is not None else str(path),
         "receipt": receipt,
     })
     result["overlay"] = overlay(result)
     result["maintenance_overlay"] = maintenance_overlay(result)
     return result
+
 
 
 def overlay(profile: Mapping[str, Any]) -> dict[str, Any]:

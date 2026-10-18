@@ -15,6 +15,7 @@ from contextlib import nullcontext
 import fullmag_docker_runtime as runtime
 import run_managed_browser as managed
 import docker_backend_volume_cache as volume_cache
+import docker_host_ledger as host_ledger
 from test_docker_backend_volume_cache import (
     DockerVolumeFixture,
     _maintenance_receipt,
@@ -2583,6 +2584,384 @@ class DockerRuntimeContract(unittest.TestCase):
                 entry.preflight()
             load.assert_not_called()
             mkdir.assert_not_called()
+
+    def test_build_control_descriptor_accepts_canonical_long_compose_project(self):
+        from docker_build_control import volume_identity
+
+        project = "fullmag-worktree-eigensolve-dispersion-plan-20260-c5dfad6d7f548079"
+        worktree_id = "eigensolve-dispersion-plan-20260-c5dfad6d7f548079"
+        self.assertGreater(len(project), 63)
+        self.assertLessEqual(len(project), 255)
+        run_id = "a" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory).resolve()
+            layout = {"repo_root": str(source_root), "project_id": "source-project"}
+            descriptor = {
+                "project": project,
+                "worktree_id": worktree_id,
+                "source_root": str(source_root),
+                "image_id": "sha256:" + "c" * 64,
+                "volume_name": volume_identity(project, worktree_id)["volume_name"],
+                "run_relative": "runs/" + run_id,
+            }
+            value = {
+                "build_control": descriptor,
+                "run_id": run_id,
+                "compose_project": project,
+                "source_project_id": layout["project_id"],
+                "source_worktree_id": worktree_id,
+                "provenance_path": runtime._BACKEND_CONTROL_PROVENANCE,
+                "helper_context": runtime._build_control_uri(descriptor, "backend-start-context"),
+                "backend_start_receipt": runtime._build_control_uri(
+                    descriptor, "backend-start-receipt.json"
+                ),
+            }
+            with patch(
+                "docker_compose_identity.compose_project_identity",
+                return_value={"project_name": project, "worktree_id": worktree_id},
+            ):
+                self.assertIs(runtime._validate_build_control_descriptor(value, layout), descriptor)
+
+            boundary_project = "a" + "b" * 254
+            boundary_descriptor = {
+                **descriptor,
+                "project": boundary_project,
+                "volume_name": volume_identity(boundary_project, worktree_id)["volume_name"],
+            }
+            boundary_value = {
+                **value,
+                "build_control": boundary_descriptor,
+                "compose_project": boundary_project,
+            }
+            with patch(
+                "docker_compose_identity.compose_project_identity",
+                return_value={"project_name": boundary_project, "worktree_id": worktree_id},
+            ):
+                self.assertEqual(len(boundary_project), 255)
+                self.assertIs(
+                    runtime._validate_build_control_descriptor(boundary_value, layout),
+                    boundary_descriptor,
+                )
+
+            with patch(
+                "docker_compose_identity.compose_project_identity",
+                return_value={"project_name": project, "worktree_id": worktree_id},
+            ):
+                too_long_project = "a" * 256
+                too_long = {
+                    **value,
+                    "compose_project": too_long_project,
+                    "build_control": {**descriptor, "project": too_long_project},
+                }
+                with self.assertRaisesRegex(ValueError, "identity is invalid"):
+                    runtime._validate_build_control_descriptor(too_long, layout)
+
+    def test_volume_only_compose_is_attested_and_merged_without_host_paths(self):
+        class Observation:
+            def __init__(self, value):
+                self.sha256 = hashlib.sha256(
+                    json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+
+        class ControlStore:
+            def __init__(self, volume_name):
+                self.volume_name = volume_name
+                self.documents = {}
+
+            def uri(self, relative):
+                return f"docker-volume://{self.volume_name}/{relative}"
+
+            def read_json(self, relative):
+                return self.documents[relative]
+
+            def stat(self, relative):
+                value = self.documents.get(relative)
+                return None if value is None else Observation(value)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            run_relative = "runs/" + "a" * 32
+            store = ControlStore("fullmag-build-control-test")
+            cache = _v2_cache_fixture(root)
+            descriptor = {
+                "project": "fullmag-test",
+                "worktree_id": "worktree-test",
+                "source_root": str(root),
+                "image_id": "sha256:" + "c" * 64,
+                "volume_name": store.volume_name,
+                "run_relative": run_relative,
+            }
+            cache_paths = {
+                "receipt_path": "backend-volume-cache-receipt.json",
+                "compose_overlay": "backend-cache-overlay.json",
+                "maintenance_compose_overlay": "backend-cache-maintenance.json",
+            }
+            cache["receipt_path"] = store.uri(
+                run_relative + "/" + cache_paths["receipt_path"]
+            )
+            cache["compose_overlay"] = store.uri(
+                run_relative + "/" + cache_paths["compose_overlay"]
+            )
+            cache["maintenance_compose_overlay"] = store.uri(
+                run_relative + "/" + cache_paths["maintenance_compose_overlay"]
+            )
+            cache["host_receipt_path"] = None
+            cache["overlay"] = volume_cache.overlay(cache)
+            cache["maintenance_overlay"] = volume_cache.maintenance_overlay(cache)
+            for field, relative in cache_paths.items():
+                value = (
+                    cache["receipt"] if field == "receipt_path" else
+                    cache["overlay"] if field == "compose_overlay" else
+                    cache["maintenance_overlay"]
+                )
+                store.documents[run_relative + "/" + relative] = value
+
+            ledger_relative = run_relative + "/host-ledger-compose-overlay.json"
+            ledger_overlay = {
+                "services": {
+                    "backend": {
+                        "environment": {"FULLMAG_DOCKER_HOST_EXECUTION": "1"},
+                        "volumes": [{
+                            "type": "bind", "source": "C:/fullmag/storage",
+                            "target": "/host-ledger", "read_only": False,
+                        }],
+                    }
+                }
+            }
+            store.documents[ledger_relative] = ledger_overlay
+            host_ledger = {
+                "environment": {"FULLMAG_DOCKER_HOST_ID": "host-id"},
+                "compose_overlay": store.uri(ledger_relative),
+                "compose_overlay_sha256": store.stat(ledger_relative).sha256,
+                "compose_overlay_document": ledger_overlay,
+            }
+            front_name = "fullmag-frontend-development-test"
+            live_mounts = [
+                {
+                    "type": "bind", "source": str(root / "apps" / "control-room" / name),
+                    "target": f"/state/development/workspace/apps/control-room/{name}",
+                    "read_only": True, "bind": {"create_host_path": False},
+                }
+                for name in ("app", "src", "public", "scripts")
+            ]
+            frontend_volume = {
+                "volume_name": front_name,
+                "compose_volume_declaration": {
+                    "frontend-development": {"name": front_name, "external": True},
+                },
+                "development_mount": {
+                    "type": "volume", "source": "frontend-development",
+                    "target": "/state/development", "read_only": False,
+                    "volume": {"nocopy": True},
+                },
+                "source_mount": {
+                    "type": "bind", "source": str(root), "target": "/run/fullmag/source",
+                    "read_only": True, "bind": {"create_host_path": False},
+                },
+                "live_source_mounts": live_mounts,
+                "control_mount_target": "/run/fullmag/control",
+                "control_volume_name": store.volume_name,
+                "container_labels": {"org.fullmag.frontend.owner": "test-owner"},
+                "creation_id": "f" * 32,
+            }
+            base = {
+                "name": "fullmag-test",
+                "services": {
+                    "backend": {
+                        "environment": {},
+                        "volumes": [{
+                            "type": "bind", "source": str(root),
+                            "target": "/run/fullmag/control", "read_only": False,
+                        }],
+                    },
+                    "frontend": {"environment": {}, "labels": {}, "volumes": []},
+                },
+                "volumes": {},
+            }
+            backend_start = {
+                "build_control": descriptor,
+                "source_root": str(root),
+                "git_common_dir": str(root / ".git"),
+                "package_root": volume_cache.PACKAGE_TARGET,
+                "cargo_profile": "backend-dev",
+                "backend_cache": cache,
+            }
+            with patch.object(runtime, "docker", return_value=json.dumps(base)), \
+                    patch.object(runtime, "_compose_source_environment", return_value={}):
+                configured = runtime._compose_spec_volume_only(
+                    "sha256:" + "d" * 64, root / "state", 3197, root / "host-certificate.json",
+                    repo=root, backend_start=backend_start, inputs={},
+                    inputs_path="/run/fullmag/control/" + run_relative + "/development-inputs.json",
+                    package=volume_cache.PACKAGE_TARGET, project="fullmag-test",
+                    source_identity={}, workspace_state_root=root / "user-data",
+                    toolchain_image="sha256:" + "b" * 64, template=root / "compose.dev.yaml",
+                    host_ledger=host_ledger, frontend_volume=frontend_volume,
+                    control_store=store, control_run_relative=run_relative,
+                )
+
+            backend = configured["services"]["backend"]
+            frontend = configured["services"]["frontend"]
+            backend_targets = {mount["target"] for mount in backend["volumes"]}
+            frontend_targets = {mount["target"] for mount in frontend["volumes"]}
+            self.assertEqual(set(configured["services"]), {"backend", "frontend"})
+            self.assertNotIn("build", backend)
+            self.assertEqual(backend["environment"]["FULLMAG_PACKAGE_PROVENANCE"],
+                             runtime._BACKEND_CONTROL_PROVENANCE)
+            self.assertIn("/run/fullmag/control", backend_targets)
+            self.assertEqual(frontend_targets, {
+                "/run/fullmag/source", "/state/development", "/run/fullmag/control",
+                *(mount["target"] for mount in live_mounts),
+            })
+            self.assertEqual(frontend["labels"]["org.fullmag.frontend.owner"], "test-owner")
+            self.assertEqual(configured["volumes"]["build-control"]["name"], store.volume_name)
+            self.assertEqual(configured["volumes"]["frontend-development"]["name"], front_name)
+            self.assertNotIn("/opt/fullmag/provenance.json", backend_targets)
+
+    def test_volume_only_startup_overlay_uses_readonly_control_mount(self):
+        authorization = {
+            "source_root": "C:/checkout",
+            "container_script_path": "/opt/fullmag/source/start.py",
+        }
+        guest_provenance = "/run/fullmag/control/runs/" + "a" * 32 + "/startup-provenance.json"
+        overlay = runtime._startup_overlay_document(
+            None,
+            authorization,
+            include_source=False,
+            provenance_sha256="b" * 64,
+            helper_sha256="c" * 64,
+            provenance_source=guest_provenance,
+            provenance_target=guest_provenance,
+            include_provenance_mount=False,
+        )
+        service = overlay["services"]["backend"]
+        self.assertEqual(service["environment"]["FULLMAG_STARTUP_PROVENANCE"], guest_provenance)
+        self.assertEqual(service["volumes"], [])
+
+    def test_volume_only_host_ledger_compose_uses_control_document_and_stdin_runner(self):
+        class MemoryDocument:
+            def __init__(self):
+                self.value = None
+
+            def write_json(self, value):
+                self.value = json.loads(json.dumps(value))
+
+            def read_bytes(self):
+                return json.dumps(self.value).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "compose.host-ledger.yaml"
+            source.write_text("services: {}\n", encoding="utf-8")
+            destination = MemoryDocument()
+            image_id = "sha256:" + "a" * 64
+            rendered = {
+                "services": {
+                    "backend": {"environment": {}},
+                    "host-ledger-maintenance": {"image": image_id},
+                },
+                "volumes": {},
+            }
+            captured = []
+
+            def compose_capture_runner(document, arguments, *, environment=None, timeout=120):
+                captured.append((document, list(arguments), environment, timeout))
+                return ""
+
+            with patch.object(
+                host_ledger, "_invoke",
+                return_value=(json.dumps(rendered), "", json.dumps(rendered)),
+            ), patch.object(host_ledger, "_validate_overlay_config"), patch.object(
+                host_ledger, "_validate_maintenance_service"
+            ):
+                result = host_ledger._render_maintenance(
+                    source,
+                    destination,
+                    environment={"FULLMAG_HOST_LEDGER_PROFILE": host_ledger.PROFILE},
+                    image_id=image_id,
+                    docker_callable=lambda *args, **kwargs: self.fail(
+                        "volume-only maintenance validation must use Compose stdin"
+                    ),
+                    compose_capture_runner=compose_capture_runner,
+                )
+
+            self.assertEqual(result, rendered)
+            expected_document = {"services": {"host-ledger-maintenance": {"image": image_id}}}
+            self.assertEqual(destination.value, expected_document)
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0][0], expected_document)
+            self.assertEqual(
+                captured[0][1],
+                ["--profile", "host-ledger-maintenance", "config", "--quiet"],
+            )
+            self.assertEqual(captured[0][3], 60)
+
+    def test_volume_only_host_ledger_run_keeps_owner_inspection_on_docker_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory)
+            image_id = "sha256:" + "a" * 64
+            run_id = "b" * 32
+            receipt = {
+                "schema": host_ledger.HOST_RECEIPT_SCHEMA,
+                "profile": host_ledger.PROFILE,
+                "state": "ready",
+                "project_id": "fullmag-test",
+                "backing_image": "/opt/fullmag-mfem-cpu",
+                "mount_root": "/host/storage",
+                "ledger_root": "/host/storage/ledger",
+                "mount_target": host_ledger.MOUNT_TARGET,
+                "filesystem": "ext4",
+                "filesystem_uuid": "00000000-0000-0000-0000-000000000000",
+                "image_size_bytes": host_ledger.IMAGE_SIZE_BYTES,
+                "loop_device": "/dev/loop7",
+                "mount_active": True,
+            }
+            document = {"services": {"host-ledger-maintenance": {"image": image_id}}}
+            capture_calls = []
+            docker_calls = []
+            container_name = host_ledger._container_name("ensure", run_root)
+
+            def compose_capture_runner(compose_document, arguments, *, timeout=120):
+                capture_calls.append((compose_document, list(arguments), timeout))
+                return json.dumps(receipt)
+
+            def docker_callable(*args, **kwargs):
+                docker_calls.append(args)
+                if args[0] == "inspect":
+                    return json.dumps([{
+                        "Name": "/" + container_name,
+                        "Image": image_id,
+                        "Config": {"Labels": {"org.fullmag.host-ledger.owner": run_id}},
+                        "State": {"Status": "exited", "ExitCode": 0},
+                    }])
+                if args[0] == "rm":
+                    return ""
+                self.fail("managed maintenance run must use the stdin Compose runner")
+
+            observed = host_ledger._run_maintenance(
+                run_root,
+                "fullmag-build://runs/test/host-ledger-maintenance-compose.json",
+                image_id,
+                "fullmag-host-ledger-test",
+                "ensure",
+                docker_callable,
+                {
+                    "run_id": run_id,
+                    "project_id": receipt["project_id"],
+                    "mount_root": receipt["mount_root"],
+                    "backing_image": receipt["backing_image"],
+                },
+                300,
+                compose_document=document,
+                compose_capture_runner=compose_capture_runner,
+            )
+
+            self.assertEqual(observed, receipt)
+            self.assertEqual(capture_calls[0][0], document)
+            self.assertEqual(
+                capture_calls[0][1][:2], ["--profile", "host-ledger-maintenance"]
+            )
+            self.assertIn("run", capture_calls[0][1])
+            self.assertEqual(capture_calls[0][2], 300)
+            self.assertEqual([call[0] for call in docker_calls], ["inspect", "rm"])
 
 
 if __name__ == "__main__":

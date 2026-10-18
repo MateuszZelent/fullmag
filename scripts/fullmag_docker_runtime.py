@@ -148,7 +148,9 @@ def _read_backend_cache_document(path_value, digest_value, label, *, expected=No
     return value
 
 
-def _validate_backend_volume_cache(value, *, expected_package=None):
+def _validate_backend_volume_cache(value, *, expected_package=None,
+                                  control_store=None, control_run_relative=None,
+                                  build_control=None):
     """Validate the v2 named-volume descriptor before Compose or attestation."""
 
     kind, adapter = _backend_cache_kind(value)
@@ -177,10 +179,43 @@ def _validate_backend_volume_cache(value, *, expected_package=None):
     receipt_expected = value.get("receipt")
     if not isinstance(receipt_expected, dict):
         raise ValueError("Backend volume cache ready receipt is missing")
-    receipt = _read_backend_cache_document(
-        value.get("receipt_path"), value.get("receipt_sha256"), "ready receipt",
-        expected=receipt_expected, maximum=16 * 1024 * 1024,
-    )
+    volume_only = build_control is not None or control_store is not None
+    if volume_only:
+        if not isinstance(build_control, Mapping):
+            raise ValueError("Backend volume cache has no build-control identity")
+        run_relative = control_run_relative or build_control.get("run_relative")
+        if run_relative != build_control.get("run_relative"):
+            raise ValueError("Backend volume cache run differs from its control-volume identity")
+        expected_paths = {
+            "receipt_path": "backend-volume-cache-receipt.json",
+            "compose_overlay": "backend-cache-overlay.json",
+            "maintenance_compose_overlay": "backend-cache-maintenance.json",
+        }
+        for field, relative in expected_paths.items():
+            if value.get(field) != _build_control_uri(build_control, relative):
+                raise ValueError(f"Backend volume cache {field} is not in its canonical control run")
+        if value.get("host_receipt_path") is not None:
+            raise ValueError("Backend volume cache must not retain a host receipt path")
+        if control_store is None:
+            receipt = receipt_expected
+            overlay = value.get("overlay")
+            maintenance_overlay = value.get("maintenance_overlay")
+        else:
+            receipt = control_store.read_json(run_relative + "/backend-volume-cache-receipt.json")
+            overlay = control_store.read_json(run_relative + "/backend-cache-overlay.json")
+            maintenance_overlay = control_store.read_json(run_relative + "/backend-cache-maintenance.json")
+            for actual, expected, label in (
+                (receipt, receipt_expected, "ready receipt"),
+                (overlay, value.get("overlay"), "Compose overlay"),
+                (maintenance_overlay, value.get("maintenance_overlay"), "maintenance overlay"),
+            ):
+                if not isinstance(actual, dict) or actual != expected:
+                    raise ValueError(f"Backend volume cache {label} differs from its control-volume copy")
+    else:
+        receipt = _read_backend_cache_document(
+            value.get("receipt_path"), value.get("receipt_sha256"), "ready receipt",
+            expected=receipt_expected, maximum=16 * 1024 * 1024,
+        )
     if receipt.get("schema") != adapter.SCHEMA or receipt.get("profile") != adapter.PROFILE:
         raise ValueError("Backend volume cache ready receipt schema differs")
     if (receipt.get("volume_names") != volume_names
@@ -197,10 +232,11 @@ def _validate_backend_volume_cache(value, *, expected_package=None):
     overlay_expected = value.get("overlay")
     if not isinstance(overlay_expected, dict):
         raise ValueError("Backend volume cache Compose overlay descriptor is missing")
-    overlay = _read_backend_cache_document(
-        value.get("compose_overlay"), value.get("compose_overlay_sha256"),
-        "Compose overlay", expected=overlay_expected,
-    )
+    if not volume_only:
+        overlay = _read_backend_cache_document(
+            value.get("compose_overlay"), value.get("compose_overlay_sha256"),
+            "Compose overlay", expected=overlay_expected,
+        )
     maintenance_expected = value.get("maintenance_overlay")
     if not isinstance(maintenance_expected, dict):
         raise ValueError("Backend volume cache maintenance overlay descriptor is missing")
@@ -209,11 +245,12 @@ def _validate_backend_volume_cache(value, *, expected_package=None):
         # Keep the field name explicit for callers that materialize the path
         # before the host wrapper adds its compatibility alias.
         maintenance_path = value.get("maintenance_overlay_path")
-    maintenance_overlay = _read_backend_cache_document(
-        maintenance_path,
-        value.get("maintenance_compose_overlay_sha256", value.get("maintenance_overlay_sha256")),
-        "maintenance overlay", expected=maintenance_expected,
-    )
+    if not volume_only:
+        maintenance_overlay = _read_backend_cache_document(
+            maintenance_path,
+            value.get("maintenance_compose_overlay_sha256", value.get("maintenance_overlay_sha256")),
+            "maintenance overlay", expected=maintenance_expected,
+        )
     try:
         if overlay != adapter.overlay(value) or maintenance_overlay != adapter.maintenance_overlay(value):
             raise ValueError("cache overlay differs from the canonical adapter output")
@@ -222,6 +259,132 @@ def _validate_backend_volume_cache(value, *, expected_package=None):
     except Exception as error:
         raise ValueError(f"Backend volume cache overlay validation failed: {error}") from error
     return adapter
+
+
+_BACKEND_CONTROL_PROVENANCE = "/build/control/provenance.json"
+
+
+def _build_control_uri(descriptor, relative):
+    """Return a canonical control-volume URI for a validated run-relative path."""
+
+    if not isinstance(descriptor, Mapping):
+        raise ValueError("Backend build-control identity is missing")
+    volume_name = descriptor.get("volume_name")
+    run_relative = descriptor.get("run_relative")
+    if (not isinstance(volume_name, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,127}", volume_name) is None
+            or not isinstance(run_relative, str)
+            or re.fullmatch(r"runs/[0-9a-f]{32}", run_relative) is None):
+        raise ValueError("Backend build-control identity is malformed")
+    suffix = str(PurePosixPath(relative))
+    if (not suffix or suffix.startswith("/")
+            or any(part in {"", ".", ".."} for part in suffix.split("/"))):
+        raise ValueError("Backend build-control document path is unsafe")
+    return f"docker-volume://{volume_name}/{run_relative}/{suffix}"
+
+
+def _validate_build_control_descriptor(value, layout):
+    """Validate the typed identity that fences one run in the Docker control volume."""
+
+    descriptor = value.get("build_control")
+    fields = {"project", "worktree_id", "source_root", "image_id", "volume_name", "run_relative"}
+    if not isinstance(descriptor, dict) or set(descriptor) != fields:
+        raise ValueError("Backend start build-control descriptor is incomplete")
+    project = descriptor.get("project")
+    worktree_id = descriptor.get("worktree_id")
+    source_root = descriptor.get("source_root")
+    helper_image = descriptor.get("image_id")
+    if (not isinstance(project, str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,254}", project) is None
+            or not isinstance(worktree_id, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", worktree_id) is None
+            or not isinstance(source_root, str) or not Path(source_root).is_absolute()
+            or not isinstance(helper_image, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", helper_image) is None):
+        raise ValueError("Backend start build-control identity is invalid")
+    if value.get("run_id") is None or _RUN_ID_RE.fullmatch(str(value.get("run_id"))) is None:
+        raise ValueError("Backend start run ID is invalid")
+    expected_run = "runs/" + value["run_id"]
+    if descriptor.get("run_relative") != expected_run:
+        raise ValueError("Backend build-control run path differs from its run ID")
+    try:
+        from docker_build_control import volume_identity
+        expected_volume = volume_identity(project, worktree_id)["volume_name"]
+    except (ImportError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("Backend build-control identity cannot be derived") from error
+    if descriptor.get("volume_name") != expected_volume:
+        raise ValueError("Backend build-control volume does not match its project/worktree")
+    layout_source = layout.get("repo_root")
+    if (value.get("compose_project") != project
+            or value.get("source_project_id") != layout.get("project_id")
+            or value.get("source_worktree_id") != worktree_id
+            or not isinstance(layout_source, (str, os.PathLike))
+            or Path(source_root).resolve() != Path(layout_source).resolve()):
+        raise ValueError("Backend build-control identity differs from the selected source")
+    if value.get("provenance_path") != _BACKEND_CONTROL_PROVENANCE:
+        raise ValueError("Backend provenance output is not the canonical writable build-volume path")
+    expected_context = _build_control_uri(descriptor, "backend-start-context")
+    expected_receipt = _build_control_uri(descriptor, "backend-start-receipt.json")
+    if (value.get("helper_context") != expected_context
+            or value.get("backend_start_receipt") != expected_receipt):
+        raise ValueError("Backend start control-volume references do not match the run identity")
+    identity = layout
+    try:
+        from docker_compose_identity import compose_project_identity
+        resolved = compose_project_identity(layout)
+    except (ImportError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("Backend build-control source identity cannot be resolved") from error
+    if (resolved.get("project_name") != project
+            or resolved.get("worktree_id") != worktree_id):
+        raise ValueError("Backend build-control source identity differs from the checkout")
+    return descriptor
+
+
+def _control_store_for_backend_start(layout, backend_start):
+    """Open the exact project/worktree control volume selected by backend start."""
+
+    from docker_build_volume_io import control_store
+
+    descriptor = _validate_build_control_descriptor(backend_start, layout)
+    store = control_store(
+        layout,
+        descriptor["source_root"],
+        helper_image=descriptor["image_id"],
+    )
+    identity = store.ensure()
+    for field in ("project", "worktree_id", "volume_name", "owner_id"):
+        if identity.get(field) != store.identity.get(field):
+            raise ValueError("Backend build-control store identity differs from its owner marker")
+    if store.volume_name != descriptor["volume_name"]:
+        raise ValueError("Backend build-control store opened a different volume")
+    run_relative = descriptor["run_relative"]
+    stored_inputs = store.read_json(run_relative + "/backend-start-inputs.json")
+    if stored_inputs != backend_start:
+        raise ValueError("Backend start inputs differ from their immutable control-volume copy")
+    input_observation = store.stat(run_relative + "/backend-start-inputs.json")
+    terminal = store.read_json(run_relative + "/backend-start-receipt.json")
+    if (not isinstance(terminal, dict)
+            or terminal.get("schema") != "fullmag.direct-compose-backend-start.v1"
+            or terminal.get("state") != "ready"
+            or terminal.get("run_id") != backend_start.get("run_id")
+            or terminal.get("backend_start_inputs")
+            != store.uri(run_relative + "/backend-start-inputs.json")
+            or terminal.get("backend_start_inputs_sha256")
+            != input_observation.sha256):
+        raise ValueError("Backend start receipt does not bind the stored inputs")
+    cache = backend_start.get("backend_cache")
+    _validate_backend_volume_cache(
+        cache,
+        expected_package=backend_start.get("package_root"),
+        control_store=store,
+        control_run_relative=run_relative,
+        build_control=descriptor,
+    )
+    helpers = backend_start.get("startup_helper_hashes")
+    for name, expected in helpers.items():
+        observation = store.stat(run_relative + "/backend-start-context/" + name)
+        if observation is None or observation.sha256 != expected:
+            raise ValueError("Backend startup helper bytes differ from the stored inventory: " + name)
+    return store
 
 
 def validate_runtime_artifacts(package, *, development=False):
@@ -747,6 +910,214 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
     return configured
 
 
+def _merge_compose_document(base, overlay):
+    """Merge a typed Compose fragment while replacing mounts by destination."""
+
+    if not isinstance(base, dict) or not isinstance(overlay, Mapping):
+        raise ValueError("Compose document and overlay must be mappings")
+
+    def merge(target, update, key=None):
+        if isinstance(target, dict) and isinstance(update, Mapping):
+            for name, value in update.items():
+                target[name] = merge(target.get(name), value, name)
+            return target
+        if key == "volumes" and isinstance(target, list) and isinstance(update, list):
+            result = list(target)
+            for mount in update:
+                if not isinstance(mount, Mapping) or not isinstance(mount.get("target"), str):
+                    raise ValueError("Compose volume overlay has an untyped mount")
+                def target_of(existing):
+                    if isinstance(existing, Mapping):
+                        return existing.get("target")
+                    if isinstance(existing, str):
+                        parts = existing.rsplit(":", 1)
+                        return parts[-1].split(":", 1)[0] if len(parts) == 2 else None
+                    return None
+                result = [existing for existing in result
+                          if target_of(existing) != mount["target"]]
+                result.append(dict(mount))
+            return result
+        if isinstance(target, list) and isinstance(update, list):
+            return list(target) + list(update)
+        return dict(update) if isinstance(update, Mapping) else list(update) if isinstance(update, list) else update
+
+    return merge(base, overlay)
+
+
+def _compose_spec_volume_only(image, state, port, host_certificate, *, repo,
+                              backend_start, inputs, inputs_path, package,
+                              project, source_identity, workspace_state_root,
+                              toolchain_image, template, host_ledger,
+                              frontend_volume, control_store, control_run_relative,
+                              startup=None, previous_config_sha256=None):
+    """Resolve final direct-mode Compose JSON in memory for control-volume storage."""
+
+    if not isinstance(backend_start, Mapping) or "build_control" not in backend_start:
+        raise ValueError("Volume-only Compose requires the typed build-control descriptor")
+    if not isinstance(frontend_volume, Mapping) or control_store is None:
+        raise ValueError("Volume-only Compose is missing its named-volume plans")
+    if not 1024 <= port <= 65535:
+        raise ValueError("Port must be between 1024 and 65535")
+    if not isinstance(host_certificate, (str, os.PathLike)):
+        raise ValueError("Windows host certificate path is missing")
+    if previous_config_sha256 is not None and _CONFIG_SHA256_RE.fullmatch(str(previous_config_sha256)) is None:
+        raise ValueError("Previous runtime configuration digest must be a lowercase SHA-256")
+
+    descriptor = backend_start["build_control"]
+    cache = backend_start.get("backend_cache")
+    cache_adapter = _validate_backend_volume_cache(
+        cache,
+        expected_package=package,
+        control_store=control_store,
+        control_run_relative=control_run_relative,
+        build_control=descriptor,
+    )
+    if cache_adapter is None:
+        raise ValueError("Volume-only Compose requires the v2 backend cache")
+    backend_overlay = cache.get("overlay")
+    if not isinstance(backend_overlay, Mapping):
+        raise ValueError("Backend cache has no in-memory Compose overlay")
+
+    frontend_plan = frontend_volume
+    required_frontend_fields = {
+        "volume_name", "compose_volume_declaration", "development_mount",
+        "source_mount", "live_source_mounts", "control_mount_target",
+        "container_labels", "creation_id",
+    }
+    if not required_frontend_fields.issubset(frontend_plan):
+        raise ValueError("Frontend named-volume plan is incomplete")
+    if frontend_plan.get("control_volume_name") != control_store.volume_name:
+        raise ValueError("Frontend plan is bound to a different control volume")
+    frontend_alias = "frontend-development"
+    control_alias = "build-control"
+    if frontend_plan["compose_volume_declaration"] != {
+        frontend_alias: {"name": frontend_plan["volume_name"], "external": True}
+    }:
+        raise ValueError("Frontend named-volume declaration is not canonical")
+
+    environment = {
+        **_compose_source_environment(project, source_identity),
+        "FULLMAG_RELEASE_IMAGE": image,
+        "FULLMAG_DEV_IMAGE": image,
+        "FULLMAG_TOOLCHAIN_IMAGE": toolchain_image or image,
+        "FULLMAG_TOOLCHAIN_IMAGE_ID": toolchain_image or image,
+        "FULLMAG_STATE_ROOT": str(state),
+        "FULLMAG_HTTP_PORT": str(port),
+        "FULLMAG_WORKSPACE_STATE_ROOT": str(workspace_state_root),
+        "FULLMAG_HOST_CERTIFICATE": str(host_certificate),
+        "FULLMAG_BACKEND_HOSTNAME": "fullmag-" + Path(state).parent.name,
+        "FULLMAG_SOURCE_ROOT": backend_start["source_root"],
+        "FULLMAG_SOURCE_GIT_COMMON": backend_start["git_common_dir"],
+        "FULLMAG_BACKEND_PACKAGE": str(package),
+        "FULLMAG_PACKAGE_PROVENANCE": _BACKEND_CONTROL_PROVENANCE,
+        "FULLMAG_DEVELOPMENT_INPUTS": str(inputs_path),
+        "FULLMAG_BACKEND_BUILD_GATE": "1",
+        "FULLMAG_BACKEND_BUILD_RECEIPT": "/opt/fullmag/package/backend-build-receipt.json",
+        "FULLMAG_BUILD_CONTROL_VOLUME": control_store.volume_name,
+        "FULLMAG_FRONTEND_DEVELOPMENT_VOLUME": frontend_plan["volume_name"],
+        "FULLMAG_RUNTIME_IMAGE_ID": image,
+        "FULLMAG_BACKEND_CARGO_PROFILE": backend_start["cargo_profile"],
+    }
+    environment.update({str(key): str(value) for key, value in cache["environment"].items()})
+    if previous_config_sha256 is not None:
+        environment["FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256"] = str(previous_config_sha256)
+    if isinstance(host_ledger, Mapping):
+        ledger_environment = host_ledger.get("environment")
+        if not isinstance(ledger_environment, Mapping):
+            raise ValueError("Host ledger has no typed Compose environment")
+        environment.update({str(key): str(value) for key, value in ledger_environment.items()})
+    elif host_ledger is not None:
+        raise ValueError("Host ledger descriptor is malformed")
+
+    # Read only the versioned source template. Generated/runtime overlays are
+    # merged below from their typed in-memory documents and the final document
+    # is persisted by the caller through BuildControlStore.
+    arguments = ["compose", "--project-name", project, "--project-directory", str(repo),
+                 "-f", str(template)]
+    raw = docker(*arguments, "config", "--format", "json", environment=environment)
+    try:
+        configured = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("Versioned volume-only Compose template returned invalid JSON") from error
+    if not isinstance(configured, dict) or not isinstance(configured.get("services"), dict):
+        raise ValueError("Versioned volume-only Compose template has no services mapping")
+
+    if isinstance(host_ledger, Mapping):
+        ledger_overlay = host_ledger.get("compose_overlay_document")
+        if not isinstance(ledger_overlay, Mapping):
+            raise ValueError("Host ledger omitted its in-memory Compose overlay")
+        ledger_relative = control_run_relative + "/host-ledger-compose-overlay.json"
+        ledger_observation = control_store.stat(ledger_relative)
+        if (host_ledger.get("compose_overlay") != control_store.uri(ledger_relative)
+                or ledger_observation is None
+                or host_ledger.get("compose_overlay_sha256") != ledger_observation.sha256
+                or control_store.read_json(ledger_relative) != ledger_overlay):
+            raise ValueError("Host-ledger Compose overlay differs from its stored volume document")
+        _merge_compose_document(configured, ledger_overlay)
+    _merge_compose_document(configured, backend_overlay)
+
+    frontend_mounts = [
+        frontend_plan["source_mount"],
+        frontend_plan["development_mount"],
+        {
+            "type": "volume", "source": control_alias,
+            "target": frontend_plan["control_mount_target"],
+            "read_only": True, "volume": {"nocopy": True},
+        },
+        *frontend_plan["live_source_mounts"],
+    ]
+    frontend_overlay = {
+        "volumes": {
+            **dict(frontend_plan["compose_volume_declaration"]),
+            control_alias: {"name": control_store.volume_name, "external": True},
+        },
+        "services": {
+            "frontend": {
+                "labels": frontend_plan["container_labels"],
+                "environment": {"FULLMAG_DEVELOPMENT_INPUTS": str(inputs_path)},
+                "volumes": frontend_mounts,
+            },
+            "backend": {
+                "environment": {
+                    "FULLMAG_PACKAGE_PROVENANCE": _BACKEND_CONTROL_PROVENANCE,
+                },
+                "volumes": [{
+                    "type": "volume", "source": control_alias,
+                    "target": "/run/fullmag/control", "read_only": True,
+                    "volume": {"nocopy": True},
+                }],
+            },
+        },
+    }
+    _merge_compose_document(configured, frontend_overlay)
+    if startup is not None:
+        startup_overlay = startup.get("compose_overlay_document")
+        if not isinstance(startup_overlay, Mapping):
+            raise ValueError("Volume-only startup overlay is missing its control-volume document")
+        _merge_compose_document(configured, startup_overlay)
+
+    services = configured.get("services")
+    if not isinstance(services, dict):
+        raise ValueError("Resolved volume-only Compose has no service mapping")
+    services.pop("host-ledger-maintenance", None)
+    services.pop("frontend-cache-maintenance", None)
+    services.pop("backend-cache-volume-maintenance", None)
+    if set(services) != {"backend", "frontend"}:
+        raise ValueError("Resolved volume-only Compose has unexpected services")
+    for service in services.values():
+        if not isinstance(service, dict):
+            raise ValueError("Resolved Compose service is malformed")
+        service.pop("build", None)
+    volume_names = configured.get("volumes")
+    if (not isinstance(volume_names, dict)
+            or not isinstance(volume_names.get(control_alias), dict)
+            or not isinstance(volume_names.get(frontend_alias), dict)
+            or volume_names[control_alias].get("name") != control_store.volume_name
+            or volume_names[frontend_alias].get("name") != frontend_plan["volume_name"]):
+        raise ValueError("Resolved Compose named-volume declarations differ from their plans")
+    return configured
+
+
 def prepare_gpu_release(layout, job_id, commit, *, source_digest=None, native_snapshot_sha256=None):
     if not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise ValueError("A full managed job ID is required")
@@ -938,8 +1309,11 @@ def build_image(repo, job_id, commit, *, source_digest=None, native_snapshot_sha
             print(json.dumps(receipt, indent=2))
 
 
-def _write_startup_overlay(path, authorization, *, include_source,
-                           provenance_sha256=None, helper_sha256=None):
+def _startup_overlay_document(path, authorization, *, include_source,
+                              provenance_sha256=None, helper_sha256=None,
+                              provenance_source=None,
+                              provenance_target="/run/fullmag/startup-provenance.json",
+                              include_provenance_mount=True):
     """Create a JSON Compose overlay for one already-admitted script.
 
     The base Compose files intentionally have no optional host path.  This
@@ -947,16 +1321,17 @@ def _write_startup_overlay(path, authorization, *, include_source,
     ordinary runtime has exactly the old mounts and environment.
     """
     source_root = Path(authorization["source_root"])
-    provenance = Path(path).with_name("startup-provenance.json")
-    volumes = [
-        {
+    provenance = (str(provenance_source) if provenance_source is not None
+                  else str(Path(path).with_name("startup-provenance.json")))
+    volumes = []
+    if include_provenance_mount:
+        volumes.append({
             "type": "bind",
-            "source": str(provenance),
-            "target": "/run/fullmag/startup-provenance.json",
+            "source": provenance,
+            "target": provenance_target,
             "read_only": True,
             "bind": {"create_host_path": False},
-        }
-    ]
+        })
     if include_source:
         volumes.insert(0, {
             "type": "bind",
@@ -968,7 +1343,7 @@ def _write_startup_overlay(path, authorization, *, include_source,
     environment = {
         "FULLMAG_STARTUP_ENABLED": "1",
         "FULLMAG_STARTUP_SCRIPT": authorization["container_script_path"],
-        "FULLMAG_STARTUP_PROVENANCE": "/run/fullmag/startup-provenance.json",
+        "FULLMAG_STARTUP_PROVENANCE": provenance_target,
         "FULLMAG_STARTUP_API": "http://127.0.0.1:8081",
     }
     if provenance_sha256 is not None:
@@ -987,7 +1362,19 @@ def _write_startup_overlay(path, authorization, *, include_source,
             }
         }
     }
-    storage.atomic_json(path, overlay)
+    return overlay
+
+
+def _write_startup_overlay(path, authorization, *, include_source,
+                           provenance_sha256=None, helper_sha256=None):
+    storage.atomic_json(
+        path,
+        _startup_overlay_document(
+            path, authorization, include_source=include_source,
+            provenance_sha256=provenance_sha256,
+            helper_sha256=helper_sha256,
+        ),
+    )
 
 
 def _write_recovery_overlay(path, authorization_path):
@@ -1094,15 +1481,34 @@ def _exec_verified_startup_helpers(helpers):
                 sys.modules[name] = previous
 
 
-def _assembly_helper_context(assembly, layout):
+def _assembly_helper_context(assembly, layout, *, control_store=None, build_control=None):
     """Return the immutable helper context recorded by the assembly receipt."""
 
     expected = assembly.get("startup_helper_hashes")
     if not isinstance(expected, dict) or set(expected) != set(_STARTUP_HELPERS):
         raise ValueError("Assembly receipt has no complete pinned startup helper inventory")
-    output = assembly.get("output")
+    output = (
+        assembly.get("context")
+        if control_store is not None or build_control is not None
+        else assembly.get("output")
+    )
     if not isinstance(output, str) or not output:
         raise ValueError("Assembly receipt has no frozen helper context")
+    if control_store is not None or build_control is not None:
+        if control_store is None or not isinstance(build_control, Mapping):
+            raise ValueError("Volume-backed helper context is incomplete")
+        expected_context = _build_control_uri(build_control, "backend-start-context")
+        if output != expected_context:
+            raise ValueError("Assembly helper context differs from its control-volume identity")
+        verified = {}
+        for name in _STARTUP_HELPERS:
+            relative = build_control["run_relative"] + "/backend-start-context/" + name
+            data = control_store.read_bytes(relative)
+            observed = hashlib.sha256(data).hexdigest()
+            if observed != expected[name]:
+                raise ValueError("Frozen control-volume helper differs from its receipt inventory: " + name)
+            verified[name] = (output + "/" + name, data)
+        return verified
     build_root = Path(layout["build_storage_root"])
     context = storage.validate_path(Path(output) / "context", build_root,
                                     "assembly helper context")
@@ -1116,7 +1522,8 @@ def _assembly_helper_context(assembly, layout):
     return verified
 
 
-def _startup_helper_for_start(assembly, layout, selected_source):
+def _startup_helper_for_start(assembly, layout, selected_source, *,
+                              control_store=None, build_control=None):
     """Use the selected checkout only when its helper bytes match the image."""
 
     expected = assembly["startup_helper_hashes"]
@@ -1145,7 +1552,9 @@ def _startup_helper_for_start(assembly, layout, selected_source):
     if matches:
         startup_helper = _exec_verified_startup_helpers(verified)
         return startup_helper, {"source": "selected_checkout", "hashes": observed}
-    frozen = _assembly_helper_context(assembly, layout)
+    frozen = _assembly_helper_context(
+        assembly, layout, control_store=control_store, build_control=build_control
+    )
     return _exec_verified_startup_helpers(frozen), {
         "source": "assembly_context",
         "hashes": observed,
@@ -1297,12 +1706,14 @@ def _container_inspect(container_id):
     return document
 
 
-def _compose_service_container_id(compose_args, service):
+def _compose_service_container_id(compose_args, service, *, compose_runner=None):
     """Return exactly one running container ID for an owned Compose service."""
 
     if not isinstance(service, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", service):
         raise ValueError("Compose service name is invalid")
-    raw = docker(*compose_args, "ps", "--quiet", service)
+    raw = (compose_runner("ps", "--quiet", service)
+           if compose_runner is not None
+           else docker(*compose_args, "ps", "--quiet", service))
     ids = [item.strip() for item in raw.splitlines() if item.strip()]
     if len(ids) != 1 or _CONTAINER_ID_RE.fullmatch(ids[0]) is None:
         raise ValueError(
@@ -1895,6 +2306,10 @@ def _validate_backend_start_inputs(value, layout):
         raise ValueError("Backend start inputs have no pinned toolchain manifest")
     if value.get("cargo_profile") != "backend-dev" or value.get("build_profile") != "dev":
         raise ValueError("Backend start inputs are not the supported GPU development profile")
+    build_control = (
+        _validate_build_control_descriptor(value, layout)
+        if "build_control" in value else None
+    )
     source_group = {
         "source_project_id": value.get("source_project_id"),
         "source_worktree_id": value.get("source_worktree_id"),
@@ -1905,13 +2320,15 @@ def _validate_backend_start_inputs(value, layout):
     if any(not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", item)
            for item in source_group.values()):
         raise ValueError("Backend start source group identity is invalid")
-    for field in (
-        "source_root", "git_common_dir", "provenance_path",
-        "helper_context", "backend_start_receipt",
-    ):
+    path_fields = ["source_root", "git_common_dir"]
+    if build_control is None:
+        path_fields.extend(("provenance_path", "helper_context", "backend_start_receipt"))
+    for field in path_fields:
         item = value.get(field)
         if not isinstance(item, str) or not Path(item).is_absolute():
             raise ValueError(f"Backend start inputs have no absolute {field}")
+    if build_control is not None and value.get("provenance_path") != _BACKEND_CONTROL_PROVENANCE:
+        raise ValueError("Backend build provenance must use the writable cache-volume handoff")
     package_value = value.get("package_root")
     if not isinstance(package_value, str):
         raise ValueError("Backend start inputs have no package_root")
@@ -1947,13 +2364,14 @@ def _validate_backend_start_inputs(value, layout):
         not isinstance(source_manifest, str) or not Path(source_manifest).is_absolute()
     ):
         raise ValueError("Backend start source manifest path is invalid")
-    for field in ("provenance_path", "backend_start_receipt"):
-        path = Path(value[field])
-        if path.is_symlink() or not path.exists():
-            raise ValueError(f"Backend start {field} is missing or a reparse point")
-    provenance = Path(value["provenance_path"])
-    if provenance.is_symlink() or not provenance.is_file():
-        raise ValueError("Backend start provenance handoff is not a regular file")
+    if build_control is None:
+        for field in ("provenance_path", "backend_start_receipt"):
+            path = Path(value[field])
+            if path.is_symlink() or not path.exists():
+                raise ValueError(f"Backend start {field} is missing or a reparse point")
+        provenance = Path(value["provenance_path"])
+        if provenance.is_symlink() or not provenance.is_file():
+            raise ValueError("Backend start provenance handoff is not a regular file")
     helpers = value.get("startup_helper_hashes")
     if (not isinstance(helpers, dict) or set(helpers) != {"docker_startup_script.py", "fullmag_storage.py"}
             or any(not isinstance(item, str) or _CONFIG_SHA256_RE.fullmatch(item) is None
@@ -1972,7 +2390,11 @@ def _validate_backend_start_inputs(value, layout):
         raise ValueError("Backend start package is not the cache helper's typed package root")
     cache_kind, _cache_adapter = _backend_cache_kind(cache)
     if cache_kind == "v2":
-        _validate_backend_volume_cache(cache, expected_package=cache_package)
+        _validate_backend_volume_cache(
+            cache,
+            expected_package=cache_package,
+            build_control=build_control,
+        )
         if package_daemon_path != PurePosixPath(_cache_adapter.PACKAGE_TARGET):
             raise ValueError("Backend start v2 package root is not the canonical daemon target")
     else:
@@ -2024,6 +2446,7 @@ import hashlib
 import json
 import os
 import stat
+import sys
 
 MAXIMUM = 16 * 1024 * 1024
 FLAGS = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
@@ -2053,7 +2476,7 @@ def read(path):
 
 print(json.dumps({
     "receipt": read("/opt/fullmag/package/backend-build-receipt.json"),
-    "provenance": read("/opt/fullmag/provenance.json"),
+    "provenance": read(sys.argv[1] if len(sys.argv) > 1 else "/opt/fullmag/provenance.json"),
 }, separators=(",", ":")))
 '''
 
@@ -2149,7 +2572,9 @@ def _read_backend_build_documents(inputs, container_id):
     try:
         raw = docker(
             "exec", container_id, "/usr/local/bin/python3", "-c",
-            _BACKEND_BUILD_DOCUMENTS_SCRIPT, timeout=30,
+            _BACKEND_BUILD_DOCUMENTS_SCRIPT,
+            *([inputs["provenance_path"]] if inputs.get("build_control") else []),
+            timeout=30,
         )
         observed = json.loads(raw)
         receipt_record = observed.get("receipt")
@@ -2278,7 +2703,11 @@ def _assembly_from_backend_start(inputs, receipt, provenance, *, container_id=No
         "build_receipt_sha256": provenance["build_receipt_sha256"],
         "backend_build_receipt": str(Path(inputs["package_root"]) / "backend-build-receipt.json"),
         "backend_build_receipt_schema": receipt.get("schema"),
-        "output": str(Path(inputs["backend_start_receipt"]).parent),
+        "output": (
+            _build_control_uri(inputs["build_control"], "runtime-assembly.json")
+            if isinstance(inputs.get("build_control"), Mapping)
+            else str(Path(inputs["backend_start_receipt"]).parent)
+        ),
         "context": inputs["helper_context"],
     }
     source_manifest = inputs.get("source_manifest")
@@ -2333,7 +2762,7 @@ def _provisional_development_certificate(inputs, source_identity):
         "cargo_profile": "backend-dev",
         "toolchain_image_id": inputs["toolchain_image_id"],
         "package_root": "/opt/fullmag/package",
-        "provenance_path": "/opt/fullmag/provenance.json",
+        "provenance_path": inputs.get("provenance_path", "/opt/fullmag/provenance.json"),
         "group_identity": project,
         "source_identity": {
             "commit": _PROVISIONAL_COMMIT,
@@ -2520,6 +2949,11 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         raise ValueError("Exactly one of an assembly receipt or backend start inputs is required")
     if backend_start is not None and recovery_authorization is not None:
         raise ValueError("Backend start inputs cannot be combined with native recovery authorization")
+    volume_only_requested = (
+        isinstance(backend_start, dict) and "build_control" in backend_start
+    )
+    if volume_only_requested and run_receipt is not None:
+        raise ValueError("Volume-only backend start cannot reuse a legacy host-document run receipt")
     if backend_start is not None and source_root is None and isinstance(backend_start, dict):
         recorded_source = backend_start.get("source_root")
         if isinstance(recorded_source, str):
@@ -2608,6 +3042,33 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         _validate_backend_start_inputs(backend_start, layout)
         if backend_start is not None else None
     )
+    volume_only = backend_start is not None and "build_control" in backend_start
+    if volume_only and frontend != "dev":
+        raise ValueError("Volume-only backend start requires the live development frontend")
+    control_store = (
+        _control_store_for_backend_start(layout, backend_start)
+        if volume_only else None
+    )
+    control_run_relative = (
+        backend_start["build_control"]["run_relative"]
+        if volume_only else None
+    )
+    if volume_only:
+        from docker_build_volume_io import BuildDocument
+
+        assembly_document = BuildDocument(
+            control_store, control_run_relative + "/runtime-assembly.json"
+        )
+        compose_document = BuildDocument(
+            control_store, control_run_relative + "/runtime-compose.json"
+        )
+        inputs_document = BuildDocument(
+            control_store, control_run_relative + "/development-inputs.json"
+        )
+    else:
+        assembly_document = None
+        compose_document = None
+        inputs_document = None
     if backend_start is not None:
         _validate_backend_start_source_group(backend_start, source_identity)
     if backend_start is None:
@@ -2634,7 +3095,10 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             "toolchain_image_id": backend_start["toolchain_image_id"],
             "package_root": backend_start["package_root"],
             "startup_helper_hashes": backend_start["startup_helper_hashes"],
-            "output": str(Path(backend_start["backend_start_receipt"]).parent),
+            "output": (
+                control_store.uri(control_run_relative)
+                if volume_only else str(Path(backend_start["backend_start_receipt"]).parent)
+            ),
             "context": backend_start["helper_context"],
         }
     image = assembly.get("image_id", "")
@@ -2697,14 +3161,21 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         state = reuse["state"]
         metadata_root = reuse["metadata_root"]
     register_runtime_reference_root(layout, root)
-    spec = root / "compose.json"
+    spec = compose_document if volume_only else root / "compose.json"
     host_certificate = root / "windows-folder-host.json"
     if backend_start is not None:
         # Keep a typed pointer in the run receipt while the fixed backend
         # service is still compiling.  It is replaced atomically by the final
         # post-build assembly after the host has validated its receipt.
-        assembly_receipt = metadata_root / "backend-assembly.json"
-        storage.atomic_json(assembly_receipt, assembly)
+        assembly_receipt = assembly_document if volume_only else metadata_root / "backend-assembly.json"
+        if volume_only:
+            assembly_receipt.write_json(assembly)
+        else:
+            storage.atomic_json(assembly_receipt, assembly)
+    assembly_receipt_sha = (
+        control_store.stat(control_run_relative + "/runtime-assembly.json").sha256
+        if volume_only else digest(assembly_receipt)
+    )
     receipt = {"schema": "fullmag.docker-all-run.v1", "state": "starting", "image_id": image,
                "compose_project": project, "compose_file": str(spec), "state_root": str(state),
                "source_project_id": source_identity["project_id"],
@@ -2712,7 +3183,7 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                "source_checkout_kind": source_identity["checkout_kind"],
                "host_certificate": str(host_certificate),
                "workspace_state_root": str(workspace_state_root),
-               "assembly_receipt": str(assembly_receipt), "assembly_receipt_sha256": digest(assembly_receipt),
+               "assembly_receipt": str(assembly_receipt), "assembly_receipt_sha256": assembly_receipt_sha,
                "source_mode": source_provenance["source_mode"],
                "url": f"http://localhost:{port}/workspace", "qualification": "NOT VERIFIED",
                "frontend_mode": frontend, "container_http_port": 8080 if frontend == "dev" else 8081}
@@ -2726,7 +3197,11 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             receipt["source_manifest"] = assembly["source_manifest"]
     if backend_start is not None:
         receipt["backend_start_inputs"] = backend_start["backend_start_receipt"]
-        receipt["backend_start_inputs_sha256"] = digest(Path(backend_start["backend_start_receipt"]).with_name("backend-start-inputs.json"))
+        receipt["backend_start_inputs_sha256"] = (
+            control_store.stat(control_run_relative + "/backend-start-inputs.json").sha256
+            if volume_only else
+            digest(Path(backend_start["backend_start_receipt"]).with_name("backend-start-inputs.json"))
+        )
         receipt["backend_build_state"] = "building"
     elif isinstance(assembly.get("source_archive"), dict):
         # Preserve the immutable legacy descriptor when one exists.  Live
@@ -2749,9 +3224,13 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
     inputs = None
     host_ledger = None
     frontend_cache = None
+    frontend_volume = None
     startup = None
     recovery = None
-    inputs_path = metadata_root / "development-inputs.json"
+    inputs_path = (
+        "/run/fullmag/control/" + control_run_relative + "/development-inputs.json"
+        if volume_only else metadata_root / "development-inputs.json"
+    )
     if recovery_info is not None:
         recovery_overlay = metadata_root / "compose.recovery.json"
         _write_recovery_overlay(recovery_overlay, recovery_info["path"])
@@ -2772,32 +3251,54 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             "state": "pending_native_recovery",
         }
         storage.atomic_json(root / "receipt.json", receipt)
+    compose_runner = None
     try:
-        args = ["compose", "-f", str(spec), "--project-name", project]
+        args = (None if volume_only else ["compose", "-f", str(spec), "--project-name", project])
         if frontend == "dev":
-            from docker_development_inputs import guest_manifest, seed, select_checkout
+            from docker_development_inputs import seed, select_checkout
             if reuse is not None:
                 inputs = preflight_inputs
             else:
                 selected_checkout = select_checkout(repo, source_root)
-                inputs = seed(
-                    selected_checkout,
-                    state,
-                    port,
-                    reuse_from=None,
-                )
+                if volume_only:
+                    from docker_frontend_volume_cache import (
+                        ensure as ensure_frontend_volume,
+                        plan as plan_frontend_volume,
+                        validate_volume as validate_frontend_volume,
+                    )
+                    if Path(selected_checkout).resolve() != Path(backend_start["source_root"]).resolve():
+                        raise ValueError("Frontend source checkout differs from the admitted backend checkout")
+                    frontend_volume = plan_frontend_volume(
+                        source_layout, selected_checkout, assembly["base_image"]
+                    )
+                    frontend_volume = ensure_frontend_volume(
+                        frontend_volume, source_root=selected_checkout, image_id=image
+                    )
+                    frontend_volume["control_volume_name"] = control_store.volume_name
+                    observed_frontend_volume = json.loads(
+                        docker("volume", "inspect", frontend_volume["volume_name"])
+                    )
+                    validate_frontend_volume(observed_frontend_volume, frontend_volume)
+                    inputs = seed(
+                        selected_checkout, state, port, reuse_from=None,
+                        volume_only=True, volume_plan=frontend_volume,
+                    )
+                    inputs_document.write_json(inputs)
+                else:
+                    inputs = seed(selected_checkout, state, port, reuse_from=None)
             if reuse is not None:
                 # frontend_dev freezes this manifest.  Reuse the original
                 # host and guest bytes instead of creating a new freeze root.
                 host_inputs_path = reuse["frontend_inputs"]
                 inputs_path = reuse["guest_inputs"]
                 receipt["frontend_inputs_reused"] = True
-            else:
+            elif not volume_only:
                 host_inputs_path = metadata_root / "development-inputs-host.json"
                 storage.atomic_json(host_inputs_path, inputs)
                 storage.atomic_json(inputs_path, guest_manifest(inputs))
-            receipt["frontend_host_inputs"] = str(host_inputs_path)
-            receipt["frontend_host_inputs_sha256"] = digest(host_inputs_path)
+            if not volume_only:
+                receipt["frontend_host_inputs"] = str(host_inputs_path)
+                receipt["frontend_host_inputs_sha256"] = digest(host_inputs_path)
             from local_runner.build_source import native_identity
             receipt["mounted_source_identity_at_start"] = native_identity(selected_checkout, "snapshot")
             receipt["source_selection"] = "live_windows_selected_checkout"
@@ -2809,8 +3310,18 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             receipt["frontend_observed_source_commit"] = storage.git(
                 selected_checkout, "rev-parse", "HEAD"
             )
-            receipt["frontend_inputs"] = str(inputs_path)
-            receipt["frontend_inputs_sha256"] = digest(inputs_path)
+            receipt["frontend_inputs"] = str(inputs_document) if volume_only else str(inputs_path)
+            receipt["frontend_inputs_sha256"] = (
+                control_store.stat(control_run_relative + "/development-inputs.json").sha256
+                if volume_only else digest(inputs_path)
+            )
+            if volume_only:
+                receipt["frontend_volume"] = {
+                    "schema": frontend_volume["schema"],
+                    **frontend_volume["identity"],
+                    "volume_name": frontend_volume["volume_name"],
+                    "creation_id": frontend_volume["creation_id"],
+                }
 
         if startup_script is not None:
             from docker_development_inputs import select_checkout
@@ -2823,7 +3334,9 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             if inputs is None:
                 _require_static_source_identity(assembly, selected_source)
             startup_helper, helper_attestation = _startup_helper_for_start(
-                assembly, layout, selected_source
+                assembly, layout, selected_source,
+                control_store=control_store if volume_only else None,
+                build_control=backend_start.get("build_control") if volume_only else None,
             )
             source_commit = (
                 inputs.get("source_commit")
@@ -2838,23 +3351,60 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             )
             if inputs is not None and startup_authorization.source_root != Path(inputs["source_root"]).resolve():
                 raise ValueError("Startup script checkout differs from the mounted development checkout")
-            startup_provenance = metadata_root / "startup-provenance.json"
-            provenance_sha256 = startup_helper.write_provenance(startup_provenance, startup_authorization)
+            if volume_only:
+                from docker_build_volume_io import BuildDocument
+                startup_relative = control_run_relative + "/startup-provenance.json"
+                startup_provenance = BuildDocument(control_store, startup_relative)
+                provenance_bytes = (
+                    json.dumps(startup_authorization.as_dict(), indent=2, ensure_ascii=False) + "\n"
+                ).encode("utf-8")
+                provenance_sha256 = hashlib.sha256(provenance_bytes).hexdigest()
+                startup_provenance.write_bytes(provenance_bytes)
+                startup_provenance_path = "/run/fullmag/control/" + startup_relative
+            else:
+                startup_provenance = metadata_root / "startup-provenance.json"
+                provenance_sha256 = startup_helper.write_provenance(
+                    startup_provenance, startup_authorization
+                )
             helper_hashes = assembly.get("startup_helper_hashes", {})
             helper_sha256 = helper_hashes.get("docker_startup_script.py")
             if not re.fullmatch(r"[0-9a-f]{64}", helper_sha256 or ""):
                 raise ValueError("Assembly receipt has no pinned startup helper digest")
-            startup_overlay = metadata_root / "compose.startup.json"
             authorization = startup_authorization.as_dict()
-            _write_startup_overlay(
-                startup_overlay,
-                authorization,
-                include_source=inputs is None,
-                provenance_sha256=provenance_sha256,
-                helper_sha256=helper_sha256,
-            )
-            startup = {"authorization": authorization, "compose_overlay": str(startup_overlay),
-                       "provenance_sha256": provenance_sha256, "helper_sha256": helper_sha256}
+            if volume_only:
+                startup_overlay = _startup_overlay_document(
+                    None,
+                    authorization,
+                    include_source=False,
+                    provenance_sha256=provenance_sha256,
+                    helper_sha256=helper_sha256,
+                    provenance_source=startup_provenance_path,
+                    provenance_target=startup_provenance_path,
+                    include_provenance_mount=False,
+                )
+                startup = {
+                    "authorization": authorization,
+                    "compose_overlay_document": startup_overlay,
+                    "provenance_path": startup_provenance_path,
+                    "provenance_sha256": provenance_sha256,
+                    "helper_sha256": helper_sha256,
+                }
+            else:
+                startup_overlay = metadata_root / "compose.startup.json"
+                _write_startup_overlay(
+                    startup_overlay,
+                    authorization,
+                    include_source=inputs is None,
+                    provenance_sha256=provenance_sha256,
+                    helper_sha256=helper_sha256,
+                )
+                startup = {
+                    "authorization": authorization,
+                    "compose_overlay": str(startup_overlay),
+                    "provenance_path": "/run/fullmag/startup-provenance.json",
+                    "provenance_sha256": provenance_sha256,
+                    "helper_sha256": helper_sha256,
+                }
             receipt["startup_script"] = {
                 "source_relative": authorization["source_relative"],
                 "source_sha256": authorization["source_sha256"],
@@ -2869,20 +3419,48 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                 "provenance": str(startup_provenance),
                 "provenance_sha256": provenance_sha256,
                 "helper_sha256": helper_sha256,
-                "compose_overlay": str(startup_overlay),
+                "compose_overlay": (
+                    str(compose_document) if volume_only else str(startup_overlay)
+                ),
                 "execution_policy": authorization["execution_policy"],
             }
 
         source_template = (Path(compose_template) if compose_template is not None
                            else repo / ("compose.dev.yaml" if inputs is not None else "compose.static.yaml"))
-        compose_source_path = metadata_root / "compose.source.yaml"
-        if compose_source_path.exists() or compose_source_path.is_symlink():
-            if compose_source_path.is_symlink() or compose_source_path.read_bytes() != source_template.read_bytes():
-                raise ValueError("Reused Compose source template differs from the requested version")
+        compose_source_path = source_template if volume_only else metadata_root / "compose.source.yaml"
+        if volume_only:
+            if compose_source_path.is_symlink() or not compose_source_path.is_file():
+                raise ValueError("Versioned Compose source template is missing or not a regular file")
         else:
-            shutil.copyfile(source_template, compose_source_path)
+            if compose_source_path.exists() or compose_source_path.is_symlink():
+                if compose_source_path.is_symlink() or compose_source_path.read_bytes() != source_template.read_bytes():
+                    raise ValueError("Reused Compose source template differs from the requested version")
+            else:
+                shutil.copyfile(source_template, compose_source_path)
 
         def configured_spec():
+            if volume_only:
+                if frontend_volume is None:
+                    raise ValueError("Frontend named-volume plan is missing before Compose resolution")
+                return _compose_spec_volume_only(
+                    image, state.resolve(), port, host_certificate.resolve(),
+                    repo=repo,
+                    backend_start=backend_start,
+                    inputs=inputs,
+                    inputs_path=inputs_path,
+                    package=assembly.get("package_root"),
+                    project=project,
+                    source_identity=source_identity,
+                    workspace_state_root=workspace_state_root,
+                    toolchain_image=assembly.get("base_image"),
+                    template=compose_source_path,
+                    host_ledger=host_ledger,
+                    frontend_volume=frontend_volume,
+                    control_store=control_store,
+                    control_run_relative=control_run_relative,
+                    startup=startup,
+                    previous_config_sha256=previous_config_sha256,
+                )
             package_provenance = (
                 Path(backend_start["provenance_path"])
                 if backend_start is not None else assembly_receipt
@@ -2944,10 +3522,17 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             image,
             metadata_root / "host-ledger",
             docker,
+            **({
+                "overlay_store": control_store,
+                "overlay_relative": control_run_relative + "/host-ledger-compose-overlay.json",
+            } if volume_only else {}),
         )
-        receipt["host_ledger"] = host_ledger
+        receipt["host_ledger"] = {
+            key: value for key, value in host_ledger.items()
+            if key != "compose_overlay_document"
+        }
         storage.atomic_json(root / "receipt.json", receipt)
-        if inputs is not None:
+        if inputs is not None and not volume_only:
             from docker_frontend_cache import prepare as prepare_frontend_cache
 
             frontend_cache = prepare_frontend_cache(
@@ -3001,6 +3586,39 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         receipt["compose_source"] = str(compose_source_path)
         receipt["compose_source_sha256"] = digest(compose_source_path)
         configured = configured_spec()
+        if volume_only:
+            from docker_build_volume_io import (
+                VolumeBuildError,
+                VolumeBuildOutcomeUnknown,
+                compose_capture,
+            )
+
+            def compose_runner(*compose_operation, timeout=120):
+                try:
+                    return compose_capture(
+                        backend_start["source_root"],
+                        project,
+                        configured,
+                        compose_operation,
+                        timeout=timeout,
+                    )
+                except VolumeBuildOutcomeUnknown as error:
+                    raise DockerOutcomeUnknown(
+                        ["compose", *map(str, compose_operation)], timeout
+                    ) from error
+                except VolumeBuildError as error:
+                    raise ValueError(f"Managed Compose operation failed: {error}") from error
+
+        def persist_compose(document):
+            if volume_only:
+                compose_document.write_json(document)
+                observation = control_store.stat(control_run_relative + "/runtime-compose.json")
+                if observation is None:
+                    raise ValueError("Runtime Compose document was not persisted in the control volume")
+                receipt["compose_file_sha256"] = observation.sha256
+            else:
+                storage.atomic_json(spec, document)
+                receipt["compose_file_sha256"] = digest(spec)
         if recovery_info is not None:
             if digest(recovery_info["path"]) != recovery_info["authorization_sha256"]:
                 raise ValueError("Runtime recovery authorization changed before Compose publication")
@@ -3013,11 +3631,21 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             # The backend service stays alive in its typed build gate.  It is
             # the only application container that runs the two guest probes;
             # no third probe container is created.
-            storage.atomic_json(spec, configured)
-            docker(*args, "config", "--quiet")
-            docker(*args, "up", "--detach", "--no-build", "--pull", "never")
-            container = _compose_service_container_id(args, "backend")
-            frontend_container = _compose_service_container_id(args, "frontend")
+            persist_compose(configured)
+            if volume_only:
+                compose_runner("config", "--quiet")
+            else:
+                docker(*args, "config", "--quiet")
+            if volume_only:
+                compose_runner("up", "--detach", "--no-build", "--pull", "never")
+            else:
+                docker(*args, "up", "--detach", "--no-build", "--pull", "never")
+            container = _compose_service_container_id(
+                args, "backend", compose_runner=compose_runner
+            )
+            frontend_container = _compose_service_container_id(
+                args, "frontend", compose_runner=compose_runner
+            )
             initial_service_ids = {
                 "backend": container,
                 "frontend": frontend_container,
@@ -3031,8 +3659,14 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             )
             receipt.update(_backend_assembly_receipt_identity(assembly))
             receipt["source_git_common_dir"] = assembly["source_git_common_dir"]
-            storage.atomic_json(assembly_receipt, assembly)
-            receipt["assembly_receipt_sha256"] = digest(assembly_receipt)
+            if volume_only:
+                assembly_receipt.write_json(assembly)
+                receipt["assembly_receipt_sha256"] = control_store.stat(
+                    control_run_relative + "/runtime-assembly.json"
+                ).sha256
+            else:
+                storage.atomic_json(assembly_receipt, assembly)
+                receipt["assembly_receipt_sha256"] = digest(assembly_receipt)
             receipt["backend_build_state"] = "succeeded"
             receipt["backend_build_receipt_sha256"] = assembly["build_receipt_sha256"]
             if reuse is not None:
@@ -3069,14 +3703,23 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             if (not isinstance(binding, dict) or not isinstance(binding.get("path"), str)
                     or digest(Path(binding["path"])) != binding.get("sha256")):
                 raise ValueError("Post-rotation storage identity binding changed before service startup")
-        storage.atomic_json(spec, configured_spec())
+        configured = configured_spec()
+        persist_compose(configured)
         ready_timeout, docker_client_timeout = _runtime_ready_timeouts(inputs, startup)
-        docker(*args, "up", "--detach", "--no-build", "--pull", "never", "--wait", "--wait-timeout",
-               str(ready_timeout), timeout=docker_client_timeout)
-        container = _compose_service_container_id(args, "backend")
+        if volume_only:
+            compose_runner("up", "--detach", "--no-build", "--pull", "never", "--wait",
+                           "--wait-timeout", str(ready_timeout), timeout=docker_client_timeout)
+        else:
+            docker(*args, "up", "--detach", "--no-build", "--pull", "never", "--wait", "--wait-timeout",
+                   str(ready_timeout), timeout=docker_client_timeout)
+        container = _compose_service_container_id(
+            args, "backend", compose_runner=compose_runner
+        )
         receipt["container_id"] = container
         if initial_service_ids is not None:
-            frontend_container = _compose_service_container_id(args, "frontend")
+            frontend_container = _compose_service_container_id(
+                args, "frontend", compose_runner=compose_runner
+            )
             if container != initial_service_ids["backend"]:
                 raise ValueError(
                     "Backend Compose container was recreated between build and readiness"
@@ -3093,31 +3736,49 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         bindings = {str(receipt["container_http_port"]) + "/tcp":
                     [{"HostIp": "127.0.0.1", "HostPort": str(port)}]}
         if inputs is not None:
-            from docker_development_inputs import attest_mounts
             if initial_service_ids is None:
-                frontend_container = _compose_service_container_id(args, "frontend")
+                frontend_container = _compose_service_container_id(
+                    args, "frontend", compose_runner=compose_runner
+                )
             receipt["frontend_container_id"] = frontend_container
             front = json.loads(docker("inspect", frontend_container))[0]
             validate_source_labels(front, source_identity)
-            attest_mounts(front, inputs, inputs_path)
             front_host = front["HostConfig"]
             if (front["Image"] != image or front_host.get("PortBindings") != bindings
                     or not front_host.get("ReadonlyRootfs") or front_host.get("Privileged")
                     or front["Config"].get("User") != "65532:65532"
                     or front_host.get("DeviceRequests")):
                 raise ValueError("Frontend image, loopback port or isolation attestation mismatch")
-            if frontend_cache is None:
-                raise ValueError("Development frontend cache was not prepared before startup")
-            from docker_frontend_cache import validate_container as validate_frontend_cache
-            receipt["frontend_cache_attestation"] = validate_frontend_cache(front, frontend_cache)
-            writable = [m for m in front["Mounts"] if m.get("RW") and m["Type"] == "bind"]
-            expected_writable_targets = {"/state/development", *frontend_cache["guest_targets"].values()}
-            actual_writable_targets = {mount["Destination"] for mount in writable}
-            if actual_writable_targets != expected_writable_targets:
-                raise ValueError("Frontend writable mounts must be the isolated state root and four cache binds")
-            state_mounts = [mount for mount in writable if mount["Destination"] == "/state/development"]
-            if (len(state_mounts) != 1 or host_path(state_mounts[0]["Source"]) != (state / "development").resolve()):
-                raise ValueError("Frontend writable state mount must be its isolated development directory")
+            if volume_only:
+                from docker_frontend_volume_cache import (
+                    validate as validate_frontend_volume_container,
+                    validate_volume as validate_frontend_volume,
+                )
+                observed_frontend_volume = json.loads(
+                    docker("volume", "inspect", frontend_volume["volume_name"])
+                )
+                validate_frontend_volume(observed_frontend_volume, frontend_volume)
+                validate_frontend_volume_container(front, frontend_volume)
+                receipt["frontend_volume_attestation"] = {
+                    "volume_name": frontend_volume["volume_name"],
+                    "creation_id": frontend_volume["creation_id"],
+                    "schema": frontend_volume["schema"],
+                }
+            else:
+                from docker_development_inputs import attest_mounts
+                attest_mounts(front, inputs, inputs_path)
+                if frontend_cache is None:
+                    raise ValueError("Development frontend cache was not prepared before startup")
+                from docker_frontend_cache import validate_container as validate_frontend_cache
+                receipt["frontend_cache_attestation"] = validate_frontend_cache(front, frontend_cache)
+                writable = [m for m in front["Mounts"] if m.get("RW") and m["Type"] == "bind"]
+                expected_writable_targets = {"/state/development", *frontend_cache["guest_targets"].values()}
+                actual_writable_targets = {mount["Destination"] for mount in writable}
+                if actual_writable_targets != expected_writable_targets:
+                    raise ValueError("Frontend writable mounts must be the isolated state root and four cache binds")
+                state_mounts = [mount for mount in writable if mount["Destination"] == "/state/development"]
+                if (len(state_mounts) != 1 or host_path(state_mounts[0]["Source"]) != (state / "development").resolve()):
+                    raise ValueError("Frontend writable state mount must be its isolated development directory")
             bindings = {}
         from docker_compose_attestation import service_network, network_owner
         network_name = source_identity["network_name"]
@@ -3145,9 +3806,11 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                 receipt["backend_cache_attestation"] = validate_backend_cache(actual, backend_cache)
                 # The v2 adapter owns both named-volume destinations.  Only
                 # the provenance handoff remains in the generic bind check.
-                expected_readwrite = {
-                    "/opt/fullmag/provenance.json": Path(backend_start["provenance_path"]).resolve(),
-                }
+                expected_readwrite = (
+                    {} if volume_only else {
+                        "/opt/fullmag/provenance.json": Path(backend_start["provenance_path"]).resolve(),
+                    }
+                )
             else:
                 expected_readwrite = {
                     # v1 keeps its daemon bind path contract.  Do not apply
@@ -3188,6 +3851,24 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                         raise ValueError("Development writable bind differs: " + destination)
                 elif host_path(observed_source) != source:
                     raise ValueError("Development writable bind differs: " + destination)
+            if volume_only:
+                control_mounts = [
+                    mount for mount in actual["Mounts"]
+                    if mount.get("Destination") == "/run/fullmag/control"
+                ]
+                if (len(control_mounts) != 1
+                        or control_mounts[0].get("Type") != "volume"
+                        or control_mounts[0].get("Name") != control_store.volume_name
+                        or control_mounts[0].get("RW") is not False):
+                    raise ValueError("Backend control-volume mount is not the exact readonly owner volume")
+                backend_environment = dict(
+                    item.split("=", 1)
+                    for item in actual["Config"].get("Env", [])
+                    if isinstance(item, str) and "=" in item
+                )
+                if (backend_environment.get("FULLMAG_PACKAGE_PROVENANCE")
+                        != _BACKEND_CONTROL_PROVENANCE):
+                    raise ValueError("Backend package provenance does not use the writable build-volume path")
         if recovery is not None:
             recovery_env = dict(
                 value.split("=", 1)
@@ -3211,12 +3892,19 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                 raise ValueError("Runtime recovery authorization mount is not readonly and pinned")
             receipt["runtime_recovery"].update(state="mounted_readonly")
         if startup is not None:
-            startup_mounts = [m for m in actual["Mounts"]
-                              if m["Destination"] == "/run/fullmag/startup-provenance.json"]
-            if (len(startup_mounts) != 1 or startup_mounts[0]["Type"] != "bind"
-                    or startup_mounts[0]["RW"]
-                    or host_path(startup_mounts[0]["Source"]) != (metadata_root / "startup-provenance.json").resolve()):
-                raise ValueError("Startup provenance must be a readonly run-owned bind")
+            if volume_only:
+                startup_relative = control_run_relative + "/startup-provenance.json"
+                startup_observation = control_store.stat(startup_relative)
+                if (startup_observation is None
+                        or startup_observation.sha256 != startup["provenance_sha256"]):
+                    raise ValueError("Startup provenance differs from its control-volume digest")
+            else:
+                startup_mounts = [m for m in actual["Mounts"]
+                                  if m["Destination"] == "/run/fullmag/startup-provenance.json"]
+                if (len(startup_mounts) != 1 or startup_mounts[0]["Type"] != "bind"
+                        or startup_mounts[0]["RW"]
+                        or host_path(startup_mounts[0]["Source"]) != (metadata_root / "startup-provenance.json").resolve()):
+                    raise ValueError("Startup provenance must be a readonly run-owned bind")
             environment = dict(
                 value.split("=", 1)
                 for value in actual["Config"].get("Env", [])
@@ -3225,7 +3913,7 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             expected_environment = {
                 "FULLMAG_STARTUP_ENABLED": "1",
                 "FULLMAG_STARTUP_SCRIPT": startup["authorization"]["container_script_path"],
-                "FULLMAG_STARTUP_PROVENANCE": "/run/fullmag/startup-provenance.json",
+                "FULLMAG_STARTUP_PROVENANCE": startup["provenance_path"],
                 "FULLMAG_STARTUP_API": "http://127.0.0.1:8081",
                 "FULLMAG_STARTUP_PROVENANCE_SHA256": startup["provenance_sha256"],
                 "FULLMAG_STARTUP_HELPER_SHA256": startup["helper_sha256"],
@@ -3243,7 +3931,11 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             raise ValueError("Runtime isolation attestation mismatch")
         if not any(d.get("Count") == -1 and ["gpu"] in d.get("Capabilities", []) for d in host.get("DeviceRequests", [])):
             raise ValueError("Runtime NVIDIA GPU request is missing")
-        provenance = json.loads(docker("exec", container, "cat", "/opt/fullmag/provenance.json"))
+        provenance_path = (
+            backend_start["provenance_path"]
+            if volume_only else "/opt/fullmag/provenance.json"
+        )
+        provenance = json.loads(docker("exec", container, "cat", provenance_path))
         if backend_start is not None:
             if any(provenance.get(key) != assembly.get(key) for key in (
                     "commit", "source_digest", "native_source_identity", "source_mode",
@@ -3343,7 +4035,14 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                            timed_out_operation=error.operation,
                            client_timeout_seconds=error.timeout_seconds)
         try:
-            receipt["retained_container_ids"] = docker(*args, "ps", "--all", "--quiet").splitlines()
+            if compose_runner is not None:
+                receipt["retained_container_ids"] = compose_runner(
+                    "ps", "--all", "--quiet"
+                ).splitlines()
+            elif args is not None:
+                receipt["retained_container_ids"] = docker(
+                    *args, "ps", "--all", "--quiet"
+                ).splitlines()
         except Exception as inspection_error:
             receipt["container_inspection_error"] = str(inspection_error)
         raise

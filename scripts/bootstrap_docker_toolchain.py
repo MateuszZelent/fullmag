@@ -452,6 +452,8 @@ def build(repo, *, direct_development=False):
 
 
 def main(argv=None):
+    from docker_build_volume_io import VolumeBuildError
+    from docker_build_control import DockerBuildControlError
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--direct-development", action="store_true",
@@ -459,7 +461,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         build(args.repo_root, direct_development=args.direct_development)
-    except (BootstrapError, storage.StorageError, OSError, subprocess.SubprocessError) as error:
+    except (BootstrapError, storage.StorageError, OSError, subprocess.SubprocessError,
+            VolumeBuildError, DockerBuildControlError) as error:
         parser.exit(2, f"Docker toolchain bootstrap: {error}\n")
     return 0
 

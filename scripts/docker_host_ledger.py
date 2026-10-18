@@ -56,6 +56,15 @@ class DockerInvocationUnknown(HostLedgerError):
         )
 
 
+class DockerComposeOutcomeUnknown(HostLedgerError):
+    """The Compose client timed out after entering a volume-backed operation."""
+
+    def __init__(self, operation: tuple[str, ...], timeout: int) -> None:
+        self.operation = list(operation)
+        self.timeout_seconds = timeout
+        super().__init__("Docker Compose outcome is unknown; no retry is allowed")
+
+
 def _text(value: Any, field: str) -> str:
     if isinstance(value, Path):
         value = str(value)
@@ -693,12 +702,13 @@ def _validate_overlay_config(document: Mapping[str, Any], environment: Mapping[s
 
 def _render_maintenance(
     source: Path,
-    destination: Path,
+    destination: Any,
     *,
     environment: Mapping[str, str],
     image_id: str,
     docker_callable: Callable[..., Any],
-) -> None:
+    compose_capture_runner: Callable[..., str] | None = None,
+) -> dict[str, Any]:
     """Resolve the versioned overlay with Compose, then retain maintenance only.
 
     The source deliberately contains an incomplete backend service.  Compose is
@@ -738,22 +748,46 @@ def _render_maintenance(
         raise HostLedgerError("resolved maintenance service is not an object")
     _validate_maintenance_service(maintenance, environment=values, image_id=image_id)
 
-    _atomic_json(destination, {"services": {"host-ledger-maintenance": maintenance}})
-    # Validate the frozen, standalone file with normal Compose consistency
-    # checks.  The incomplete backend is absent at this point, so no bypass is
-    # needed for this final validation.
-    _invoke(
-        docker_callable,
-        "compose",
-        "-f",
-        str(destination),
-        "--profile",
-        "host-ledger-maintenance",
-        "config",
-        "--quiet",
-        timeout=60,
-        environment=values,
-    )
+    maintenance_document = {"services": {"host-ledger-maintenance": maintenance}}
+    if compose_capture_runner is None:
+        _atomic_json(destination, maintenance_document)
+        # Validate the frozen, standalone file with normal Compose consistency
+        # checks.  The incomplete backend is absent at this point, so no bypass is
+        # needed for this final validation.
+        _invoke(
+            docker_callable,
+            "compose",
+            "-f",
+            str(destination),
+            "--profile",
+            "host-ledger-maintenance",
+            "config",
+            "--quiet",
+            timeout=60,
+            environment=values,
+        )
+    else:
+        if not callable(getattr(destination, "write_json", None)) or not callable(
+            getattr(destination, "read_bytes", None)
+        ):
+            raise HostLedgerError("volume-backed maintenance Compose requires a build document")
+        destination.write_json(maintenance_document)
+        try:
+            persisted = _parse_json_document(
+                destination.read_bytes().decode("utf-8"),
+                "stored host-ledger maintenance Compose document",
+            )
+        except (UnicodeError, AttributeError) as error:
+            raise HostLedgerError("stored host-ledger maintenance Compose document is unreadable") from error
+        if persisted != maintenance_document:
+            raise HostLedgerError("stored host-ledger maintenance Compose document changed after write")
+        compose_capture_runner(
+            persisted,
+            ["--profile", "host-ledger-maintenance", "config", "--quiet"],
+            environment=values,
+            timeout=60,
+        )
+    return document
 
 
 def _container_name(prefix: str, run_root: Path) -> str:
@@ -768,10 +802,17 @@ def _container_name(prefix: str, run_root: Path) -> str:
 
 def _run_owned_container(*, args: list[str], name: str, image_id: str, label_value: str,
                          run_root: Path, prefix: str, docker_callable: Callable[..., Any],
-                         timeout: int) -> tuple[dict[str, Any], dict[str, Any]]:
+                         timeout: int,
+                         compose_operation: Callable[[int], str] | None = None
+                         ) -> tuple[dict[str, Any], dict[str, Any]]:
     label_key = "org.fullmag.host-ledger.owner"
     try:
-        stdout, stderr, combined = _invoke(docker_callable, *args, timeout=timeout)
+        if compose_operation is None:
+            stdout, stderr, combined = _invoke(docker_callable, *args, timeout=timeout)
+        else:
+            stdout = compose_operation(timeout)
+            stderr = ""
+            combined = stdout
         _write_output(run_root, prefix, stdout, stderr, combined)
     except BaseException as error:
         _write_output(run_root, prefix, "", str(error), str(error))
@@ -838,18 +879,33 @@ def _probe_host_python(run_root: Path, image_id: str, docker_callable: Callable[
         raise
 
 
-def _run_maintenance(run_root: Path, compose_file: Path, image_id: str, project: str,
+def _run_maintenance(run_root: Path, compose_file: Any, image_id: str, project: str,
                      action: str, docker_callable: Callable[..., Any], receipt: dict[str, Any],
-                     timeout: int) -> dict[str, Any]:
+                     timeout: int, *, compose_document: Mapping[str, Any] | None = None,
+                     compose_capture_runner: Callable[..., str] | None = None
+                     ) -> dict[str, Any]:
     name = _container_name(action, run_root)
     label_value = receipt["run_id"]
     label_key = "org.fullmag.host-ledger.owner"
     args = ["compose", "--project-name", project, "--profile", "host-ledger-maintenance", "-f", str(compose_file),
             "run", "--name", name, "--label", f"{label_key}={label_value}", "host-ledger-maintenance", action]
     receipt[f"{action}_container"] = name
+    compose_operation = None
+    if compose_capture_runner is not None:
+        if not isinstance(compose_document, Mapping):
+            raise HostLedgerError("volume-backed maintenance run has no stored Compose document")
+        operation = ["--profile", "host-ledger-maintenance", "run", "--name", name,
+                     "--label", f"{label_key}={label_value}", "host-ledger-maintenance", action]
+
+        def compose_operation(operation_timeout: int) -> str:
+            return compose_capture_runner(
+                compose_document, operation, timeout=operation_timeout
+            )
+
     document, host_receipt = _run_owned_container(args=args, name=name, image_id=image_id, label_value=label_value,
                                                    run_root=run_root, prefix=f"maintenance-{action}",
-                                                   docker_callable=docker_callable, timeout=timeout)
+                                                   docker_callable=docker_callable, timeout=timeout,
+                                                   compose_operation=compose_operation)
     values = {
         "project_id": receipt.get("project_id"),
         "mount_root": receipt["mount_root"],
@@ -862,7 +918,8 @@ def _run_maintenance(run_root: Path, compose_file: Path, image_id: str, project:
 
 
 def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
-            docker_callable: Callable[..., Any]) -> dict[str, Any]:
+            docker_callable: Callable[..., Any], *, overlay_store=None,
+            overlay_relative: str | None = None) -> dict[str, Any]:
     """Prepare one persistent host-ledger mount and return launcher bindings."""
     image_id = _safe_image_id(image_id)
     values = _resolve_values(layout)
@@ -882,9 +939,16 @@ def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
     helper_source = repo / "scripts" / "lib" / HELPER_COPY_NAME
     overlay_source = repo / "compose.host-ledger.yaml"
     helper_copy = run_root / HELPER_COPY_NAME
-    overlay_copy = run_root / COMPOSE_SOURCE_NAME
+    volume_overlay = overlay_store is not None or overlay_relative is not None
+    if volume_overlay and (overlay_store is None or not isinstance(overlay_relative, str)):
+        raise HostLedgerError("control-volume Compose overlay requires a store and relative path")
+    overlay_copy = overlay_source if volume_overlay else run_root / COMPOSE_SOURCE_NAME
     helper_hash = _copy_immutable(helper_source, helper_copy, MAX_HELPER_BYTES, 0o444)
-    overlay_hash = _copy_immutable(overlay_source, overlay_copy, MAX_COMPOSE_BYTES, 0o444)
+    overlay_hash = (
+        _digest(overlay_source, MAX_COMPOSE_BYTES)
+        if volume_overlay else
+        _copy_immutable(overlay_source, overlay_copy, MAX_COMPOSE_BYTES, 0o444)
+    )
     daemon_info = _daemon_info(docker_callable)
     image_attestation = _image_attestation(image_id, docker_callable)
 
@@ -909,6 +973,7 @@ def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
         "FULLMAG_DOCKER_HOST_ID": daemon_info["id_sha256"],
     }
     run_id = hashlib.sha256(str(run_root).encode("utf-8")).hexdigest()[:32]
+    project = f"fullmag-host-ledger-{run_root.name}"
     receipt_path = run_root / "host-ledger-adapter-receipt.json"
     if receipt_path.is_symlink() or receipt_path.exists():
         raise HostLedgerError("an existing host-ledger receipt requires explicit reconciliation; refusing retry")
@@ -936,21 +1001,86 @@ def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
     }
     _atomic_json(receipt_path, receipt)
     try:
-        maintenance_doc = run_root / COMPOSE_MAINTENANCE_NAME
-        _render_maintenance(
+        compose_capture_runner = None
+        maintenance_document = None
+        if volume_overlay:
+            from docker_build_volume_io import (
+                BuildDocument,
+                VolumeBuildError,
+                VolumeBuildOutcomeUnknown,
+                compose_capture,
+            )
+
+            overlay_parent = overlay_relative.rpartition("/")[0]
+            maintenance_relative = (
+                overlay_parent + "/host-ledger-maintenance-compose.json"
+                if overlay_parent else "host-ledger-maintenance-compose.json"
+            )
+            maintenance_doc = BuildDocument(overlay_store, maintenance_relative)
+
+            def compose_capture_runner(document, arguments, *, environment=None, timeout=120):
+                try:
+                    return compose_capture(
+                        repo, project, document, arguments,
+                        environment=environment, timeout=timeout,
+                    )
+                except VolumeBuildOutcomeUnknown as error:
+                    raise DockerComposeOutcomeUnknown(
+                        tuple(["compose", *map(str, arguments)]), timeout
+                    ) from error
+                except VolumeBuildError as error:
+                    raise HostLedgerError(f"managed host-ledger Compose failed: {error}") from error
+        else:
+            maintenance_doc = run_root / COMPOSE_MAINTENANCE_NAME
+        resolved_overlay = _render_maintenance(
             overlay_copy,
             maintenance_doc,
             environment=environment,
             image_id=image_id,
             docker_callable=docker_callable,
+            compose_capture_runner=compose_capture_runner,
         )
-        receipt["maintenance_compose"] = str(maintenance_doc)
-        receipt["maintenance_compose_sha256"] = _digest(maintenance_doc, MAX_COMPOSE_BYTES)
+        compose_overlay_document = None
+        compose_overlay_uri = str(overlay_copy)
+        compose_overlay_sha256 = overlay_hash
+        if volume_overlay:
+            services = resolved_overlay.get("services")
+            backend = services.get("backend") if isinstance(services, dict) else None
+            if not isinstance(backend, dict):
+                raise HostLedgerError("resolved host-ledger overlay has no backend service")
+            compose_overlay_document = {"services": {"backend": backend}}
+            overlay_store.write_json(overlay_relative, compose_overlay_document)
+            observation = overlay_store.stat(overlay_relative)
+            if observation is None or not re.fullmatch(r"[0-9a-f]{64}", observation.sha256):
+                raise HostLedgerError("control-volume host-ledger overlay could not be attested")
+            compose_overlay_uri = overlay_store.uri(overlay_relative)
+            compose_overlay_sha256 = observation.sha256
+            receipt["compose_overlay"] = compose_overlay_uri
+            receipt["compose_overlay_sha256"] = compose_overlay_sha256
+            maintenance_document = _parse_json_document(
+                maintenance_doc.read_bytes().decode("utf-8"),
+                "stored host-ledger maintenance Compose document",
+            )
+            maintenance_observation = overlay_store.stat(maintenance_relative)
+            if (maintenance_observation is None
+                    or not re.fullmatch(r"[0-9a-f]{64}", maintenance_observation.sha256)):
+                raise HostLedgerError("control-volume maintenance Compose could not be attested")
+            maintenance_compose = overlay_store.uri(maintenance_relative)
+            maintenance_compose_sha256 = maintenance_observation.sha256
+        else:
+            maintenance_compose = str(maintenance_doc)
+            maintenance_compose_sha256 = _digest(maintenance_doc, MAX_COMPOSE_BYTES)
+        receipt["maintenance_compose"] = maintenance_compose
+        receipt["maintenance_compose_sha256"] = maintenance_compose_sha256
         _atomic_json(receipt_path, receipt)
         _probe_host_python(run_root, image_id, docker_callable, receipt)
         _atomic_json(receipt_path, receipt)
-        project = f"fullmag-host-ledger-{run_root.name}"
-        host_receipt = _run_maintenance(run_root, maintenance_doc, image_id, project, "ensure", docker_callable, receipt, 300)
+        host_receipt = _run_maintenance(
+            run_root, maintenance_doc, image_id, project, "ensure", docker_callable,
+            receipt, 300,
+            compose_document=maintenance_document,
+            compose_capture_runner=compose_capture_runner,
+        )
         _validate_host_receipt(host_receipt, {
             "project_id": values["project_id"],
             "mount_root": values["mount_root"],
@@ -979,8 +1109,11 @@ def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
         "ledger_root_daemon": values["ledger_root_daemon"],
         "backing_image": environment["FULLMAG_HOST_LEDGER_BACKING_IMAGE"],
         "backing_image_local": values["backing_image"],
-        "compose_overlay": str(overlay_copy),
-        "maintenance_compose": str(run_root / COMPOSE_MAINTENANCE_NAME),
+        "compose_overlay": compose_overlay_uri,
+        "compose_overlay_sha256": compose_overlay_sha256,
+        **({"compose_overlay_document": compose_overlay_document}
+           if compose_overlay_document is not None else {}),
+        "maintenance_compose": maintenance_compose,
         "run_root": str(run_root),
         "helper_copy": str(helper_copy),
         "helper_sha256": helper_hash,
@@ -989,6 +1122,7 @@ def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
         "receipt_sha256": _digest(receipt_path),
         "host_receipt": host_receipt,
         "docker_daemon_id_sha256": daemon_info["id_sha256"],
+        "maintenance_compose_sha256": maintenance_compose_sha256,
     }
 
 

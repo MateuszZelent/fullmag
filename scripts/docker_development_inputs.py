@@ -169,10 +169,22 @@ def _validate_reused_workspace(destination, inputs, old_inputs, *, generated_sou
         raise ValueError(f"Persistent frontend seed metadata was changed: {relative}")
 
 
-def seed(source, state, port, *, reuse_from=None):
+def seed(source, state, port, *, reuse_from=None, volume_only=False, volume_plan=None):
     if os.name != "nt":
         raise ValueError("Live Docker development sources require native Windows preflight")
+    if not isinstance(volume_only, bool):
+        raise ValueError("volume_only must be a boolean")
+    if volume_only:
+        if reuse_from is not None or not isinstance(volume_plan, dict):
+            raise ValueError("volume-only seed requires an ensured plan and no legacy reuse receipt")
+        identity = volume_plan.get("identity")
+        if (volume_plan.get("schema") != "fullmag.frontend-development-volume.v1"
+                or not isinstance(identity, dict)
+                or not isinstance(volume_plan.get("creation_id"), str)):
+            raise ValueError("volume-only seed plan is not ensured")
     source = source.resolve(strict=True)
+    if volume_only and str(source) != volume_plan.get("source_root"):
+        raise ValueError("volume-only seed source differs from the ensured checkout")
     source_volume = local_volume(source)
     initial_commit = storage.git(source, "rev-parse", "HEAD")
     app = source / "apps/control-room"
@@ -212,13 +224,15 @@ def seed(source, state, port, *, reuse_from=None):
     files = []
     source_files = {}
     dependency_entries = {}
-    destination = storage.validate_path(state / "development/workspace", state,
-                                        "isolated Docker frontend workspace")
-    if reuse_from is not None:
-        if not destination.is_dir() or destination.is_symlink():
-            raise ValueError("Persistent frontend workspace is missing or a reparse point")
-    else:
-        destination.mkdir(parents=True, exist_ok=False)
+    destination = None
+    if not volume_only:
+        destination = storage.validate_path(state / "development/workspace", state,
+                                            "isolated Docker frontend workspace")
+        if reuse_from is not None:
+            if not destination.is_dir() or destination.is_symlink():
+                raise ValueError("Persistent frontend workspace is missing or a reparse point")
+        else:
+            destination.mkdir(parents=True, exist_ok=False)
     for relative in sorted(relative_files, key=str):
         try:
             data = (package_data if relative == package_relative else
@@ -229,13 +243,14 @@ def seed(source, state, port, *, reuse_from=None):
                     f"Pnpm patch file is missing or unavailable: {relative}"
                 ) from error
             raise
-        target = storage.validate_path(destination / relative, destination, "frontend metadata")
-        if reuse_from is None:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("xb") as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
+        if not volume_only:
+            target = storage.validate_path(destination / relative, destination, "frontend metadata")
+            if reuse_from is None:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("xb") as stream:
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
         digest = hashlib.sha256(data).hexdigest()
         source_files[relative.as_posix()] = data
         files.append({"relative": relative.as_posix(), "sha256": digest})
@@ -282,7 +297,7 @@ def seed(source, state, port, *, reuse_from=None):
         # commit and manifest digest.  Keep it byte-for-byte unchanged while
         # recording the current checkout identity in the outer run receipt.
         return old_inputs
-    return {"schema": "fullmag.docker-development-inputs.v1", "source_root": str(source),
+    manifest = {"schema": "fullmag.docker-development-inputs.v1", "source_root": str(source),
             "source_commit": commit, "source_selection": "live_windows_selected_checkout",
             "source_volume": source_volume, "host_port": port,
             "worktree_id": storage.identifier(source),
@@ -295,6 +310,24 @@ def seed(source, state, port, *, reuse_from=None):
             "configuration_changes": ("reuse_existing_workspace"
                                        if reuse_from is not None else "prepare_new_workspace"),
             "backend_build": "explicit_request_only"}
+    if volume_only:
+        manifest.update({
+            "storage_mode": "docker_named_volume_v1",
+            "source_mount": "/run/fullmag/source",
+            "frontend_volume": {
+                "schema": volume_plan["schema"],
+                "project_id": identity["project_id"],
+                "worktree_id": identity["worktree_id"],
+                "toolchain_image_id": identity["toolchain_image_id"],
+                "profile": identity["profile"],
+                "role": identity["role"],
+                "owner_id": identity["owner_id"],
+                "volume_name": volume_plan["volume_name"],
+                "creation_id": volume_plan["creation_id"],
+            },
+            "configuration_changes": "seed_existing_docker_named_volume",
+        })
+    return manifest
 
 
 

@@ -59,7 +59,8 @@ services:
       FULLMAG_BACKEND_CARGO_PROFILE: ${FULLMAG_BACKEND_CARGO_PROFILE:-backend-dev}
       FULLMAG_REPO_ROOT: /opt/fullmag/source
       FULLMAG_RUNTIME_PACKAGE_ROOT: /opt/fullmag/package
-      FULLMAG_PACKAGE_PROVENANCE: /opt/fullmag/provenance.json
+      FULLMAG_PACKAGE_PROVENANCE: /build/control/provenance.json
+      CUDA_CACHE_PATH: /build/cuda-cache
       PYTHONPATH: /build/workspace/packages/fullmag-py/src:/opt/fullmag/package
       # Durable workspace metadata is isolated per Compose source group.
       FULLMAG_WORKSPACE_STATE_DIR: /user-data
@@ -90,21 +91,18 @@ services:
         source: backend-cache-package
         target: /opt/fullmag/package
         volume: {nocopy: true}
-      - type: bind
-        source: ${FULLMAG_PACKAGE_PROVENANCE:?Backend build provenance is required}
-        target: /opt/fullmag/provenance.json
-        # This is the small run-owned handoff record.  The backend writer
-        # updates it in place while API admission is still closed; the parent
-        # /opt/fullmag tree remains read-only and no directory is overmounted.
-        read_only: false
-        bind: {create_host_path: false}
+      - type: volume
+        source: build-control
+        target: /run/fullmag/control
+        read_only: true
+        volume: {nocopy: true}
       # Per-group durable user data: workspace.db and related settings only.
       # Runtime sessions/results remain in the per-run /state bind below.
       - type: bind
         source: ${FULLMAG_WORKSPACE_STATE_ROOT:?Managed group user-data namespace is required}
         target: /user-data
         bind: {create_host_path: false}
-      # Real Windows storage: sessions, results, logs and the CUDA disk cache.
+      # User sessions, results and runtime operational logs remain on Windows.
       - type: bind
         source: ${FULLMAG_STATE_ROOT:?Managed Windows storage namespace is required}
         target: /state
@@ -150,27 +148,26 @@ services:
       FULLMAG_API_PROXY_TARGET: http://backend:8081
       FULLMAG_WATCHPACK_POLLING_MS: ${FULLMAG_WATCHPACK_POLLING_MS:-5000}
       HOME: /state/development
+      FULLMAG_DEVELOPMENT_INPUTS: ${FULLMAG_DEVELOPMENT_INPUTS:?Select the Docker control manifest}
+      TMPDIR: /state/development/tmp
       NVIDIA_VISIBLE_DEVICES: void
     ports: ["127.0.0.1:${FULLMAG_HTTP_PORT:-3197}:8080"]
     volumes:
       - type: bind
         source: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
-        target: /opt/fullmag/source
+        target: /run/fullmag/source
         read_only: true
         bind: {create_host_path: false}
-      # Linux dependencies, Next output and HMR logs stay out of the checkout.
-      # The frontend-cache-v1 overlay replaces only the four Linux cache/dependency
-      # children below; the Windows state bind remains the owner of sessions, logs
-      # and receipts.
-      - type: bind
-        source: ${FULLMAG_STATE_ROOT}/development
+      # One stable Docker-VM volume owns workspace, pnpm, Next and build logs.
+      - type: volume
+        source: frontend-development
         target: /state/development
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${FULLMAG_DEVELOPMENT_INPUTS:?Prepare the frontend input manifest}
-        target: /run/fullmag/development-inputs.json
+        volume: {nocopy: true}
+      - type: volume
+        source: build-control
+        target: /run/fullmag/control
         read_only: true
-        bind: {create_host_path: false}
+        volume: {nocopy: true}
       - type: bind
         source: ${FULLMAG_SOURCE_ROOT}/apps/control-room/app
         target: /state/development/workspace/apps/control-room/app
@@ -214,4 +211,10 @@ volumes:
     external: true
   backend-cache-package:
     name: ${FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME:-fullmag-backend-bootstrap-package}
+    external: true
+  build-control:
+    name: ${FULLMAG_BUILD_CONTROL_VOLUME:?Prepare the checkout build control volume}
+    external: true
+  frontend-development:
+    name: ${FULLMAG_FRONTEND_DEVELOPMENT_VOLUME:?Prepare the checkout frontend volume}
     external: true

@@ -63,6 +63,10 @@ FREEZE_SCHEMA = "fullmag.docker-development-inputs-freeze.v1"
 RECEIPT_SCHEMA = "fullmag.docker-frontend-development-receipt.v1"
 
 INPUTS_PATH = Path("/run/fullmag/development-inputs.json")
+VOLUME_INPUTS_ENV = "FULLMAG_DEVELOPMENT_INPUTS"
+VOLUME_INPUTS_PATH_RE = re.compile(
+    r"^/run/fullmag/control/runs/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}/development-inputs\.json$"
+)
 DEVELOPMENT_ROOT = Path("/state/development")
 WORKSPACE_ROOT = DEVELOPMENT_ROOT / "workspace"
 FRONTEND_ROOT = DEVELOPMENT_ROOT / "cache"
@@ -73,6 +77,14 @@ HOME_ROOT = DEVELOPMENT_ROOT / "home"
 TEMP_ROOT = DEVELOPMENT_ROOT / "tmp"
 FREEZE_ROOT = DEVELOPMENT_ROOT / "frozen-inputs"
 FREEZE_PATH = DEVELOPMENT_ROOT / "inputs-freeze.json"
+VOLUME_FREEZE_SCHEMA = "fullmag.docker-frontend-volume-seed.v1"
+VOLUME_FREEZE_PATH = DEVELOPMENT_ROOT / "volume-seed-state.json"
+VOLUME_FREEZE_ROOT = DEVELOPMENT_ROOT / "volume-frozen-inputs"
+VOLUME_OWNER_MARKER = DEVELOPMENT_ROOT / ".fullmag-frontend-development-owner.json"
+VOLUME_SCHEMA = "fullmag.frontend-development-volume.v1"
+VOLUME_OWNER_SCHEMA = "fullmag.frontend-development-owner.v1"
+VOLUME_ROLE = "frontend-development"
+SOURCE_MOUNT_ROOT = Path("/run/fullmag/source")
 RECEIPT_PATH = DEVELOPMENT_ROOT / "frontend-dev-receipt.json"
 LOG_PATH = DEVELOPMENT_ROOT / "next.log"
 RUNTIME_LOCK_PATH = FRONTEND_ROOT / ".fullmag-frontend-runtime.lock"
@@ -116,7 +128,8 @@ OPTIONAL_MANIFEST_KEYS = frozenset(
     {
         "source_selection", "source_volume", "configuration_changes", "backend_build",
         "worktree_id", "dependency_seed_files", "dependency_seed_sha256",
-        "toolpins", "toolpins_sha256",
+        "toolpins", "toolpins_sha256", "storage_mode", "source_mount",
+        "frontend_volume",
     }
 )
 GENERATED_RELATIVES = frozenset(
@@ -137,6 +150,7 @@ REQUIRED_SEED_RELATIVES = frozenset(
 FORBIDDEN_RELATIVE_PARTS = frozenset({".git", "node_modules"})
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+HEX32 = re.compile(r"^[0-9a-f]{32}$")
 WINDOWS_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 MAX_INPUTS_BYTES = 512 * 1024
 MAX_SEED_FILE_BYTES = 8 * 1024 * 1024
@@ -391,15 +405,74 @@ def read_inputs(path: Path | None = None) -> DevelopmentInputs:
     """Read and validate the bounded, fixed-layout host input manifest."""
 
     if path is None:
-        path = INPUTS_PATH
-    if path != INPUTS_PATH:
-        _fail("development input manifest path is fixed to /run/fullmag/development-inputs.json")
+        configured = os.environ.get(VOLUME_INPUTS_ENV)
+        if configured:
+            if not VOLUME_INPUTS_PATH_RE.fullmatch(configured):
+                _fail(f"{VOLUME_INPUTS_ENV} must name a fixed run manifest under /run/fullmag/control")
+            path = Path(configured)
+        else:
+            path = INPUTS_PATH
+    if path != INPUTS_PATH and not VOLUME_INPUTS_PATH_RE.fullmatch(str(path)):
+        _fail("development input manifest path is outside the fixed legacy/control mount locations")
     manifest = _read_json(path, "Docker development input manifest")
     unexpected_keys = set(manifest) - REQUIRED_MANIFEST_KEYS - OPTIONAL_MANIFEST_KEYS
     if not REQUIRED_MANIFEST_KEYS <= set(manifest) or unexpected_keys:
         _fail("Docker development input manifest has an unexpected field set")
     if manifest.get("schema") != INPUTS_SCHEMA:
         _fail("Docker development input manifest has an unsupported schema")
+    storage_mode = manifest.get("storage_mode")
+    volume_manifest = manifest.get("frontend_volume")
+    if storage_mode is None:
+        if "source_mount" in manifest or volume_manifest is not None:
+            _fail("named-volume frontend metadata requires its explicit storage mode")
+    else:
+        expected_volume_keys = {
+            "schema", "project_id", "worktree_id", "toolchain_image_id",
+            "profile", "role", "owner_id", "volume_name", "creation_id",
+        }
+        if (
+            storage_mode != "docker_named_volume_v1"
+            or manifest.get("source_mount") != str(SOURCE_MOUNT_ROOT)
+            or not isinstance(volume_manifest, dict)
+            or set(volume_manifest) != expected_volume_keys
+        ):
+            _fail("frontend named-volume manifest has an unexpected storage contract")
+        if (
+            volume_manifest.get("schema") != VOLUME_SCHEMA
+            or volume_manifest.get("role") != VOLUME_ROLE
+            or volume_manifest.get("profile") != "dev"
+            or not isinstance(volume_manifest.get("project_id"), str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", volume_manifest["project_id"])
+            or not isinstance(volume_manifest.get("worktree_id"), str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", volume_manifest["worktree_id"])
+            or not isinstance(volume_manifest.get("toolchain_image_id"), str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", volume_manifest["toolchain_image_id"])
+            or not isinstance(volume_manifest.get("owner_id"), str)
+            or not HEX64.fullmatch(volume_manifest["owner_id"])
+            or not isinstance(volume_manifest.get("volume_name"), str)
+            or not re.fullmatch(r"fullmag-frontend-dev-v1-[0-9a-f]{32}", volume_manifest["volume_name"])
+            or not isinstance(volume_manifest.get("creation_id"), str)
+            or not HEX32.fullmatch(volume_manifest["creation_id"])
+            or not isinstance(manifest.get("dependency_seed_sha256"), str)
+            or not HEX64.fullmatch(manifest["dependency_seed_sha256"])
+            or not isinstance(manifest.get("toolpins_sha256"), str)
+            or not HEX64.fullmatch(manifest["toolpins_sha256"])
+        ):
+            _fail("frontend named-volume identity fields are invalid")
+        identity_seed = {
+            "schema": VOLUME_SCHEMA,
+            "project_id": volume_manifest["project_id"],
+            "worktree_id": volume_manifest["worktree_id"],
+            "toolchain_image_id": volume_manifest["toolchain_image_id"],
+            "profile": volume_manifest["profile"],
+            "role": volume_manifest["role"],
+        }
+        owner_id = _hash_bytes(_canonical_json(identity_seed))
+        if (
+            volume_manifest["owner_id"] != owner_id
+            or volume_manifest["volume_name"] != "fullmag-frontend-dev-v1-" + owner_id[:32]
+        ):
+            _fail("frontend named-volume owner identity is not canonical")
     source_root = manifest.get("source_root")
     if (
         not isinstance(source_root, str)
@@ -505,6 +578,10 @@ def _freeze_manifest(inputs: DevelopmentInputs) -> dict[str, Any]:
 def _freeze_inputs(inputs: DevelopmentInputs, *, allow_generated: bool) -> None:
     """Create or verify the durable original input bytes; never refresh them."""
 
+    if inputs.manifest.get("storage_mode") == "docker_named_volume_v1":
+        _materialize_volume_seed(inputs, allow_generated=allow_generated)
+        return
+
     if FREEZE_PATH.exists():
         frozen = _read_json(FREEZE_PATH, "frozen Docker development inputs")
         if frozen.get("schema") != FREEZE_SCHEMA:
@@ -541,6 +618,193 @@ def _freeze_inputs(inputs: DevelopmentInputs, *, allow_generated: bool) -> None:
         )
         _atomic_bytes(destination, data, f"frozen seed file {seed.relative}", replace=False)
     _atomic_json(FREEZE_PATH, _freeze_manifest(inputs), "frozen Docker development inputs")
+
+
+def _volume_identity(inputs: DevelopmentInputs) -> dict[str, Any]:
+    value = inputs.manifest.get("frontend_volume")
+    if not isinstance(value, dict):
+        _fail("named-volume frontend inputs have no volume identity")
+    return value
+
+
+def _validate_volume_owner(inputs: DevelopmentInputs) -> dict[str, Any]:
+    identity = _volume_identity(inputs)
+    _assert_no_links(VOLUME_OWNER_MARKER, "frontend volume owner marker")
+    info = VOLUME_OWNER_MARKER.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        _fail("frontend volume owner marker is not a regular file")
+    if (info.st_uid, info.st_gid) != (65532, 65532) or stat.S_IMODE(info.st_mode) != 0o660:
+        _fail("frontend volume owner marker ownership/mode is invalid")
+    marker = _read_json(VOLUME_OWNER_MARKER, "frontend volume owner marker", 16 * 1024)
+    expected = {
+        "schema": VOLUME_OWNER_SCHEMA,
+        "volume_schema": VOLUME_SCHEMA,
+        "project_id": identity["project_id"],
+        "worktree_id": identity["worktree_id"],
+        "toolchain_image_id": identity["toolchain_image_id"],
+        "profile": identity["profile"],
+        "role": VOLUME_ROLE,
+        "owner_id": identity["owner_id"],
+        "creation_id": identity["creation_id"],
+        "volume_name": identity["volume_name"],
+        "uid": 65532,
+        "gid": 65532,
+    }
+    if marker != expected:
+        _fail("frontend volume marker does not match the manifest identity")
+    if not VOLUME_FREEZE_ROOT.is_dir() or VOLUME_FREEZE_ROOT.is_symlink():
+        _fail("volume-owned frozen input directory is missing or unsafe")
+    return identity
+
+
+def _volume_state_files(value: Any, label: str) -> dict[str, str]:
+    if not isinstance(value, list) or len(value) > MAX_SEED_FILES:
+        _fail(f"{label} file list is malformed")
+    result: dict[str, str] = {}
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict) or set(entry) != {"relative", "sha256"}:
+            _fail(f"{label} file entry {index} is malformed")
+        relative = _relative_path(entry["relative"], f"{label} path")
+        digest = entry["sha256"]
+        if not isinstance(digest, str) or not HEX64.fullmatch(digest) or relative in result:
+            _fail(f"{label} file identity is invalid")
+        result[relative] = digest
+    return result
+
+
+def _materialize_volume_seed(inputs: DevelopmentInputs, *, allow_generated: bool) -> None:
+    """Refresh only files recorded as frontend seeds inside the owned volume."""
+
+    identity = _validate_volume_owner(inputs)
+    _assert_no_links(SOURCE_MOUNT_ROOT, "readonly selected source mount")
+    if not SOURCE_MOUNT_ROOT.is_dir():
+        _fail("readonly selected source mount is unavailable")
+    source_bytes: dict[str, bytes] = {}
+    total = 0
+    for seed in inputs.files:
+        source = SOURCE_MOUNT_ROOT.joinpath(*PurePosixPath(seed.relative).parts)
+        _assert_no_links(source, f"readonly source seed {seed.relative}")
+        try:
+            data = _bounded_bytes(source, f"readonly source seed {seed.relative}")
+        except FileNotFoundError as error:
+            raise FrontendDevError(f"selected checkout seed is missing: {seed.relative}") from error
+        total += len(data)
+        if total > MAX_SEED_TOTAL_BYTES:
+            _fail("Docker development seed exceeds its total size bound")
+        if _hash_bytes(data) != seed.sha256:
+            _fail(f"selected checkout seed hash differs from its manifest: {seed.relative}")
+        source_bytes[seed.relative] = data
+
+    previous: dict[str, Any] | None
+    try:
+        previous = _read_json(VOLUME_FREEZE_PATH, "frontend volume seed state")
+    except FileNotFoundError:
+        previous = None
+    current_files = {seed.relative: seed.sha256 for seed in inputs.files}
+    if previous is not None:
+        expected_state_keys = {
+            "schema", "state", "frontend_volume", "manifest_digest",
+            "dependency_seed_sha256", "files",
+        }
+        if set(previous) != expected_state_keys or previous.get("schema") != VOLUME_FREEZE_SCHEMA:
+            _fail("frontend volume seed state has an unsupported shape")
+        if previous.get("state") != "ready":
+            _fail("frontend seed update was interrupted; refusing ambiguous recovery")
+        if previous.get("frontend_volume") != identity:
+            _fail("frontend seed state belongs to another volume identity")
+        old_files = _volume_state_files(previous.get("files"), "previous volume seed")
+        for relative, digest in old_files.items():
+            workspace_path = _seed_file_path(inputs, relative)
+            frozen_path = _seed_file_path(
+                dataclasses.replace(inputs, workspace_root=VOLUME_FREEZE_ROOT), relative
+            )
+            try:
+                frozen = _bounded_bytes(frozen_path, f"frozen volume seed {relative}")
+            except FileNotFoundError as error:
+                raise FrontendDevError(f"frozen volume seed is missing: {relative}") from error
+            if _hash_bytes(frozen) != digest:
+                _fail(f"frozen volume seed hash is invalid: {relative}")
+            try:
+                actual = _bounded_bytes(workspace_path, f"existing volume seed {relative}")
+            except FileNotFoundError:
+                if allow_generated and relative in GENERATED_RELATIVES:
+                    actual = None
+                else:
+                    raise FrontendDevError(f"owned volume seed is missing: {relative}")
+            if actual is not None and _hash_bytes(actual) != digest:
+                if relative not in GENERATED_RELATIVES or not allow_generated:
+                    _fail(f"owned volume seed was modified: {relative}")
+                if actual not in _next_generated_seed_variants(relative, frozen):
+                    _fail(f"generated frontend seed has an unknown form: {relative}")
+        if (
+            previous.get("manifest_digest") == inputs.manifest_digest
+            and old_files == current_files
+            and previous.get("dependency_seed_sha256")
+                == inputs.manifest.get("dependency_seed_sha256")
+        ):
+            _validate_seed_files(inputs, allow_generated=allow_generated)
+            return
+    else:
+        old_files = {}
+        # Without a prior ownership inventory, existing seed files cannot be
+        # adopted or overwritten. The helper creates only empty fixed dirs.
+        for relative in current_files:
+            if os.path.lexists(_seed_file_path(inputs, relative)):
+                _fail(f"unrecorded file blocks initial frontend seed: {relative}")
+            frozen_path = _seed_file_path(
+                dataclasses.replace(inputs, workspace_root=VOLUME_FREEZE_ROOT), relative
+            )
+            if os.path.lexists(frozen_path):
+                _fail(f"unrecorded frozen seed blocks initialization: {relative}")
+
+    _atomic_json(
+        VOLUME_FREEZE_PATH,
+        {
+            "schema": VOLUME_FREEZE_SCHEMA,
+            "state": "updating",
+            "frontend_volume": identity,
+            "manifest_digest": inputs.manifest_digest,
+            "dependency_seed_sha256": inputs.manifest.get("dependency_seed_sha256"),
+            "files": [
+                {"relative": relative, "sha256": digest}
+                for relative, digest in sorted(old_files.items())
+            ],
+        },
+        "pending frontend volume seed state",
+    )
+    for relative in sorted(old_files.keys() - current_files.keys()):
+        for root in (inputs.workspace_root, VOLUME_FREEZE_ROOT):
+            path = _seed_file_path(dataclasses.replace(inputs, workspace_root=root), relative)
+            try:
+                metadata = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                _fail(f"stale owned seed is not a regular file: {relative}")
+            path.unlink()
+    for relative, data in source_bytes.items():
+        workspace = _seed_file_path(inputs, relative)
+        frozen = _seed_file_path(
+            dataclasses.replace(inputs, workspace_root=VOLUME_FREEZE_ROOT), relative
+        )
+        _atomic_bytes(workspace, data, f"volume seed {relative}")
+        _atomic_bytes(frozen, data, f"frozen volume seed {relative}")
+    _atomic_json(
+        VOLUME_FREEZE_PATH,
+        {
+            "schema": VOLUME_FREEZE_SCHEMA,
+            "state": "ready",
+            "frontend_volume": identity,
+            "manifest_digest": inputs.manifest_digest,
+            "dependency_seed_sha256": inputs.manifest.get("dependency_seed_sha256"),
+            "files": [
+                {"relative": seed.relative, "sha256": seed.sha256}
+                for seed in inputs.files
+            ],
+        },
+        "frontend volume seed state",
+    )
+    _validate_seed_files(inputs, allow_generated=False)
 
 
 def _load_receipt() -> dict[str, Any] | None:
@@ -1091,6 +1355,9 @@ def _receipt_base(
         "workspace_root": str(WORKSPACE_ROOT),
         "frontend_root": str(FRONTEND_ROOT),
         "inputs_manifest_digest": inputs.manifest_digest,
+        "storage_mode": inputs.manifest.get("storage_mode", "legacy_host_seed"),
+        "dependency_seed_sha256": inputs.manifest.get("dependency_seed_sha256"),
+        "frontend_volume": inputs.manifest.get("frontend_volume"),
         "internal_port": INTERNAL_PORT,
         "next_dist_dir": NEXT_DIST_DIR,
         "api_proxy_target": API_PROXY_TARGET,
@@ -1892,14 +2159,24 @@ def start(stopping_event: Any) -> FrontendHandle:
     if stopping_event.is_set():
         _fail("frontend development cannot start after shutdown was requested")
     inputs = read_inputs()
+    volume_only = inputs.manifest.get("storage_mode") == "docker_named_volume_v1"
+    if volume_only:
+        # Reject a missing or mismatched owner marker before creating any state.
+        _validate_volume_owner(inputs)
     previous = _load_receipt()
     _reject_existing_owner(previous)
     allow_generated = _generated_gate(previous)
-    _prepare_state_directories()
-    _validate_live_directories(inputs)
-    _freeze_inputs(inputs, allow_generated=allow_generated)
     watchpack_polling_ms = _watchpack_polling_ms()
-    runtime_lock = _acquire_runtime_lock()
+    runtime_lock = _acquire_runtime_lock() if volume_only else None
+    try:
+        _prepare_state_directories()
+        _validate_live_directories(inputs)
+        _freeze_inputs(inputs, allow_generated=allow_generated)
+    except Exception:
+        _release_runtime_lock(runtime_lock)
+        raise
+    if runtime_lock is None:
+        runtime_lock = _acquire_runtime_lock()
     try:
         node_modules_target = _prepare_managed_frontend(inputs)
         tool_environment = _safe_environment(
@@ -1968,7 +2245,15 @@ def start(stopping_event: Any) -> FrontendHandle:
     log_tailer = _start_log_tailer()
     handle: FrontendHandle | None = None
     try:
-        needs_install = previous is None or previous.get("dependency_install") != "ready"
+        if volume_only:
+            dependency_identity = inputs.manifest["dependency_seed_sha256"]
+            needs_install = (
+                previous is None
+                or previous.get("dependency_install") != "ready"
+                or previous.get("dependency_seed_sha256") != dependency_identity
+            )
+        else:
+            needs_install = previous is None or previous.get("dependency_install") != "ready"
         if not needs_install and not _dependency_tree_ready(inputs):
             needs_install = True
             _write_lifecycle_log(

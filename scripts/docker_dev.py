@@ -267,14 +267,15 @@ def _read_json(path: Path, label: str) -> tuple[dict[str, object], bytes]:
     return value, raw
 
 
-def _write_json(path: Path, value: Mapping[str, object]) -> None:
+def _write_json(path, value: Mapping[str, object]) -> None:
+    from docker_build_volume_io import BuildDocument
+    if isinstance(path, BuildDocument):
+        path.write_json(dict(value))
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temporary, path)
     finally:
         if temporary.exists():
@@ -301,26 +302,36 @@ def _image_reference_present(reference: str) -> bool:
         _docker_capture("image", "inspect", reference, timeout=60)
     except DirectDockerOutcomeUnknown:
         raise
-    except DirectDockerError:
-        return False
+    except DirectDockerError as error:
+        message = str(error).lower()
+        if any(token in message for token in ('no such image:', 'no such object:', 'image not found')):
+            return False
+        raise
     return True
 
 
-def _image_file(image: str, path: str) -> bytes:
-    command = _docker_argv(
-        ("run", "--rm", "--pull", "never", "--network", "none", "--read-only",
-         "--entrypoint", "/bin/cat", image, path)
-    )
-    try:
-        result = subprocess.run(command, capture_output=True, timeout=60)
-    except subprocess.TimeoutExpired as error:
-        raise DirectDockerOutcomeUnknown(
-            f"Docker helper read timed out; daemon ownership is unknown: {' '.join(command)}"
-        ) from error
-    if result.returncode:
-        message = result.stderr.decode("utf-8", "replace").strip()
-        raise _fail(message or f"cannot read {path} from development image")
-    return bytes(result.stdout)
+def _image_file(image: str, path: str, *, layout=None) -> bytes:
+    from docker_build_volume_io import compose_capture
+    if layout is None:
+        raise _fail('Image probes require the selected checkout layout')
+    image_id, _ = _inspect_image(image)
+    project = _compose_identity(layout)['project_name']
+    spec = {'name': project, 'services': {'image-file-probe': {
+        'image': image_id, 'pull_policy': 'never', 'user': '65532:65532',
+        'read_only': True, 'network_mode': 'none', 'runtime': 'runc',
+        'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'],
+        'pids_limit': 16, 'mem_limit': '64m', 'cpus': 0.25,
+        'environment': {'NVIDIA_VISIBLE_DEVICES': 'void'},
+        'entrypoint': ['/usr/local/bin/python3', '-c',
+            'import os,stat,sys; f=os.open(sys.argv[1],os.O_RDONLY|os.O_NOFOLLOW); s=os.fstat(f); '
+            'assert stat.S_ISREG(s.st_mode) and s.st_size<=4*1024*1024; '
+            'sys.stdout.buffer.write(os.read(f,4*1024*1024+1)); os.close(f)', path]}}}
+    raw = compose_capture(layout['repo_root'], project, spec,
+                          ['run', '--rm', '--no-deps', '-T', 'image-file-probe'], timeout=90)
+    data = raw.encode('utf-8')
+    if len(data) > 4 * 1024 * 1024:
+        raise _fail('Image probe exceeded its output limit')
+    return data
 
 
 def _image_helper_inventory(image: str, destination: Path) -> dict[str, str]:
@@ -368,34 +379,22 @@ def _copy_owned_context_file(source: Path, destination: Path) -> str:
     return _sha256_bytes(data)
 
 
-def _development_base_context(repo: Path, run_root: Path, toolchain_id: str,
+def _development_base_context(repo: Path, run_root, toolchain_id: str,
                               toolchain_manifest: Mapping[str, object]) -> dict[str, object]:
-    context = run_root / "development-base-context"
-    context.mkdir(mode=0o700, parents=True, exist_ok=False)
-    files: dict[str, str] = {}
-    for destination_name, relative_source in BASE_CONTEXT_FILES:
-        files[destination_name] = _copy_owned_context_file(
-            repo / relative_source,
-            context / destination_name,
-        )
+    # BuildKit reads the allow-listed readonly checkout directly; no context
+    # copy, archive, log or receipt is generated in Windows storage.
+    paths = dict(BASE_CONTEXT_FILES)
+    paths['Dockerfile.dev'] = 'docker/all-in-one/Dockerfile.development-volume'
+    paths['Dockerfile.development-volume.dockerignore'] = 'docker/all-in-one/Dockerfile.development-volume.dockerignore'
+    files = {name: _sha256_file(repo / relative, 'development base input') for name, relative in paths.items()}
     manifest_sha256 = _sha256_bytes(_canonical_json(toolchain_manifest))
-    identity = {
-        "schema": DEVELOPMENT_BASE_CONTEXT_SCHEMA,
-        "toolchain_image_id": toolchain_id,
-        "toolchain_manifest_sha256": manifest_sha256,
-        "files": files,
-    }
-    context_sha256 = _sha256_bytes(_canonical_json(identity))
-    receipt = {**identity, "context_sha256": context_sha256}
-    _write_json(run_root / "development-base-context.json", receipt)
-    return {
-        "root": str(context),
-        "toolchain_image_id": toolchain_id,
-        "context_sha256": context_sha256,
-        "toolchain_manifest_sha256": manifest_sha256,
-        "helper_hashes": files,
-        "receipt": str(run_root / "development-base-context.json"),
-    }
+    identity = {'schema': DEVELOPMENT_BASE_CONTEXT_SCHEMA, 'toolchain_image_id': toolchain_id,
+                'toolchain_manifest_sha256': manifest_sha256, 'files': files}
+    receipt = {**identity, 'context_sha256': _sha256_bytes(_canonical_json(identity))}
+    _write_json(run_root / 'development-base-context.json', receipt)
+    return {'root': str(repo), 'source_paths': paths, 'toolchain_image_id': toolchain_id,
+            'context_sha256': receipt['context_sha256'], 'toolchain_manifest_sha256': manifest_sha256,
+            'helper_hashes': files, 'receipt': str(run_root / 'development-base-context.json')}
 
 
 def _runtime_image_context(repo: Path) -> dict[str, object]:
@@ -439,20 +438,17 @@ def _toolchain_setup_message(detail: str) -> DirectDockerError:
 
 
 def _bootstrap_toolchain_reference(layout: Mapping[str, object]) -> str | None:
-    from fullmag_storage import validate_path
-
-    root = Path(str(layout["storage_root"]))
-    path = validate_path(root / TOOLCHAIN_BOOTSTRAP_RECEIPT, root, "toolchain bootstrap receipt")
-    if not path.is_file() or path.is_symlink():
+    from docker_build_volume_io import BuildDocument, control_store
+    store = layout.get('_build_control_store') or control_store(layout)
+    path = BuildDocument(store, 'index/docker-toolchain-bootstrap.json')
+    if not path.exists():
         return None
-    receipt, _raw = _read_json(path, "toolchain bootstrap receipt")
-    if receipt.get("state") != "built":
-        raise _toolchain_setup_message(
-            f"toolchain bootstrap receipt is not ready: {receipt.get('state')!r}"
-        )
-    reference = receipt.get("image") or receipt.get("image_id")
-    if not isinstance(reference, str) or not reference.strip():
-        raise _toolchain_setup_message("toolchain bootstrap receipt has no configured image")
+    receipt, _ = _read_json(path, 'Docker toolchain bootstrap receipt')
+    if receipt.get('schema') != 'fullmag.docker-toolchain-bootstrap.v2' or receipt.get('state') != 'built':
+        raise _toolchain_setup_message('Docker toolchain receipt is not ready')
+    reference = receipt.get('image_id')
+    if not isinstance(reference, str) or not IMAGE_ID_RE.fullmatch(reference):
+        raise _toolchain_setup_message('Docker toolchain receipt has no immutable image')
     return reference
 
 
@@ -468,22 +464,12 @@ def _configured_toolchain_reference(args: argparse.Namespace,
     return reference
 
 
-def _preflight_dependency_image(image_id: str) -> tuple[dict[str, object], str]:
-    """Use the shared runtime preflight for one immutable dependency image."""
-
-    try:
-        from fullmag_docker_runtime import DockerOutcomeUnknown, _preflight_toolchain_image
-        manifest = _preflight_toolchain_image(image_id)
-    except DockerOutcomeUnknown as error:
-        raise DirectDockerOutcomeUnknown(
-            f"toolchain manifest probe timed out; daemon ownership is unknown: {image_id}"
-        ) from error
-    except Exception as error:
-        raise _toolchain_setup_message(
-            f"toolchain image {image_id} failed the dependency manifest preflight"
-        ) from error
-    if not isinstance(manifest, dict) or manifest.get("schema") != TOOLCHAIN_MANIFEST_SCHEMA:
-        raise _toolchain_setup_message("toolchain dependency manifest schema is unsupported")
+def _preflight_dependency_image(image_id: str, *, layout=None) -> tuple[dict[str, object], str]:
+    from fullmag_docker_runtime import _validate_toolchain_manifest
+    raw = _image_file(image_id, TOOLCHAIN_MANIFEST_PATH, layout=layout)
+    if len(raw) > 2 * 1024 * 1024:
+        raise _fail('Dependency manifest exceeds its output bound')
+    manifest = _validate_toolchain_manifest(json.loads(raw))
     return manifest, _sha256_bytes(_canonical_json(manifest))
 
 
@@ -497,14 +483,21 @@ def _direct_image_tag(reference: str, kind: str, context_sha256: str) -> str:
     return f"{repository}:direct-{kind}-{context_sha256[:20]}"
 
 
-def _image_metadata_path(layout: Mapping[str, object], reference: str) -> Path:
-    from fullmag_storage import validate_path
+def _group_image_seed(layout: Mapping[str, object], context_sha256: str) -> str:
+    """Keep image tags and their receipts in the same stable checkout namespace."""
+    identity = _compose_identity(layout)
+    return _sha256_bytes(_canonical_json({
+        'schema': 'fullmag.direct-compose.image-namespace.v1',
+        'compose_project': identity['project_name'],
+        'worktree_id': identity['worktree_id'],
+        'context_sha256': context_sha256,
+    }))
 
-    root = Path(str(layout["storage_root"]))
-    index = validate_path(root / "index", root, "Docker development image index")
-    index.mkdir(parents=True, exist_ok=True)
-    name = "docker-dev-image-" + _sha256_bytes(reference.encode("utf-8")) + ".json"
-    return validate_path(index / name, root, "Docker development image receipt")
+
+def _image_metadata_path(layout: Mapping[str, object], reference: str):
+    from docker_build_volume_io import BuildDocument, control_store
+    store = layout.get('_build_control_store') or control_store(layout)
+    return BuildDocument(store, 'index/docker-dev-image-' + _sha256_bytes(reference.encode('utf-8')) + '.json')
 
 
 def _read_image_metadata(layout: Mapping[str, object], reference: str) -> dict[str, object] | None:
@@ -524,7 +517,7 @@ def _write_image_metadata(layout: Mapping[str, object], reference: str,
     return path
 
 
-def _validate_development_base(reference: str, *, expected_toolchain_id: str | None = None,
+def _validate_development_base(reference: str, *, layout=None, expected_toolchain_id: str | None = None,
                                expected_context_sha256: str | None = None) -> dict[str, object]:
     image_id, document = _inspect_image(reference)
     labels = _image_labels(document)
@@ -537,7 +530,7 @@ def _validate_development_base(reference: str, *, expected_toolchain_id: str | N
         raise _fail("development base image has no immutable toolchain label")
     if expected_toolchain_id is not None and toolchain_id != expected_toolchain_id:
         raise _fail("development base image toolchain label differs from the requested image")
-    manifest, manifest_sha256 = _preflight_dependency_image(image_id)
+    manifest, manifest_sha256 = _preflight_dependency_image(image_id, layout=layout)
     context_sha256 = labels.get("org.fullmag.direct-development.context-sha256")
     if expected_context_sha256 is not None and context_sha256 != expected_context_sha256:
         raise _fail(
@@ -583,31 +576,15 @@ def _development_base_metadata_matches(metadata: Mapping[str, object] | None,
 
 
 def _verify_development_base_context(context: Mapping[str, object]) -> None:
-    """Verify the frozen Docker context before publishing an image receipt."""
-
-    root_value = context.get("root")
-    helper_hashes = context.get("helper_hashes")
-    context_sha256 = context.get("context_sha256")
-    manifest_sha256 = context.get("toolchain_manifest_sha256")
-    if (not isinstance(root_value, str) or not isinstance(helper_hashes, Mapping)
-            or not isinstance(context_sha256, str) or not isinstance(manifest_sha256, str)):
-        raise _fail("development base context receipt is incomplete")
-    root = Path(root_value)
-    observed: dict[str, str] = {}
-    for name, expected in helper_hashes.items():
-        if not isinstance(name, str) or not isinstance(expected, str):
-            raise _fail("development base context helper inventory is malformed")
-        observed[name] = _sha256_file(root / name, "development base context helper")
-    if observed != dict(helper_hashes):
-        raise _fail("development base context changed before image receipt publication")
-    identity = {
-        "schema": DEVELOPMENT_BASE_CONTEXT_SCHEMA,
-        "toolchain_image_id": context.get("toolchain_image_id"),
-        "toolchain_manifest_sha256": manifest_sha256,
-        "files": observed,
-    }
-    if _sha256_bytes(_canonical_json(identity)) != context_sha256:
-        raise _fail("development base context digest no longer matches its frozen inputs")
+    paths, expected = context.get('source_paths'), context.get('helper_hashes')
+    if not isinstance(paths, dict) or not isinstance(expected, dict) or set(paths) != set(expected):
+        raise _fail('Development context has no complete readonly input inventory')
+    repo = Path(str(context['root']))
+    observed = {name: _sha256_file(repo / relative, 'development base input') for name, relative in paths.items()}
+    identity = {'schema': DEVELOPMENT_BASE_CONTEXT_SCHEMA, 'toolchain_image_id': context.get('toolchain_image_id'),
+                'toolchain_manifest_sha256': context.get('toolchain_manifest_sha256'), 'files': observed}
+    if observed != expected or _sha256_bytes(_canonical_json(identity)) != context.get('context_sha256'):
+        raise _fail('Development context changed while Docker was building')
 
 
 def _ensure_development_base(args: argparse.Namespace, repo: Path,
@@ -624,7 +601,7 @@ def _ensure_development_base(args: argparse.Namespace, repo: Path,
         raise _toolchain_setup_message(
             f"configured toolchain image is unavailable locally: {toolchain_reference}"
         ) from error
-    toolchain_manifest, toolchain_manifest_sha256 = _preflight_dependency_image(toolchain_id)
+    toolchain_manifest, toolchain_manifest_sha256 = _preflight_dependency_image(toolchain_id, layout=layout)
     context_info = _development_base_context(repo, run_root, toolchain_id, toolchain_manifest)
     context_sha256 = str(context_info["context_sha256"])
 
@@ -635,7 +612,7 @@ def _ensure_development_base(args: argparse.Namespace, repo: Path,
     if _image_reference_present(requested):
         try:
             existing = _validate_development_base(
-                requested,
+                requested, layout=layout,
                 expected_toolchain_id=toolchain_id,
                 expected_context_sha256=context_sha256,
             )
@@ -665,16 +642,21 @@ def _ensure_development_base(args: argparse.Namespace, repo: Path,
     # owns the build.
     compose_identity = _compose_identity(layout)
     compose_project = compose_identity["project_name"]
-    toolchain_base = f"fullmag/{compose_project}-direct-toolchain:{run_root.name}"
-    _docker_capture("tag", toolchain_id, toolchain_base, timeout=60)
+    toolchain_base = f"fullmag/{compose_project}-direct-toolchain:sha256-{toolchain_id[7:]}"
+    if _image_reference_present(toolchain_base):
+        existing_alias_id, _ = _inspect_image(toolchain_base)
+        if existing_alias_id != toolchain_id:
+            raise _fail('Existing checkout toolchain alias points to another image')
+    else:
+        _docker_capture("tag", toolchain_id, toolchain_base, timeout=60)
     aliased_id, _aliased_document = _inspect_image(toolchain_base)
     if aliased_id != toolchain_id:
         raise _fail("run-scoped toolchain alias changed the immutable image identity")
 
-    base_reference = _direct_image_tag(requested, "base", context_sha256)
+    base_reference = _direct_image_tag(requested, "base", _group_image_seed(layout, context_sha256))
     if _image_reference_present(base_reference):
         existing = _validate_development_base(
-            base_reference,
+            base_reference, layout=layout,
             expected_toolchain_id=toolchain_id,
             expected_context_sha256=context_sha256,
         )
@@ -687,28 +669,19 @@ def _ensure_development_base(args: argparse.Namespace, repo: Path,
         existing["built"] = False
         return existing
 
-    iid_path = run_root / "development-base-image-id.txt"
-    _docker_live(
-        run_root / "development-base-build.log",
-        "build", "--pull=false", "--network", "none", "--file",
-        str(Path(str(context_info["root"])) / "Dockerfile.dev"),
-        "--build-arg", "RUNTIME_BASE=" + toolchain_base,
-        "--build-arg", "FULLMAG_TOOLCHAIN_IMAGE_ID=" + toolchain_id,
-        "--label", "org.fullmag.direct-development.context-schema=" + DEVELOPMENT_BASE_CONTEXT_SCHEMA,
-        "--label", "org.fullmag.direct-development.context-sha256=" + context_sha256,
-        "--iidfile", str(iid_path), "--tag", base_reference,
-        str(context_info["root"]),
-        timeout=4 * 60 * 60,
-    )
-    try:
-        built_id = iid_path.read_text(encoding="utf-8").strip()
-    except OSError as error:
-        raise _fail("development base build did not publish an image ID") from error
-    if not IMAGE_ID_RE.fullmatch(built_id):
-        raise _fail("development base build published an invalid image ID")
+    from docker_build_volume_io import compose_build
+    build_document = {'name': compose_project, 'services': {'development-base': {
+        'image': base_reference, 'pull_policy': 'never', 'build': {
+            'context': str(repo), 'dockerfile': 'docker/all-in-one/Dockerfile.development-volume',
+            'network': 'none', 'args': {'RUNTIME_BASE': toolchain_base, 'FULLMAG_TOOLCHAIN_IMAGE_ID': toolchain_id},
+            'labels': {'org.fullmag.direct-development.context-schema': DEVELOPMENT_BASE_CONTEXT_SCHEMA,
+                       'org.fullmag.direct-development.context-sha256': context_sha256}}}}}
+    _write_json(run_root / 'development-base-compose.json', build_document)
+    compose_build(repo, compose_project, build_document, 'development-base', run_root / 'development-base-build-log.json')
+    built_id, _ = _inspect_image(base_reference)
     _verify_development_base_context(context_info)
     base = _validate_development_base(
-        base_reference,
+        base_reference, layout=layout,
         expected_toolchain_id=toolchain_id,
         expected_context_sha256=context_sha256,
     )
@@ -803,17 +776,11 @@ def _backend_build_state_root(layout: Mapping[str, object], run_root: Path) -> P
     return validate_path(scratch, build_storage_root, "direct backend build scratch state root")
 
 
-def _new_run_root(layout: Mapping[str, object]) -> tuple[str, Path]:
-    from fullmag_storage import validate_path
-
-    build_root = Path(str(layout["build_root"]))
-    build_storage = Path(str(layout["build_storage_root"]))
+def _new_run_root(layout: Mapping[str, object]):
+    from docker_build_volume_io import BuildDocument, control_store
+    store = layout.get('_build_control_store') or control_store(layout)
     run_id = uuid.uuid4().hex
-    parent = validate_path(build_root / "direct-compose", build_storage, "direct Compose build root")
-    parent.mkdir(parents=True, exist_ok=True)
-    root = validate_path(parent / run_id, build_storage, "direct Compose run root")
-    root.mkdir(mode=0o700)
-    return run_id, root
+    return run_id, BuildDocument(store, 'runs/' + run_id)
 
 
 def _direct_recreate_source_root(args: argparse.Namespace) -> Path:
@@ -1026,8 +993,8 @@ def _validate_runtime_image(reference: str, expected_toolchain_id: str,
     )
     if labels.get("org.fullmag.toolchain.image-id") not in accepted_label_ids:
         raise _fail("development image toolchain label differs from the admitted base")
-    _image_file(reference, "/opt/fullmag/backend_dev.py")
-    _image_file(reference, "/opt/fullmag/backend_volume_cache_maintenance.py")
+    _image_file(reference, "/opt/fullmag/backend_dev.py", layout=layout)
+    _image_file(reference, "/opt/fullmag/backend_volume_cache_maintenance.py", layout=layout)
     metadata = _read_image_metadata(layout, reference)
     if metadata is None:
         if require_receipt:
@@ -1090,10 +1057,10 @@ def _runtime_image_reference(args: argparse.Namespace, repo: Path,
             document = None
         else:
             return requested, image_id, document, False
-        tag_seed = runtime_context_sha256
+        tag_seed = _group_image_seed(layout, runtime_context_sha256)
         image_reference = _direct_image_tag(requested, "runtime", tag_seed)
     else:
-        image_reference = requested
+        image_reference = _direct_image_tag(requested, 'runtime', _group_image_seed(layout, runtime_context_sha256))
 
     if _image_reference_present(image_reference):
         try:
@@ -1118,13 +1085,13 @@ def _runtime_image_reference(args: argparse.Namespace, repo: Path,
         FULLMAG_TOOLCHAIN_IMAGE_ID=toolchain_id,
         FULLMAG_DEVELOPMENT_BASE_IMAGE=str(base_info["reference"]),
     )
-    _docker_live(
-        run_root / "image-build.log",
-        *_compose_prefix(repo, [repo / COMPOSE_RUNTIME_FILE], project),
-        "build", "--pull=false", "--progress=plain", "backend",
-        timeout=4 * 60 * 60,
-        environment=build_environment,
-    )
+    from docker_build_volume_io import compose_build
+    image_spec = {'name': project, 'services': {'backend': {
+        'image': image_reference, 'pull_policy': 'never',
+        'build': {'context': str(repo / 'docker/all-in-one'), 'dockerfile': 'Dockerfile.backend',
+                  'args': {'DEV_BASE': str(base_info['reference'])}}}}}
+    _write_json(run_root / 'runtime-image-compose.json', image_spec)
+    compose_build(repo, project, image_spec, 'backend', run_root / 'runtime-image-build-log.json', environment=build_environment)
     if _runtime_image_context(repo) != backend_context:
         raise _fail("backend image helpers changed while Docker was building; image retained without receipt")
     image_id, document = _validate_runtime_image(
@@ -1133,7 +1100,7 @@ def _runtime_image_reference(args: argparse.Namespace, repo: Path,
         backend_context_sha256, runtime_context_sha256,
         require_receipt=False,
     )
-    _preflight_dependency_image(image_id)
+    _preflight_dependency_image(image_id, layout=layout)
     metadata = {
         "schema": DEVELOPMENT_IMAGE_SCHEMA,
         "kind": "development-runtime",
@@ -1214,12 +1181,10 @@ def _prepare_backend_cache(layout: Mapping[str, object], repo: Path, image_id: s
         return tuple(consumers)
 
     def maintenance(profile: Mapping[str, object], overlay: Mapping[str, object]) -> Mapping[str, object]:
+        from docker_build_volume_io import compose_capture
         _write_json(maintenance_overlay_path, overlay)
-        output = _docker_capture(
-            *_compose_prefix(repo, [maintenance_overlay_path], project),
-            "run", "--rm", "--no-deps", "backend-cache-volume-maintenance",
-            timeout=180,
-        )
+        output = compose_capture(repo, project, dict(overlay),
+            ['run', '--rm', '--no-deps', '-T', 'backend-cache-volume-maintenance'], timeout=180)
         value = _read_json_output(output, "backend cache maintenance receipt")
         if not isinstance(value, dict):
             raise _fail("backend cache maintenance returned no JSON receipt")
@@ -1236,6 +1201,8 @@ def _prepare_backend_cache(layout: Mapping[str, object], repo: Path, image_id: s
             source_root=selected,
             toolchain_image=toolchain_id,
             active_consumers=running_consumers,
+            receipt_store=run_root.store,
+            receipt_relative=run_root.relative + '/backend-volume-cache-receipt.json',
         )
     except BackendVolumeCacheError as error:
         raise _fail(f"backend named-volume cache was not admitted: {error}") from error
@@ -1797,235 +1764,82 @@ def _publish_backend_start_manifest(source_manifest: Path, destination: Path) ->
     return str(destination)
 
 
-def _backend_start_inputs(
-    args: argparse.Namespace,
-    *,
-    run_root: Path | None = None,
-    run_id: str | None = None,
-    heavy_lock_held: bool = False,
-) -> tuple[dict[str, object], Path]:
-    """Prepare only the inputs for the fixed backend service.
-
-    This phase may build/admit the Docker runtime image and prepare its
-    persistent cache, but it never invokes a backend one-shot container or
-    captures source bytes.  The backend service receives only readonly source
-    and Git binds and performs the fresh source observation/package build in
-    its own long-lived container via ``backend_dev start``.
-    """
-
+def _backend_start_inputs(args: argparse.Namespace, *, run_root=None, run_id=None,
+                          heavy_lock_held: bool = False):
+    """Prepare the existing fixed backend using Docker-owned build metadata."""
+    from docker_build_volume_io import BuildDocument, VolumeBuildOutcomeUnknown, control_store
     _require_native_windows()
-    build_profile = getattr(args, "profile", DEFAULT_BUILD_PROFILE)
-    if build_profile != DEFAULT_BUILD_PROFILE:
-        raise _fail(
-            "docker-dev uses the backend-dev profile; release packages use the managed image route"
-        )
-    if getattr(args, "source_manifest", None) is not None:
-        raise _fail(
-            "--source-manifest is unsupported by docker-dev's live source service; "
-            "use the managed frozen-input route for an immutable source manifest"
-        )
-    if getattr(args, "include_untracked", None):
-        raise _fail(
-            "--include-untracked is unsupported by docker-dev's live source service; "
-            "add new source files to the selected Git index before starting the service"
-        )
-    cargo_profile = _cargo_profile_for_build(build_profile)
+    if getattr(args, 'profile', DEFAULT_BUILD_PROFILE) != DEFAULT_BUILD_PROFILE:
+        raise _fail('docker-dev requires the backend-dev profile')
+    if getattr(args, 'source_manifest', None) is not None or getattr(args, 'include_untracked', None):
+        raise _fail('Live Docker development requires Git-tracked source inputs')
     repo = Path(args.repo_root).resolve(strict=True)
-    selected, layout = _select_source(repo, getattr(args, "source_root", None))
-    compose_identity = _compose_identity(layout)
-    compose_project = compose_identity["project_name"]
-    if run_root is None:
-        resolved_run_id, resolved_root = _new_run_root(layout)
-    else:
-        resolved_root = Path(run_root).resolve()
-        if not resolved_root.is_absolute() or resolved_root.is_symlink() or not resolved_root.is_dir():
-            raise _fail("controlled backend restart requires an existing real run root")
-        resolved_run_id = run_id or resolved_root.name
-    if not isinstance(resolved_run_id, str) or re.fullmatch(r"[0-9a-f]{32}", resolved_run_id) is None:
-        raise _fail("direct backend run ID is not a canonical 32-character value")
-
-    terminal = {
-        "schema": "fullmag.direct-compose-backend-start.v1",
-        "state": "preparing",
-        "run_id": resolved_run_id,
-        "source_root": str(selected),
-        "run_root": str(resolved_root),
-        "queue": "not-used",
-        "build_profile": build_profile,
-        "cargo_profile": cargo_profile,
-        "compose_project": compose_project,
-    }
-    terminal_path = resolved_root / "backend-start-receipt.json"
-    _write_json(terminal_path, terminal)
-
-    if heavy_lock_held:
-        lock_context = nullcontext()
-    else:
-        from fullmag_storage import file_lock, validate_path
-
-        storage_root = Path(str(layout["storage_root"]))
-        heavy_lock = validate_path(
-            storage_root / "locks" / "fullmag-heavy.lock",
-            storage_root,
-            "direct Docker backend start lock",
-        )
-        lock_context = file_lock(
-            heavy_lock,
-            "direct Docker backend start preparation",
-            wait_timeout_seconds=120,
-        )
-    try:
-        lock_context.__enter__()
-        backend_context = resolved_root / "backend-start-context"
-        backend_context.mkdir(parents=True, exist_ok=True)
-        workspace_state_root = _workspace_state_root(layout, compose_project)
-        build_state_root = _backend_build_state_root(layout, resolved_root)
-        # Resolve the Git common directory before any runtime image build or
-        # Compose interpolation.  The image build context validates this
-        # source bind before the long-lived backend service starts.
-        git_common = _source_git_common_directory(selected)
-        placeholder_environment = {
-            **_compose_identity_environment(layout),
-            "FULLMAG_DEV_IMAGE": getattr(args, "image", None)
-            or os.environ.get("FULLMAG_DEV_IMAGE", DEFAULT_IMAGE),
-            "FULLMAG_RELEASE_IMAGE": getattr(args, "image", None)
-            or os.environ.get("FULLMAG_DEV_IMAGE", DEFAULT_IMAGE),
-            "FULLMAG_TOOLCHAIN_IMAGE": getattr(args, "toolchain_image", None)
-            or os.environ.get("FULLMAG_TOOLCHAIN_IMAGE", DEFAULT_BASE_IMAGE),
-            "FULLMAG_TOOLCHAIN_IMAGE_ID": getattr(args, "toolchain_image", None)
-            or os.environ.get("FULLMAG_TOOLCHAIN_IMAGE_ID", "pending"),
-            "FULLMAG_BACKEND_CARGO_PROFILE": cargo_profile,
-            "FULLMAG_DEVELOPMENT_BASE_IMAGE": os.environ.get(
-                "FULLMAG_DEVELOPMENT_BASE_IMAGE", DEFAULT_BASE_IMAGE
-            ),
-            "FULLMAG_SOURCE_ROOT": str(selected),
-            "FULLMAG_SOURCE_GIT_COMMON": str(git_common),
-            "FULLMAG_BACKEND_PACKAGE": str(resolved_root / "package"),
-            "FULLMAG_STATE_ROOT": str(resolved_root / "state"),
-            "FULLMAG_WORKSPACE_STATE_ROOT": str(workspace_state_root),
-            "FULLMAG_BACKEND_BUILD_STATE_ROOT": str(build_state_root),
-            "FULLMAG_HOST_CERTIFICATE": str(resolved_root / "host-certificate.json"),
-            "FULLMAG_PACKAGE_PROVENANCE": str(resolved_root / "provenance.json"),
-            "FULLMAG_DEVELOPMENT_INPUTS": str(resolved_root / "development-inputs.json"),
-            "FULLMAG_BACKEND_HOSTNAME": "fullmag-direct-backend-" + resolved_run_id[:12],
-        }
-        package_placeholder = resolved_root / "backend-package-placeholder"
-        package_placeholder.mkdir(parents=True, exist_ok=True)
-        (resolved_root / "state" / "development").mkdir(parents=True, exist_ok=True)
-        for placeholder in ("host-certificate.json", "provenance.json", "development-inputs.json"):
-            (resolved_root / placeholder).touch(exist_ok=True)
-        placeholder_environment["FULLMAG_BACKEND_PACKAGE"] = str(package_placeholder)
-
-        base_info = _ensure_development_base(args, selected, layout, resolved_root)
-        terminal.update(
-            development_base_image=base_info["reference"],
-            development_base_image_id=base_info["image_id"],
-            toolchain_image_id=base_info["toolchain_image_id"],
-            toolchain_manifest_sha256=base_info["toolchain_manifest_sha256"],
-            development_base_context_sha256=base_info.get("context_sha256"),
-        )
+    selected, layout = _select_source(repo, getattr(args, 'source_root', None))
+    identity = _compose_identity(layout)
+    store = run_root.store if isinstance(run_root, BuildDocument) else control_store(layout, selected)
+    layout = {**layout, '_build_control_store': store}
+    if run_root is not None and not isinstance(run_root, BuildDocument):
+        raise _fail('Direct development build metadata must be a Docker control document')
+    run_id = run_id or uuid.uuid4().hex
+    if not isinstance(run_id, str) or re.fullmatch(r'[0-9a-f]{32}', run_id) is None:
+        raise _fail('Direct backend run ID is invalid')
+    run = run_root or BuildDocument(store, 'runs/' + run_id)
+    if run.relative != 'runs/' + run_id:
+        raise _fail('Build metadata namespace differs from its run ID')
+    terminal = {'schema': 'fullmag.direct-compose-backend-start.v1', 'state': 'preparing',
+                'run_id': run_id, 'source_root': str(selected), 'run_root': str(run),
+                'compose_project': identity['project_name'], 'queue': 'not-used',
+                'build_profile': DEFAULT_BUILD_PROFILE, 'cargo_profile': BACKEND_CARGO_PROFILE,
+                'build_data_location': 'docker-named-volumes-and-buildkit'}
+    terminal_path = run / 'backend-start-receipt.json'
+    lock_context = nullcontext() if heavy_lock_held else _direct_heavy_lock(layout)
+    with lock_context:
         _write_json(terminal_path, terminal)
-        placeholder_environment["FULLMAG_DEVELOPMENT_BASE_IMAGE"] = str(base_info["reference"])
-        placeholder_environment["FULLMAG_TOOLCHAIN_IMAGE"] = str(base_info["toolchain_image_id"])
-        placeholder_environment["FULLMAG_TOOLCHAIN_IMAGE_ID"] = str(base_info["toolchain_image_id"])
-        image_ref, image_id, _image_document, image_built = _runtime_image_reference(
-            args, selected, placeholder_environment, resolved_root, layout, base_info,
-            compose_project,
-        )
-        toolchain_id = str(base_info["toolchain_image_id"])
-        helper_hashes = _image_helper_inventory(image_id, backend_context)
-
-        source_for_environment = {
-            "source_mode": "live-shadow-v1",
-            "git_common_dir": str(git_common),
-        }
-        cache = _prepare_backend_cache(layout, selected, image_id, resolved_root, selected, toolchain_id)
-        package = _backend_cache_package_root(cache)
-        # ``package`` is a daemon-side /mnt path supplied by the cache helper;
-        # native Windows Python cannot inspect it.  The fixed backend service
-        # owns the attempt fence and publishes a fresh receipt after its
-        # in-container source scan.  Do not read or hash a guessed host path.
-        previous_receipt_sha256 = None
-        environment = _environment(
-            layout, selected, resolved_root, source_for_environment,
-            package, image_ref, image_id, toolchain_id, cache,
-            str(base_info["reference"]), cargo_profile,
-        )
-        # No backend package or source snapshot is built/captured in this host
-        # preparation phase.  The service observes the live readonly mounts on
-        # every start, including an ordinary Docker Desktop restart.
-        environment["FULLMAG_SOURCE_GIT_COMMON"] = str(git_common)
-        files = [selected / COMPOSE_RUNTIME_FILE, Path(str(cache["compose_overlay"]))]
-        config = _compose_config(selected, files, environment, project=compose_project)
-        services = config.get("services", {})
-        if not isinstance(services, Mapping) or set(services) != {"backend", "frontend"}:
-            raise _fail("direct development Compose must contain exactly backend and frontend services")
-        backend_service = services.get("backend")
-        if not isinstance(backend_service, dict):
-            raise _fail("direct development Compose backend service is malformed")
-        tokens = _service_tokens(backend_service)
-        if "start" not in tokens or "backend_dev.py" not in " ".join(tokens):
-            raise _fail("direct development backend service does not own the typed start operation")
-
-        inputs = {
-            "schema": BACKEND_START_INPUTS_SCHEMA,
-            "state": "ready",
-            "run_id": resolved_run_id,
-            "compose_project": compose_project,
-            "source_project_id": compose_identity["project_id"],
-            "source_worktree_id": compose_identity["worktree_id"],
-            "source_checkout_kind": compose_identity["checkout_kind"],
-            "source_root": str(selected),
-            "source_mode": "live-shadow-v1",
-            "git_common_dir": str(git_common),
-            "image_reference": image_ref,
-            "image_id": image_id,
-            "toolchain_image_id": toolchain_id,
-            "toolchain_manifest_sha256": base_info["toolchain_manifest_sha256"],
-            "development_base_image": str(base_info["reference"]),
-            "development_base_image_id": base_info["image_id"],
-            "build_profile": build_profile,
-            "cargo_profile": cargo_profile,
-            "package_root": str(package),
-            "provenance_path": str(resolved_root / "provenance.json"),
-            "host_certificate": str(resolved_root / "host-certificate.json"),
-            "helper_context": str(backend_context),
-            "startup_helper_hashes": helper_hashes,
-            "backend_cache": dict(cache),
-            "runtime_image_built": image_built,
-            "backend_start_receipt": str(terminal_path),
-            "previous_backend_build_receipt_sha256": previous_receipt_sha256,
-        }
-        inputs_path = resolved_root / "backend-start-inputs.json"
-        _write_json(inputs_path, inputs)
-        terminal.update(
-            state="ready",
-            backend_start_inputs=str(inputs_path),
-            backend_start_inputs_sha256=_sha256_file(inputs_path, "backend start inputs"),
-            image_id=image_id,
-            image_reference=image_ref,
-            toolchain_image_id=toolchain_id,
-            runtime_image_built=image_built,
-            backend_cache_receipt=cache.get("receipt_path"),
-        )
-        _write_json(terminal_path, terminal)
-        return inputs, resolved_root
-    except Exception as error:
-        terminal.update(
-            state=("outcome_unknown_resources_retained"
-                   if isinstance(error, DirectDockerOutcomeUnknown)
-                   else "failed_resources_retained"),
-            exit_code=2,
-            error=str(error),
-        )
         try:
+            git_common = _source_git_common_directory(selected)
+            base = _ensure_development_base(args, selected, layout, run)
+            image_ref, image_id, _document, image_built = _runtime_image_reference(
+                args, selected, {}, run, layout, base, identity['project_name'])
+            toolchain_id = str(base['toolchain_image_id'])
+            helpers = {}
+            # Attest the helper bytes in the immutable image. No helper copy
+            # or context is published in host storage.
+            for name in REQUIRED_STARTUP_HELPERS:
+                data = _image_file(image_id, '/opt/fullmag/' + name, layout=layout)
+                if not data or len(data) > 4 * 1024 * 1024:
+                    raise _fail('Image startup helper is missing or oversized: ' + name)
+                (run / 'backend-start-context' / name).write_bytes(data)
+                helpers[name] = _sha256_bytes(data)
+            cache = _prepare_backend_cache(layout, selected, image_id, run, selected, toolchain_id)
+            inputs = {'schema': BACKEND_START_INPUTS_SCHEMA, 'state': 'ready', 'run_id': run_id,
+                      'compose_project': identity['project_name'], 'source_project_id': identity['project_id'],
+                      'source_worktree_id': identity['worktree_id'], 'source_checkout_kind': identity['checkout_kind'],
+                      'source_root': str(selected), 'source_mode': 'live-shadow-v1', 'git_common_dir': str(git_common),
+                      'image_reference': image_ref, 'image_id': image_id, 'toolchain_image_id': toolchain_id,
+                      'toolchain_manifest_sha256': base['toolchain_manifest_sha256'],
+                      'development_base_image': str(base['reference']), 'development_base_image_id': base['image_id'],
+                      'build_profile': DEFAULT_BUILD_PROFILE, 'cargo_profile': BACKEND_CARGO_PROFILE,
+                      'package_root': str(_backend_cache_package_root(cache)),
+                      'provenance_path': '/build/control/provenance.json',
+                      'helper_context': str(run / 'backend-start-context'),
+                      'startup_helper_hashes': helpers, 'backend_cache': cache, 'runtime_image_built': image_built,
+                      'backend_start_receipt': str(terminal_path), 'previous_backend_build_receipt_sha256': None,
+                      'build_control': {'project': identity['project_name'], 'worktree_id': identity['worktree_id'],
+                                        'source_root': str(selected), 'image_id': store.image_id,
+                                        'volume_name': store.volume_name, 'run_relative': run.relative}}
+            inputs_path = run / 'backend-start-inputs.json'
+            _write_json(inputs_path, inputs)
+            terminal.update(state='ready', backend_start_inputs=str(inputs_path),
+                            backend_start_inputs_sha256=_sha256_file(inputs_path, 'backend start inputs'),
+                            image_id=image_id, image_reference=image_ref, toolchain_image_id=toolchain_id)
             _write_json(terminal_path, terminal)
-        except Exception:
-            pass
-        raise
-    finally:
-        if not heavy_lock_held:
-            lock_context.__exit__(None, None, None)
+            return inputs, run
+        except BaseException as error:
+            uncertain = isinstance(error, (DirectDockerOutcomeUnknown, VolumeBuildOutcomeUnknown))
+            terminal.update(state=('outcome_unknown_resources_retained' if uncertain
+                                   else 'failed_resources_retained'), error=str(error))
+            _write_json(terminal_path, terminal)
+            raise
 
 
 def _direct_heavy_lock(layout: Mapping[str, object]):
@@ -2248,6 +2062,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from docker_build_volume_io import VolumeBuildError
+    from docker_build_control import DockerBuildControlError
     args = _parser().parse_args(argv)
     try:
         if args.action == "build":
@@ -2259,7 +2075,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             raise _fail(f"unsupported action: {args.action}")
         return 0
-    except DirectDockerError as error:
+    except (DirectDockerError, VolumeBuildError, DockerBuildControlError) as error:
         print(f"docker-dev: {error}", file=sys.stderr)
         return 2
 

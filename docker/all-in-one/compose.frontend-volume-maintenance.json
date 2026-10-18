@@ -1,0 +1,72 @@
+{
+  "services": {
+    "frontend-development-volume-maintenance": {
+      "image": "__IMAGE_ID__",
+      "profiles": [
+        "frontend-volume-maintenance-v1"
+      ],
+      "entrypoint": [
+        "/usr/local/bin/python3",
+        "/opt/fullmag/frontend_volume_maintenance.py"
+      ],
+      "command": [
+        "__OPERATION__"
+      ],
+      "user": "65532:65532",
+      "read_only": true,
+      "network_mode": "none",
+      "pids_limit": 16,
+      "mem_limit": "128m",
+      "cpus": 0.25,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "labels": {},
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "FULLMAG_FRONTEND_VOLUME_SCHEMA": "fullmag.frontend-development-volume.v1",
+        "FULLMAG_FRONTEND_VOLUME_OWNER_SCHEMA": "fullmag.frontend-development-owner.v1",
+        "FULLMAG_FRONTEND_VOLUME_PROJECT_ID": "__PROJECT_ID__",
+        "FULLMAG_FRONTEND_VOLUME_WORKTREE_ID": "__WORKTREE_ID__",
+        "FULLMAG_FRONTEND_VOLUME_TOOLCHAIN_IMAGE_ID": "__TOOLCHAIN_IMAGE_ID__",
+        "FULLMAG_FRONTEND_VOLUME_PROFILE": "dev",
+        "FULLMAG_FRONTEND_VOLUME_ROLE": "frontend-development",
+        "FULLMAG_FRONTEND_VOLUME_OWNER_ID": "__OWNER_ID__",
+        "FULLMAG_FRONTEND_VOLUME_CREATION_ID": "__CREATION_ID__",
+        "FULLMAG_FRONTEND_VOLUME_NAME": "__VOLUME_NAME__",
+        "FULLMAG_FRONTEND_VOLUME_UID": "65532",
+        "FULLMAG_FRONTEND_VOLUME_GID": "65532",
+        "FULLMAG_FRONTEND_VOLUME_OPERATION": "__OPERATION__"
+      },
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "frontend-development",
+          "target": "/frontend",
+          "read_only": false,
+          "volume": {
+            "nocopy": true
+          }
+        },
+        {
+          "type": "bind",
+          "source": "__HELPER_SOURCE__",
+          "target": "/opt/fullmag/frontend_volume_maintenance.py",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    }
+  },
+  "volumes": {
+    "frontend-development": {
+      "name": "__VOLUME_NAME__",
+      "external": true
+    }
+  }
+}

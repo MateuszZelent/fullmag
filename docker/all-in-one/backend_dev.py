@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from typing import Any, NoReturn
 
 try:
@@ -60,7 +61,7 @@ CAPTURE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 BUILD_ROOT = Path("/build")
 OUTPUT_ROOT = Path("/output")
 PACKAGE_ROOT = Path("/opt/fullmag/package")
-PROVENANCE_PATH = Path("/opt/fullmag/provenance.json")
+PROVENANCE_PATH = Path("/build/control/provenance.json")
 HOST_ATTESTATION_PATH = Path("/run/fullmag/windows-folder-host.json")
 WINDOWS_FOLDER_OWNER_PATH = Path("/state/.fullmag-windows-folder-owner.json")
 WINDOWS_FOLDER_HOST_SCHEMA = "fullmag.windows-folder-host.v1"
@@ -2804,55 +2805,41 @@ def _publish_runtime_provenance(output: Path) -> None:
 
 
 def _write_bound_bytes(path: Path, data: bytes, name: str) -> None:
-    """Rewrite an explicitly mounted regular file without replacing its mount."""
-
+    """Atomically publish provenance in the persistent build volume."""
     path = _absolute(path, name)
-    _assert_no_links(path.parent, f"{name} parent")
+    if path != PROVENANCE_PATH:
+        _fail('runtime provenance must remain in the backend build volume')
+    parent = _ensure_directory(path.parent, f'{name} parent')
+    _assert_no_links(parent, f'{name} parent')
     if path.is_symlink():
-        _fail(f"{name} must not be a symlink")
-    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        _fail(f"cannot open mounted {name}: {error}")
-    locked = False
-    try:
-        metadata = os.fstat(descriptor)
+        _fail(f'{name} must not be a symlink')
+    if path.exists():
+        metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            _fail(f"mounted {name} is not one regular file")
-        if fcntl is not None:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (BlockingIOError, OSError) as error:
-                _fail(f"mounted {name} is already in use: {error}")
-            locked = True
-        os.ftruncate(descriptor, 0)
+            _fail(f'{name} must be one regular file')
+    temporary = parent / f'.{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp'
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o660)
+    try:
         view = memoryview(data)
         while view:
             written = os.write(descriptor, view)
             if written <= 0:
-                _fail(f"short write while publishing {name}")
+                _fail(f'short write while publishing {name}')
             view = view[written:]
         os.fsync(descriptor)
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        observed = bytearray()
-        while len(observed) <= len(data):
-            block = os.read(descriptor, min(1024 * 1024, len(data) + 1 - len(observed)))
-            if not block:
-                break
-            observed.extend(block)
-        observed_bytes = bytes(observed)
-        if _sha256_bytes(observed_bytes) != _sha256_bytes(data) or observed_bytes != data:
-            _fail(f"mounted {name} changed while publishing")
-    except OSError as error:
-        _fail(f"cannot publish mounted {name}: {error}")
     finally:
-        if locked:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            except OSError:
-                pass
         os.close(descriptor)
+    try:
+        os.replace(temporary, path)
+        directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
 
 
 def _write_bound_json(path: Path, value: Mapping[str, Any], name: str) -> None:
@@ -3294,7 +3281,7 @@ def _serve(extra: list[str]) -> int:
             "FULLMAG_DOCKER_ROLE": "backend",
             "FULLMAG_RUNTIME_ROOT": str(PACKAGE_ROOT),
             "FULLMAG_RUNTIME_PACKAGE_ROOT": str(PACKAGE_ROOT),
-            "FULLMAG_PACKAGE_PROVENANCE": "/opt/fullmag/provenance.json",
+            "FULLMAG_PACKAGE_PROVENANCE": "/build/control/provenance.json",
             "FULLMAG_WEB_STATIC_DIR": str(PACKAGE_ROOT / "web"),
             "PATH": f"{PACKAGE_ROOT / 'bin'}:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin",
         }

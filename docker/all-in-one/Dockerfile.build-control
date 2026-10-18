@@ -1,0 +1,21 @@
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1
+
+ARG FULLMAG_CONTROL_PROJECT
+ARG FULLMAG_CONTROL_WORKTREE_ID
+ARG FULLMAG_CONTROL_BUILD_KEY
+ARG FULLMAG_CONTROL_DOCKERFILE_SHA256
+
+LABEL com.fullmag.build-control.helper.schema="fullmag.docker-build-control-helper.v1" \
+      com.fullmag.build-control.helper.role="control-helper" \
+      com.fullmag.build-control.project="${FULLMAG_CONTROL_PROJECT}" \
+      com.fullmag.build-control.worktree-id="${FULLMAG_CONTROL_WORKTREE_ID}" \
+      com.fullmag.build-control.base-image="nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1" \
+      com.fullmag.build-control.dockerfile-sha256="${FULLMAG_CONTROL_DOCKERFILE_SHA256}" \
+      com.fullmag.build-control.build-key="${FULLMAG_CONTROL_BUILD_KEY}"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates python3-minimal && \
+    rm -rf /var/lib/apt/lists/*

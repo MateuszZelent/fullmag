@@ -85,12 +85,24 @@ def control_store(layout, source_root=None, *, helper_image=None):
 
     source = Path(source_root or layout['repo_root']).resolve(strict=True)
     identity = compose_project_identity(layout)
-    reference = helper_image or os.environ.get('FULLMAG_BUILD_CONTROL_IMAGE', 'fullmag/development-base:local')
-    result = subprocess.run(
-        ['docker', '--context', 'desktop-linux', 'image', 'inspect', reference, '--format', '{{.Id}}'],
-        capture_output=True, text=True, encoding='utf-8', timeout=60, check=True,
+    from docker_build_control_bootstrap import (
+        ControlHelperError, ControlHelperOutcomeUnknown, ControlHelperTerminalError,
+        ensure_control_helper, _inspect_local_image,
     )
-    image_id = result.stdout.strip()
+    try:
+        if helper_image is None:
+            image_id = ensure_control_helper(layout, source)
+        else:
+            selected = _inspect_local_image(helper_image, source)
+            if selected is None:
+                raise ControlHelperError('Explicit build-control helper is unavailable locally')
+            image_id = selected['Id']
+    except ControlHelperOutcomeUnknown as error:
+        raise VolumeBuildOutcomeUnknown(str(error)) from error
+    except ControlHelperTerminalError as error:
+        raise VolumeBuildTerminalError(str(error), error.exit_code) from error
+    except ControlHelperError as error:
+        raise VolumeBuildError(str(error)) from error
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
         raise VolumeBuildError('Build control helper has no immutable local image identity')
     store = BuildControlStore(identity['project_name'], identity['worktree_id'], source, image_id)

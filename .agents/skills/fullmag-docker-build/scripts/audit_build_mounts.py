@@ -10,6 +10,12 @@ BUILD_PATHS = {
     "backend": ("/build", "/opt/fullmag/package"),
     "frontend": ("/state/development",),
 }
+SOURCE_TARGETS = {
+    "backend": ("/opt/fullmag/source",),
+    # The live frontend may use the current /run mount or the legacy /opt
+    # mount, but both point to one selected checkout and are never combined.
+    "frontend": ("/run/fullmag/source", "/opt/fullmag/source"),
+}
 RUNTIME_BINDS = {"backend": {"/state", "/user-data", "/host-ledger"}, "frontend": set()}
 WRITE_ENV = (
     "HOME", "XDG_CACHE_HOME", "CARGO_HOME", "CARGO_TARGET_DIR",
@@ -22,6 +28,8 @@ WRITE_ENV = (
 )
 TEMP_ENV = ("TMPDIR", "TEMP", "TMP")
 LIVE_INPUTS = ("app", "src", "public", "scripts")
+FRONTEND_HMR_ROOT = "/state/development/workspace/apps/control-room"
+FRONTEND_HMR_TARGETS = {f"{FRONTEND_HMR_ROOT}/{name}": name for name in LIVE_INPUTS}
 
 
 def normalized_target(value):
@@ -34,6 +42,15 @@ def normalized_target(value):
 
 def covers(target, path):
     return target == path or target == "/" or path.startswith(target + "/")
+
+
+def normalized_source_path(value):
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("\\", "/")
+    if len(normalized) > 1 and not normalized.endswith(":/"):
+        normalized = normalized.rstrip("/")
+    return normalized or None
 
 
 def audit(document, expected_project):
@@ -64,6 +81,25 @@ def audit(document, expected_project):
             paths = (*paths, normalized_target(provenance))
         mounts = []
         declared_mounts = list(service.get("volumes", []))
+        source_candidates = []
+        for source_item in declared_mounts:
+            if not isinstance(source_item, dict):
+                raise ValueError("use rendered Compose JSON with normalized mount objects")
+            source_target = normalized_target(source_item.get("target"))
+            if source_target in SOURCE_TARGETS[role]:
+                source_candidates.append((source_target, source_item))
+        selected_source_root = None
+        if (len(source_candidates) != 1
+                or source_candidates[0][1].get("type") != "bind"
+                or source_candidates[0][1].get("read_only") is not True):
+            allowed_sources = ", ".join(SOURCE_TARGETS[role])
+            problems.append(f"{role}: selected source must be exactly one readonly bind at {allowed_sources}")
+        else:
+            selected_source_root = normalized_source_path(source_candidates[0][1].get("source"))
+            if selected_source_root is None:
+                problems.append(f"{role}: selected source bind has no source path")
+        if selected_source_root is not None:
+            sources.append(selected_source_root)
         # Compose has a separate service-level tmpfs field, absent from volumes.
         tmpfs = service.get("tmpfs", [])
         if isinstance(tmpfs, str):
@@ -101,13 +137,13 @@ def audit(document, expected_project):
                 if target not in RUNTIME_BINDS[role]:
                     problems.append(f"{role}: writable host bind at {target}")
             if any(covers(path, target) for path in paths):
-                live_name = target.removeprefix("/state/development/workspace/apps/control-room/")
-                source_root = next((m.get("source") for m in declared_mounts
-                                    if isinstance(m, dict) and m.get("target") == "/opt/fullmag/source"), None)
-                expected_input = str(source_root).replace("\\", "/").rstrip("/") + "/apps/control-room/" + live_name
-                source_input = (role == "frontend" and live_name in LIVE_INPUTS
+                live_name = FRONTEND_HMR_TARGETS.get(target)
+                expected_input = (selected_source_root + "/apps/control-room/" + live_name
+                                  if role == "frontend" and selected_source_root is not None
+                                  and live_name is not None else None)
+                source_input = (role == "frontend" and live_name is not None
                                 and item.get("type") == "bind" and item.get("read_only") is True
-                                and str(item.get("source")).replace("\\", "/") == expected_input)
+                                and normalized_source_path(item.get("source")) == expected_input)
                 if item.get("type") != "volume" and not source_input:
                     problems.append(f"{role}: non-volume mount overlays a build directory: {target}")
                 if item.get("type") == "volume" and any(target != path and covers(path, target) for path in BUILD_PATHS[role]):
@@ -141,11 +177,6 @@ def audit(document, expected_project):
                 problems.append(f"{role}: build path is not in a writable Docker volume: {path} (mount {target})")
             elif not mount.get("source"):
                 problems.append(f"{role}: anonymous volume does not provide an explicit cache identity: {path}")
-        source = [item for target, item in mounts if target == "/opt/fullmag/source"]
-        if len(source) != 1 or source[0].get("type") != "bind" or source[0].get("read_only") is not True:
-            problems.append(f"{role}: selected source must be one readonly bind")
-        else:
-            sources.append(source[0].get("source"))
     if len(sources) == 2 and (not sources[0] or sources[0] != sources[1]):
         problems.append("frontend and backend source checkout differs")
     return {
