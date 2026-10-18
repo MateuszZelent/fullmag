@@ -648,10 +648,10 @@ class DockerDevRecreateContract(unittest.TestCase):
             with patch.object(development_inputs, "select_checkout", return_value=source), \
                     patch.object(
                         development_inputs,
-                        "seed",
-                        side_effect=ValueError("Persistent frontend seed metadata was changed"),
+                        "describe",
+                        side_effect=ValueError("Frontend dependency identity could not be read"),
                     ):
-                with self.assertRaisesRegex(ValueError, "Persistent frontend seed metadata"):
+                with self.assertRaisesRegex(ValueError, "Frontend dependency identity"):
                     runtime._preflight_reuse_frontend_inputs(
                         Path("/repo"), reuse, source, 3197,
                     )
@@ -744,9 +744,9 @@ class DockerDevRecreateContract(unittest.TestCase):
                 "checkout_kind": "worktree",
             }
             source_bundle = {
-                "source_mode": "archive",
-                "manifest_path": str(source_manifest),
-                "archive_path": str(source_archive),
+                "source_mode": "live-shadow-v1",
+                "git_common_dir": str(root / "git-common"),
+                "source_commit": "a" * 40,
             }
             with patch.object(docker_dev, "_compose_identity", return_value=identity):
                 environment = docker_dev._environment(
@@ -757,18 +757,10 @@ class DockerDevRecreateContract(unittest.TestCase):
                     "fullmag/development-base:local", "backend-dev",
                 )
             expected_user_data = storage_root / "user-data" / identity["project_name"]
-            expected_scratch = run_root / "backend-build-state"
             self.assertEqual(Path(environment["FULLMAG_WORKSPACE_STATE_ROOT"]), expected_user_data)
-            self.assertEqual(Path(environment["FULLMAG_BACKEND_BUILD_STATE_ROOT"]), expected_scratch)
+            self.assertEqual(environment["FULLMAG_BACKEND_BUILD_STATE_ROOT"], "/build/.fullmag-build-state")
             self.assertTrue(expected_user_data.is_dir())
-            self.assertTrue(expected_scratch.is_dir())
-            for filename in ("compose.backend-build.yaml", "compose.backend-build-live.yaml"):
-                overlay = (Path(__file__).resolve().parents[1] / filename).read_text(encoding="utf-8")
-                self.assertIn("FULLMAG_WORKSPACE_STATE_ROOT", overlay)
-                self.assertIn("target: /user-data", overlay)
-                self.assertIn("read_only: true", overlay)
-                self.assertIn("FULLMAG_BACKEND_BUILD_STATE_ROOT", overlay)
-                self.assertIn("target: /state", overlay)
+            self.assertFalse((run_root / "backend-build-state").exists())
 
     def test_live_backend_environment_leaves_source_capture_to_guest(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -819,8 +811,12 @@ class DockerDevRecreateContract(unittest.TestCase):
             run_root = root / "run"
             for path in (repo, selected, run_root):
                 path.mkdir()
+            (selected / "compose.dev.gpu.yaml").write_text(
+                "services:\n  backend:\n    gpus: all\n", encoding="utf-8"
+            )
             git_common_path = selected / ".git-common"
-            layout = {"repo_root": str(repo)}
+            layout = {"repo_root": str(repo), "storage_root": str(root / "storage")}
+            (root / "storage").mkdir()
             identity = {
                 "project_name": "fullmag-worktree-early-env",
                 "project_id": "project-test",
@@ -874,13 +870,16 @@ class DockerDevRecreateContract(unittest.TestCase):
                     patch.object(docker_dev, "_workspace_state_root", return_value=root / "user-data"), \
                     patch.object(docker_dev, "_backend_build_state_root", return_value=root / "build-state"), \
                     patch.object(docker_dev, "_source_git_common_directory", side_effect=resolve_git_common), \
+                    patch.object(storage, "git", return_value="a" * 40), \
                     patch.object(docker_dev, "_ensure_development_base", return_value=base_info) as base_mock, \
                     patch.object(docker_dev, "_runtime_image_reference", side_effect=runtime_image), \
                     patch.object(docker_dev, "_image_helper_inventory", return_value={}), \
                     patch.object(docker_dev, "_prepare_backend_cache", return_value=cache) as cache_mock, \
                     patch.object(docker_dev, "_backend_cache_package_root", return_value=Path("/mnt/fullmag-cache/package")), \
                     patch.object(docker_dev, "_environment", return_value={}), \
-                    patch.object(docker_dev, "_compose_config", return_value=compose_config) as compose_mock:
+                    patch.object(docker_dev, "_compose_config", return_value=compose_config) as compose_mock, \
+                    patch.object(docker_dev, "_write_control_json", return_value="/opt/fullmag/control/test.json"), \
+                    patch.object(docker_dev, "_write_control", return_value="/opt/fullmag/control/test.json"):
                 docker_dev._backend_start_inputs(args, run_root=run_root, run_id="e" * 32,
                                                  heavy_lock_held=True)
 
@@ -1098,21 +1097,20 @@ class DockerDevRecreateContract(unittest.TestCase):
 
     def test_backend_cache_package_root_is_the_attested_mount_child(self):
         with tempfile.TemporaryDirectory() as directory:
-            mount = Path(directory) / "ext4-cache"
-            package = mount / "package"
-            package.mkdir(parents=True)
+            mount = Path("/build")
+            package = Path("/opt/fullmag/package")
             cache = {
                 "mount_root": str(mount),
                 "package_root": str(package),
                 "environment": {"FULLMAG_BACKEND_PACKAGE": str(package)},
             }
             self.assertEqual(docker_dev._backend_cache_package_root(cache), package)
-            cache["environment"]["FULLMAG_BACKEND_PACKAGE"] = str(Path(directory) / "other")
+            cache["environment"]["FULLMAG_BACKEND_PACKAGE"] = "/opt/fullmag/other"
             with self.assertRaisesRegex(docker_dev.DirectDockerError, "package environment"):
                 docker_dev._backend_cache_package_root(cache)
-            cache["package_root"] = str(Path(directory) / "escape")
-            cache["environment"]["FULLMAG_BACKEND_PACKAGE"] = str(Path(directory) / "escape")
-            with self.assertRaisesRegex(docker_dev.DirectDockerError, "escapes"):
+            cache["package_root"] = "/opt/fullmag/escape"
+            cache["environment"]["FULLMAG_BACKEND_PACKAGE"] = "/opt/fullmag/escape"
+            with self.assertRaisesRegex(docker_dev.DirectDockerError, "v2 daemon package target"):
                 docker_dev._backend_cache_package_root(cache)
 
     def test_frontend_workspace_reuse_checks_dependency_bytes_without_reseeding(self):

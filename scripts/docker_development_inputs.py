@@ -11,6 +11,8 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import uuid
 
 import fullmag_storage as storage
 from windows_folder_host import local_volume, read_owned_regular
@@ -28,6 +30,19 @@ HOST_CACHE_METADATA_KEYS = frozenset({
     "worktree_id", "dependency_seed_files", "dependency_seed_sha256",
     "toolpins", "toolpins_sha256",
 })
+FRONTEND_VOLUME_UID = 65532
+FRONTEND_VOLUME_GID = 65532
+
+
+def _named_volume_permission_error(path, error):
+    """Return an actionable error when a named-volume mount is not writable."""
+
+    return ValueError(
+        "Frontend named-volume path is not writable by "
+        f"UID {FRONTEND_VOLUME_UID}:GID {FRONTEND_VOLUME_GID}: {path}. "
+        "Provision the named volume with that ownership before starting the "
+        "frontend; do not redirect this data to host storage."
+    )
 
 
 def guest_manifest(inputs):
@@ -107,6 +122,142 @@ def _next_generated_seed_variants(relative, source):
     if normalized.count(marker) == 1:
         variants.add(normalized.replace(marker, replacement, 1))
     return variants
+
+
+def _describe_regular(path, *, maximum):
+    """Read one dependency input without creating or replacing anything."""
+
+    path = Path(path)
+    for ancestor in (path, *path.parents):
+        if storage.is_link(ancestor):
+            raise ValueError(f"Frontend dependency input traverses a reparse point: {path}")
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise ValueError(f"Cannot inspect frontend dependency input: {path}") from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"Frontend dependency input is not a regular file: {path}")
+    if metadata.st_size > maximum:
+        raise ValueError(f"Frontend dependency input is too large: {path}")
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise ValueError(f"Cannot read frontend dependency input: {path}") from error
+    if len(data) != metadata.st_size:
+        raise ValueError(f"Frontend dependency input changed while being read: {path}")
+    return data
+
+
+def describe(source, port):
+    """Describe frontend dependency identity without touching build storage.
+
+    This host-side operation is intentionally read-only.  It computes the
+    dependency seed used by the Compose named-volume cache, while workspace
+    metadata and the live source mounts are created later by ``seed_guest`` in
+    the frontend container.
+    """
+
+    raw_source = Path(source)
+    if not raw_source.is_absolute() or storage.is_link(raw_source):
+        raise ValueError("Frontend source checkout must be an absolute real directory")
+    source = raw_source.resolve(strict=True)
+    if not source.is_dir() or storage.is_link(source):
+        raise ValueError("Frontend source checkout must be a real directory")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
+        raise ValueError("port must be an integer in 1024..65535")
+
+    initial_commit = storage.git(source, "rev-parse", "HEAD")
+    if not re.fullmatch(r"[a-f0-9]{40}", initial_commit):
+        raise ValueError("Frontend source checkout has no full commit identity")
+    app = source / "apps" / "control-room"
+    directories = []
+    for name in DIRECTORIES:
+        path = app / name
+        if not path.is_dir() or storage.is_link(path):
+            raise ValueError(f"Missing live frontend source directory: {path}")
+        directories.append(
+            {
+                "name": name,
+                "source": str(source / "apps" / "control-room" / name),
+                "target": WORKSPACE + "/apps/control-room/" + name,
+            }
+        )
+
+    package_relative = Path("package.json")
+    package_data = _describe_regular(
+        source / package_relative, maximum=16 * 1024 * 1024
+    )
+    patch_relatives = _pnpm_patch_relatives(source)
+    relative_files = {
+        Path(name) for name in ("package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml")
+    }
+    relative_files.update(patch_relatives)
+    dependency_files = set(relative_files)
+    from windows.stage_workspace_frontend import (
+        _direct_app_package_manifests,
+        _parse_lock_importers,
+    )
+
+    importers = _parse_lock_importers(source / "pnpm-lock.yaml")
+    for path in _direct_app_package_manifests(source, importers):
+        relative = path.relative_to(source)
+        relative_files.add(relative)
+        dependency_files.add(relative)
+    for path in app.iterdir():
+        if path.suffix in {".ts", ".tsx", ".json", ".mjs", ".css"} and path.is_file():
+            relative_files.add(path.relative_to(source))
+
+    files = []
+    dependency_entries = {}
+    for relative in sorted(relative_files, key=str):
+        data = (
+            package_data
+            if relative == package_relative
+            else _describe_regular(source / relative, maximum=16 * 1024 * 1024)
+        )
+        digest = hashlib.sha256(data).hexdigest()
+        relative_name = relative.as_posix()
+        files.append({"relative": relative_name, "sha256": digest})
+        if relative in dependency_files:
+            dependency_entries[relative_name] = digest
+
+    commit = storage.git(source, "rev-parse", "HEAD")
+    if commit != initial_commit:
+        raise ValueError("Frontend configuration changed during metadata capture")
+    for file in files:
+        current = _describe_regular(
+            source / file["relative"], maximum=16 * 1024 * 1024
+        )
+        if hashlib.sha256(current).hexdigest() != file["sha256"]:
+            raise ValueError(
+                "Frontend configuration changed during metadata capture: "
+                + file["relative"]
+            )
+    if _pnpm_patch_relatives(source) != patch_relatives:
+        raise ValueError("Pnpm patch inventory changed during metadata capture")
+    from docker_frontend_cache import default_toolpins, dependency_seed_digest, toolpins_digest
+
+    toolpins = default_toolpins()
+    worktree_id = storage.identifier(source)
+    dependency_seed_sha256 = dependency_seed_digest(dependency_entries)
+    return {
+        "schema": "fullmag.docker-development-inputs.v1",
+        "source_root": str(source),
+        "source_commit": commit,
+        "source_selection": "live_windows_selected_checkout",
+        "host_port": port,
+        "worktree_id": worktree_id,
+        "dependency_seed_files": sorted(dependency_entries),
+        "dependency_seed_sha256": dependency_seed_sha256,
+        "toolpins": toolpins,
+        "toolpins_sha256": toolpins_digest(toolpins),
+        "workspace_root": WORKSPACE,
+        "frontend_root": FRONTEND,
+        "live_directories": directories,
+        "files": files,
+        "configuration_changes": "describe_only",
+        "backend_build": "explicit_request_only",
+    }
 
 
 def _validate_reused_workspace(destination, inputs, old_inputs, *, generated_sources=None):
@@ -297,10 +448,201 @@ def seed(source, state, port, *, reuse_from=None):
             "backend_build": "explicit_request_only"}
 
 
+def seed_guest(
+    source,
+    state,
+    port,
+    *,
+    host_source_root,
+    worktree_id,
+    source_commit,
+    manifest_path=None,
+):
+    """Seed frontend dependency metadata into a Docker named volume.
 
-def attest_mounts(actual, inputs, inputs_path):
-    expected = {CONFIG_TARGET: str(inputs_path),
-                **{entry["target"]: entry["source"] for entry in inputs["live_directories"]}}
+    This is the volume-only counterpart of :func:`seed`.  It runs inside the
+    frontend container, reads the readonly ``/opt/fullmag/source`` bind and
+    writes only ``workspace`` plus the input manifest below the named
+    ``/state/development`` volume.  It deliberately does not call
+    ``local_volume`` or touch the Windows project storage.
+
+    ``host_source_root`` is diagnostic provenance retained in the manifest;
+    ``source`` is the container path used for reads.  A full commit and the
+    Compose worktree identity are required because the guest cannot safely
+    infer either from a Windows Git checkout.
+    """
+    def guest_read_regular(path, *, maximum):
+        path = Path(path)
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            raise ValueError(f"Cannot inspect guest frontend input: {path}") from error
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Guest frontend input is not a regular file: {path}")
+        if metadata.st_size > maximum:
+            raise ValueError(f"Guest frontend input is too large: {path}")
+        try:
+            return path.read_bytes()
+        except OSError as error:
+            raise ValueError(f"Cannot read guest frontend input: {path}") from error
+
+    source = Path(source)
+    if not source.is_absolute() or source.is_symlink() or not source.is_dir():
+        raise ValueError(f"Container source mount is not a real directory: {source}")
+    state = Path(state)
+    if not state.is_absolute() or state.is_symlink():
+        raise ValueError("Docker frontend state root must be an absolute named-volume path")
+    if not isinstance(host_source_root, str) or not re.fullmatch(
+        r"(?:[A-Za-z]:[\\/].*|\\\\.*)", host_source_root
+    ):
+        raise ValueError("host_source_root must be a diagnostic Windows path")
+    if not isinstance(worktree_id, str) or not re.fullmatch(
+        r"[a-z0-9][a-z0-9._-]{0,127}", worktree_id
+    ):
+        raise ValueError("worktree_id is not a safe Compose identity")
+    if not isinstance(source_commit, str) or not re.fullmatch(r"[a-f0-9]{40}", source_commit):
+        raise ValueError("source_commit must be a lowercase full Git commit")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
+        raise ValueError("port must be an integer in 1024..65535")
+
+    app = source / "apps" / "control-room"
+    directories = []
+    for name in DIRECTORIES:
+        path = app / name
+        if not path.is_dir() or path.is_symlink():
+            raise ValueError(f"Missing live frontend source directory: {path}")
+        directories.append(
+            {
+                "name": name,
+                "source": host_source_root.rstrip("\\/")
+                + "/apps/control-room/"
+                + name,
+                "target": WORKSPACE + "/apps/control-room/" + name,
+            }
+        )
+
+    package_relative = Path("package.json")
+    package_data = guest_read_regular(source / package_relative, maximum=16 * 1024 * 1024)
+    patch_relatives = _pnpm_patch_relatives(source)
+    relative_files = {
+        Path(name) for name in ("package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml")
+    }
+    relative_files.update(patch_relatives)
+    dependency_files = set(relative_files)
+    from windows.stage_workspace_frontend import (
+        _direct_app_package_manifests,
+        _parse_lock_importers,
+    )
+
+    importers = _parse_lock_importers(source / "pnpm-lock.yaml")
+    for path in _direct_app_package_manifests(source, importers):
+        relative = path.relative_to(source)
+        relative_files.add(relative)
+        dependency_files.add(relative)
+    for path in app.iterdir():
+        if path.suffix in {".ts", ".tsx", ".json", ".mjs", ".css"} and path.is_file():
+            relative_files.add(path.relative_to(source))
+
+    workspace = state / "workspace"
+    if workspace.exists() or workspace.is_symlink():
+        raise ValueError(
+            "Named frontend state already contains workspace metadata; preserve the matching manifest"
+        )
+    try:
+        workspace.mkdir(parents=True, exist_ok=False)
+    except PermissionError as error:
+        raise _named_volume_permission_error(workspace, error) from error
+    # Compose attaches the four readonly Windows source mounts below these
+    # targets.  Create their empty mountpoints in the named volume before the
+    # service is created; ``create_host_path: false`` then remains fail-closed.
+    for name in DIRECTORIES:
+        mountpoint = workspace / "apps" / "control-room" / name
+        try:
+            mountpoint.mkdir(parents=True, exist_ok=True)
+        except PermissionError as error:
+            raise _named_volume_permission_error(mountpoint, error) from error
+    files = []
+    dependency_entries = {}
+    for relative in sorted(relative_files, key=str):
+        try:
+            data = (
+                package_data
+                if relative == package_relative
+                else guest_read_regular(source / relative, maximum=16 * 1024 * 1024)
+            )
+        except OSError as error:
+            if relative in patch_relatives:
+                raise ValueError(f"Pnpm patch file is missing or unavailable: {relative}") from error
+            raise
+        target = workspace / relative
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except PermissionError as error:
+            raise _named_volume_permission_error(target, error) from error
+        digest = hashlib.sha256(data).hexdigest()
+        relative_name = relative.as_posix()
+        files.append({"relative": relative_name, "sha256": digest})
+        if relative in dependency_files:
+            dependency_entries[relative_name] = digest
+
+    from docker_frontend_cache import default_toolpins, dependency_seed_digest, toolpins_digest
+
+    toolpins = default_toolpins()
+    manifest = {
+        "schema": "fullmag.docker-development-inputs.v1",
+        "source_root": host_source_root,
+        "source_commit": source_commit,
+        "source_selection": "live_windows_selected_checkout",
+        "source_volume": str(source),
+        "host_port": port,
+        "worktree_id": worktree_id,
+        "dependency_seed_files": sorted(dependency_entries),
+        "dependency_seed_sha256": dependency_seed_digest(dependency_entries),
+        "toolpins": toolpins,
+        "toolpins_sha256": toolpins_digest(toolpins),
+        "workspace_root": WORKSPACE,
+        "frontend_root": FRONTEND,
+        "live_directories": directories,
+        "files": files,
+        "configuration_changes": "prepare_named_volume_workspace",
+        "backend_build": "explicit_request_only",
+    }
+    destination = Path(manifest_path) if manifest_path is not None else state / "development-inputs.json"
+    if not destination.is_absolute() or destination.is_symlink():
+        raise ValueError("Frontend input manifest must be an absolute regular volume path")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError as error:
+        raise _named_volume_permission_error(destination.parent, error) from error
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        try:
+            temporary.write_bytes(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                + b"\n"
+            )
+            os.replace(temporary, destination)
+        except PermissionError as error:
+            raise _named_volume_permission_error(destination, error) from error
+    finally:
+        if temporary.exists():
+            try:
+                temporary.unlink()
+            except PermissionError as error:
+                raise _named_volume_permission_error(temporary, error) from error
+    return manifest
+
+
+
+def attest_mounts(actual, inputs, inputs_path=None):
+    expected = {
+        **({CONFIG_TARGET: str(inputs_path)} if inputs_path is not None else {}),
+        **{entry["target"]: entry["source"] for entry in inputs["live_directories"]},
+    }
     from run_managed_browser import host_path
     for target, source in expected.items():
         mounts = [mount for mount in actual["Mounts"] if mount["Destination"] == target]

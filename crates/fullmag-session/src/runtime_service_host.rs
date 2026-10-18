@@ -9,9 +9,7 @@ use std::path::{Component, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::host_resource_ledger::{
-    HostResourceLedgerPolicy, HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2,
-};
+use crate::host_resource_ledger::HostResourceLedgerPolicy;
 use crate::repository_path::validate_store_id;
 use crate::types::{FmsPreparationResourceOffer, FmsResourceKind, FmsSchedulerResourceOffer};
 
@@ -37,8 +35,8 @@ pub struct RuntimeServiceHostExecution {
     pub ledger_root: PathBuf,
     pub policy: HostResourceLedgerPolicy,
     /// Digest of the canonical immutable host-readiness blob used by every
-    /// strict v2 admission and launch. Legacy bindings may omit it so old
-    /// archives remain readable; v2 host execution cannot.
+    /// strict runtime-readiness admission and launch. Legacy bindings may
+    /// omit it so old archives remain readable; v2/v3 execution cannot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_generation_sha256: Option<String>,
     pub compute_max_concurrency: usize,
@@ -67,8 +65,8 @@ impl RuntimeServiceHostExecution {
         self.policy.validate()?;
         if let Some(digest) = self.runtime_generation_sha256.as_deref() {
             crate::types::validate_runtime_generation_sha256(digest)?;
-        } else if self.policy.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
-            bail!("v2 host execution requires its pinned runtime_generation_sha256");
+        } else if self.policy.requires_runtime_readiness() {
+            bail!("runtime-readiness host execution requires its pinned runtime_generation_sha256");
         }
         if !(1..=MAX_HOST_SCHEDULER_CONCURRENCY).contains(&self.compute_max_concurrency)
             || !(1..=MAX_HOST_SCHEDULER_CONCURRENCY).contains(&self.preparation_max_concurrency)

@@ -44,9 +44,15 @@ pub const HOST_RESOURCE_LEDGER_SCHEMA_V3: &str = "host_resource_ledger.v3";
 pub const HOST_RESOURCE_LEDGER_SCHEMA_V4: &str = "host_resource_ledger.v4";
 pub const HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1: &str = "host_resource_ledger_policy.v1";
 /// Host policy with a canonical, observed inventory topology and native GPU
-/// readiness binding. V1 remains accepted for CPU/backward-compatible hosts.
+/// readiness binding. V1 remains accepted for legacy hosts.
 pub const HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2: &str = "host_resource_ledger_policy.v2";
+/// CPU-only host policy backed by the full native FEM build. GPU capacity is
+/// intentionally absent; GPU requests remain unavailable under this profile.
+pub const HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3: &str = "host_resource_ledger_policy.v3";
 pub const HOST_RUNTIME_READINESS_SCHEMA_V1: &str = "host_runtime_readiness.v1";
+/// CPU-only native readiness. Older readers reject this profile rather than
+/// accepting a host without a current GPU proof.
+pub const HOST_RUNTIME_READINESS_SCHEMA_V2: &str = "host_runtime_readiness.v2";
 pub const HOST_RUNTIME_STATE_SCHEMA_V1: &str = "host_runtime_state.v1";
 pub const HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V1: &str = "host_resource_release_proof.v1";
 /// Proof schema for an authoritative Docker namespace teardown. Older
@@ -133,10 +139,23 @@ pub struct HostResourceLedgerPolicy {
 }
 
 impl HostResourceLedgerPolicy {
+    pub fn requires_runtime_readiness(&self) -> bool {
+        matches!(
+            self.schema_version.as_str(),
+            HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 | HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3
+        )
+    }
+
+    pub fn is_cpu_only_runtime_profile(&self) -> bool {
+        self.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3
+    }
+
     pub fn validate(&self) -> Result<()> {
         if !matches!(
             self.schema_version.as_str(),
-            HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1 | HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
+            HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1
+                | HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
+                | HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3
         ) {
             bail!("unsupported host resource ledger policy schema");
         }
@@ -144,6 +163,14 @@ impl HostResourceLedgerPolicy {
             && self.gpu_vram_bytes_by_uuid.is_empty()
         {
             bail!("host resource ledger policy v2 requires at least one GPU capacity");
+        }
+        if self.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3 {
+            if !self.gpu_vram_bytes_by_uuid.is_empty() {
+                bail!("host resource ledger policy v3 cannot configure GPU capacity");
+            }
+            if self.total_budget.cpu_millis == 0 || self.total_budget.memory_bytes == 0 {
+                bail!("host resource ledger policy v3 requires positive CPU and memory capacity");
+            }
         }
         validate_stable_label(&self.host_id, "host_id")?;
         validate_sha256(&self.topology_sha256, "topology_sha256")?;
@@ -185,11 +212,12 @@ impl HostResourceLedgerPolicy {
     }
 }
 
-/// Typed native FEM/GPU runtime evidence injected by the host probe.
+/// Typed native FEM runtime evidence injected by the host probe. V1 is the
+/// strict GPU profile; V2 is the explicit CPU-only profile.
 ///
-/// The ledger never invents this evidence. A v2 compute snapshot is admitted
-/// only when its current capability and GPU compatibility projection matches
-/// this bounded, persisted record under the ledger writer lock.
+/// The ledger never invents this evidence. A runtime-readiness compute snapshot is admitted
+/// only when its current capability and runtime compatibility projection
+/// matches this bounded, persisted record under the ledger writer lock.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HostRuntimeReadiness {
@@ -236,11 +264,21 @@ impl HostRuntimeState {
 }
 
 impl HostRuntimeReadiness {
+    pub fn is_cpu_only_profile(&self) -> bool {
+        self.schema_version == HOST_RUNTIME_READINESS_SCHEMA_V2
+            && self.source_kind == "native_fem_cpu_abi"
+    }
+
     /// Validate the external native probe response before it is trusted.
     pub fn validate_probe(&self) -> Result<()> {
-        if self.schema_version != HOST_RUNTIME_READINESS_SCHEMA_V1 {
-            bail!("unsupported host runtime readiness schema");
+        match self.schema_version.as_str() {
+            HOST_RUNTIME_READINESS_SCHEMA_V1 => self.validate_gpu_probe(),
+            HOST_RUNTIME_READINESS_SCHEMA_V2 => self.validate_cpu_probe(),
+            _ => bail!("unsupported host runtime readiness schema"),
         }
+    }
+
+    fn validate_gpu_probe(&self) -> Result<()> {
         if self.status != "ready" || self.source_kind != "native_fem_gpu_abi" {
             bail!("native FEM/GPU readiness is not an accepted ready ABI result");
         }
@@ -279,10 +317,43 @@ impl HostRuntimeReadiness {
         Ok(())
     }
 
+    fn validate_cpu_probe(&self) -> Result<()> {
+        if self.status != "ready" || self.source_kind != "native_fem_cpu_abi" {
+            bail!("native FEM CPU readiness is not an accepted ready ABI result");
+        }
+        validate_sha256(&self.source_snapshot_sha256, "source_snapshot_sha256")?;
+        validate_sha256(&self.runtime_identity_sha256, "runtime_identity_sha256")?;
+        if self.capabilities.len() != 1
+            || self.capabilities.first().map(String::as_str) != Some("fem.cpu")
+        {
+            bail!("native FEM CPU readiness must advertise only fem.cpu");
+        }
+        if !self.gpu_runtime_compatibility.is_empty() {
+            bail!("native FEM CPU readiness cannot contain GPU compatibility entries");
+        }
+        if self.gpu_visibility != EnforcementStatus::Unavailable {
+            bail!("native FEM CPU readiness must mark GPU visibility unavailable");
+        }
+        match (&self.inventory_sha256, &self.capabilities_sha256) {
+            (Some(inventory), Some(capabilities)) => {
+                validate_sha256(inventory, "inventory_sha256")?;
+                validate_sha256(capabilities, "capabilities_sha256")?;
+            }
+            (None, None) => {}
+            _ => bail!("runtime readiness inventory and capability digests must be paired"),
+        }
+        Ok(())
+    }
+
     pub fn validate_persisted(&self, policy: &HostResourceLedgerPolicy) -> Result<()> {
         self.validate_probe()?;
-        if policy.schema_version != HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
-            bail!("runtime readiness requires a v2 host resource policy");
+        let expected_schema = match policy.schema_version.as_str() {
+            HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 => HOST_RUNTIME_READINESS_SCHEMA_V1,
+            HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3 => HOST_RUNTIME_READINESS_SCHEMA_V2,
+            _ => bail!("runtime readiness requires a v2 or v3 host resource policy"),
+        };
+        if self.schema_version != expected_schema {
+            bail!("runtime readiness schema does not match the host resource policy");
         }
         if self.inventory_sha256.as_deref() != Some(policy.topology_sha256.as_str()) {
             bail!("runtime readiness topology digest differs from host policy");
@@ -1119,10 +1190,8 @@ impl HostResourceLedger {
             .runtime_state
             .as_ref()
             .map(|state| state.readiness_sha256.clone());
-        if self.policy.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
-            && runtime_generation_sha256.is_none()
-        {
-            bail!("v2 host launch binding requires a v4 runtime generation");
+        if self.policy.requires_runtime_readiness() && runtime_generation_sha256.is_none() {
+            bail!("runtime-readiness host launch binding requires a v4 runtime generation");
         }
         let binding = crate::FmsHostLaunchBinding {
             schema_version: "host_launch_binding.v1".into(),
@@ -2139,8 +2208,8 @@ impl HostResourceLedger {
         policy: HostResourceLedgerPolicy,
     ) -> Result<Self> {
         policy.validate()?;
-        if policy.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
-            bail!("host resource ledger policy v2 requires initialize_with_readiness");
+        if policy.requires_runtime_readiness() {
+            bail!("runtime-readiness host policy requires initialize_with_readiness");
         }
         let root = canonical_ledger_root(root.as_ref(), true)?;
         let ledger = Self::new(root, policy);
@@ -2188,16 +2257,16 @@ impl HostResourceLedger {
         Ok(ledger)
     }
 
-    /// Initialize a v2 host ledger together with the exact typed native
-    /// readiness used to construct its first accepted compute snapshot.
+    /// Initialize a runtime-readiness host ledger together with the exact
+    /// typed native readiness used to construct its first accepted snapshot.
     pub fn initialize_with_readiness(
         root: impl AsRef<Path>,
         policy: HostResourceLedgerPolicy,
         readiness: HostRuntimeReadiness,
     ) -> Result<Self> {
         policy.validate()?;
-        if policy.schema_version != HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
-            bail!("native runtime readiness requires a v2 host resource policy");
+        if !policy.requires_runtime_readiness() {
+            bail!("native runtime readiness requires a v2 or v3 host resource policy");
         }
         readiness.validate_persisted(&policy)?;
         let root = canonical_ledger_root(root.as_ref(), true)?;
@@ -2286,8 +2355,10 @@ impl HostResourceLedger {
         Ok(ledger)
     }
 
-    /// Initialize a v2 ledger or perform the fenced v3-to-v4 runtime
-    /// readiness rotation when the existing ledger is idle.
+    /// Initialize a runtime-readiness ledger or perform the fenced v3-to-v4
+    /// readiness rotation when the existing ledger is idle. A changed policy
+    /// remains an explicit configuration boundary and is not silently
+    /// interpreted as a profile-compatible rotation.
     pub fn initialize_or_upgrade_with_readiness(
         root: impl AsRef<Path>,
         policy: HostResourceLedgerPolicy,
@@ -2421,15 +2492,15 @@ impl HostResourceLedger {
     }
 
     /// Open a previously initialized ledger without creating or repairing its
-    /// policy, marker, or reservation state. V2 also requires its persisted
-    /// native readiness record before it can be admitted.
+    /// policy, marker, or reservation state. Runtime-readiness profiles also
+    /// require their persisted native readiness record before admission.
     pub(crate) fn open(root: impl AsRef<Path>, expected_policy: HostResourceLedgerPolicy) -> Result<Self> {
         expected_policy.validate()?;
         let root = canonical_ledger_root(root.as_ref(), false)?;
         let ledger = Self::new(root, expected_policy);
         let _host_writer = ledger.writer.acquire()?;
         ledger.read_document_locked()?;
-        if ledger.policy.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
+        if ledger.policy.requires_runtime_readiness() {
             ledger.read_runtime_readiness_locked()?;
         }
         Ok(ledger)
@@ -2687,12 +2758,12 @@ impl HostResourceLedger {
         request: &HostReservationRequest,
         required: bool,
     ) -> Result<()> {
-        // Policy v2 is the native-runtime admission contract even while a
-        // legacy v3 document is being read. Historical reservations are
-        // validated without this path; every new admission still needs its
-        // explicit inventory owner pin.
+        // Runtime-readiness policies are the native-runtime admission
+        // contract even while a legacy v3 document is being read. Historical
+        // reservations are validated without this path; every new admission
+        // still needs its explicit inventory owner pin.
         let required = required
-            || self.policy.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2;
+            || self.policy.requires_runtime_readiness();
         self.validate_compute_node_owner_locked(
             request.expected_compute_node_owner_id.as_deref(),
             request.expected_compute_node_owner_epoch,
@@ -2789,9 +2860,9 @@ impl HostResourceLedger {
         request: &HostReservationRequest,
     ) -> Result<()> {
         if document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V4 {
-            if self.policy.schema_version == HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
+            if self.policy.requires_runtime_readiness() {
                 bail!(
-                    "v2 host admission requires a v4 runtime generation; migrate the host ledger before new admission"
+                    "runtime-readiness host admission requires a v4 runtime generation; migrate the host ledger before new admission"
                 );
             }
             if request.runtime_generation_sha256.is_some() {
@@ -3076,7 +3147,7 @@ impl HostResourceLedger {
     }
 
     fn validate_v2_snapshot_locked(&self, snapshot: &ComputeNodeSnapshot) -> Result<()> {
-        if self.policy.schema_version != HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
+        if !self.policy.requires_runtime_readiness() {
             return Ok(());
         }
         let document = self.read_document_locked()?;
@@ -3098,60 +3169,10 @@ impl HostResourceLedger {
         }
         if snapshot.schema_version != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
         {
-            bail!("v2 host policy requires a v2 compute-node snapshot");
-        }
-        if snapshot.inventory_sha256 != self.policy.topology_sha256 {
-            bail!("compute-node inventory differs from the v2 host policy topology");
+            bail!("runtime-readiness host policy requires a v2 compute-node snapshot");
         }
         let readiness = self.read_runtime_readiness_locked()?;
-        let capabilities_sha256 = snapshot.computed_capabilities_sha256()?;
-        if readiness.inventory_sha256.as_deref() != Some(snapshot.inventory_sha256.as_str())
-            || readiness.capabilities_sha256.as_deref() != Some(capabilities_sha256.as_str())
-        {
-            bail!("compute-node snapshot differs from persisted native readiness digests");
-        }
-        let capabilities = match &snapshot.capabilities {
-            Reported::Available { value } => value,
-            Reported::Unavailable { .. } => {
-                bail!("v2 host admission requires current runtime capabilities")
-            }
-        };
-        if capabilities != &readiness.capabilities
-            || snapshot.enforcement.gpu_visibility != readiness.gpu_visibility
-        {
-            bail!("compute-node runtime capabilities do not match native readiness");
-        }
-        let devices = match &snapshot.gpus {
-            Reported::Available { value } => value,
-            Reported::Unavailable { .. } => {
-                bail!("v2 host admission requires current GPU inventory")
-            }
-        };
-        let mut compatibility = BTreeMap::new();
-        let mut vram_bytes_by_uuid = BTreeMap::new();
-        for device in devices {
-            let values = match &device.runtime_compatibility {
-                Reported::Available { value } => value.clone(),
-                Reported::Unavailable { .. } => {
-                    bail!("v2 host admission requires current GPU runtime compatibility")
-                }
-            };
-            let vram = match &device.vram_bytes {
-                Reported::Available { value } if *value > 0 => *value,
-                Reported::Available { .. } | Reported::Unavailable { .. } => {
-                    bail!("v2 host admission requires current GPU VRAM capacity")
-                }
-            };
-            compatibility.insert(device.uuid.clone(), values);
-            vram_bytes_by_uuid.insert(device.uuid.clone(), vram);
-        }
-        if vram_bytes_by_uuid != self.policy.gpu_vram_bytes_by_uuid {
-            bail!("compute-node GPU VRAM differs from the v2 host resource policy");
-        }
-        if compatibility != readiness.gpu_runtime_compatibility {
-            bail!("compute-node GPU compatibility differs from native readiness");
-        }
-        Ok(())
+        validate_v2_snapshot_static_against_readiness(&self.policy, &readiness, snapshot)
     }
 
     /// Read the last bounded compute-node observation under the shared host
@@ -5222,8 +5243,8 @@ fn validate_v4_runtime_state(document: &HostResourceLedgerDocument, root: &Path)
         }
         return Ok(());
     }
-    if document.policy.schema_version != HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
-        bail!("v4 host resource ledger requires a v2 host resource policy");
+    if !document.policy.requires_runtime_readiness() {
+        bail!("v4 host resource ledger requires a v2 or v3 host resource policy");
     }
     let state = document
         .runtime_state
@@ -5265,7 +5286,7 @@ fn validate_v2_snapshot_against_readiness(
     snapshot: &ComputeNodeSnapshot,
 ) -> Result<()> {
     validate_v2_snapshot_static_against_readiness(policy, readiness, snapshot)?;
-    if matches!(&snapshot.gpus, Reported::Unavailable { .. }) {
+    if !readiness.is_cpu_only_profile() && matches!(&snapshot.gpus, Reported::Unavailable { .. }) {
         bail!("v2 host admission requires current GPU inventory");
     }
     Ok(())
@@ -5273,9 +5294,10 @@ fn validate_v2_snapshot_against_readiness(
 
 /// Validate the immutable policy/readiness binding without turning a
 /// last-known GPU observation into a GPU admission proof. A warm partial
-/// sample may keep the static GPU identity while reporting that the current
-/// NVIDIA probe is unavailable; request-specific GPU validation remains
-/// strict in `validate_compute_node_request_locked`.
+/// GPU sample may keep the static GPU identity while reporting that the
+/// current NVIDIA probe is unavailable; CPU-only profiles require a fresh
+/// empty GPU report. Request-specific GPU validation remains strict in
+/// `validate_compute_node_request_locked`.
 fn validate_v2_snapshot_static_against_readiness(
     policy: &HostResourceLedgerPolicy,
     readiness: &HostRuntimeReadiness,
@@ -5303,6 +5325,61 @@ fn validate_v2_snapshot_static_against_readiness(
         || snapshot.enforcement.gpu_visibility != readiness.gpu_visibility
     {
         bail!("compute-node runtime capabilities do not match native readiness");
+    }
+    if readiness.is_cpu_only_profile() {
+        if !policy.is_cpu_only_runtime_profile() {
+            bail!("CPU readiness requires a CPU-only host resource policy");
+        }
+        if snapshot.sample.error.is_some() {
+            bail!("CPU readiness cannot be bound to a failed compute-node sample");
+        }
+        if snapshot.cpu.topology.known_value().is_none()
+            || snapshot
+                .cpu
+                .os_constraints
+                .allowed_logical_cpu_ids
+                .known_value()
+                .is_none()
+            || snapshot.cpu.os_constraints.quota.known_value().is_none()
+        {
+            bail!("CPU readiness requires current topology, affinity, and quota observations");
+        }
+        if !matches!(
+            &snapshot.cpu.effective_capacity_millis,
+            crate::compute_node_snapshot::Observation::Available { value } if *value > 0
+        ) {
+            bail!("CPU readiness requires positive effective CPU capacity");
+        }
+        if !matches!(
+            &snapshot.memory.total_bytes,
+            crate::compute_node_snapshot::Observation::Available { value } if *value > 0
+        ) {
+            bail!("CPU readiness requires positive total memory");
+        }
+        if cfg!(target_os = "linux")
+            && snapshot.enforcement.cpu_quota
+                != crate::compute_node_snapshot::EnforcementStatus::Supported
+        {
+            bail!("Linux CPU readiness requires verified cgroup quota enforcement");
+        }
+        match &snapshot.gpus {
+            Reported::Unavailable {
+                last_known: None, ..
+            } => {}
+            Reported::Unavailable {
+                last_known: Some(_),
+                ..
+            } => bail!("CPU readiness cannot retain a stale GPU identity"),
+            Reported::Available { .. } => {
+                bail!("CPU readiness cannot publish a current GPU inventory")
+            }
+        }
+        if !policy.gpu_vram_bytes_by_uuid.is_empty()
+            || !readiness.gpu_runtime_compatibility.is_empty()
+        {
+            bail!("CPU readiness cannot carry GPU capacity or compatibility");
+        }
+        return Ok(());
     }
     let devices = match &snapshot.gpus {
         Reported::Available { value } => value,
@@ -6726,6 +6803,32 @@ mod tests {
             gpu_visibility: EnforcementStatus::Supported,
             inventory_sha256: Some(policy.topology_sha256.clone()),
             capabilities_sha256: Some("3".repeat(64)),
+        }
+    }
+
+    fn cpu_policy() -> HostResourceLedgerPolicy {
+        let mut policy = policy();
+        policy.schema_version = HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3.into();
+        policy.gpu_vram_bytes_by_uuid.clear();
+        policy
+    }
+
+    fn cpu_readiness(
+        policy: &HostResourceLedgerPolicy,
+        source_snapshot_sha256: &str,
+        runtime_identity_sha256: &str,
+    ) -> HostRuntimeReadiness {
+        HostRuntimeReadiness {
+            schema_version: HOST_RUNTIME_READINESS_SCHEMA_V2.into(),
+            status: "ready".into(),
+            source_kind: "native_fem_cpu_abi".into(),
+            source_snapshot_sha256: source_snapshot_sha256.into(),
+            runtime_identity_sha256: runtime_identity_sha256.into(),
+            capabilities: vec!["fem.cpu".into()],
+            gpu_runtime_compatibility: BTreeMap::new(),
+            gpu_visibility: EnforcementStatus::Unavailable,
+            inventory_sha256: Some(policy.topology_sha256.clone()),
+            capabilities_sha256: Some("4".repeat(64)),
         }
     }
 
@@ -11001,6 +11104,131 @@ mod tests {
         policy.schema_version = HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into();
         policy.gpu_vram_bytes_by_uuid.clear();
         assert!(policy.validate().is_err());
+    }
+
+    #[test]
+    fn v3_cpu_profile_rejects_gpu_capacity_and_cross_profile_readiness() {
+        let cpu = cpu_policy();
+        assert!(cpu.validate().is_ok());
+
+        let gpu_readiness = v4_readiness(&cpu, &"1".repeat(64), &"2".repeat(64));
+        assert!(gpu_readiness.validate_persisted(&cpu).is_err());
+
+        let cpu_readiness = cpu_readiness(&cpu, &"1".repeat(64), &"2".repeat(64));
+        let mut gpu_policy = policy();
+        gpu_policy.schema_version = HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into();
+        assert!(cpu_readiness.validate_persisted(&gpu_policy).is_err());
+
+        let mut cpu_with_gpu_capacity = cpu;
+        cpu_with_gpu_capacity
+            .gpu_vram_bytes_by_uuid
+            .insert(GPU_A.into(), 4096);
+        assert!(cpu_with_gpu_capacity.validate().is_err());
+    }
+
+    #[test]
+    fn v4_cpu_profile_publishes_current_snapshot_and_accepts_cpu_but_rejects_gpu() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = ledger_root(directory.path());
+        let mut policy = cpu_policy();
+        let now = chrono::Utc::now();
+        let mut snapshot = compute_node_snapshot(
+            &policy,
+            HostResourceLedger::node_id_for_host_id(&policy.host_id),
+            now,
+            1,
+            1,
+        );
+        snapshot.gpus = Reported::Unavailable {
+            reason: crate::compute_node_snapshot::UnavailableReason::SourceUnavailable,
+            last_known: None,
+        };
+        snapshot.capabilities = Reported::Available {
+            value: vec!["fem.cpu".into()],
+        };
+        snapshot.cpu.os_constraints.quota = Reported::Available {
+            value: crate::compute_node_snapshot::CpuQuota::Limited {
+                capacity_millis: policy.total_budget.cpu_millis,
+            },
+        };
+        snapshot.enforcement.cpu_quota = if cfg!(target_os = "linux") {
+            EnforcementStatus::Supported
+        } else {
+            EnforcementStatus::Advisory
+        };
+        snapshot.enforcement.gpu_visibility = EnforcementStatus::Unavailable;
+        snapshot.inventory_sha256 = snapshot.computed_inventory_sha256().unwrap();
+        policy.topology_sha256 = snapshot.inventory_sha256.clone();
+        let mut readiness = cpu_readiness(&policy, &"1".repeat(64), &"2".repeat(64));
+        readiness.capabilities_sha256 = Some(snapshot.computed_capabilities_sha256().unwrap());
+
+        let ledger = HostResourceLedger::initialize_with_readiness(
+            &root,
+            policy.clone(),
+            readiness,
+        )
+        .unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        snapshot.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        snapshot.runtime_owner_id = ledger.owner_id();
+        snapshot.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        snapshot.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        snapshot.sample.boot_monotonic_ns = Some(1);
+        snapshot.validate().unwrap();
+        assert_eq!(
+            ledger
+                .publish_compute_node_snapshot_with_owner(&owner, &snapshot)
+                .unwrap(),
+            ComputeNodeSnapshotPublicationDisposition::Accepted
+        );
+        assert!(matches!(
+            ledger.read_compute_node_snapshot().unwrap().unwrap().gpus,
+            Reported::Unavailable {
+                last_known: None,
+                ..
+            }
+        ));
+
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let store_id = HostResourceLedger::store_id(store.root()).unwrap();
+        let generation = ledger.read_runtime_generation_sha256().unwrap();
+        let mut cpu_request = request(
+            &policy,
+            &store_id,
+            "cpu-profile",
+            budget(1000, 100, 0),
+            &[],
+            &[],
+            &[0],
+        );
+        cpu_request.runtime_generation_sha256 = Some(generation.clone());
+        cpu_request.expected_compute_node_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        cpu_request.expected_compute_node_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        assert_eq!(
+            ledger.reserve(&cpu_request).unwrap().state,
+            HostResourceReservationState::Tentative
+        );
+
+        let mut gpu_request = request(
+            &policy,
+            &store_id,
+            "gpu-profile",
+            budget(1000, 100, 0),
+            &[GPU_A],
+            &[(GPU_A.to_string(), 4096)],
+            &[1],
+        );
+        gpu_request.runtime_generation_sha256 = Some(generation);
+        gpu_request.expected_compute_node_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        gpu_request.expected_compute_node_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        let error = ledger.reserve(&gpu_request).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("exclusive GPU UUID")
+                || error.to_string().contains("GPU UUID"),
+            "CPU-only policy must reject GPU admission: {error:#}"
+        );
     }
 
     #[test]

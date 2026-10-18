@@ -16,7 +16,8 @@ use fullmag_session::{
         HostRuntimeReadiness, HostWorkerLaunchGate, WorkerOrphanContainerBinding,
         WorkerOrphanContainerScope, WorkerOrphanExpectedEvidence, WorkerOrphanLaunchGate,
         WorkerOrphanReservationState, WorkerOrphanTeardownRequest,
-        HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2,
+        HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2, HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3,
+        HOST_RUNTIME_READINESS_SCHEMA_V1, HOST_RUNTIME_READINESS_SCHEMA_V2,
     },
     repository_path::{checked_path, validate_store_id},
     runtime_service::{
@@ -91,13 +92,11 @@ async fn publish_compute_node_sample(
         let previous = fullmag_runtime_control::retry_store_writer_busy(|| {
             ledger.read_compute_node_snapshot()
         })?;
-        let snapshot = if ledger.policy().schema_version
-            == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
-        {
+        let snapshot = if ledger.policy().requires_runtime_readiness() {
             let readiness = fullmag_runtime_control::retry_store_writer_busy(|| {
                 ledger.read_runtime_readiness()
             })?;
-            fullmag_runtime_control::compute_node_probe::validate_native_fem_gpu_readiness(
+            fullmag_runtime_control::compute_node_probe::validate_native_runtime_readiness(
                 &readiness,
             )?;
             fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner_with_readiness(
@@ -862,10 +861,26 @@ struct DockerHostProfile {
     runtime_generation_sha256: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DockerHostDeviceAccess {
+    Cpu,
+    Gpu,
+}
+
+impl DockerHostDeviceAccess {
+    fn readiness_schema(self) -> &'static str {
+        match self {
+            Self::Cpu => HOST_RUNTIME_READINESS_SCHEMA_V2,
+            Self::Gpu => HOST_RUNTIME_READINESS_SCHEMA_V1,
+        }
+    }
+}
+
 struct DockerHostInitArgs {
     ledger_root: PathBuf,
     store_root: PathBuf,
     readiness_path: Option<PathBuf>,
+    device_access: DockerHostDeviceAccess,
     host_id: String,
 }
 
@@ -888,6 +903,7 @@ fn parse_docker_host_init_args(
     let mut ledger_root = None;
     let mut store_root = None;
     let mut readiness_path = None;
+    let mut device_access = None;
     let mut host_id = None;
     while let Some(flag) = args.next() {
         let name = flag.to_str().context("initializer argument is not UTF-8")?;
@@ -895,8 +911,20 @@ fn parse_docker_host_init_args(
         match name {
             "--ledger-root" => ledger_root = Some(explicit_absolute_path(value, name)?),
             "--store-root" => store_root = Some(explicit_absolute_path(value, name)?),
-            "--native-fem-gpu-readiness" => {
-                readiness_path = Some(explicit_absolute_path(value, name)?)
+            "--native-fem-readiness" | "--native-fem-gpu-readiness" => {
+                if readiness_path.replace(explicit_absolute_path(value, name)?).is_some() {
+                    bail!("initializer received duplicate native readiness paths");
+                }
+            }
+            "--device-access" => {
+                let access = match value.to_str() {
+                    Some("cpu") => DockerHostDeviceAccess::Cpu,
+                    Some("gpu") => DockerHostDeviceAccess::Gpu,
+                    _ => bail!("--device-access must be resolved to cpu or gpu"),
+                };
+                if device_access.replace(access).is_some() {
+                    bail!("initializer received duplicate --device-access");
+                }
             }
             "--host-id" => {
                 let value = value.to_str().context("host ID is not UTF-8")?.to_owned();
@@ -910,14 +938,21 @@ fn parse_docker_host_init_args(
     let host_id = host_id
         .or_else(|| std::env::var("FULLMAG_DOCKER_HOST_ID").ok())
         .unwrap_or_else(|| "docker-all-host".into());
+    let device_access = device_access.unwrap_or(DockerHostDeviceAccess::Gpu);
     let readiness_path = readiness_path
-        .or_else(|| std::env::var_os("FULLMAG_NATIVE_FEM_GPU_READINESS").map(PathBuf::from))
+        .or_else(|| std::env::var_os("FULLMAG_NATIVE_FEM_READINESS").map(PathBuf::from))
+        .or_else(|| {
+            (device_access == DockerHostDeviceAccess::Gpu)
+                .then(|| std::env::var_os("FULLMAG_NATIVE_FEM_GPU_READINESS").map(PathBuf::from))
+                .flatten()
+        })
         .map(|path| explicit_absolute_path(path.into_os_string(), "native readiness"))
         .transpose()?;
     let args = DockerHostInitArgs {
         ledger_root: ledger_root.context("missing --ledger-root")?,
         store_root: store_root.context("missing --store-root")?,
         readiness_path,
+        device_access,
         host_id,
     };
     if args.ledger_root == args.store_root
@@ -998,21 +1033,29 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         .is_some_and(|value| value == "1");
     if args.readiness_path.is_some() && !fixture_readiness {
         bail!(
-            "--native-fem-gpu-readiness is restricted to FULLMAG_DOCKER_HOST_READINESS_FIXTURE=1"
+            "native readiness fixture paths are restricted to FULLMAG_DOCKER_HOST_READINESS_FIXTURE=1"
         );
     }
     let readiness = match (fixture_readiness, args.readiness_path.as_deref()) {
         (true, Some(path)) => {
-            fullmag_runtime_control::compute_node_probe::load_native_fem_gpu_readiness(path)?
+            fullmag_runtime_control::compute_node_probe::load_native_runtime_readiness(path)?
         }
         (true, None) => bail!(
-            "FULLMAG_DOCKER_HOST_READINESS_FIXTURE=1 requires --native-fem-gpu-readiness"
+            "FULLMAG_DOCKER_HOST_READINESS_FIXTURE=1 requires an explicit native readiness path"
         ),
-        (false, None) => {
-            fullmag_runtime_control::compute_node_probe::probe_native_fem_gpu_readiness()?
-        }
+        (false, None) => match args.device_access {
+            DockerHostDeviceAccess::Cpu => {
+                fullmag_runtime_control::compute_node_probe::probe_native_fem_cpu_readiness()?
+            }
+            DockerHostDeviceAccess::Gpu => {
+                fullmag_runtime_control::compute_node_probe::probe_native_fem_gpu_readiness()?
+            }
+        },
         (false, Some(_)) => unreachable!("fixture readiness path was rejected above"),
     };
+    if readiness.schema_version != args.device_access.readiness_schema() {
+        bail!("native readiness profile differs from the resolved Docker device access");
+    }
     let node_id = HostResourceLedger::node_id_for_host_id(&args.host_id);
     let runtime_owner_id = HostResourceLedger::owner_id_for_host_id(&args.host_id);
     let provisional_owner = HostInventoryOwnerDescriptor {
@@ -1057,7 +1100,18 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
     if cpu_millis == 0 || memory_bytes == 0 {
         bail!("Docker host profile has no bounded CPU or memory capacity");
     }
-    let devices = required_reported(&provisional.gpus, "NVIDIA GPU inventory")?;
+    let devices: &[fullmag_session::compute_node_snapshot::GpuDeviceSnapshot] =
+        match args.device_access {
+            DockerHostDeviceAccess::Gpu => {
+                required_reported(&provisional.gpus, "NVIDIA GPU inventory")?.as_slice()
+            }
+            DockerHostDeviceAccess::Cpu => {
+                if provisional.gpus.known_value().is_some() {
+                    bail!("CPU-only Docker profile cannot publish a known GPU inventory");
+                }
+                &[]
+            }
+        };
     let mut gpu_vram_bytes_by_uuid = BTreeMap::new();
     for device in devices {
         let partition = required_reported(&device.partition, "GPU partition")?;
@@ -1075,7 +1129,7 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
             bail!("Docker host profile received duplicate GPU UUIDs");
         }
     }
-    if gpu_vram_bytes_by_uuid.len() != 1 {
+    if args.device_access == DockerHostDeviceAccess::Gpu && gpu_vram_bytes_by_uuid.len() != 1 {
         bail!("Docker host profile currently requires exactly one full physical NVIDIA GPU");
     }
     let storage_bytes = std::env::var("FULLMAG_DOCKER_STORAGE_BYTES")
@@ -1087,7 +1141,10 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         bail!("Docker host profile storage capacity must be positive");
     }
     let policy = HostResourceLedgerPolicy {
-        schema_version: HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into(),
+        schema_version: match args.device_access {
+            DockerHostDeviceAccess::Cpu => HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3,
+            DockerHostDeviceAccess::Gpu => HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2,
+        }.into(),
         host_id: args.host_id.clone(),
         topology_sha256: provisional.inventory_sha256.clone(),
         revision: 1,
@@ -1256,15 +1313,26 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         host_execution: Some(host_execution),
     };
     configuration.validate()?;
-    let gpu_uuids = snapshot
-        .gpus
-        .known_value()
-        .context("published host snapshot has no GPU list")?
-        .iter()
-        .map(|device| device.uuid.clone())
-        .collect::<Vec<_>>();
+    let gpu_uuids = match args.device_access {
+        DockerHostDeviceAccess::Gpu => snapshot
+            .gpus
+            .known_value()
+            .context("published host snapshot has no GPU list")?
+            .iter()
+            .map(|device| device.uuid.clone())
+            .collect::<Vec<_>>(),
+        DockerHostDeviceAccess::Cpu => {
+            if snapshot.gpus.known_value().is_some() {
+                bail!("published CPU-only host snapshot contains a known GPU inventory");
+            }
+            Vec::new()
+        }
+    };
     let profile = DockerHostProfile {
-        schema_version: "fullmag.docker-host-profile.v1".into(),
+        schema_version: match args.device_access {
+            DockerHostDeviceAccess::Cpu => "fullmag.docker-host-profile.v2",
+            DockerHostDeviceAccess::Gpu => "fullmag.docker-host-profile.v1",
+        }.into(),
         configuration,
         host_identity: DockerHostIdentity {
             host_id: args.host_id,
@@ -2242,7 +2310,7 @@ fn run() -> Result<()> {
             }
             run_service(path)
         }
-        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--native-fem-gpu-readiness <absolute-json-path>] [--host-id <stable-id>]")
+        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
     }
 }
 
@@ -2735,6 +2803,58 @@ fn run_service(path: PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn docker_host_initializer_arguments() -> Vec<OsString> {
+        let root = std::env::temp_dir().join("fullmag-host-initializer-parser");
+        vec![
+            "--ledger-root".into(), root.join("ledger").into_os_string(),
+            "--store-root".into(), root.join("store").into_os_string(),
+            "--native-fem-readiness".into(), root.join("readiness.json").into_os_string(),
+            "--host-id".into(), "initializer-fixture".into(),
+        ]
+    }
+
+    #[test]
+    fn docker_host_initializer_preserves_gpu_default_and_legacy_fixture_flag() {
+        let mut args = docker_host_initializer_arguments();
+        *args.iter_mut().find(|value| value.to_str() == Some("--native-fem-readiness")).unwrap() =
+            "--native-fem-gpu-readiness".into();
+        let parsed = parse_docker_host_init_args(args.into_iter()).unwrap();
+        assert_eq!(parsed.device_access, DockerHostDeviceAccess::Gpu);
+        assert_eq!(parsed.device_access.readiness_schema(), HOST_RUNTIME_READINESS_SCHEMA_V1);
+        assert!(parsed.readiness_path.is_some());
+    }
+
+    #[test]
+    fn docker_host_initializer_requires_explicit_resolved_cpu_access() {
+        let mut args = docker_host_initializer_arguments();
+        args.extend(["--device-access".into(), "cpu".into()]);
+        let parsed = parse_docker_host_init_args(args.into_iter()).unwrap();
+        assert_eq!(parsed.device_access, DockerHostDeviceAccess::Cpu);
+        assert_eq!(parsed.device_access.readiness_schema(), HOST_RUNTIME_READINESS_SCHEMA_V2);
+    }
+
+    #[test]
+    fn docker_host_initializer_rejects_auto_unknown_and_duplicate_device_access() {
+        for value in ["auto", "disabled", "", "CPU"] {
+            let mut args = docker_host_initializer_arguments();
+            args.extend(["--device-access".into(), value.into()]);
+            assert!(parse_docker_host_init_args(args.into_iter()).is_err());
+        }
+        let mut args = docker_host_initializer_arguments();
+        args.extend(["--device-access".into(), "cpu".into(), "--device-access".into(), "gpu".into()]);
+        assert!(parse_docker_host_init_args(args.into_iter()).is_err());
+        let mut args = docker_host_initializer_arguments();
+        args.push("--device-access".into());
+        assert!(parse_docker_host_init_args(args.into_iter()).is_err());
+    }
+
+    #[test]
+    fn docker_host_initializer_rejects_two_readiness_fixture_paths() {
+        let mut args = docker_host_initializer_arguments();
+        args.extend(["--native-fem-gpu-readiness".into(), std::env::temp_dir().join("other-readiness.json").into_os_string()]);
+        assert!(parse_docker_host_init_args(args.into_iter()).is_err());
+    }
 
     #[test]
     fn docker_host_cpu_placements_are_sorted_disjoint_and_fail_closed() {

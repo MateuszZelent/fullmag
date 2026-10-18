@@ -1,4 +1,4 @@
-"""Initialize and prove the two Docker-VM backend cache volumes.
+"""Initialize and prove the Docker-VM backend cache volumes.
 
 The process is intentionally a tiny guest-side helper. It never resolves a
 Docker volume to a host path and never talks to the Docker socket. The
@@ -28,12 +28,18 @@ PROFILE = "backend-build-cache-v2"
 MAINTENANCE_PROFILE = "backend-build-cache-v2-maintenance"
 BUILD_ROLE = "build"
 PACKAGE_ROLE = "package"
+CONTROL_ROLE = "control"
 BUILD_ROOT = "/build"
 PACKAGE_ROOT = "/opt/fullmag/package"
+CONTROL_ROOT = "/opt/fullmag/control"
+CONTROL_BACKEND_ROOT = "/opt/fullmag/control/backend"
 PACKAGE_DEVELOPMENT_DIRNAME = ".development"
 PACKAGE_CACHE_CONTROL_DIRNAME = "cache-maintenance"
 MARKER_NAME = ".fullmag-backend-cache-owner.json"
 READBACK_NAME = ".fullmag-backend-cache-readback"
+CONTROL_MARKER_NAME = ".fullmag-toolchain-control-owner.json"
+CONTROL_OWNER_SCHEMA = "fullmag.docker-toolchain-control-owner.v1"
+CONTROL_NAMESPACE_SCHEMA = "fullmag.docker-toolchain-control-namespace.v1"
 DEFAULT_OWNER_UID = 65532
 DEFAULT_OWNER_GID = 65532
 MAX_MARKER_BYTES = 16 * 1024
@@ -220,6 +226,32 @@ def _open_guest_root(path: str | os.PathLike[str], uid: int, gid: int) -> int:
             metadata = os.fstat(directory)
             if (metadata.st_uid, metadata.st_gid) != (0, 0):
                 raise MaintenanceError("cache maintenance root ownership did not read back")
+    except BaseException:
+        os.close(directory)
+        raise
+    return directory
+
+
+def _open_shared_control_root(
+    path: str | os.PathLike[str], uid: int, gid: int
+) -> int:
+    """Open the group-shared control root without taking ownership of it."""
+
+    candidate = Path(path)
+    if (not candidate.is_absolute()
+            or candidate == Path(candidate.anchor)
+            or any(part in {"", ".", ".."} for part in candidate.parts[1:])):
+        raise MaintenanceError("shared control root is not a safe absolute guest path")
+    try:
+        directory = os.open(str(candidate), os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW)
+    except OSError as error:
+        raise MaintenanceError(f"shared control root is unavailable: {candidate}") from error
+    try:
+        metadata = os.fstat(directory)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise MaintenanceError("shared control root is not a directory")
+        if (metadata.st_uid, metadata.st_gid) not in {(0, 0), (uid, gid)}:
+            raise MaintenanceError("shared control root has a foreign owner")
     except BaseException:
         os.close(directory)
         raise
@@ -592,6 +624,82 @@ def _ensure_marker(
     return raw
 
 
+def _ensure_shared_marker(
+    directory: int, marker: Mapping[str, Any], uid: int, gid: int
+) -> bytes:
+    """Create/reopen the group marker without binding it to a cache unit."""
+
+    try:
+        existing, metadata = _read_record(directory, CONTROL_MARKER_NAME, MAX_MARKER_BYTES)
+    except FileNotFoundError:
+        owner = (0, 0) if os.geteuid() == 0 else (uid, gid)
+        _write_new_record(directory, CONTROL_MARKER_NAME, marker, *owner)
+        existing, metadata = _read_record(directory, CONTROL_MARKER_NAME, MAX_MARKER_BYTES)
+    if existing != dict(marker):
+        raise MaintenanceError("shared control marker is foreign or incomplete")
+    expected_owner = (0, 0) if os.geteuid() == 0 else (uid, gid)
+    if (metadata.st_uid, metadata.st_gid) != expected_owner:
+        raise MaintenanceError("shared control marker owner is not exact")
+    raw = _canonical(existing)
+    if len(raw) > MAX_MARKER_BYTES:
+        raise MaintenanceError("shared control marker is too large")
+    return raw
+
+
+def _ensure_control_namespace(
+    control_root: str | os.PathLike[str],
+    control_volume_name: str,
+    uid: int,
+    gid: int,
+) -> tuple[bytes, bytes]:
+    """Prove the shared root and hand only the backend namespace to UID 65532."""
+
+    if not isinstance(control_volume_name, str) or not control_volume_name:
+        raise MaintenanceError("shared control volume name is missing")
+    root = _open_shared_control_root(control_root, uid, gid)
+    try:
+        root_marker = {
+            "schema": CONTROL_OWNER_SCHEMA,
+            "state": "owned",
+            "role": CONTROL_ROLE,
+            "volume_name": control_volume_name,
+            "mount": CONTROL_ROOT,
+            "namespace": CONTROL_BACKEND_ROOT,
+        }
+        root_marker_raw = _ensure_shared_marker(root, root_marker, uid, gid)
+        namespace = _open_child_directory(
+            root, "backend", uid, gid, "backend control namespace"
+        )
+        try:
+            if not _entry_present(namespace, MARKER_NAME):
+                try:
+                    entries = os.listdir(namespace)
+                except OSError as error:
+                    raise MaintenanceError("cannot inspect backend control namespace") from error
+                if entries:
+                    raise MaintenanceError(
+                        "backend control namespace is nonempty without its owner marker"
+                    )
+            namespace_marker = {
+                "schema": CONTROL_NAMESPACE_SCHEMA,
+                "state": "owned",
+                "role": CONTROL_ROLE,
+                "volume_name": control_volume_name,
+                "mount": CONTROL_ROOT,
+                "namespace": CONTROL_BACKEND_ROOT,
+            }
+            namespace_marker_raw = _ensure_marker(namespace, namespace_marker, uid, gid)
+            _prepare_readback(namespace, uid, gid)
+            _probe_readback(namespace, namespace_marker_raw, uid, gid)
+            _finalize_guest_root(namespace, uid, gid)
+        finally:
+            os.close(namespace)
+        _fsync_directory_fd(root, "shared control root")
+        return root_marker_raw, namespace_marker_raw
+    finally:
+        os.close(root)
+
+
 def _prepare_readback(directory: int, uid: int, gid: int) -> None:
     try:
         with _open_maintenance_record(directory, READBACK_NAME, os.O_RDONLY) as (
@@ -729,6 +837,10 @@ def _record_environment(environment: Mapping[str, str]) -> dict[str, Any]:
         raise MaintenanceError("cache maintenance build root mismatch")
     if required("FULLMAG_BACKEND_CACHE_PACKAGE_ROOT") != PACKAGE_ROOT:
         raise MaintenanceError("cache maintenance package root mismatch")
+    if required("FULLMAG_BACKEND_CACHE_CONTROL_ROOT") != CONTROL_ROOT:
+        raise MaintenanceError("cache maintenance control root mismatch")
+    if required("FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE") != CONTROL_BACKEND_ROOT:
+        raise MaintenanceError("cache maintenance backend namespace mismatch")
 
     def positive(name: str) -> int:
         value = required(name)
@@ -744,6 +856,9 @@ def _record_environment(environment: Mapping[str, str]) -> dict[str, Any]:
     gid = positive("FULLMAG_BACKEND_CACHE_OWNER_GID")
     if (uid, gid) != (DEFAULT_OWNER_UID, DEFAULT_OWNER_GID):
         raise MaintenanceError("cache maintenance must target backend uid/gid 65532")
+    control_volume = required("FULLMAG_BUILD_CONTROL_VOLUME")
+    if required("FULLMAG_BACKEND_CACHE_CONTROL_VOLUME") != control_volume:
+        raise MaintenanceError("cache maintenance control volume identities differ")
     return {
         "project_id": required("FULLMAG_BACKEND_CACHE_PROJECT_ID"),
         "cache_key": required("FULLMAG_BACKEND_CACHE_KEY"),
@@ -756,6 +871,7 @@ def _record_environment(environment: Mapping[str, str]) -> dict[str, Any]:
         "volume_names": {
             BUILD_ROLE: required("FULLMAG_BACKEND_CACHE_BUILD_VOLUME"),
             PACKAGE_ROLE: required("FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME"),
+            CONTROL_ROLE: control_volume,
         },
         "uid": uid,
         "gid": gid,
@@ -765,12 +881,13 @@ def _record_environment(environment: Mapping[str, str]) -> dict[str, Any]:
 def ensure(
     build_root: str | os.PathLike[str] = BUILD_ROOT,
     package_root: str | os.PathLike[str] = PACKAGE_ROOT,
+    control_root: str | os.PathLike[str] = CONTROL_ROOT,
     *,
     environment: Mapping[str, str] | None = None,
     owner_uid: int | None = None,
     owner_gid: int | None = None,
 ) -> dict[str, Any]:
-    """Create/reopen exact markers and prove a bounded user read/write pair."""
+    """Create/reopen unit markers and prove the shared control namespace."""
 
     identity = _record_environment(os.environ if environment is None else environment)
     uid = identity["uid"] if owner_uid is None else owner_uid
@@ -781,6 +898,20 @@ def ensure(
     directories: dict[str, int] = {}
     nested_directories: list[int] = []
     marker_raw: dict[str, bytes] = {}
+    _control_root_marker_raw, _control_namespace_marker_raw = _ensure_control_namespace(
+        control_root,
+        identity["volume_names"][CONTROL_ROLE],
+        uid,
+        gid,
+    )
+    control_marker = {
+        "schema": CONTROL_OWNER_SCHEMA,
+        "state": "owned",
+        "role": CONTROL_ROLE,
+        "volume_name": identity["volume_names"][CONTROL_ROLE],
+        "mount": CONTROL_ROOT,
+        "namespace": CONTROL_BACKEND_ROOT,
+    }
     try:
         for role, root in roots.items():
             directory = _open_guest_root(root, uid, gid)
@@ -825,17 +956,20 @@ def ensure(
         "toolchain_image_id": identity["toolchain_image_id"],
         "volume_names": identity["volume_names"],
         "markers": {
-            role: {
-                "schema": OWNER_SCHEMA,
-                "state": "owned",
-                "unit_key": identity["unit_key"],
-                "owner_id": identity["owner_id"],
-                "role": role,
-                "volume_name": identity["volume_names"][role],
-                "uid": uid,
-                "gid": gid,
-            }
-            for role in (BUILD_ROLE, PACKAGE_ROLE)
+            **{
+                role: {
+                    "schema": OWNER_SCHEMA,
+                    "state": "owned",
+                    "unit_key": identity["unit_key"],
+                    "owner_id": identity["owner_id"],
+                    "role": role,
+                    "volume_name": identity["volume_names"][role],
+                    "uid": uid,
+                    "gid": gid,
+                }
+                for role in (BUILD_ROLE, PACKAGE_ROLE)
+            },
+            CONTROL_ROLE: control_marker,
         },
         "probe": {
             "schema": PROBE_SCHEMA,
@@ -843,13 +977,21 @@ def ensure(
             "owner_uid": uid,
             "owner_gid": gid,
             "volumes": {
-                role: {
+                **{
+                    role: {
+                        "regular_marker": True,
+                        "writable": True,
+                        "readonly_reopen": True,
+                        "no_reparse": True,
+                    }
+                    for role in (BUILD_ROLE, PACKAGE_ROLE)
+                },
+                CONTROL_ROLE: {
                     "regular_marker": True,
                     "writable": True,
                     "readonly_reopen": True,
                     "no_reparse": True,
-                }
-                for role in (BUILD_ROLE, PACKAGE_ROLE)
+                },
             },
         },
     }

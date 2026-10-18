@@ -44,6 +44,8 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             "FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION": "ensure",
             "FULLMAG_BACKEND_CACHE_BUILD_ROOT": helper.BUILD_ROOT,
             "FULLMAG_BACKEND_CACHE_PACKAGE_ROOT": helper.PACKAGE_ROOT,
+            "FULLMAG_BACKEND_CACHE_CONTROL_ROOT": helper.CONTROL_ROOT,
+            "FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE": helper.CONTROL_BACKEND_ROOT,
             "FULLMAG_BACKEND_CACHE_OWNER_UID": str(helper.DEFAULT_OWNER_UID),
             "FULLMAG_BACKEND_CACHE_OWNER_GID": str(helper.DEFAULT_OWNER_GID),
             "FULLMAG_BACKEND_CACHE_PROJECT_ID": "fullmag",
@@ -56,6 +58,8 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             "FULLMAG_BACKEND_RUNTIME_IMAGE_ID": "sha256:" + "d" * 64,
             "FULLMAG_BACKEND_CACHE_BUILD_VOLUME": "fullmag-cache-build",
             "FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME": "fullmag-cache-package",
+            "FULLMAG_BUILD_CONTROL_VOLUME": "fullmag-build-control-test",
+            "FULLMAG_BACKEND_CACHE_CONTROL_VOLUME": "fullmag-build-control-test",
         }
 
     def _package_marker(self, uid: int, gid: int) -> tuple[bytes, bytes]:
@@ -89,6 +93,11 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
         self._write_owned_record(package / helper.READBACK_NAME, readback, 0o600, uid, gid)
         return marker, readback
 
+    def _ensure(self, build: Path, package: Path, **kwargs):
+        control = package.parent / "control"
+        control.mkdir(exist_ok=True)
+        return helper.ensure(build, package, control_root=control, **kwargs)
+
     def test_fresh_and_reopen_prove_marker_readback_pair_without_host_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -97,14 +106,14 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             build.mkdir()
             package.mkdir()
             uid, gid = self._test_owner()
-            receipt = helper.ensure(
+            receipt = self._ensure(
                 build,
                 package,
                 environment=self._environment(),
                 owner_uid=uid,
                 owner_gid=gid,
             )
-            repeated = helper.ensure(
+            repeated = self._ensure(
                 build,
                 package,
                 environment=self._environment(),
@@ -116,20 +125,37 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             self.assertEqual(receipt["probe"]["state"], "passed")
             self.assertEqual(receipt["probe"]["owner_uid"], uid)
             self.assertEqual(receipt["probe"]["owner_gid"], gid)
-            self.assertEqual(set(receipt["markers"]), {"build", "package"})
+            self.assertEqual(set(receipt["markers"]), {"build", "package", "control"})
             self.assertNotIn(str(root), json.dumps(receipt))
             marker_roots = {
                 build: build,
                 package: package
                 / backend.PACKAGE_DEVELOPMENT_DIRNAME
                 / backend.PACKAGE_CACHE_CONTROL_DIRNAME,
+                root / "control": root / "control" / "backend",
             }
             for path, marker_root in marker_roots.items():
                 marker = marker_root / helper.MARKER_NAME
                 readback = marker_root / helper.READBACK_NAME
                 self.assertTrue(marker.is_file())
                 self.assertTrue(readback.is_file())
-                self.assertEqual(json.loads(marker.read_text())["uid"], uid)
+                marker_document = json.loads(marker.read_text())
+                if path == root / "control":
+                    self.assertEqual(
+                        marker_document,
+                        {
+                            "mount": helper.CONTROL_ROOT,
+                            "namespace": helper.CONTROL_BACKEND_ROOT,
+                            "role": helper.CONTROL_ROLE,
+                            "schema": helper.CONTROL_NAMESPACE_SCHEMA,
+                            "state": "owned",
+                            "volume_name": self._environment()[
+                                "FULLMAG_BUILD_CONTROL_VOLUME"
+                            ],
+                        },
+                    )
+                else:
+                    self.assertEqual(marker_document["uid"], uid)
                 self.assertTrue(readback.read_bytes().startswith(b"fullmag-cache-readback:"))
             self.assertFalse((package / helper.MARKER_NAME).exists())
             self.assertFalse((package / helper.READBACK_NAME).exists())
@@ -154,7 +180,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             old_marker_stat = (package / helper.MARKER_NAME).stat()
             old_readback_stat = (package / helper.READBACK_NAME).stat()
 
-            helper.ensure(
+            self._ensure(
                 build,
                 package,
                 environment=self._environment(),
@@ -201,7 +227,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
                 {"user-owned-input.txt"},
             )
 
-            repeated = helper.ensure(
+            repeated = self._ensure(
                 build,
                 package,
                 environment=self._environment(),
@@ -225,7 +251,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             user_file = package / "user-owned-input.txt"
             user_file.write_bytes(b"keep me")
             with self.assertRaisesRegex(helper.MaintenanceError, "pair is incomplete"):
-                helper.ensure(
+                self._ensure(
                     build,
                     package,
                     environment=self._environment(),
@@ -255,7 +281,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             foreign_marker = control / helper.MARKER_NAME
             self._write_owned_record(foreign_marker, b"foreign\n", 0o640, uid, gid)
             with self.assertRaisesRegex(helper.MaintenanceError, "foreign or incomplete"):
-                helper.ensure(
+                self._ensure(
                     build,
                     package,
                     environment=self._environment(),
@@ -274,7 +300,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             build.mkdir()
             package.mkdir()
             uid, gid = self._test_owner()
-            helper.ensure(
+            self._ensure(
                 build,
                 package,
                 environment=self._environment(),
@@ -299,7 +325,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
                 build.mkdir()
                 package.mkdir()
                 uid, gid = self._test_owner()
-                helper.ensure(
+                self._ensure(
                     build,
                     package,
                     environment=self._environment(),
@@ -316,7 +342,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
                 os.link(record, target)
                 before = target.read_bytes()
                 with self.assertRaisesRegex(helper.MaintenanceError, "unexpected link count"):
-                    helper.ensure(
+                    self._ensure(
                         build,
                         package,
                         environment=self._environment(),
@@ -343,7 +369,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             marker.symlink_to(outside)
             (package / helper.READBACK_NAME).write_bytes(readback)
             with self.assertRaises(helper.MaintenanceError):
-                helper.ensure(
+                self._ensure(
                     build,
                     package,
                     environment=self._environment(),
@@ -365,7 +391,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             marker.write_text(json.dumps({"foreign": True}), encoding="utf-8")
             before = marker.read_bytes()
             with self.assertRaisesRegex(helper.MaintenanceError, "foreign"):
-                helper.ensure(
+                self._ensure(
                     build,
                     package,
                     environment=self._environment(),
@@ -385,7 +411,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             target.write_text("{}", encoding="utf-8")
             (build / helper.MARKER_NAME).symlink_to(target)
             with self.assertRaises(helper.MaintenanceError):
-                helper.ensure(
+                self._ensure(
                     build,
                     package,
                     environment=self._environment(),
@@ -406,7 +432,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             build.chmod(0o755)
             package.chmod(0o755)
             uid, gid = self._test_owner()
-            helper.ensure(
+            self._ensure(
                 build,
                 package,
                 environment=self._environment(),
@@ -440,7 +466,7 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
                 for marker_root in marker_roots.values():
                     os.chown(marker_root / helper.MARKER_NAME, 0, 0)
                     os.chown(marker_root / helper.READBACK_NAME, 0, 0)
-                helper.ensure(
+                self._ensure(
                     build,
                     package,
                     environment=self._environment(),

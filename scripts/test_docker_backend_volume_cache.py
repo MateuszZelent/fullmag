@@ -16,7 +16,7 @@ TOOLCHAIN = "sha256:" + "b" * 64
 
 
 class DockerVolumeFixture:
-    def __init__(self, profile, *, roles=()):
+    def __init__(self, profile, *, roles=(cache.CONTROL_VOLUME_ROLE,)):
         self.profile = profile
         self.documents = {
             role: self._document(role)
@@ -51,6 +51,8 @@ class DockerVolumeFixture:
                 role for role, expected in self.profile["volume_names"].items()
                 if expected == name
             )
+            if role == cache.CONTROL_VOLUME_ROLE:
+                raise AssertionError("bootstrap-owned control volume must not be created by cache adapter")
             self.documents[role] = self._document(role)
             return name
         raise AssertionError(f"unexpected Docker call: {args!r}")
@@ -69,6 +71,7 @@ def _profile(tmp: str, image: str = IMAGE):
         "storage_root": str(storage),
         "project_id": "fullmag",
         "worktree_id": "docker-all-master-integration-20261017",
+        "compose_project": "fullmag-worktree-docker-all-master-integration-20261017",
     }
     profile = cache.prepare(
         layout,
@@ -77,6 +80,7 @@ def _profile(tmp: str, image: str = IMAGE):
         runroot,
         source_root=source,
         toolchain_image=TOOLCHAIN,
+        control_volume_name="fullmag-build-control-fullmag-worktree-docker-all-master-integration-20261017",
     )
     return profile, layout, source, repo, runroot
 
@@ -84,17 +88,28 @@ def _profile(tmp: str, image: str = IMAGE):
 def _maintenance_receipt(profile):
     markers = {}
     probes = {}
-    for role in (cache.BUILD_VOLUME_ROLE, cache.PACKAGE_VOLUME_ROLE):
-        markers[role] = {
-            "schema": cache.OWNER_SCHEMA,
-            "state": "owned",
-            "unit_key": profile["unit_key"],
-            "owner_id": profile["owner_id"],
-            "role": role,
-            "volume_name": profile["volume_names"][role],
-            "uid": 65532,
-            "gid": 65532,
-        }
+    for role in cache.VOLUME_ROLES:
+        markers[role] = (
+            {
+                "schema": "fullmag.docker-toolchain-control-owner.v1",
+                "state": "owned",
+                "role": role,
+                "volume_name": profile["volume_names"][role],
+                "mount": cache.CONTROL_TARGET,
+                "namespace": cache.CONTROL_BACKEND_TARGET,
+            }
+            if role == cache.CONTROL_VOLUME_ROLE
+            else {
+                "schema": cache.OWNER_SCHEMA,
+                "state": "owned",
+                "unit_key": profile["unit_key"],
+                "owner_id": profile["owner_id"],
+                "role": role,
+                "volume_name": profile["volume_names"][role],
+                "uid": 65532,
+                "gid": 65532,
+            }
+        )
         probes[role] = {
             "regular_marker": True,
             "writable": True,
@@ -136,6 +151,12 @@ def _container(profile, *, socket=False):
             "Type": "volume",
             "Name": profile["volume_names"][cache.PACKAGE_VOLUME_ROLE],
             "Destination": cache.PACKAGE_TARGET,
+            "RW": True,
+        },
+        {
+            "Type": "volume",
+            "Name": profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
+            "Destination": cache.CONTROL_TARGET,
             "RW": True,
         },
     ]
@@ -185,6 +206,7 @@ class BackendVolumeCacheTests(unittest.TestCase):
                 runroot,
                 source_root=source,
                 toolchain_image=TOOLCHAIN,
+                control_volume_name=first["volume_names"][cache.CONTROL_VOLUME_ROLE],
             )
             self.assertEqual(first["cache_key"], second["cache_key"])
             self.assertEqual(first["unit_key"], second["unit_key"])
@@ -200,15 +222,16 @@ class BackendVolumeCacheTests(unittest.TestCase):
             profile, *_ = _profile(tmp)
             docker = DockerVolumeFixture(profile)
             prepared = cache.prepare(
-                {"storage_root": Path(tmp) / "storage", "project_id": "fullmag", "worktree_id": profile["worktree_id"]},
+                {"storage_root": Path(tmp) / "storage", "project_id": "fullmag", "worktree_id": profile["worktree_id"], "compose_project": profile["control_project"]},
                 Path(tmp) / "repo",
                 IMAGE,
                 Path(tmp) / "storage" / "runs" / "run-1",
                 docker,
                 source_root=Path(tmp) / "source",
                 toolchain_image=TOOLCHAIN,
+                control_volume_name=profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
             )
-            self.assertEqual(set(prepared["volume_documents"]), {"build", "package"})
+            self.assertEqual(set(prepared["volume_documents"]), set(cache.VOLUME_ROLES))
             creates = [call[0] for call in docker.calls if call[0][:2] == ("volume", "create")]
             self.assertEqual(len(creates), 2)
             for args in creates:
@@ -230,6 +253,7 @@ class BackendVolumeCacheTests(unittest.TestCase):
                 self.assertEqual(set(maintenance_overlay["volumes"]), {
                     cache.COMPOSE_BUILD_VOLUME,
                     cache.COMPOSE_PACKAGE_VOLUME,
+                    cache.COMPOSE_CONTROL_VOLUME,
                 })
                 return _maintenance_receipt(prepared)
 
@@ -242,6 +266,7 @@ class BackendVolumeCacheTests(unittest.TestCase):
                 maintenance,
                 source_root=source,
                 toolchain_image=TOOLCHAIN,
+                control_volume_name=profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
             )
             self.assertEqual(ready["state"], "ready")
             self.assertEqual(seen["profile"]["volume_names"], ready["volume_names"])
@@ -261,40 +286,48 @@ class BackendVolumeCacheTests(unittest.TestCase):
                 lambda prepared, overlay: _maintenance_receipt(prepared),
                 source_root=source,
                 toolchain_image=TOOLCHAIN,
+                control_volume_name=profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
             )
 
             self.assertEqual(ready["build_root"], cache.BUILD_TARGET)
 
-    def test_partial_pair_and_foreign_pair_fail_closed_without_deletion(self):
+    def test_missing_unit_volume_is_added_without_touching_shared_control(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile, *_ = _profile(tmp)
-            docker = DockerVolumeFixture(profile, roles=(cache.BUILD_VOLUME_ROLE,))
-            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "partial"):
-                cache.ensure_volume_pair(docker, profile)
-            self.assertFalse(any(call[0][:2] == ("volume", "create") for call in docker.calls))
+            docker = DockerVolumeFixture(profile, roles=(cache.BUILD_VOLUME_ROLE, cache.CONTROL_VOLUME_ROLE))
+            documents = cache.ensure_volume_pair(docker, profile)
+            self.assertEqual(set(documents), set(cache.VOLUME_ROLES))
+            creates = [call[0] for call in docker.calls if call[0][:2] == ("volume", "create")]
+            self.assertEqual(len(creates), 1)
+            self.assertEqual(creates[0][-1], profile["volume_names"][cache.PACKAGE_VOLUME_ROLE])
 
-            docker = DockerVolumeFixture(profile, roles=(cache.BUILD_VOLUME_ROLE, cache.PACKAGE_VOLUME_ROLE))
+            docker = DockerVolumeFixture(profile, roles=cache.VOLUME_ROLES)
             docker.documents[cache.PACKAGE_VOLUME_ROLE]["Labels"][cache.LABEL_OWNER] = "foreign"
             with self.assertRaisesRegex(cache.BackendVolumeCacheError, "label mismatch"):
                 cache.inspect_volume_pair(docker, profile)
             self.assertFalse(any(call[0][:2] == ("volume", "rm") for call in docker.calls))
 
-    def test_validate_writes_canonical_receipt_and_never_fakes_package_path(self):
+    def test_validate_returns_control_volume_receipt_without_host_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile, *_ = _profile(tmp)
-            docker = DockerVolumeFixture(profile, roles=(cache.BUILD_VOLUME_ROLE, cache.PACKAGE_VOLUME_ROLE))
+            docker = DockerVolumeFixture(profile, roles=cache.VOLUME_ROLES)
             result = cache.validate(
                 profile,
                 docker.documents,
                 _maintenance_receipt(profile),
             )
             receipt_path = Path(result["receipt_path"])
-            self.assertTrue(receipt_path.is_file())
-            stored = json.loads(receipt_path.read_text())
+            self.assertEqual(receipt_path, Path(cache.RECEIPT_TARGET))
+            self.assertFalse(receipt_path.exists())
+            self.assertEqual(result["receipt_storage"], "docker-named-volume")
+            self.assertIsNone(result["host_receipt_path"])
+            stored = result["receipt"]
             self.assertEqual(stored["package_root"], cache.PACKAGE_TARGET)
             self.assertEqual(stored["build_root"], cache.BUILD_TARGET)
-            self.assertEqual(stored["host_receipt_path"], str(receipt_path))
-            self.assertTrue(str(receipt_path).startswith(str(Path(tmp) / "storage")))
+            self.assertEqual(stored["control_root"], cache.CONTROL_TARGET)
+            self.assertEqual(stored["receipt_path"], cache.RECEIPT_TARGET)
+            self.assertEqual(stored["receipt_storage"], "docker-named-volume")
+            self.assertIsNone(stored["host_receipt_path"])
             self.assertNotIn("/mnt/fullmag", json.dumps(stored))
             self.assertEqual(set(result["overlay"]["services"]), {"backend"})
             self.assertEqual(
@@ -305,7 +338,7 @@ class BackendVolumeCacheTests(unittest.TestCase):
     def test_validate_rejects_changed_maintenance_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile, *_ = _profile(tmp)
-            docker = DockerVolumeFixture(profile, roles=(cache.BUILD_VOLUME_ROLE, cache.PACKAGE_VOLUME_ROLE))
+            docker = DockerVolumeFixture(profile, roles=cache.VOLUME_ROLES)
             receipt = _maintenance_receipt(profile)
             receipt["runtime_image_id"] = REFRESHED_IMAGE
             with self.assertRaisesRegex(cache.BackendVolumeCacheError, "image identity"):
@@ -437,7 +470,7 @@ class BackendVolumeCacheTests(unittest.TestCase):
                 inspected_profile = dict(profile)
                 inspected_profile["volume_documents"] = DockerVolumeFixture(
                     profile,
-                    roles=(cache.BUILD_VOLUME_ROLE, cache.PACKAGE_VOLUME_ROLE),
+                    roles=cache.VOLUME_ROLES,
                 ).documents
                 cache._assert_no_active_consumers(inspected_profile, [posix_backslash])
 
@@ -510,7 +543,7 @@ class BackendVolumeCacheTests(unittest.TestCase):
             profile, *_ = _profile(tmp)
             docker = DockerVolumeFixture(
                 profile,
-                roles=(cache.BUILD_VOLUME_ROLE, cache.PACKAGE_VOLUME_ROLE),
+                roles=cache.VOLUME_ROLES,
             )
             mountpoint = docker.documents[cache.BUILD_VOLUME_ROLE]["Mountpoint"]
             for source in (
@@ -629,22 +662,30 @@ class BackendVolumeCacheTests(unittest.TestCase):
                     maintenance,
                     source_root=source,
                     toolchain_image=TOOLCHAIN,
+                    control_volume_name=profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
                     active_consumers=inventory,
                 )
             self.assertEqual(len(calls), 2)
             self.assertEqual(maintenance_calls, [])
 
-    def test_windows_mount_and_symlink_receipt_are_rejected(self):
+    def test_windows_mount_is_rejected_and_receipt_stays_in_control_volume(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile, *_ = _profile(tmp)
             document = DockerVolumeFixture(profile)._document(cache.BUILD_VOLUME_ROLE)
             document["Mountpoint"] = "/run/desktop/mnt/host/c/fullmag"
             with self.assertRaisesRegex(cache.BackendVolumeCacheError, "Windows host bind"):
                 cache._validate_volume_document(document, profile, cache.BUILD_VOLUME_ROLE)
-            link = Path(tmp) / "storage" / "runs" / "link"
-            link.symlink_to(Path(tmp) / "storage" / "runs" / "run-1", target_is_directory=True)
-            with self.assertRaises(cache.BackendVolumeCacheError):
-                cache._receipt_path({"storage_root": Path(tmp) / "storage"}, link)
+            profile_without_runroot = cache.prepare(
+                {"project_id": "fullmag", "worktree_id": profile["worktree_id"], "compose_project": profile["control_project"]},
+                Path(tmp) / "repo",
+                IMAGE,
+                Path(tmp) / "missing-runroot",
+                source_root=Path(tmp) / "source",
+                toolchain_image=TOOLCHAIN,
+                control_volume_name=profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
+            )
+            self.assertEqual(profile_without_runroot["receipt_path"], cache.RECEIPT_TARGET)
+            self.assertIsNone(profile_without_runroot["host_receipt_path"])
 
 
 if __name__ == "__main__":

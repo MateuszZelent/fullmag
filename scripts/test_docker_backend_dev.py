@@ -343,7 +343,7 @@ class BackendPackageTests(unittest.TestCase):
             self.assertIn(token, backend_block)
         for removed_token in ("/input/manifest.json", "--manifest", "--source-tar"):
             self.assertNotIn(removed_token, backend_block)
-        self.assertIn("read_only: false", backend_block)
+        self.assertIn("read_only: true", backend_block)
         self.assertIn("start_period: 14400s", backend_block)
         self.assertIn(
             "PYTHONPATH: /build/workspace/packages/fullmag-py/src:/opt/fullmag/package",
@@ -389,7 +389,7 @@ class BackendPackageTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     execvpe.call_args_list[0].args[2]["FULLMAG_PACKAGE_PROVENANCE"],
-                    "/opt/fullmag/provenance.json",
+                    str(backend.PROVENANCE_PATH),
                 )
 
                 manifest = output / "runtimes/fem-gpu/manifest.json"
@@ -401,6 +401,48 @@ class BackendPackageTests(unittest.TestCase):
                     tampered_exec.assert_not_called()
             finally:
                 backend.PACKAGE_ROOT = original_package_root
+
+    def test_backend_cache_receipt_is_published_only_in_control_volume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = root / "control"
+            backend_control = control / "backend"
+            host_storage = root / "storage"
+            host_storage.mkdir()
+            receipt_path = backend_control / backend.PACKAGE_CACHE_RECEIPT_NAME
+            environment = {
+                "FULLMAG_BACKEND_CACHE_SCHEMA": "fullmag.backend-build-cache.v2",
+                "FULLMAG_BACKEND_CACHE_PROFILE": "backend-build-cache-v2",
+                "FULLMAG_BACKEND_CACHE_PROJECT_ID": "fullmag",
+                "FULLMAG_BACKEND_CACHE_KEY": "a" * 64,
+                "FULLMAG_BACKEND_CACHE_UNIT_KEY": "b" * 64,
+                "FULLMAG_BACKEND_CACHE_OWNER_ID": "c" * 64,
+                "FULLMAG_BACKEND_CACHE_WORKTREE_ID": "docker-all-master-integration-20261017",
+                "FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID": "sha256:" + "d" * 64,
+                "FULLMAG_BACKEND_RUNTIME_IMAGE_ID": "sha256:" + "e" * 64,
+                "FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev",
+                "FULLMAG_BACKEND_CACHE_BUILD_VOLUME": "fullmag-build-cache",
+                "FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME": "fullmag-package-cache",
+                "FULLMAG_BUILD_CONTROL_VOLUME": "fullmag-control-cache",
+                "FULLMAG_BACKEND_CACHE_CONTROL_VOLUME": "fullmag-control-cache",
+                "FULLMAG_BACKEND_CACHE_BUILD_ROOT": str(backend.BUILD_ROOT),
+                "FULLMAG_BACKEND_CACHE_PACKAGE_ROOT": str(backend.PACKAGE_ROOT),
+                "FULLMAG_BACKEND_CACHE_CONTROL_ROOT": str(control),
+                "FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE": str(control / "backend"),
+                "FULLMAG_BACKEND_CACHE_RECEIPT": str(receipt_path),
+            }
+            with (
+                patch.object(backend, "CONTROL_ROOT", control),
+                patch.object(backend, "BACKEND_CONTROL_ROOT", backend_control),
+                patch.object(backend, "CACHE_RECEIPT_PATH", receipt_path),
+                patch.dict(os.environ, environment, clear=False),
+            ):
+                receipt = backend._backend_cache_receipt()
+            self.assertIsNotNone(receipt)
+            self.assertEqual(receipt["storage"], "docker-named-volume")
+            self.assertEqual(receipt["targets"]["receipt"], str(receipt_path))
+            self.assertTrue(receipt_path.is_file())
+            self.assertFalse((host_storage / backend.PACKAGE_CACHE_RECEIPT_NAME).exists())
 
     def test_start_prepares_and_serves_in_one_container(self):
         with tempfile.TemporaryDirectory() as directory:

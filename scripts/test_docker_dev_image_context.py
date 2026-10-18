@@ -140,9 +140,11 @@ class BackendBuildReceiptProfileTests(unittest.TestCase):
         package = Path(temporary.name) / "package"
         package.mkdir()
         source_bundle = {
+            "source_mode": "live-shadow-v1",
             "source_digest": "d" * 64,
             "resolved_commit": "e" * 40,
-            "archive_sha256": "f" * 64,
+            "source_snapshot_sha256": "a" * 64,
+            "live_manifest_sha256": "b" * 64,
             "native_source_identity": {
                 "head_commit_full": "e" * 40,
                 "source_snapshot_dirty": False,
@@ -155,9 +157,11 @@ class BackendBuildReceiptProfileTests(unittest.TestCase):
             "state": "succeeded",
             "operation": "direct-compose-build",
             "source": {
+                "source_mode": "live-shadow-v1",
                 "source_digest": source_bundle["source_digest"],
                 "resolved_commit": source_bundle["resolved_commit"],
-                "source_tar_sha256": source_bundle["archive_sha256"],
+                "source_snapshot_sha256": source_bundle["source_snapshot_sha256"],
+                "live_manifest_sha256": source_bundle["live_manifest_sha256"],
             },
             "native_source_identity": source_bundle["native_source_identity"],
             "toolchain": {"image_id": toolchain_id},
@@ -304,14 +308,13 @@ class DevelopmentBaseContextTests(unittest.TestCase):
             run_root.mkdir()
             context_root.mkdir()
             context = self._context(context_root, toolchain_id)
-            requested = docker_dev.DEFAULT_BASE_IMAGE
-            derived = docker_dev._direct_image_tag(
-                requested, "base", str(context["context_sha256"]),
+            requested = docker_dev._stable_project_image_reference(
+                "fullmag-worktree-test", "base",
             )
             stale_context = {**context, "context_sha256": "old-context"}
             old_base = self._base(requested, old_base_id, toolchain_id, stale_context)
             old_base["context_sha256"] = "old-context"
-            current_base = self._base(derived, new_base_id, toolchain_id, context)
+            current_base = self._base(requested, new_base_id, toolchain_id, context)
             metadata = {
                 "schema": docker_dev.DEVELOPMENT_IMAGE_SCHEMA,
                 "kind": "development-base",
@@ -339,12 +342,10 @@ class DevelopmentBaseContextTests(unittest.TestCase):
                     return toolchain_id, inspect_document
                 if reference == requested:
                     return old_base_id, inspect_document
-                if reference == derived:
-                    return new_base_id, inspect_document
                 raise AssertionError(reference)
 
             def image_present(reference: str) -> bool:
-                return reference in {requested, derived}
+                return reference == requested
 
             with patch.object(docker_dev, "_inspect_image", side_effect=inspect), \
                     patch.object(docker_dev, "_preflight_dependency_image", return_value=(
@@ -352,12 +353,12 @@ class DevelopmentBaseContextTests(unittest.TestCase):
                         context["toolchain_manifest_sha256"],
                     )), \
                     patch.object(docker_dev, "_development_base_context", return_value=context), \
+                    patch.object(docker_dev, "_compose_identity", return_value={"project_name": "fullmag-worktree-test", "network_name": "fullmag-worktree-test_fullmag", "project_id": "project-test", "worktree_id": "worktree-test", "checkout_kind": "worktree", "source_root": ""}), \
                     patch.object(
                         docker_dev, "_image_reference_present", side_effect=image_present
                     ), \
                     patch.object(docker_dev, "_validate_development_base",
-                                 side_effect=lambda reference, **_kwargs:
-                                 {requested: old_base, derived: current_base}[reference]), \
+                                 side_effect=[docker_dev.DirectDockerError("stale context"), current_base]), \
                     patch.object(
                         docker_dev,
                         "_read_image_metadata",
@@ -366,6 +367,8 @@ class DevelopmentBaseContextTests(unittest.TestCase):
                         ),
                     ), \
                     patch.object(docker_dev, "_docker_capture", return_value="") as docker_capture, \
+                    patch.object(docker_dev, "_docker_live"), \
+                    patch.object(docker_dev, "_write_control_json"), \
                     patch.object(docker_dev, "_write_image_metadata"):
                 result = docker_dev._ensure_development_base(
                     argparse.Namespace(toolchain_image=toolchain_id),
@@ -376,10 +379,7 @@ class DevelopmentBaseContextTests(unittest.TestCase):
 
             self.assertIs(result, current_base)
             self.assertEqual(result["context_sha256"], context["context_sha256"])
-            self.assertEqual(
-                [call.args[:2] for call in docker_capture.call_args_list],
-                [("tag", toolchain_id)],
-            )
+            docker_capture.assert_not_called()
 
     def test_matching_requested_base_receipt_is_reused(self) -> None:
         toolchain_id = "sha256:" + "4" * 64
@@ -391,7 +391,9 @@ class DevelopmentBaseContextTests(unittest.TestCase):
             run_root.mkdir()
             context_root.mkdir()
             context = self._context(context_root, toolchain_id)
-            requested = docker_dev.DEFAULT_BASE_IMAGE
+            requested = docker_dev._stable_project_image_reference(
+                "fullmag-worktree-test", "base",
+            )
             base = self._base(requested, base_id, toolchain_id, context)
             metadata = {
                 "schema": docker_dev.DEVELOPMENT_IMAGE_SCHEMA,
@@ -410,11 +412,13 @@ class DevelopmentBaseContextTests(unittest.TestCase):
                         context["toolchain_manifest_sha256"],
                     )), \
                     patch.object(docker_dev, "_development_base_context", return_value=context), \
+                    patch.object(docker_dev, "_compose_identity", return_value={"project_name": "fullmag-worktree-test", "network_name": "fullmag-worktree-test_fullmag", "project_id": "project-test", "worktree_id": "worktree-test", "checkout_kind": "worktree", "source_root": ""}), \
                     patch.object(docker_dev, "_image_reference_present", return_value=True), \
                     patch.object(docker_dev, "_validate_development_base", return_value=base), \
                     patch.object(docker_dev, "_read_image_metadata", return_value=metadata), \
                     patch.object(docker_dev, "_docker_capture") as docker_capture, \
-                    patch.object(docker_dev, "_docker_live") as docker_live:
+                    patch.object(docker_dev, "_docker_live") as docker_live, \
+                    patch.object(docker_dev, "_write_control_json"):
                 result = docker_dev._ensure_development_base(
                     argparse.Namespace(toolchain_image=toolchain_id),
                     root,

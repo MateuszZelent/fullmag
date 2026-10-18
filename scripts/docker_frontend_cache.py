@@ -1,9 +1,11 @@
-"""Prepare and attest the persistent frontend development cache.
+"""Prepare and attest the frontend development state named volume.
 
-The cache is deliberately separate from the host execution ledger.  Its
-identity is derived from the source root, worktree, port, dependency seed and
-tool pins.  A source edit therefore reuses the cache while a dependency or
-toolchain change selects a new one.
+The active v2 path keeps pnpm, node_modules, Next cache, logs and receipts in
+Docker named volumes owned by the selected Compose group.  Windows storage is
+used only for readonly source binds and user data.  The old ext4 adapter is
+kept below only as a compatibility implementation for historical receipts;
+the exported v2 ``prepare`` and ``validate_container`` functions never call
+it.
 """
 
 from __future__ import annotations
@@ -18,9 +20,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 
-SCHEMA = "fullmag.frontend-cache.v1"
-KEY_SCHEMA = "fullmag.frontend-cache-key.v1"
-PROFILE = "fullmag-frontend-cache-v1"
+SCHEMA = "fullmag.frontend-cache.v2"
+KEY_SCHEMA = "fullmag.frontend-cache-key.v2"
+PROFILE = "fullmag-frontend-cache-v2"
 MAINTENANCE_PROFILE = "fullmag-frontend-cache-maintenance-v1"
 MAINTENANCE_SERVICE = "frontend-cache-maintenance"
 CONSUMER_PROFILE_LABEL = "com.fullmag.frontend-cache.profile"
@@ -587,6 +589,420 @@ def _require_cache_capacity(
         )
 
 
+# ---------------------------------------------------------------------------
+# v2 named-volume implementation
+# ---------------------------------------------------------------------------
+#
+# These definitions intentionally appear after the historical adapter so a
+# checkout that already contains old helper code can be upgraded atomically:
+# every exported operation used by the current launcher resolves to the v2
+# implementation below.  The v2 route has no call site that creates a host
+# backing image, loop mount, maintenance container, or host receipt.
+
+STATE_TARGET = "/state/development"
+CONTROL_TARGET = "/opt/fullmag/control"
+ENV_VOLUME_NAME = "FULLMAG_FRONTEND_CACHE_VOLUME"
+ENV_CONTROL_VOLUME = "FULLMAG_BUILD_CONTROL_VOLUME"
+VOLUME_SCHEMA_LABEL = "com.fullmag.frontend-cache.schema"
+VOLUME_PROFILE_LABEL = "com.fullmag.frontend-cache.profile"
+VOLUME_PROJECT_LABEL = "com.fullmag.frontend-cache.project"
+VOLUME_KEY_LABEL = "com.fullmag.frontend-cache.key"
+_V2_VOLUME_PREFIX = "fullmag-frontend-dev-v2"
+
+
+def _v2_key(
+    source_root: str | os.PathLike[str],
+    worktree_id: str,
+    host_port: int,
+    dependency_seed_sha256: str,
+    toolpins: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a dependency identity whose key is independent of host port."""
+
+    source = _source_root(source_root)
+    worktree = _require_identifier(worktree_id, "worktree_id")
+    if (
+        isinstance(host_port, bool)
+        or not isinstance(host_port, int)
+        or not 1 <= host_port <= 65535
+    ):
+        raise FrontendCacheError("host_port must be a valid TCP port")
+    dependency = _require_sha(dependency_seed_sha256, "dependency_seed_sha256")
+    pins = _cache_identity_toolpins(toolpins)
+    if not pins:
+        raise FrontendCacheError("toolpins must not be empty")
+    pins_sha256 = toolpins_digest(pins)
+    inputs = {
+        "source_root": source,
+        "worktree_id": worktree,
+        # Keep the endpoint in receipts, but never in the volume identity.
+        "host_port": host_port,
+        "dependency_seed_sha256": dependency,
+        "toolpins_sha256": pins_sha256,
+    }
+    payload = {
+        "schema": "fullmag.frontend-cache-key.v2",
+        "worktree_id": worktree,
+        "dependency_seed_sha256": dependency,
+        "toolpins_sha256": pins_sha256,
+    }
+    return {
+        "schema": "fullmag.frontend-cache-key.v2",
+        "key": _sha256(payload),
+        "inputs": inputs,
+        "toolpins": pins,
+    }
+
+
+def _v2_project_id(
+    layout: Mapping[str, Any], compose_project: str | None = None
+) -> str:
+    project = (
+        compose_project
+        or layout.get("compose_project")
+        or layout.get("project_id")
+        or layout.get("host_ledger_project_id")
+    )
+    if project is None:
+        project_root = layout.get("project_root")
+        if project_root is None:
+            raise FrontendCacheError("layout has no Compose project identity")
+        project = hashlib.sha256(
+            str(Path(project_root).resolve()).encode("utf-8")
+        ).hexdigest()[:16]
+    project = str(project).lower()
+    return _require_identifier(project, "compose_project")
+
+
+def _v2_volume_name(project_id: str, key: str) -> str:
+    project = _require_identifier(project_id, "compose_project")
+    key = _require_sha(key, "cache_key")
+    candidate = f"{project}-{_V2_VOLUME_PREFIX}-{key[:32]}"
+    if len(candidate) <= 200:
+        return candidate
+    digest = hashlib.sha256(project.encode("utf-8")).hexdigest()[:24]
+    return f"fullmag-fe-v2-{digest}-{key[:32]}"
+
+
+def _v2_cache_paths(
+    layout: Mapping[str, Any], key: str, *, compose_project: str | None = None,
+    control_volume_name: str | None = None,
+) -> dict[str, Any]:
+    project_id = _v2_project_id(layout, compose_project)
+    if not isinstance(control_volume_name, str) or not control_volume_name:
+        raise FrontendCacheError(
+            "control_volume_name must be supplied by the Compose-group launcher"
+        )
+    control = control_volume_name
+    _require_identifier(control, "control_volume_name")
+    return {
+        "project_id": project_id,
+        "volume_name": _v2_volume_name(project_id, key),
+        "control_volume_name": control,
+        "mount_target": STATE_TARGET,
+    }
+
+
+def _v2_volume_inspect(
+    docker: Callable[..., Any], name: str
+) -> Mapping[str, Any] | None:
+    try:
+        raw = docker("volume", "inspect", name, timeout=60)
+    except Exception:
+        return None
+    inspected = _read_json_output(raw)
+    if isinstance(inspected, list) and len(inspected) == 1 and isinstance(inspected[0], Mapping):
+        return inspected[0]
+    if isinstance(inspected, Mapping):
+        return inspected
+    raise FrontendCacheError("Docker volume inspect returned no volume record")
+
+
+def _v2_ensure_volume(
+    docker: Callable[..., Any],
+    *,
+    name: str,
+    project_id: str,
+    key: str,
+    profile: str = PROFILE,
+) -> dict[str, Any]:
+    labels = {
+        VOLUME_SCHEMA_LABEL: SCHEMA,
+        VOLUME_PROFILE_LABEL: profile,
+        VOLUME_PROJECT_LABEL: project_id,
+        VOLUME_KEY_LABEL: key,
+    }
+    record = _v2_volume_inspect(docker, name)
+    if record is None:
+        command: list[str] = ["volume", "create"]
+        for label, value in labels.items():
+            command.extend(["--label", f"{label}={value}"])
+        command.append(name)
+        docker(*command, timeout=60)
+        record = _v2_volume_inspect(docker, name)
+    if record is None:
+        raise FrontendCacheError(f"Docker did not publish named volume {name}")
+    if record.get("Name") != name:
+        raise FrontendCacheError("Docker volume identity changed")
+    if record.get("Driver") not in (None, "local"):
+        raise FrontendCacheError("frontend development volume must use Docker's local driver")
+    observed = record.get("Labels")
+    if not isinstance(observed, Mapping):
+        raise FrontendCacheError("frontend development volume has no labels")
+    for label, expected in labels.items():
+        if observed.get(label) != expected:
+            raise FrontendCacheError(f"frontend development volume label mismatch: {label}")
+    return {
+        "name": name,
+        "driver": str(record.get("Driver", "local")),
+        "labels": dict(observed),
+    }
+
+
+def _v2_ensure_control_volume(
+    docker: Callable[..., Any], *, name: str, project_id: str
+) -> dict[str, Any]:
+    """Ensure the shared control volume without claiming its ownership.
+
+    Backend and frontend use this volume together.  An existing volume may
+    therefore carry labels from the backend resolver; only its Docker name and
+    local driver are authoritative here.  New volumes receive neutral labels
+    that the other service can extend without a frontend-cache schema clash.
+    """
+
+    record = _v2_volume_inspect(docker, name)
+    if record is None:
+        docker(
+            "volume",
+            "create",
+            "--label",
+            "com.fullmag.build-control.project=" + project_id,
+            "--label",
+            "com.fullmag.build-control.schema=fullmag-build-control.v1",
+            name,
+            timeout=60,
+        )
+        record = _v2_volume_inspect(docker, name)
+    if record is None or record.get("Name") != name:
+        raise FrontendCacheError("Docker did not publish the shared build-control volume")
+    if record.get("Driver") not in (None, "local"):
+        raise FrontendCacheError("shared build-control volume must use Docker's local driver")
+    labels = record.get("Labels")
+    if labels is not None and not isinstance(labels, Mapping):
+        raise FrontendCacheError("shared build-control volume labels are malformed")
+    return {
+        "name": name,
+        "driver": str(record.get("Driver", "local")),
+        "labels": dict(labels or {}),
+    }
+
+
+def _v2_cache_key(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _v2_key(*args, **kwargs)
+
+
+def _v2_prepare(
+    layout: Mapping[str, Any],
+    repo: str | os.PathLike[str],
+    image_id: str,
+    run_root: str | os.PathLike[str],
+    docker: Callable[..., Any],
+    *,
+    source_root: str | os.PathLike[str],
+    worktree_id: str,
+    host_port: int,
+    dependency_seed_sha256: str,
+    toolpins: Mapping[str, Any] | None = None,
+    compose_project: str | None = None,
+    control_volume_name: str | None = None,
+) -> dict[str, Any]:
+    """Create/reuse group-scoped named volumes without host build storage."""
+
+    del run_root
+    identity = _v2_key(
+        source_root,
+        worktree_id,
+        host_port,
+        dependency_seed_sha256,
+        toolpins,
+    )
+    paths = _v2_cache_paths(
+        layout,
+        identity["key"],
+        compose_project=compose_project,
+        control_volume_name=control_volume_name,
+    )
+    repo_path = Path(repo).resolve(strict=True)
+    overlay = repo_path / "compose.frontend-cache.yaml"
+    if overlay.is_symlink() or not overlay.is_file():
+        raise FrontendCacheError(f"frontend cache Compose overlay is unavailable: {overlay}")
+    image = _image_attestation(docker, image_id)
+    state_volume = _v2_ensure_volume(
+        docker,
+        name=paths["volume_name"],
+        project_id=paths["project_id"],
+        key=identity["key"],
+    )
+    control_volume = _v2_ensure_control_volume(
+        docker,
+        name=paths["control_volume_name"],
+        project_id=paths["project_id"],
+    )
+    overlay_sha256 = hashlib.sha256(overlay.read_bytes()).hexdigest()
+    environment = {
+        ENV_SCHEMA: SCHEMA,
+        ENV_PROFILE: PROFILE,
+        ENV_PROJECT_ID: paths["project_id"],
+        ENV_KEY: identity["key"],
+        ENV_VOLUME_NAME: paths["volume_name"],
+        ENV_CONTROL_VOLUME: paths["control_volume_name"],
+        ENV_MOUNT_TARGET: STATE_TARGET,
+        ENV_RUNTIME_IMAGE_ID: image_id,
+        ENV_SOURCE_ROOT: identity["inputs"]["source_root"],
+        ENV_WORKTREE_ID: identity["inputs"]["worktree_id"],
+        ENV_HOST_PORT: str(identity["inputs"]["host_port"]),
+        ENV_DEPENDENCY_SEED: identity["inputs"]["dependency_seed_sha256"],
+        ENV_TOOLPINS: identity["inputs"]["toolpins_sha256"],
+    }
+    receipt = {
+        "schema": SCHEMA,
+        "profile": PROFILE,
+        "state": "ready",
+        "project_id": paths["project_id"],
+        "compose_project": paths["project_id"],
+        "cache_key": identity["key"],
+        "volume_name": paths["volume_name"],
+        "control_volume_name": paths["control_volume_name"],
+        "mount_target": STATE_TARGET,
+        "control_target": CONTROL_TARGET,
+        "runtime_image_id": image_id,
+        "volume": state_volume,
+        "control_volume": control_volume,
+        "identity": identity,
+        "environment": environment,
+        "compose_overlay": str(overlay),
+        "compose_overlay_sha256": overlay_sha256,
+        "qualification": "frontend-named-volume-admission-only",
+    }
+    return {
+        **receipt,
+        "image": image,
+        "image_id": image_id,
+        "filesystem_uuid": None,
+        "mount_root": None,
+        "children": {
+            "state": paths["volume_name"],
+            "control": paths["control_volume_name"],
+        },
+        "guest_targets": {"state": STATE_TARGET, "control": CONTROL_TARGET},
+        "maintenance_compose": None,
+        # A guest path inside the named state volume.  It must not be passed to
+        # host-side receipt validators as a host filesystem path.
+        "receipt_path": f"{STATE_TARGET}/frontend-cache-receipt.json",
+    }
+
+
+def _v2_container_env(document: Mapping[str, Any]) -> dict[str, str]:
+    config = document.get("Config")
+    if not isinstance(config, Mapping):
+        raise FrontendCacheError("frontend container has no config")
+    values = config.get("Env", [])
+    if not isinstance(values, list):
+        raise FrontendCacheError("frontend container environment is malformed")
+    result: dict[str, str] = {}
+    for value in values:
+        if isinstance(value, str) and "=" in value:
+            name, item = value.split("=", 1)
+            result[name] = item
+    return result
+
+
+def _v2_validate_container(
+    document: Mapping[str, Any], profile: Mapping[str, Any]
+) -> dict[str, Any]:
+    if profile.get("schema") != SCHEMA or profile.get("state") != "ready":
+        raise FrontendCacheError("frontend cache profile is not ready")
+    if profile.get("image_id") is not None and document.get("Image") != profile["image_id"]:
+        raise FrontendCacheError("frontend container image identity changed")
+    expected = profile.get("environment")
+    if not isinstance(expected, Mapping):
+        raise FrontendCacheError("frontend cache profile has no environment")
+    env = _v2_container_env(document)
+    for name in (
+        ENV_SCHEMA,
+        ENV_PROFILE,
+        ENV_PROJECT_ID,
+        ENV_KEY,
+        ENV_VOLUME_NAME,
+        ENV_CONTROL_VOLUME,
+        ENV_MOUNT_TARGET,
+        ENV_RUNTIME_IMAGE_ID,
+    ):
+        if env.get(name) != str(expected[name]):
+            raise FrontendCacheError(f"frontend container cache environment mismatch: {name}")
+    config = document.get("Config")
+    labels = config.get("Labels") if isinstance(config, Mapping) else None
+    if (
+        not isinstance(labels, Mapping)
+        or labels.get(CONSUMER_PROFILE_LABEL) != str(expected[ENV_PROFILE])
+        or labels.get(CONSUMER_KEY_LABEL) != str(expected[ENV_KEY])
+    ):
+        raise FrontendCacheError("frontend container cache labels mismatch")
+    mounts = document.get("Mounts")
+    if not isinstance(mounts, list):
+        raise FrontendCacheError("frontend container has no mount list")
+    state_mounts = []
+    control_mounts = []
+    for mount in mounts:
+        if not isinstance(mount, Mapping):
+            continue
+        target = str(mount.get("Destination", mount.get("destination", "")))
+        if target == STATE_TARGET:
+            state_mounts.append(mount)
+        if target == CONTROL_TARGET:
+            control_mounts.append(mount)
+        if target in set(CHILD_TARGETS.values()):
+            raise FrontendCacheError(f"legacy frontend cache child mount is forbidden: {target}")
+    if len(state_mounts) != 1:
+        raise FrontendCacheError("frontend container must have exactly one state volume")
+    mount = state_mounts[0]
+    if mount.get("Type", mount.get("type")) != "volume":
+        raise FrontendCacheError("frontend state must be a Docker named volume")
+    source = mount.get("Name", mount.get("Source", mount.get("source")))
+    if str(source) != str(expected[ENV_VOLUME_NAME]):
+        raise FrontendCacheError("frontend state volume identity changed")
+    if mount.get("RW") is False or mount.get("read_only") is True:
+        raise FrontendCacheError("frontend state volume is read-only")
+    if len(control_mounts) != 1:
+        raise FrontendCacheError("frontend container must have exactly one control volume")
+    control_mount = control_mounts[0]
+    if control_mount.get("Type", control_mount.get("type")) != "volume":
+        raise FrontendCacheError("frontend control state must be a Docker named volume")
+    control_source = control_mount.get(
+        "Name", control_mount.get("Source", control_mount.get("source"))
+    )
+    if str(control_source) != str(expected[ENV_CONTROL_VOLUME]):
+        raise FrontendCacheError("frontend control volume identity changed")
+    if control_mount.get("RW") is False or control_mount.get("read_only") is True:
+        raise FrontendCacheError("frontend control volume is read-only")
+    return {
+        "schema": SCHEMA,
+        "state": "attested",
+        "cache_key": profile["cache_key"],
+        "volume_name": str(source),
+        "control_volume_name": str(control_source),
+        "target": STATE_TARGET,
+    }
+
+
+# Export v2 operations.  Assigning aliases here preserves the existing import
+# surface while making the active path auditable in one contiguous section.
+cache_key = _v2_cache_key
+_cache_paths = _v2_cache_paths
+prepare = _v2_prepare
+validate_container = _v2_validate_container
+
+
 def prepare(
     layout: Mapping[str, Any],
     repo: str | os.PathLike[str],
@@ -800,3 +1216,12 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
         "filesystem_uuid": profile["filesystem_uuid"],
         "targets": sorted(seen),
     }
+
+
+# Keep these aliases at the end of the module: the historical v1 definitions
+# above are retained for receipt readers, but must never shadow the active v2
+# named-volume implementation.
+cache_key = _v2_cache_key
+_cache_paths = _v2_cache_paths
+prepare = _v2_prepare
+validate_container = _v2_validate_container

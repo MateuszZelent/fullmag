@@ -12,6 +12,78 @@ x-fullmag-source-labels: &fullmag-source-labels
   org.fullmag.compose.project: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
 
 services:
+  development-base:
+    profiles: ["image-build"]
+    labels: *fullmag-source-labels
+    image: ${FULLMAG_DEVELOPMENT_BASE_IMAGE:-fullmag/development-base:local}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: docker/all-in-one/Dockerfile.dev
+      args:
+        RUNTIME_BASE: ${FULLMAG_TOOLCHAIN_IMAGE:?Pin the selected Docker FEM toolchain}
+        FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the immutable toolchain image identity}
+        FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA: ${FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA:-fullmag.direct-compose.development-base-context.v1}
+        FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SHA256: ${FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SHA256:-pending}
+    entrypoint: ["/bin/true"]
+
+  backend-cache-volume-maintenance:
+    profiles: ["backend-cache-maintenance"]
+    labels:
+      com.fullmag.source.project-id: ${FULLMAG_SOURCE_PROJECT_ID:-unknown}
+      com.fullmag.source.worktree-id: ${FULLMAG_SOURCE_WORKTREE_ID:-unknown}
+      com.fullmag.compose.project: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
+    image: ${FULLMAG_RUNTIME_IMAGE_ID:-fullmag/fullmag-dev:local}
+    pull_policy: never
+    user: "0:0"
+    read_only: true
+    privileged: false
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    restart: "no"
+    entrypoint: ["/usr/local/bin/python3", "/opt/fullmag/backend_volume_cache_maintenance.py"]
+    command: ["ensure"]
+    environment:
+      FULLMAG_BACKEND_CACHE_SCHEMA: ${FULLMAG_BACKEND_CACHE_SCHEMA:-}
+      FULLMAG_BACKEND_CACHE_PROFILE: ${FULLMAG_BACKEND_CACHE_PROFILE:-}
+      FULLMAG_BACKEND_CACHE_PROJECT_ID: ${FULLMAG_BACKEND_CACHE_PROJECT_ID:-}
+      FULLMAG_BACKEND_CACHE_KEY: ${FULLMAG_BACKEND_CACHE_KEY:-}
+      FULLMAG_BACKEND_CACHE_UNIT_KEY: ${FULLMAG_BACKEND_CACHE_UNIT_KEY:-}
+      FULLMAG_BACKEND_CACHE_OWNER_ID: ${FULLMAG_BACKEND_CACHE_OWNER_ID:-}
+      FULLMAG_BACKEND_CACHE_WORKTREE_ID: ${FULLMAG_BACKEND_CACHE_WORKTREE_ID:-}
+      FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID: ${FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID:-}
+      FULLMAG_BACKEND_RUNTIME_IMAGE_ID: ${FULLMAG_BACKEND_RUNTIME_IMAGE_ID:-}
+      FULLMAG_BACKEND_CARGO_PROFILE: ${FULLMAG_BACKEND_CARGO_PROFILE:-}
+      FULLMAG_BACKEND_CACHE_BUILD_VOLUME: ${FULLMAG_BACKEND_CACHE_BUILD_VOLUME:-}
+      FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME: ${FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME:-}
+      FULLMAG_BUILD_CONTROL_VOLUME: ${FULLMAG_BUILD_CONTROL_VOLUME:-}
+      FULLMAG_BACKEND_CACHE_CONTROL_VOLUME: ${FULLMAG_BACKEND_CACHE_CONTROL_VOLUME:-}
+      FULLMAG_BACKEND_PACKAGE: ${FULLMAG_BACKEND_PACKAGE:-/opt/fullmag/package}
+      FULLMAG_BACKEND_CACHE_BUILD_ROOT: ${FULLMAG_BACKEND_CACHE_BUILD_ROOT:-/build}
+      FULLMAG_BACKEND_CACHE_PACKAGE_ROOT: ${FULLMAG_BACKEND_CACHE_PACKAGE_ROOT:-/opt/fullmag/package}
+      FULLMAG_BACKEND_CACHE_CONTROL_ROOT: ${FULLMAG_BACKEND_CACHE_CONTROL_ROOT:-/opt/fullmag/control}
+      FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE: ${FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE:-/opt/fullmag/control/backend}
+      FULLMAG_BACKEND_CACHE_RECEIPT: ${FULLMAG_BACKEND_CACHE_RECEIPT:-/opt/fullmag/control/backend/backend-volume-cache-receipt.json}
+      FULLMAG_BACKEND_CACHE_MAINTENANCE_PROFILE: ${FULLMAG_BACKEND_CACHE_MAINTENANCE_PROFILE:-}
+      FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION: ${FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION:-}
+      FULLMAG_BACKEND_CACHE_OWNER_UID: ${FULLMAG_BACKEND_CACHE_OWNER_UID:-65532}
+      FULLMAG_BACKEND_CACHE_OWNER_GID: ${FULLMAG_BACKEND_CACHE_OWNER_GID:-65532}
+    volumes:
+      - type: volume
+        source: backend-cache-build
+        target: /build
+        volume: {nocopy: true}
+      - type: volume
+        source: backend-cache-package
+        target: /opt/fullmag/package
+        volume: {nocopy: true}
+      - type: volume
+        source: fullmag-build-control
+        target: /opt/fullmag/control
+        volume: {nocopy: true}
+
   backend:
     labels: *fullmag-source-labels
     image: ${FULLMAG_DEV_IMAGE:?Prepare the development toolchain image}
@@ -20,11 +92,15 @@ services:
       dockerfile: Dockerfile.backend
       args:
         DEV_BASE: ${FULLMAG_DEVELOPMENT_BASE_IMAGE:-fullmag/development-base:local}
+        FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA: ${FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA:-pending}
+        FULLMAG_DIRECT_DEVELOPMENT_BASE_CONTEXT_SHA256: ${FULLMAG_DIRECT_DEVELOPMENT_BASE_CONTEXT_SHA256:-pending}
+        FULLMAG_DIRECT_DEVELOPMENT_BACKEND_CONTEXT_SHA256: ${FULLMAG_DIRECT_DEVELOPMENT_BACKEND_CONTEXT_SHA256:-pending}
+        FULLMAG_DIRECT_DEVELOPMENT_RUNTIME_CONTEXT_SHA256: ${FULLMAG_DIRECT_DEVELOPMENT_RUNTIME_CONTEXT_SHA256:-pending}
+        FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA: ${FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA:-pending}
     pull_policy: never
     init: true
     user: "65532:65532"
     read_only: true
-    gpus: all
     cpus: 4
     mem_limit: 8g
     pids_limit: 512
@@ -57,12 +133,15 @@ services:
       FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_DEV_IMAGE}
       FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the toolchain identity}
       FULLMAG_BACKEND_CARGO_PROFILE: ${FULLMAG_BACKEND_CARGO_PROFILE:-backend-dev}
+      FULLMAG_DOCKER_DEVICE_ACCESS: ${FULLMAG_DOCKER_DEVICE_ACCESS:?Resolved device access is required}
       FULLMAG_REPO_ROOT: /opt/fullmag/source
       FULLMAG_RUNTIME_PACKAGE_ROOT: /opt/fullmag/package
-      FULLMAG_PACKAGE_PROVENANCE: /opt/fullmag/provenance.json
+      FULLMAG_PACKAGE_PROVENANCE: /opt/fullmag/control/backend/runtime-provenance.json
+      FULLMAG_RUNTIME_PROVENANCE: /opt/fullmag/control/backend/runtime-provenance.json
       PYTHONPATH: /build/workspace/packages/fullmag-py/src:/opt/fullmag/package
       # Durable workspace metadata is isolated per Compose source group.
       FULLMAG_WORKSPACE_STATE_DIR: /user-data
+      CUDA_CACHE_PATH: /build/cache/cuda-compute
     expose: ["8081"]
     volumes:
       # One source selection for both services: the main checkout or a worktree.
@@ -78,10 +157,8 @@ services:
         target: /opt/fullmag/source-git
         read_only: true
         bind: {create_host_path: false}
-      # The v2 cache pair is already a Docker-VM named volume in the base
-      # contract.  docker_dev layers the exact identity-named declarations
-      # before startup; the bootstrap names below are only for image/config
-      # inspection and are never a host path or an implicit migration target.
+      # The v2 cache volumes are external Docker named volumes. The managed
+      # launcher resolves their exact names and validates their labels/mounts.
       - type: volume
         source: backend-cache-build
         target: /build
@@ -90,14 +167,10 @@ services:
         source: backend-cache-package
         target: /opt/fullmag/package
         volume: {nocopy: true}
-      - type: bind
-        source: ${FULLMAG_PACKAGE_PROVENANCE:?Backend build provenance is required}
-        target: /opt/fullmag/provenance.json
-        # This is the small run-owned handoff record.  The backend writer
-        # updates it in place while API admission is still closed; the parent
-        # /opt/fullmag tree remains read-only and no directory is overmounted.
-        read_only: false
-        bind: {create_host_path: false}
+      - type: volume
+        source: fullmag-build-control
+        target: /opt/fullmag/control
+        volume: {nocopy: true}
       # Per-group durable user data: workspace.db and related settings only.
       # Runtime sessions/results remain in the per-run /state bind below.
       - type: bind
@@ -149,6 +222,12 @@ services:
       FULLMAG_DOCKER_FRONTEND: dev
       FULLMAG_API_PROXY_TARGET: http://backend:8081
       FULLMAG_WATCHPACK_POLLING_MS: ${FULLMAG_WATCHPACK_POLLING_MS:-5000}
+      FULLMAG_SOURCE_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
+      FULLMAG_SOURCE_WORKTREE_ID: ${FULLMAG_SOURCE_WORKTREE_ID:?Select a registered source worktree}
+      FULLMAG_SOURCE_COMMIT: ${FULLMAG_SOURCE_COMMIT:?Resolve the selected checkout commit}
+      FULLMAG_FRONTEND_HOST_PORT: ${FULLMAG_HTTP_PORT:-3197}
+      FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT: /opt/fullmag/source
+      FULLMAG_DEVELOPMENT_INPUTS_PATH: ${FULLMAG_DEVELOPMENT_INPUTS_PATH:?Resolve the frontend control-volume manifest path}
       HOME: /state/development
       NVIDIA_VISIBLE_DEVICES: void
     ports: ["127.0.0.1:${FULLMAG_HTTP_PORT:-3197}:8080"]
@@ -158,19 +237,9 @@ services:
         target: /opt/fullmag/source
         read_only: true
         bind: {create_host_path: false}
-      # Linux dependencies, Next output and HMR logs stay out of the checkout.
-      # The frontend-cache-v1 overlay replaces only the four Linux cache/dependency
-      # children below; the Windows state bind remains the owner of sessions, logs
-      # and receipts.
-      - type: bind
-        source: ${FULLMAG_STATE_ROOT}/development
-        target: /state/development
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${FULLMAG_DEVELOPMENT_INPUTS:?Prepare the frontend input manifest}
-        target: /run/fullmag/development-inputs.json
-        read_only: true
-        bind: {create_host_path: false}
+      # Generated dependencies, Next output, HMR logs, and receipts are mounted
+      # from the group's Docker named volumes in compose.frontend-cache.yaml.
+      # Only source directories are bind-mounted below, read-only, for HMR.
       - type: bind
         source: ${FULLMAG_SOURCE_ROOT}/apps/control-room/app
         target: /state/development/workspace/apps/control-room/app
@@ -214,4 +283,7 @@ volumes:
     external: true
   backend-cache-package:
     name: ${FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME:-fullmag-backend-bootstrap-package}
+    external: true
+  fullmag-build-control:
+    name: ${FULLMAG_BUILD_CONTROL_VOLUME:?Resolve the Compose-group control volume}
     external: true

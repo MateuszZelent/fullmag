@@ -62,7 +62,19 @@ INPUTS_SCHEMA = "fullmag.docker-development-inputs.v1"
 FREEZE_SCHEMA = "fullmag.docker-development-inputs-freeze.v1"
 RECEIPT_SCHEMA = "fullmag.docker-frontend-development-receipt.v1"
 
-INPUTS_PATH = Path("/run/fullmag/development-inputs.json")
+# The manifest is control-plane metadata shared by the two application
+# services.  It lives in the frontend namespace of the per-group named control
+# volume; dependency trees, Next output, logs and receipts remain below the
+# frontend state volume.
+FRONTEND_CONTROL_ROOT = Path(
+    os.environ.get("FULLMAG_FRONTEND_CONTROL_ROOT", "/opt/fullmag/control/frontend")
+)
+INPUTS_PATH = Path(
+    os.environ.get(
+        "FULLMAG_DEVELOPMENT_INPUTS_PATH",
+        str(FRONTEND_CONTROL_ROOT / "development-inputs.json"),
+    )
+)
 DEVELOPMENT_ROOT = Path("/state/development")
 WORKSPACE_ROOT = DEVELOPMENT_ROOT / "workspace"
 FRONTEND_ROOT = DEVELOPMENT_ROOT / "cache"
@@ -387,13 +399,63 @@ def _canonical_live_directory(value: Any, name: str) -> str:
     return normalized
 
 
+def _ensure_inputs_manifest() -> None:
+    """Create the guest manifest once, inside named volumes, when absent.
+
+    The source bind is readonly and may expose a Windows checkout.  The
+    container therefore receives the diagnostic Windows root, worktree ID and
+    commit through environment variables prepared by the Compose launcher;
+    ``seed_guest`` performs the bounded copy into the frontend state volume.
+    Existing manifests are never rewritten during a restart.
+    """
+
+    if INPUTS_PATH.exists():
+        return
+    source = Path(
+        os.environ.get("FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT", "/opt/fullmag/source")
+    )
+    host_source_root = os.environ.get("FULLMAG_SOURCE_ROOT")
+    worktree_id = os.environ.get("FULLMAG_SOURCE_WORKTREE_ID")
+    source_commit = os.environ.get("FULLMAG_SOURCE_COMMIT")
+    host_port = os.environ.get("FULLMAG_FRONTEND_HOST_PORT") or os.environ.get(
+        "FULLMAG_FRONTEND_CACHE_HOST_PORT"
+    )
+    if not host_source_root or not worktree_id or not source_commit or not host_port:
+        _fail(
+            "frontend input manifest is missing and the Compose source identity is incomplete; "
+            "set FULLMAG_SOURCE_ROOT, FULLMAG_SOURCE_WORKTREE_ID, FULLMAG_SOURCE_COMMIT "
+            "and FULLMAG_FRONTEND_HOST_PORT"
+        )
+    try:
+        source_scripts = source / "scripts"
+        if source_scripts.is_dir() and str(source_scripts) not in sys.path:
+            # The dev image intentionally contains only the runtime scripts;
+            # use the selected readonly checkout for this one bounded seeder.
+            sys.path.insert(0, str(source_scripts))
+        import docker_development_inputs
+
+        docker_development_inputs.seed_guest(
+            source,
+            DEVELOPMENT_ROOT,
+            int(host_port),
+            host_source_root=host_source_root,
+            worktree_id=worktree_id,
+            source_commit=source_commit,
+            manifest_path=INPUTS_PATH,
+        )
+    except Exception as error:
+        if isinstance(error, FrontendDevError):
+            raise
+        _fail(f"cannot seed frontend named-volume inputs: {error}")
+
+
 def read_inputs(path: Path | None = None) -> DevelopmentInputs:
-    """Read and validate the bounded, fixed-layout host input manifest."""
+    """Read and validate the bounded manifest from the named control volume."""
 
     if path is None:
         path = INPUTS_PATH
     if path != INPUTS_PATH:
-        _fail("development input manifest path is fixed to /run/fullmag/development-inputs.json")
+        _fail("development input manifest path is fixed to the named control volume")
     manifest = _read_json(path, "Docker development input manifest")
     unexpected_keys = set(manifest) - REQUIRED_MANIFEST_KEYS - OPTIONAL_MANIFEST_KEYS
     if not REQUIRED_MANIFEST_KEYS <= set(manifest) or unexpected_keys:
@@ -1891,6 +1953,7 @@ def start(stopping_event: Any) -> FrontendHandle:
         _fail("frontend development requires a stopping event")
     if stopping_event.is_set():
         _fail("frontend development cannot start after shutdown was requested")
+    _ensure_inputs_manifest()
     inputs = read_inputs()
     previous = _load_receipt()
     _reject_existing_owner(previous)

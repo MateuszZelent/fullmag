@@ -27,6 +27,10 @@ from local_runner.worker_entrypoint import verify_source
 from run_managed_browser import digest, host_path, read_json, validate_managed_build
 
 PROFILE = "docker-all-gpu"
+COMPOSE_RUNTIME_FILE = "compose.dev.yaml"
+BACKEND_PROVENANCE_PATH = "/opt/fullmag/control/backend/runtime-provenance.json"
+FRONTEND_INPUTS_PATH = "/opt/fullmag/control/frontend/development-inputs.json"
+DEVICE_ACCESS_CHOICES = frozenset({"cpu", "gpu"})
 # ``fullmag`` was the project name emitted by the pre-grouped Compose runner.
 # It remains admissible only when an explicitly named, fully validated run is
 # being recreated. Fresh starts must use the checkout-derived identity.
@@ -64,6 +68,12 @@ _SOURCE_IDENTITY_FIELDS = (
     "source_project_id", "source_worktree_id", "source_checkout_kind",
 )
 _SOURCE_LABEL_VALUE_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def _validate_device_access(value: object) -> str:
+    if value not in DEVICE_ACCESS_CHOICES:
+        raise ValueError("resolved device access must be cpu or gpu")
+    return str(value)
 _TOOLCHAIN_MANIFEST_PROBE = r'''
 import os
 import stat
@@ -149,7 +159,7 @@ def _read_backend_cache_document(path_value, digest_value, label, *, expected=No
 
 
 def _validate_backend_volume_cache(value, *, expected_package=None):
-    """Validate the v2 named-volume descriptor before Compose or attestation."""
+    """Validate the v2 named-volume descriptor without host-side cache files."""
 
     kind, adapter = _backend_cache_kind(value)
     if kind != "v2":
@@ -162,65 +172,36 @@ def _validate_backend_volume_cache(value, *, expected_package=None):
         raise ValueError("Backend volume cache package root is not the canonical daemon target")
     if expected_package is not None and expected_package != adapter.PACKAGE_TARGET:
         raise ValueError("Backend start package root differs from the v2 cache target")
+    if value.get("receipt_path") != adapter.RECEIPT_TARGET:
+        raise ValueError("Backend volume cache receipt is not in the group's control volume")
+    if value.get("receipt_storage") != "docker-named-volume" or value.get("host_receipt_path") is not None:
+        raise ValueError("Backend volume cache receipt must remain in Docker storage")
+    if value.get("compose_overlay") is not None or value.get("maintenance_compose_overlay") is not None:
+        raise ValueError("Backend volume cache must not materialize Compose overlays on the host")
     environment = value.get("environment")
     if (not isinstance(environment, dict)
-            or environment.get("FULLMAG_BACKEND_PACKAGE") != adapter.PACKAGE_TARGET):
-        raise ValueError("Backend volume cache package environment is not typed")
+            or environment != adapter._cache_environment(value)):
+        raise ValueError("Backend volume cache environment is not canonical")
     volume_names = value.get("volume_names")
     if (not isinstance(volume_names, dict)
-            or set(volume_names) != {adapter.BUILD_VOLUME_ROLE, adapter.PACKAGE_VOLUME_ROLE}
+            or set(volume_names) != set(adapter.VOLUME_ROLES)
             or any(not isinstance(name, str) or adapter._VOLUME_NAME.fullmatch(name) is None
                    for name in volume_names.values())):
         raise ValueError("Backend volume cache volume names are invalid")
     if value.get("mounts") != adapter.mount_specs(value):
-        raise ValueError("Backend volume cache mounts are not the canonical named-volume pair")
-    receipt_expected = value.get("receipt")
-    if not isinstance(receipt_expected, dict):
-        raise ValueError("Backend volume cache ready receipt is missing")
-    receipt = _read_backend_cache_document(
-        value.get("receipt_path"), value.get("receipt_sha256"), "ready receipt",
-        expected=receipt_expected, maximum=16 * 1024 * 1024,
-    )
-    if receipt.get("schema") != adapter.SCHEMA or receipt.get("profile") != adapter.PROFILE:
-        raise ValueError("Backend volume cache ready receipt schema differs")
-    if (receipt.get("volume_names") != volume_names
-            or receipt.get("build_root") != adapter.BUILD_TARGET
-            or receipt.get("package_root") != adapter.PACKAGE_TARGET
-            or receipt.get("mounts") != value["mounts"]):
-        raise ValueError("Backend volume cache ready receipt volume identity differs")
+        raise ValueError("Backend volume cache mounts are not the canonical named-volume set")
     try:
-        adapter._validate_volume_documents(value["volume_documents"], value)
+        canonical = adapter.validate(
+            value,
+            value.get("volume_documents"),
+            value.get("maintenance_receipt"),
+            receipt_path=value.get("receipt_path"),
+        )
     except (KeyError, TypeError, ValueError) as error:
-        raise ValueError(f"Backend volume cache volume receipt is invalid: {error}") from error
-    if environment != adapter._cache_environment(value):
-        raise ValueError("Backend volume cache environment is not canonical")
-    overlay_expected = value.get("overlay")
-    if not isinstance(overlay_expected, dict):
-        raise ValueError("Backend volume cache Compose overlay descriptor is missing")
-    overlay = _read_backend_cache_document(
-        value.get("compose_overlay"), value.get("compose_overlay_sha256"),
-        "Compose overlay", expected=overlay_expected,
-    )
-    maintenance_expected = value.get("maintenance_overlay")
-    if not isinstance(maintenance_expected, dict):
-        raise ValueError("Backend volume cache maintenance overlay descriptor is missing")
-    maintenance_path = value.get("maintenance_compose_overlay")
-    if maintenance_path is None:
-        # Keep the field name explicit for callers that materialize the path
-        # before the host wrapper adds its compatibility alias.
-        maintenance_path = value.get("maintenance_overlay_path")
-    maintenance_overlay = _read_backend_cache_document(
-        maintenance_path,
-        value.get("maintenance_compose_overlay_sha256", value.get("maintenance_overlay_sha256")),
-        "maintenance overlay", expected=maintenance_expected,
-    )
-    try:
-        if overlay != adapter.overlay(value) or maintenance_overlay != adapter.maintenance_overlay(value):
-            raise ValueError("cache overlay differs from the canonical adapter output")
-        adapter.validate_overlay(overlay, value)
-        adapter.validate_maintenance_overlay(maintenance_overlay, value)
-    except Exception as error:
-        raise ValueError(f"Backend volume cache overlay validation failed: {error}") from error
+        raise ValueError(f"Backend volume cache receipts are invalid: {error}") from error
+    for field in ("receipt", "overlay", "maintenance_overlay"):
+        if value.get(field) != canonical.get(field):
+            raise ValueError(f"Backend volume cache {field} differs from canonical named-volume data")
     return adapter
 
 
@@ -613,7 +594,8 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
                  inputs_path=None, package=None, provenance=None, toolchain_image=None,
                  project="fullmag-config-check", source_identity=None, workspace_state_root=None,
                  template=None, host_ledger=None, startup=None, frontend_cache=None,
-                 previous_config_sha256=None, recovery=None, backend_start=None):
+                 previous_config_sha256=None, recovery=None, backend_start=None,
+                 device_access="gpu", device_overlay=None):
     """Resolve the versioned Compose definition; do not generate service topology."""
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
         raise ValueError("A full immutable image ID is required")
@@ -621,6 +603,7 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
         raise ValueError("Port must be between 1024 and 65535")
     if host_certificate is None:
         raise ValueError("Windows host certificate is required")
+    device_access = _validate_device_access(device_access)
     if workspace_state_root is None:
         raise ValueError("Durable workspace user-data host root is required")
     workspace_state_root = Path(workspace_state_root)
@@ -664,19 +647,44 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
                 # certificate from admitting an old package on restart.
                 FULLMAG_BACKEND_BUILD_GATE="1",
                 FULLMAG_BACKEND_BUILD_RECEIPT="/opt/fullmag/package/backend-build-receipt.json",
-                FULLMAG_BACKEND_PROVENANCE="/opt/fullmag/provenance.json",
+                FULLMAG_BACKEND_PROVENANCE=BACKEND_PROVENANCE_PATH,
             )
             # A live start captures the mounted checkout inside backend_dev.
             # Keep this optional solely for older archived Compose metadata;
             # normal fresh starts must not bind a host-created manifest.
             if isinstance(source_manifest, str) and source_manifest:
                 environment["FULLMAG_BACKEND_SOURCE_MANIFEST"] = source_manifest
+            if isinstance(inputs, Mapping):
+                environment.update(
+                    FULLMAG_SOURCE_WORKTREE_ID=str(inputs["worktree_id"]),
+                    FULLMAG_SOURCE_COMMIT=str(inputs["source_commit"]),
+                    FULLMAG_FRONTEND_HOST_PORT=str(port),
+                    FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT="/opt/fullmag/source",
+                    FULLMAG_FRONTEND_CONTROL_ROOT="/opt/fullmag/control/frontend",
+                    FULLMAG_DEVELOPMENT_INPUTS_PATH=FRONTEND_INPUTS_PATH,
+                )
         else:
             environment.update(FULLMAG_SOURCE_ROOT=str(inputs["source_root"]),
                                FULLMAG_BACKEND_PACKAGE=str(package),
                                FULLMAG_PACKAGE_PROVENANCE=str(provenance),
-                               FULLMAG_DEVELOPMENT_INPUTS=str(inputs_path))
+                               FULLMAG_DEVELOPMENT_INPUTS=FRONTEND_INPUTS_PATH,
+                               FULLMAG_DEVELOPMENT_INPUTS_PATH=FRONTEND_INPUTS_PATH,
+                               FULLMAG_FRONTEND_CONTROL_ROOT="/opt/fullmag/control/frontend",
+                               FULLMAG_SOURCE_WORKTREE_ID=str(inputs["worktree_id"]),
+                               FULLMAG_SOURCE_COMMIT=str(inputs["source_commit"]),
+                               FULLMAG_FRONTEND_HOST_PORT=str(port),
+                               FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT="/opt/fullmag/source")
     definitions = ["-f", str(template)]
+    development_topology = inputs is not None or backend_start is not None
+    if development_topology:
+        environment["FULLMAG_DOCKER_DEVICE_ACCESS"] = device_access
+        if device_access == "gpu":
+            overlay = Path(device_overlay) if device_overlay is not None else None
+            if overlay is None and template.name == COMPOSE_RUNTIME_FILE:
+                overlay = repo / "compose.dev.gpu.yaml"
+            if overlay is None or overlay.is_symlink() or not overlay.is_file():
+                raise ValueError("GPU development Compose overlay is missing")
+            definitions.extend(["-f", str(overlay)])
     if host_ledger is not None:
         environment.update(host_ledger["environment"])
         definitions.extend(["-f", host_ledger["compose_overlay"]])
@@ -689,9 +697,9 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
             raise ValueError("Frontend cache Compose overlay is missing")
         if not isinstance(cache_environment, dict):
             raise ValueError("Frontend cache has no resolved Compose environment")
-        if not cache_environment.get("FULLMAG_FRONTEND_CACHE_FILESYSTEM_UUID"):
-            raise ValueError("Frontend cache has no attested ext4 UUID")
         environment.update(cache_environment)
+        environment["FULLMAG_DEVELOPMENT_INPUTS_PATH"] = FRONTEND_INPUTS_PATH
+        environment["FULLMAG_FRONTEND_CONTROL_ROOT"] = "/opt/fullmag/control/frontend"
         definitions.extend(["-f", overlay])
     if backend_start is not None:
         backend_cache = backend_start.get("backend_cache")
@@ -704,14 +712,19 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
             )
         cache_overlay = backend_cache.get("compose_overlay")
         cache_environment = backend_cache.get("environment")
-        if (not isinstance(cache_overlay, str) or not Path(cache_overlay).is_file()
-                or not isinstance(cache_environment, dict)):
-            raise ValueError("Backend start cache overlay or environment is missing")
+        if not isinstance(cache_environment, dict):
+            raise ValueError("Backend start cache environment is missing")
         if (cache_environment.get("FULLMAG_BACKEND_PACKAGE")
                 != backend_start.get("package_root")):
             raise ValueError("Backend start cache package environment differs from its descriptor")
         environment.update({str(key): str(value) for key, value in cache_environment.items()})
-        definitions.extend(["-f", cache_overlay])
+        if cache_kind == "v2":
+            if cache_overlay is not None:
+                raise ValueError("v2 backend cache must use the selected Compose group's static volume declarations")
+        else:
+            if not isinstance(cache_overlay, str) or not Path(cache_overlay).is_file():
+                raise ValueError("Legacy backend cache overlay is missing")
+            definitions.extend(["-f", cache_overlay])
     if startup is not None:
         overlay = startup.get("compose_overlay")
         if not isinstance(overlay, str) or not Path(overlay).is_file():
@@ -1523,22 +1536,27 @@ def _load_reuse_run(layout, run_receipt, *, project_name, frontend,
     if frontend == "dev":
         if not isinstance(source_root, str) or not Path(source_root).is_dir() or Path(source_root).is_symlink():
             raise ValueError("Reused development run has no valid live source checkout")
-        if not isinstance(host_inputs_value, str) or not isinstance(guest_inputs_value, str):
-            raise ValueError("Reused development run has no complete frontend input manifests")
-        frontend_inputs = storage.validate_path(host_inputs_value, root,
-                                                 "prior frontend input manifest")
-        guest_inputs = storage.validate_path(guest_inputs_value, root,
-                                             "prior guest frontend input manifest")
-        if (frontend_inputs.is_symlink() or not frontend_inputs.is_file()
-                or guest_inputs.is_symlink() or not guest_inputs.is_file()):
-            raise ValueError("Prior frontend input manifest is not a regular file")
-        for path, field in ((frontend_inputs, "frontend_host_inputs_sha256"),
-                            (guest_inputs, "frontend_inputs_sha256")):
-            expected = receipt.get(field)
-            if not isinstance(expected, str) or not _CONFIG_SHA256_RE.fullmatch(expected):
-                raise ValueError(f"Reused development run has no valid {field}")
-            if digest(path) != expected:
-                raise ValueError(f"Reused development run {field} changed")
+        if receipt.get("frontend_inputs_storage") == "docker-named-volume":
+            if guest_inputs_value != FRONTEND_INPUTS_PATH:
+                raise ValueError("Reused frontend manifest is outside the Compose-group control volume")
+            guest_inputs = FRONTEND_INPUTS_PATH
+        else:
+            if not isinstance(host_inputs_value, str) or not isinstance(guest_inputs_value, str):
+                raise ValueError("Reused development run has no complete frontend input manifests")
+            frontend_inputs = storage.validate_path(host_inputs_value, root,
+                                                     "prior frontend input manifest")
+            guest_inputs = storage.validate_path(guest_inputs_value, root,
+                                                 "prior guest frontend input manifest")
+            if (frontend_inputs.is_symlink() or not frontend_inputs.is_file()
+                    or guest_inputs.is_symlink() or not guest_inputs.is_file()):
+                raise ValueError("Prior frontend input manifest is not a regular file")
+            for path, field in ((frontend_inputs, "frontend_host_inputs_sha256"),
+                                (guest_inputs, "frontend_inputs_sha256")):
+                expected = receipt.get(field)
+                if not isinstance(expected, str) or not _CONFIG_SHA256_RE.fullmatch(expected):
+                    raise ValueError(f"Reused development run has no valid {field}")
+                if digest(path) != expected:
+                    raise ValueError(f"Reused development run {field} changed")
     _validate_reuse_containers(
         {"receipt": receipt, "state": state},
         project=project,
@@ -1749,10 +1767,11 @@ def _record_recreate_preflight_failure(reuse, *, phase, error):
         "owner_marker": str(reuse["owner_marker"]),
         "backend_container_id": reuse["receipt"].get("container_id"),
         "frontend_container_id": reuse["receipt"].get("frontend_container_id"),
-        "frontend_host_inputs": str(reuse["frontend_inputs"]),
-        "frontend_host_inputs_sha256": digest(reuse["frontend_inputs"]),
-        "frontend_inputs": str(reuse["guest_inputs"]),
-        "frontend_inputs_sha256": digest(reuse["guest_inputs"]),
+        "frontend_inputs_storage": reuse["receipt"].get("frontend_inputs_storage", "host-legacy"),
+        "frontend_host_inputs": str(reuse["frontend_inputs"]) if reuse.get("frontend_inputs") else None,
+        "frontend_host_inputs_sha256": digest(reuse["frontend_inputs"]) if reuse.get("frontend_inputs") else None,
+        "frontend_inputs": str(reuse["guest_inputs"]) if reuse.get("guest_inputs") else None,
+        "frontend_inputs_sha256": digest(reuse["guest_inputs"]) if reuse.get("guest_inputs") and Path(reuse["guest_inputs"]).is_file() else None,
         "previous_config_sha256": reuse.get("previous_config_sha256"),
     }
     attempt_path = history / "failed-attempt.json"
@@ -1768,18 +1787,13 @@ def _record_recreate_preflight_failure(reuse, *, phase, error):
 
 def _preflight_reuse_frontend_inputs(repo, reuse, source_root, port):
     """Validate the reusable frontend seed before replacing its run receipt."""
-    from docker_development_inputs import seed, select_checkout
+    from docker_development_inputs import describe, select_checkout
 
     try:
         selected_checkout = select_checkout(repo, source_root)
-        inputs = seed(
-            selected_checkout,
-            reuse["state"],
-            port,
-            reuse_from=reuse["frontend_inputs"],
-        )
+        inputs = describe(selected_checkout, port)
         if not isinstance(inputs, dict):
-            raise ValueError("Frontend reuse seed returned a malformed input manifest")
+            raise ValueError("Frontend reuse descriptor returned malformed inputs")
     except Exception as error:
         try:
             _record_recreate_preflight_failure(
@@ -1793,7 +1807,7 @@ def _preflight_reuse_frontend_inputs(repo, reuse, source_root, port):
                 f"{evidence_error}; original error: {error}"
             ) from evidence_error
         raise
-    return selected_checkout, inputs
+    return {"selected_checkout": selected_checkout, "inputs": inputs}
 
 
 def _publish_restart_sentinel(state, payload):
@@ -1894,7 +1908,14 @@ def _validate_backend_start_inputs(value, layout):
     if not isinstance(toolchain_manifest, str) or _CONFIG_SHA256_RE.fullmatch(toolchain_manifest) is None:
         raise ValueError("Backend start inputs have no pinned toolchain manifest")
     if value.get("cargo_profile") != "backend-dev" or value.get("build_profile") != "dev":
-        raise ValueError("Backend start inputs are not the supported GPU development profile")
+        raise ValueError("Backend start inputs are not the supported development profile")
+    device_access = value.get("device_access", "gpu")
+    _validate_device_access(device_access)
+    gpu_preflight = value.get("gpu_preflight")
+    if gpu_preflight is not None:
+        expected_preflight = "PASS" if device_access == "gpu" else "NOT_REQUIRED"
+        if gpu_preflight != expected_preflight:
+            raise ValueError("Backend start GPU preflight does not match device access")
     source_group = {
         "source_project_id": value.get("source_project_id"),
         "source_worktree_id": value.get("source_worktree_id"),
@@ -1905,13 +1926,21 @@ def _validate_backend_start_inputs(value, layout):
     if any(not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", item)
            for item in source_group.values()):
         raise ValueError("Backend start source group identity is invalid")
-    for field in (
-        "source_root", "git_common_dir", "provenance_path",
-        "helper_context", "backend_start_receipt",
-    ):
+    for field in ("source_root", "git_common_dir"):
         item = value.get(field)
         if not isinstance(item, str) or not Path(item).is_absolute():
             raise ValueError(f"Backend start inputs have no absolute {field}")
+    control_root = PurePosixPath("/opt/fullmag/control")
+    guest_paths = {}
+    for field in ("provenance_path", "helper_context", "backend_start_receipt"):
+        item = value.get(field)
+        if not isinstance(item, str):
+            raise ValueError(f"Backend start inputs have no container {field}")
+        guest_paths[field] = _daemon_mount_path(item, f"Backend start {field}")
+        if guest_paths[field] != control_root and control_root not in guest_paths[field].parents:
+            raise ValueError(f"Backend start {field} is outside the group's Docker control volume")
+    if value.get("provenance_path") != BACKEND_PROVENANCE_PATH:
+        raise ValueError("Backend provenance must remain in the group's Docker control volume")
     package_value = value.get("package_root")
     if not isinstance(package_value, str):
         raise ValueError("Backend start inputs have no package_root")
@@ -1947,13 +1976,6 @@ def _validate_backend_start_inputs(value, layout):
         not isinstance(source_manifest, str) or not Path(source_manifest).is_absolute()
     ):
         raise ValueError("Backend start source manifest path is invalid")
-    for field in ("provenance_path", "backend_start_receipt"):
-        path = Path(value[field])
-        if path.is_symlink() or not path.exists():
-            raise ValueError(f"Backend start {field} is missing or a reparse point")
-    provenance = Path(value["provenance_path"])
-    if provenance.is_symlink() or not provenance.is_file():
-        raise ValueError("Backend start provenance handoff is not a regular file")
     helpers = value.get("startup_helper_hashes")
     if (not isinstance(helpers, dict) or set(helpers) != {"docker_startup_script.py", "fullmag_storage.py"}
             or any(not isinstance(item, str) or _CONFIG_SHA256_RE.fullmatch(item) is None
@@ -2053,7 +2075,7 @@ def read(path):
 
 print(json.dumps({
     "receipt": read("/opt/fullmag/package/backend-build-receipt.json"),
-    "provenance": read("/opt/fullmag/provenance.json"),
+    "provenance": read("/opt/fullmag/control/backend/runtime-provenance.json"),
 }, separators=(",", ":")))
 '''
 
@@ -2268,6 +2290,8 @@ def _assembly_from_backend_start(inputs, receipt, provenance, *, container_id=No
         "toolchain_image_id": inputs["toolchain_image_id"],
         "development_base_image": inputs.get("development_base_image"),
         "development_base_image_id": inputs.get("development_base_image_id"),
+        "device_access": inputs.get("device_access", "gpu"),
+        "gpu_preflight": inputs.get("gpu_preflight"),
         "runtime_mode": "development_source_bind",
         "build_profile": inputs["build_profile"],
         "cargo_profile": provenance.get("cargo_profile"),
@@ -2333,7 +2357,7 @@ def _provisional_development_certificate(inputs, source_identity):
         "cargo_profile": "backend-dev",
         "toolchain_image_id": inputs["toolchain_image_id"],
         "package_root": "/opt/fullmag/package",
-        "provenance_path": "/opt/fullmag/provenance.json",
+        "provenance_path": BACKEND_PROVENANCE_PATH,
         "group_identity": project,
         "source_identity": {
             "commit": _PROVISIONAL_COMMIT,
@@ -2513,7 +2537,7 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
           startup_script=None, *, project_name=None, compose_template=None,
           run_receipt=None, previous_config_sha256=None,
           recovery_authorization=None, migrate_compose_project=False,
-          backend_start=None):
+          backend_start=None, device_access=None):
     if project_name is not None and not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project_name):
         raise ValueError("Invalid Compose project name")
     if (assembly_receipt is None) == (backend_start is None):
@@ -2610,6 +2634,13 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
     )
     if backend_start is not None:
         _validate_backend_start_source_group(backend_start, source_identity)
+    effective_device_access = _validate_device_access(
+        device_access if device_access is not None
+        else (backend_start.get("device_access", "gpu") if backend_start is not None else "gpu")
+    )
+    if (backend_start is not None and device_access is not None
+            and backend_start.get("device_access", "gpu") != effective_device_access):
+        raise ValueError("Backend start device access differs from the resolved launcher mode")
     if backend_start is None:
         assembly_receipt = storage.validate_path(assembly_receipt, Path(layout["build_storage_root"]))
         assembly = read_json(assembly_receipt)
@@ -2671,12 +2702,13 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         # archive it and publish a replacement ``starting`` receipt before
         # this validation: a failed seed must leave an explicit retryable
         # stopped run rather than an unreusable failed pointer.
-        selected_checkout, preflight_inputs = _preflight_reuse_frontend_inputs(
+        preflight_inputs = _preflight_reuse_frontend_inputs(
             repo,
             reuse,
             source_root,
             port,
         )
+        selected_checkout = preflight_inputs["selected_checkout"]
     if reuse is None:
         root = storage.validate_path(Path(layout["runs_root"]) / "docker-all" / uuid.uuid4().hex,
                                      Path(layout["build_storage_root"]))
@@ -2715,7 +2747,8 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                "assembly_receipt": str(assembly_receipt), "assembly_receipt_sha256": digest(assembly_receipt),
                "source_mode": source_provenance["source_mode"],
                "url": f"http://localhost:{port}/workspace", "qualification": "NOT VERIFIED",
-               "frontend_mode": frontend, "container_http_port": 8080 if frontend == "dev" else 8081}
+               "frontend_mode": frontend, "container_http_port": 8080 if frontend == "dev" else 8081,
+               "device_access": effective_device_access}
     for field in ("native_source_identity", "source_digest", "source_snapshot_sha256"):
         if field in assembly:
             receipt[field] = assembly[field]
@@ -2725,8 +2758,9 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         if "source_manifest" in assembly:
             receipt["source_manifest"] = assembly["source_manifest"]
     if backend_start is not None:
-        receipt["backend_start_inputs"] = backend_start["backend_start_receipt"]
-        receipt["backend_start_inputs_sha256"] = digest(Path(backend_start["backend_start_receipt"]).with_name("backend-start-inputs.json"))
+        receipt["backend_start_inputs"] = backend_start.get("backend_start_inputs")
+        receipt["backend_start_inputs_storage"] = "docker-named-volume"
+        receipt["backend_start_inputs_sha256"] = backend_start.get("backend_start_inputs_sha256")
         receipt["backend_build_state"] = "building"
     elif isinstance(assembly.get("source_archive"), dict):
         # Preserve the immutable legacy descriptor when one exists.  Live
@@ -2751,7 +2785,7 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
     frontend_cache = None
     startup = None
     recovery = None
-    inputs_path = metadata_root / "development-inputs.json"
+    inputs_path = FRONTEND_INPUTS_PATH
     if recovery_info is not None:
         recovery_overlay = metadata_root / "compose.recovery.json"
         _write_recovery_overlay(recovery_overlay, recovery_info["path"])
@@ -2775,29 +2809,17 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
     try:
         args = ["compose", "-f", str(spec), "--project-name", project]
         if frontend == "dev":
-            from docker_development_inputs import guest_manifest, seed, select_checkout
+            from docker_development_inputs import describe, select_checkout
             if reuse is not None:
-                inputs = preflight_inputs
+                selected_checkout = preflight_inputs["selected_checkout"]
+                inputs = preflight_inputs["inputs"]
             else:
                 selected_checkout = select_checkout(repo, source_root)
-                inputs = seed(
-                    selected_checkout,
-                    state,
-                    port,
-                    reuse_from=None,
-                )
-            if reuse is not None:
-                # frontend_dev freezes this manifest.  Reuse the original
-                # host and guest bytes instead of creating a new freeze root.
-                host_inputs_path = reuse["frontend_inputs"]
-                inputs_path = reuse["guest_inputs"]
-                receipt["frontend_inputs_reused"] = True
-            else:
-                host_inputs_path = metadata_root / "development-inputs-host.json"
-                storage.atomic_json(host_inputs_path, inputs)
-                storage.atomic_json(inputs_path, guest_manifest(inputs))
-            receipt["frontend_host_inputs"] = str(host_inputs_path)
-            receipt["frontend_host_inputs_sha256"] = digest(host_inputs_path)
+                inputs = describe(selected_checkout, port)
+            inputs_path = FRONTEND_INPUTS_PATH
+            receipt["frontend_inputs_storage"] = "docker-named-volume"
+            receipt["frontend_inputs"] = FRONTEND_INPUTS_PATH
+            receipt["frontend_inputs_reused"] = bool(reuse is not None)
             from local_runner.build_source import native_identity
             receipt["mounted_source_identity_at_start"] = native_identity(selected_checkout, "snapshot")
             receipt["source_selection"] = "live_windows_selected_checkout"
@@ -2809,8 +2831,6 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             receipt["frontend_observed_source_commit"] = storage.git(
                 selected_checkout, "rev-parse", "HEAD"
             )
-            receipt["frontend_inputs"] = str(inputs_path)
-            receipt["frontend_inputs_sha256"] = digest(inputs_path)
 
         if startup_script is not None:
             from docker_development_inputs import select_checkout
@@ -2881,6 +2901,20 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                 raise ValueError("Reused Compose source template differs from the requested version")
         else:
             shutil.copyfile(source_template, compose_source_path)
+        compose_device_overlay_path = None
+        if inputs is not None or backend_start is not None:
+            if effective_device_access == "gpu":
+                overlay_source = source_template.parent / "compose.dev.gpu.yaml"
+                if overlay_source.is_symlink() or not overlay_source.is_file():
+                    raise ValueError("GPU development Compose overlay is missing")
+                compose_device_overlay_path = metadata_root / "compose.gpu.source.yaml"
+                if (compose_device_overlay_path.exists()
+                        or compose_device_overlay_path.is_symlink()):
+                    if (compose_device_overlay_path.is_symlink()
+                            or compose_device_overlay_path.read_bytes() != overlay_source.read_bytes()):
+                        raise ValueError("Reused GPU Compose overlay differs from the requested version")
+                else:
+                    shutil.copyfile(overlay_source, compose_device_overlay_path)
 
         def configured_spec():
             package_provenance = (
@@ -2888,7 +2922,7 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                 if backend_start is not None else assembly_receipt
             )
             return compose_spec(image, state.resolve(), port, host_certificate.resolve(),
-                                repo=repo, inputs=inputs, inputs_path=inputs_path.resolve(),
+                                repo=repo, inputs=inputs, inputs_path=inputs_path,
                                 package=assembly.get("package_root"),
                                 provenance=package_provenance, project=project, source_identity=source_identity,
                                 workspace_state_root=workspace_state_root,
@@ -2896,7 +2930,9 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                                 host_ledger=host_ledger, startup=startup,
                                 frontend_cache=frontend_cache, recovery=recovery,
                                 previous_config_sha256=previous_config_sha256,
-                                backend_start=backend_start)
+                                backend_start=backend_start,
+                                device_access=effective_device_access,
+                                device_overlay=compose_device_overlay_path)
         if os.name != "nt":
             raise ValueError("This Windows-folder launcher requires native Windows host attestation")
         from windows_folder_host import attest, local_volume, publish_evidence, read_owned_regular
@@ -3099,7 +3135,7 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             receipt["frontend_container_id"] = frontend_container
             front = json.loads(docker("inspect", frontend_container))[0]
             validate_source_labels(front, source_identity)
-            attest_mounts(front, inputs, inputs_path)
+            attest_mounts(front, inputs, None)
             front_host = front["HostConfig"]
             if (front["Image"] != image or front_host.get("PortBindings") != bindings
                     or not front_host.get("ReadonlyRootfs") or front_host.get("Privileged")
@@ -3110,14 +3146,6 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                 raise ValueError("Development frontend cache was not prepared before startup")
             from docker_frontend_cache import validate_container as validate_frontend_cache
             receipt["frontend_cache_attestation"] = validate_frontend_cache(front, frontend_cache)
-            writable = [m for m in front["Mounts"] if m.get("RW") and m["Type"] == "bind"]
-            expected_writable_targets = {"/state/development", *frontend_cache["guest_targets"].values()}
-            actual_writable_targets = {mount["Destination"] for mount in writable}
-            if actual_writable_targets != expected_writable_targets:
-                raise ValueError("Frontend writable mounts must be the isolated state root and four cache binds")
-            state_mounts = [mount for mount in writable if mount["Destination"] == "/state/development"]
-            if (len(state_mounts) != 1 or host_path(state_mounts[0]["Source"]) != (state / "development").resolve()):
-                raise ValueError("Frontend writable state mount must be its isolated development directory")
             bindings = {}
         from docker_compose_attestation import service_network, network_owner
         network_name = source_identity["network_name"]
@@ -3143,11 +3171,9 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                 )
                 from docker_backend_volume_cache import validate_container as validate_backend_cache
                 receipt["backend_cache_attestation"] = validate_backend_cache(actual, backend_cache)
-                # The v2 adapter owns both named-volume destinations.  Only
-                # the provenance handoff remains in the generic bind check.
-                expected_readwrite = {
-                    "/opt/fullmag/provenance.json": Path(backend_start["provenance_path"]).resolve(),
-                }
+                # The v2 adapter attests build, package, and shared control named
+                # volumes. No build provenance file is writable through a host bind.
+                expected_readwrite = {}
             else:
                 expected_readwrite = {
                     # v1 keeps its daemon bind path contract.  Do not apply
@@ -3241,9 +3267,18 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             raise ValueError("Readonly Windows host attestation mount mismatch")
         if not host.get("ReadonlyRootfs") or host.get("Privileged") or actual["Config"].get("User") != "65532:65532":
             raise ValueError("Runtime isolation attestation mismatch")
-        if not any(d.get("Count") == -1 and ["gpu"] in d.get("Capabilities", []) for d in host.get("DeviceRequests", [])):
-            raise ValueError("Runtime NVIDIA GPU request is missing")
-        provenance = json.loads(docker("exec", container, "cat", "/opt/fullmag/provenance.json"))
+        device_requests = host.get("DeviceRequests") or []
+        if effective_device_access == "gpu":
+            if not any(d.get("Count") == -1 and ["gpu"] in d.get("Capabilities", [])
+                       for d in device_requests):
+                raise ValueError("Runtime NVIDIA GPU request is missing")
+        elif device_requests:
+            raise ValueError("CPU runtime must not request Docker GPU devices")
+        provenance_path = (
+            backend_start.get("provenance_path", BACKEND_PROVENANCE_PATH)
+            if backend_start is not None else "/opt/fullmag/provenance.json"
+        )
+        provenance = json.loads(docker("exec", container, "cat", provenance_path))
         if backend_start is not None:
             if any(provenance.get(key) != assembly.get(key) for key in (
                     "commit", "source_digest", "native_source_identity", "source_mode",
@@ -3288,13 +3323,15 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             # SHA fence instead of replaying a takeover.
             normal_configured = compose_spec(
                 image, state.resolve(), port, host_certificate.resolve(),
-                repo=repo, inputs=inputs, inputs_path=inputs_path.resolve(),
+                repo=repo, inputs=inputs, inputs_path=inputs_path,
                 package=assembly.get("package_root"), provenance=assembly_receipt,
                 project=project, source_identity=source_identity,
                 workspace_state_root=workspace_state_root, toolchain_image=assembly.get("base_image"),
                 template=compose_source_path, host_ledger=host_ledger,
                 startup=startup, frontend_cache=frontend_cache,
                 recovery=None, previous_config_sha256=previous_config_sha256,
+                device_access=effective_device_access,
+                device_overlay=compose_device_overlay_path,
             )
             normal_backend_environment = normal_configured.get("services", {}).get(
                 "backend", {}
@@ -3323,8 +3360,13 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
             receipt["startup_process_tree_receipt"] = str(_startup_process_receipt_path(state))
             receipt["startup_process_tree_receipt_sha256"] = receipt["process_tree_receipt_sha256"]
             receipt["startup_activation"] = process_tree_receipt["startup_activation"]
-        receipt.update(state="running", health="PASS", gpu_preflight="PASS",
-                       attestation="image, provenance, port, storage, GPU request, isolation")
+        receipt.update(
+            state="running", health="PASS",
+            gpu_preflight=("PASS" if effective_device_access == "gpu" else "NOT_REQUIRED"),
+            attestation=("image, provenance, port, storage, GPU request, isolation"
+                         if effective_device_access == "gpu"
+                         else "image, provenance, port, storage, CPU device isolation"),
+        )
     except Exception as error:
         receipt.update(state="failed_resources_retained", error=str(error))
         if isinstance(error, DockerOutcomeUnknown):

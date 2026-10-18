@@ -1,14 +1,14 @@
 # Canonical FEM/GPU dependency image. Application source and runtime packages
 # are intentionally absent from this build context's allow-list.
-name: fullmag-toolchain
+name: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
 
 services:
   fem-gpu-toolchain:
-    image: ${FULLMAG_TOOLCHAIN_IMAGE:-fullmag/fem-gpu-toolchain:cuda12.6.3}
+    image: ${FULLMAG_TOOLCHAIN_IMAGE:?FULLMAG_TOOLCHAIN_IMAGE must be set by the selected Compose-group launcher}
     pull_policy: never
     platform: linux/amd64
     build:
-      context: .
+      context: ${FULLMAG_TOOLCHAIN_CONTEXT:-.}
       dockerfile: docker/fem-gpu/Dockerfile
       target: fem-gpu-dev
       args:
@@ -22,3 +22,31 @@ services:
     gpus: all
     profiles: [toolchain]
     command: ["sleep", "infinity"]
+
+  # This is an ephemeral Compose helper for bootstrap receipts and bounded
+  # BuildKit logs. It is deliberately separate from the dependency image and
+  # is never an application backend or a backend-build service.
+  toolchain-control:
+    image: busybox:1.36.1
+    pull_policy: missing
+    profiles: [toolchain-control]
+    network_mode: none
+    restart: "no"
+    read_only: false
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      FULLMAG_CONTROL_ROOT: /opt/fullmag/control
+    volumes:
+      - type: volume
+        source: toolchain-control
+        target: /opt/fullmag/control
+        volume:
+          nocopy: true
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep infinity"]
+
+volumes:
+  toolchain-control:
+    name: ${FULLMAG_BUILD_CONTROL_VOLUME:?FULLMAG_BUILD_CONTROL_VOLUME must be set}
+    external: true

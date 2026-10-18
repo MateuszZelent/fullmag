@@ -899,10 +899,8 @@ impl HostRuntimeAdmission {
     ) -> Result<Self> {
         if let Some(expected) = binding.runtime_generation_sha256.as_deref() {
             crate::retry_store_writer_busy(|| ledger.validate_runtime_generation(expected))?;
-        } else if binding.policy.schema_version
-            == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
-        {
-            bail!("v2 host runtime service has no pinned runtime_generation_sha256");
+        } else if binding.policy.requires_runtime_readiness() {
+            bail!("runtime-readiness host runtime service has no pinned runtime_generation_sha256");
         }
         Ok(Self {
             ledger: Arc::new(ledger),

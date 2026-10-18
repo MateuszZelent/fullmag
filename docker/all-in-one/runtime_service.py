@@ -33,6 +33,12 @@ WINDOWS_STORAGE_PROFILE = "windows-folder-v1"
 STORAGE_SCHEMA = "fullmag_storage_v1"
 RUNTIME_CONFIG_SCHEMA = "runtime_service_config.v1"
 HOST_PROFILE_SCHEMA = "fullmag.docker-host-profile.v1"
+CPU_HOST_PROFILE_SCHEMA = "fullmag.docker-host-profile.v2"
+HOST_POLICY_GPU_SCHEMA = "host_resource_ledger_policy.v2"
+HOST_POLICY_CPU_SCHEMA = "host_resource_ledger_policy.v3"
+HOST_READINESS_GPU_SCHEMA = "host_runtime_readiness.v1"
+HOST_READINESS_CPU_SCHEMA = "host_runtime_readiness.v2"
+DEVICE_ACCESS_CHOICES = frozenset({"cpu", "gpu"})
 # This is a path inside the Linux container, even when the source-only
 # contract tests are imported by native Windows Python.  PurePosixPath keeps
 # the serialized CLI/profile value stable across host operating systems.
@@ -626,9 +632,16 @@ def build_configuration(
     }
 
 
-def _validate_host_profile(value: Mapping[str, Any], paths: RuntimePaths) -> dict[str, Any]:
+def _validate_host_profile(
+    value: Mapping[str, Any], paths: RuntimePaths, device_access: str = "gpu"
+) -> dict[str, Any]:
     """Check the fixed Docker boundary around the canonical Rust host factory."""
-    if value.get("schema_version") != HOST_PROFILE_SCHEMA:
+    if device_access not in DEVICE_ACCESS_CHOICES:
+        _fail("FULLMAG_DOCKER_DEVICE_ACCESS must be cpu or gpu")
+    expected_profile_schema = (
+        HOST_PROFILE_SCHEMA if device_access == "gpu" else CPU_HOST_PROFILE_SCHEMA
+    )
+    if value.get("schema_version") != expected_profile_schema:
         _fail("native Docker host profile has an unsupported schema")
     config = value.get("configuration")
     if not isinstance(config, dict) or config.get("schema_version") != "runtime_service_config.v2":
@@ -654,29 +667,86 @@ def _validate_host_profile(value: Mapping[str, Any], paths: RuntimePaths) -> dic
     if host.get("compute_max_concurrency") != 1 or host.get("preparation_max_concurrency") != 1:
         _fail("Docker host profile requires one compute and one preparation worker")
     policy = host.get("policy")
-    if not isinstance(policy, dict) or policy.get("schema_version") != "host_resource_ledger_policy.v2":
-        _fail("Docker GPU requires the native readiness/topology-bound host policy v2")
+    expected_policy_schema = (
+        HOST_POLICY_GPU_SCHEMA if device_access == "gpu" else HOST_POLICY_CPU_SCHEMA
+    )
+    if not isinstance(policy, dict) or policy.get("schema_version") != expected_policy_schema:
+        _fail(
+            "Docker host profile requires the native readiness/topology-bound host policy "
+            + expected_policy_schema
+        )
     compute = config.get("compute_resources")
     preparation = config.get("preparation_resources")
-    if (not isinstance(compute, list) or len(compute) != 2
+    expected_compute_kinds = {"cpu", "gpu"} if device_access == "gpu" else {"cpu"}
+    expected_compute_count = 2 if device_access == "gpu" else 1
+    if (not isinstance(compute, list) or len(compute) != expected_compute_count
             or not all(isinstance(offer, dict) for offer in compute)
-            or {offer.get("kind") for offer in compute} != {"cpu", "gpu"}
+            or {offer.get("kind") for offer in compute} != expected_compute_kinds
             or not isinstance(preparation, list) or len(preparation) != 1
             or not isinstance(preparation[0], dict)):
-        _fail("Docker host profile requires CPU, GPU and preparation offers")
+        _fail(
+            "Docker host profile requires "
+            + ("CPU, GPU and preparation offers" if device_access == "gpu"
+               else "one CPU and one preparation offer")
+        )
     placements = host.get("compute_placements")
     prep_placements = host.get("preparation_cpu_ids")
     uuids = policy.get("gpu_vram_bytes_by_uuid")
+    if device_access == "cpu" and uuids is None:
+        uuids = {}
     if (not isinstance(placements, dict) or not isinstance(prep_placements, dict)
-            or not isinstance(uuids, dict) or len(uuids) != 1):
+            or not isinstance(uuids, dict)):
         _fail("Docker host profile lacks exact physical resource placements")
-    gpu_uuid, vram = next(iter(uuids.items()))
-    if (not isinstance(gpu_uuid, str)
-            or not re.fullmatch(r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", gpu_uuid)
-            or type(vram) is not int or vram <= 0):
-        _fail("Docker host profile requires one full physical NVIDIA UUID and measured VRAM")
+    gpu_uuid = vram = None
+    if device_access == "gpu":
+        if len(uuids) != 1:
+            _fail("Docker host profile requires one physical GPU capacity")
+        gpu_uuid, vram = next(iter(uuids.items()))
+        if (not isinstance(gpu_uuid, str)
+                or not re.fullmatch(r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", gpu_uuid)
+                or type(vram) is not int or vram <= 0):
+            _fail("Docker host profile requires one full physical NVIDIA UUID and measured VRAM")
+    elif uuids:
+        _fail("Docker CPU host profile cannot contain GPU capacity")
+    if device_access == "cpu":
+        identity = value.get("host_identity")
+        readiness = value.get("readiness")
+        if not isinstance(identity, dict) or identity.get("gpu_uuids") != []:
+            _fail("Docker CPU host profile must attest an empty GPU identity")
+        if not isinstance(readiness, dict):
+            _fail("Docker CPU host profile has no native CPU readiness")
+        if (readiness.get("schema_version") != HOST_READINESS_CPU_SCHEMA
+                or readiness.get("status") != "ready"
+                or readiness.get("source_kind") != "native_fem_cpu_abi"
+                or readiness.get("capabilities") != ["fem.cpu"]
+                or readiness.get("gpu_runtime_compatibility") != {}
+                or readiness.get("gpu_visibility") != "unavailable"):
+            _fail("Docker CPU host profile has invalid native CPU readiness")
+        for field in ("source_snapshot_sha256", "runtime_identity_sha256",
+                      "inventory_sha256", "capabilities_sha256"):
+            if not isinstance(readiness.get(field), str) or not HEX64.fullmatch(readiness[field]):
+                _fail("Docker CPU host readiness has an invalid " + field)
+        if readiness["inventory_sha256"] != policy.get("topology_sha256"):
+            _fail("Docker CPU readiness topology differs from host policy")
+        if identity.get("inventory_sha256") != readiness["inventory_sha256"]:
+            _fail("Docker CPU host identity differs from readiness inventory")
+        if identity.get("capabilities_sha256") != readiness["capabilities_sha256"]:
+            _fail("Docker CPU host identity differs from readiness capabilities")
+        allowed_cpu_ids = policy.get("allowed_cpu_ids")
+        if (not isinstance(allowed_cpu_ids, list) or not allowed_cpu_ids
+                or any(type(cpu_id) is not int or cpu_id < 0 for cpu_id in allowed_cpu_ids)
+                or len(set(allowed_cpu_ids)) != len(allowed_cpu_ids)):
+            _fail("Docker CPU host policy has no explicit allowed CPU IDs")
+        if identity.get("allowed_cpu_ids") != allowed_cpu_ids:
+            _fail("Docker CPU host identity differs from the pinned CPU policy")
+    else:
+        allowed_cpu_ids = policy.get("allowed_cpu_ids")
+        if (not isinstance(value.get("readiness"), dict)
+                or value["readiness"].get("schema_version") != HOST_READINESS_GPU_SCHEMA):
+            _fail("Docker GPU host profile requires native GPU readiness v1")
     cpu_budgets, memory_budgets = [], []
-    for offer in [*compute, *preparation]:
+    for offer_index, offer in enumerate([*compute, *preparation]):
+        is_preparation = offer_index == len(compute)
         budget = offer.get("budget")
         if not isinstance(budget, dict) or any(
             type(budget.get(key)) is not int or budget[key] <= 0
@@ -693,18 +763,41 @@ def _validate_host_profile(value: Mapping[str, Any], paths: RuntimePaths) -> dic
                 _fail("Docker GPU offer differs from its physical device allocation")
         elif gpu_bytes != 0:
             _fail("Docker CPU/preparation offer cannot reserve GPU memory")
+        if device_access == "cpu":
+            placement = placements.get(offer.get("resource_id"))
+            if offer.get("kind") != "cpu" and not is_preparation:
+                _fail("Docker CPU host profile contains an unexpected compute kind")
+            if is_preparation:
+                cpu_ids = prep_placements.get(offer.get("resource_id"))
+            else:
+                cpu_ids = placement.get("cpu_ids") if isinstance(placement, dict) else None
+                if isinstance(placement, dict) and placement.get("gpu_uuid") is not None:
+                    _fail("Docker CPU offer cannot have a GPU placement")
+            if (not isinstance(cpu_ids, list) or not cpu_ids
+                    or any(type(cpu_id) is not int or cpu_id < 0 for cpu_id in cpu_ids)
+                    or any(cpu_id not in allowed_cpu_ids for cpu_id in cpu_ids)
+                    or len(set(cpu_ids)) != len(cpu_ids)):
+                _fail("Docker CPU offer has no pinned allowed CPU placement")
         cpu_budgets.append(budget["cpu_millis"])
         memory_budgets.append(budget["memory_bytes"])
     # Compute offers are mutually exclusive; preparation has its own slot.
-    if max(cpu_budgets[:2]) + cpu_budgets[2] > 4000:
+    if device_access == "gpu":
+        cpu_total = max(cpu_budgets[:2]) + cpu_budgets[2]
+        memory_total = max(memory_budgets[:2]) + memory_budgets[2]
+    else:
+        cpu_total = sum(cpu_budgets)
+        memory_total = sum(memory_budgets)
+    if cpu_total > 4000:
         _fail("Docker host offers exceed the backend CPU quota")
-    if max(memory_budgets[:2]) + memory_budgets[2] > 7 * GIB:
+    if memory_total > 7 * GIB:
         _fail("Docker host offers exceed memory minus API headroom")
     return config
 
 
-def initialize_host_configuration(paths: RuntimePaths) -> dict[str, Any]:
+def initialize_host_configuration(paths: RuntimePaths, device_access: str = "gpu") -> dict[str, Any]:
     """Discover native devices and initialize the exact shared Rust ledger."""
+    if device_access not in DEVICE_ACCESS_CHOICES:
+        _fail("FULLMAG_DOCKER_DEVICE_ACCESS must be cpu or gpu")
     daemon_host_id = _validated_docker_host_id()
     logical_host_id = _initializer_host_id(daemon_host_id)
     executable = paths.package / "bin" / "fullmag-runtime-service"
@@ -714,7 +807,8 @@ def initialize_host_configuration(paths: RuntimePaths) -> dict[str, Any]:
     try:
         result = subprocess.run(
             [str(executable), "--initialize-docker-host", "--ledger-root", str(HOST_LEDGER_ROOT),
-             "--store-root", str(paths.store), "--host-id", logical_host_id],
+             "--store-root", str(paths.store), "--device-access", device_access,
+             "--host-id", logical_host_id],
             cwd=str(paths.state), env=process_environment(paths, service=True),
             stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
         )
@@ -733,7 +827,7 @@ def initialize_host_configuration(paths: RuntimePaths) -> dict[str, Any]:
         raise RuntimeServiceError("native Docker host profile is invalid JSON") from error
     if not isinstance(value, dict):
         _fail("native Docker host profile must contain an object")
-    return _validate_host_profile(value, paths)
+    return _validate_host_profile(value, paths, device_access)
 
 
 def _retain_previous_configuration(path: Path, raw: bytes) -> None:
@@ -802,15 +896,18 @@ def _rotate_configuration_generation(
 
 def ensure_configuration(paths: RuntimePaths | None = None) -> dict[str, Any]:
     paths = paths or canonical_paths()
-    host_mode = os.environ.get("FULLMAG_DOCKER_HOST_EXECUTION", "0")
-    if host_mode not in {"0", "1"}:
-        _fail("FULLMAG_DOCKER_HOST_EXECUTION must be 0 or 1")
+    host_mode = os.environ.get("FULLMAG_DOCKER_HOST_EXECUTION", "1")
+    if host_mode != "1":
+        _fail("Docker runtime requires native host execution; legacy local profile is disabled")
+    device_access = os.environ.get("FULLMAG_DOCKER_DEVICE_ACCESS", "gpu")
+    if device_access not in DEVICE_ACCESS_CHOICES:
+        _fail("FULLMAG_DOCKER_DEVICE_ACCESS must be cpu or gpu")
     previous_sha256 = os.environ.get("FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256")
     if previous_sha256 is not None and (
         host_mode != "1" or not HEX64.fullmatch(previous_sha256)
     ):
         _fail("FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256 requires native host mode and a lowercase SHA-256")
-    expected = initialize_host_configuration(paths) if host_mode == "1" else build_configuration(paths)
+    expected = initialize_host_configuration(paths, device_access)
     try:
         current = _read_json(paths.config, "runtime service configuration")
     except FileNotFoundError:
@@ -820,8 +917,6 @@ def ensure_configuration(paths: RuntimePaths | None = None) -> dict[str, Any]:
         return expected
     if current != expected:
         if previous_sha256 is None:
-            if host_mode != "1":
-                _fail("stable runtime service configuration differs from the operator profile")
             # A normal Docker restart has no host-side config digest.  Derive
             # it from the exact current bytes only after the previous native
             # owner has published an authenticated, successful drain.  The

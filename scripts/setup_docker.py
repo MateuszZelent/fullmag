@@ -15,6 +15,7 @@ import tempfile
 import fullmag_storage as storage
 
 SCHEMA = "fullmag.docker-host-setup.v1"
+GPU_ACCESS_CHOICES = frozenset({"auto", "required", "disabled"})
 KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 
@@ -200,10 +201,17 @@ def probe(command: list[str], timeout: int = 15) -> dict:
     return {"state": "available", "value": result.stdout.strip()[:4096]}
 
 
-def host_checks() -> dict:
+def host_checks(gpu_access: str = "auto") -> dict:
+    if gpu_access not in GPU_ACCESS_CHOICES:
+        raise SetupError("gpu-access musi być auto, required albo disabled")
     is_wsl = os.name != "nt" and (bool(os.environ.get("WSL_DISTRO_NAME"))
         or "microsoft" in __import__("platform").release().lower())
     docker = ["docker"] + (["--context", "desktop-linux"] if os.name == "nt" else [])
+    nvidia = (
+        {"state": "not_required", "value": "disabled"}
+        if gpu_access == "disabled" else
+        probe(["nvidia-smi", "--query-gpu=name,uuid,driver_version", "--format=csv,noheader"])
+    )
     checks = {
         "platform": "windows" if os.name == "nt" else "wsl" if is_wsl else "linux",
         "python": {"state": "available", "version": __import__("platform").python_version()},
@@ -212,14 +220,18 @@ def host_checks() -> dict:
         "docker": probe([*docker, "version", "--format", "{{.Server.Version}}"]),
         "compose": probe([*docker, "compose", "version", "--short"]),
         "docker_os": probe([*docker, "info", "--format", "{{.OSType}}"]),
-        "nvidia": probe(["nvidia-smi", "--query-gpu=name,uuid,driver_version", "--format=csv,noheader"]),
+        "nvidia": nvidia,
         "gpu_container_execution": "NOT VERIFIED",
+        "gpu_access": gpu_access,
     }
     checks["application_launcher"] = "windows-folder-v1" if os.name == "nt" else "not_qualified_for_this_platform"
     return checks
 
 
-def plan(repo: Path, storage_root: str, source_root: str, port: int) -> dict:
+def plan(repo: Path, storage_root: str, source_root: str, port: int,
+         *, gpu_access: str = "auto") -> dict:
+    if gpu_access not in GPU_ACCESS_CHOICES:
+        raise SetupError("gpu-access musi być auto, required albo disabled")
     context = checkout_context(repo)
     root = validate_storage_root(storage_root, context)
     validate_windows_volume(root)
@@ -233,7 +245,10 @@ def plan(repo: Path, storage_root: str, source_root: str, port: int) -> dict:
     template = context["main"] / ".env.example"
     base = original if original is not None else bounded_file(template)
     # Never replace a nonempty operator credential, including on partial setups.
-    updates = {"FULLMAG_PROJECT_STORAGE_ROOT": root.as_posix()}
+    updates = {
+        "FULLMAG_PROJECT_STORAGE_ROOT": root.as_posix(),
+        "FULLMAG_GPU_ACCESS": gpu_access,
+    }
     existing = dotenv_values(base)
     defaults = {"POSTGRES_PASSWORD": lambda: secrets.token_urlsafe(24),
                 "MINIO_ROOT_USER": lambda: "fullmag",
@@ -287,7 +302,13 @@ def show_checks(checks: dict) -> None:
         print("\nKonfigurujesz powłokę Linux/WSL. Launcher dwóch usług wymaga obecnie "
               "natywnego Windows i checkoutu/storage NTFS/ReFS. Zapis ustawień nie "
               "kwalifikuje startu aplikacji z WSL; użyj PowerShell dla tej trasy.")
-    print("  Wykonanie GPU w kontenerze: NOT VERIFIED; widoczność nvidia-smi nie jest testem solvera.")
+    print(f"  Dostęp urządzenia: {checks['gpu_access']}")
+    if checks["gpu_access"] == "disabled":
+        print("  GPU host proof: pominięty jawnie; zostanie wybrany profil CPU.")
+    elif checks["gpu_access"] == "auto" and checks["nvidia"].get("state") != "available":
+        print("  GPU host proof: niedostępny; tryb auto wybierze profil CPU.")
+    else:
+        print("  Wykonanie GPU w kontenerze: NOT VERIFIED; widoczność nvidia-smi nie jest testem solvera.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -297,10 +318,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--storage-root", help="Jawny, bezwzględny storage tego hosta")
     parser.add_argument("--source-root", help="Zarejestrowany checkout źródeł; domyślnie główny")
     parser.add_argument("--port", type=int, default=3197)
+    parser.add_argument(
+        "--gpu-access", choices=sorted(GPU_ACCESS_CHOICES),
+        default=os.environ.get("FULLMAG_GPU_ACCESS", "auto"),
+        help="wybór dostępu urządzenia: auto, required albo disabled",
+    )
     args = parser.parse_args(argv)
     try:
         context = checkout_context(args.repo_root)
-        checks = host_checks()
+        checks = host_checks(args.gpu_access)
         show_checks(checks)
         compose = context["repo"] / "compose.dev.yaml"
         print("  compose.dev.yaml: " + ("obecny" if compose.is_file() else "brak w tym checkoutcie"))
@@ -317,7 +343,9 @@ def main(argv: list[str] | None = None) -> int:
             for key in ("POSTGRES_PASSWORD", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
                 if not configured.get(key):
                     raise SetupError(f"Brak {key}; uzupełnij konfigurację kreatorem")
-            required = ("git", "just", "docker", "compose", "nvidia")
+            required = ("git", "just", "docker", "compose")
+            if args.gpu_access == "required":
+                required += ("nvidia",)
             if any(checks[name].get("state") != "available" for name in required):
                 raise SetupError("Brak wymaganych narzędzi; sprawdź wyniki powyżej")
             if checks["docker_os"].get("value") != "linux" or not compose.is_file():
@@ -339,7 +367,8 @@ def main(argv: list[str] | None = None) -> int:
         source = args.source_root or str(context["main"])
         chosen_source = input(f"Checkout źródeł [{source}]: ").strip() or source
         chosen_port = validate_port(input(f"Port frontendu [{args.port}]: ").strip() or args.port)
-        prepared = plan(context["repo"], chosen_storage, chosen_source, chosen_port)
+        prepared = plan(context["repo"], chosen_storage, chosen_source, chosen_port,
+                        gpu_access=args.gpu_access)
         print("\nDo zapisania:")
         print(f"  .env: {prepared['env_path']}\n  storage: {prepared['storage_root']}")
         print(f"  źródła: {prepared['source_root']}\n  port: {prepared['port']}")

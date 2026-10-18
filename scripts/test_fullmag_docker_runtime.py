@@ -26,8 +26,9 @@ def _v2_cache_fixture(root):
     profile = {
         "schema": volume_cache.SCHEMA,
         "profile": volume_cache.PROFILE,
-        "state": "ready",
+        "state": "prepared",
         "project_id": "fullmag",
+        "control_project": "fullmag-worktree-test",
         "worktree_id": "worktree-test",
         "cache_key": "c" * 64,
         "unit_key": "d" * 64,
@@ -38,16 +39,19 @@ def _v2_cache_fixture(root):
         "volume_names": {
             volume_cache.BUILD_VOLUME_ROLE: "fullmag-cache-build-test",
             volume_cache.PACKAGE_VOLUME_ROLE: "fullmag-cache-package-test",
+            volume_cache.CONTROL_VOLUME_ROLE: "fullmag-build-control-worktree-test",
         },
         "build_root": volume_cache.BUILD_TARGET,
         "mount_root": volume_cache.BUILD_TARGET,
         "package_root": volume_cache.PACKAGE_TARGET,
+        "receipt_path": volume_cache.RECEIPT_TARGET,
+        "receipt_storage": "docker-named-volume",
+        "host_receipt_path": None,
     }
     profile["environment"] = volume_cache._cache_environment(profile)
     profile["mounts"] = volume_cache.mount_specs(profile)
-    documents = {}
-    for role in (volume_cache.BUILD_VOLUME_ROLE, volume_cache.PACKAGE_VOLUME_ROLE):
-        documents[role] = {
+    profile["volume_documents"] = {
+        role: {
             "Name": profile["volume_names"][role],
             "Driver": "local",
             "Options": {},
@@ -55,40 +59,20 @@ def _v2_cache_fixture(root):
             "Mountpoint": "/var/lib/docker/volumes/" + profile["volume_names"][role] + "/_data",
             "Labels": volume_cache.volume_labels(profile, role),
         }
-    profile["volume_documents"] = documents
-    profile["receipt"] = {
-        "schema": volume_cache.SCHEMA,
-        "profile": volume_cache.PROFILE,
-        "state": "ready",
-        "volume_names": dict(profile["volume_names"]),
-        "build_root": volume_cache.BUILD_TARGET,
-        "package_root": volume_cache.PACKAGE_TARGET,
-        "mounts": list(profile["mounts"]),
+        for role in volume_cache.VOLUME_ROLES
     }
-    receipt_path = root / "backend-volume-cache-receipt.json"
-    overlay_path = root / "compose.backend-cache-v2.json"
-    maintenance_path = root / "compose.backend-cache-v2-maintenance.json"
-    profile["receipt_path"] = str(receipt_path)
-    records = (
-        (receipt_path, profile["receipt"]),
-        (overlay_path, volume_cache.overlay(profile)),
-        (maintenance_path, volume_cache.maintenance_overlay(profile)),
+    profile["receipt_path"] = volume_cache.RECEIPT_TARGET
+    profile["receipt_storage"] = "docker-named-volume"
+    profile["host_receipt_path"] = None
+    ready = volume_cache.validate(
+        profile,
+        profile["volume_documents"],
+        _maintenance_receipt(profile),
+        receipt_path=volume_cache.RECEIPT_TARGET,
     )
-    for path, record in records:
-        raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        path.write_bytes(raw)
-        if path is receipt_path:
-            # The v2 producer binds the ready receipt to its path and the
-            # published descriptor; it does not add a second receipt digest.
-            profile["receipt"] = record
-        elif path is overlay_path:
-            profile["overlay"] = record
-            profile["compose_overlay"] = str(path)
-            profile["compose_overlay_sha256"] = hashlib.sha256(raw).hexdigest()
-        else:
-            profile["maintenance_overlay"] = record
-            profile["maintenance_compose_overlay"] = str(path)
-    return profile
+    ready["compose_overlay"] = None
+    ready["maintenance_compose_overlay"] = None
+    return ready
 
 
 class DockerRuntimeContract(unittest.TestCase):
@@ -102,29 +86,16 @@ class DockerRuntimeContract(unittest.TestCase):
                 profile["runtime_image_id"],
                 runroot,
                 docker,
-                lambda prepared, overlay: _maintenance_receipt(prepared),
+                lambda prepared, _overlay: _maintenance_receipt(prepared),
                 source_root=source,
                 toolchain_image=profile["toolchain_image_id"],
+                control_volume_name=profile["volume_names"][volume_cache.CONTROL_VOLUME_ROLE],
             )
-
-            for field, path_field, digest_field in (
-                ("overlay", "compose_overlay", "compose_overlay_sha256"),
-                ("maintenance_overlay", "maintenance_compose_overlay", None),
-            ):
-                filename = (
-                    "backend-cache-overlay.json"
-                    if field == "overlay"
-                    else "backend-cache-maintenance.json"
-                )
-                path = runroot / filename
-                raw = json.dumps(
-                    ready[field], sort_keys=True, separators=(",", ":")
-                ).encode("utf-8")
-                path.write_bytes(raw)
-                ready[path_field] = str(path)
-                if digest_field is not None:
-                    ready[digest_field] = hashlib.sha256(raw).hexdigest()
-
+            self.assertEqual(ready["receipt_path"], volume_cache.RECEIPT_TARGET)
+            self.assertEqual(ready["receipt_storage"], "docker-named-volume")
+            self.assertIsNone(ready["host_receipt_path"])
+            self.assertIsNone(ready.get("compose_overlay"))
+            self.assertIsNone(ready.get("maintenance_compose_overlay"))
             self.assertIs(
                 runtime._validate_backend_volume_cache(
                     ready, expected_package=volume_cache.PACKAGE_TARGET
@@ -169,9 +140,9 @@ class DockerRuntimeContract(unittest.TestCase):
                 "source_checkout_kind": "worktree",
                 "source_root": "/checkout",
                 "git_common_dir": "/git-common",
-                "provenance_path": str(provenance),
-                "helper_context": "/run/helper-context",
-                "backend_start_receipt": str(receipt),
+                "provenance_path": runtime.BACKEND_PROVENANCE_PATH,
+                "helper_context": "/opt/fullmag/control/docker-dev/backend-start/" + "e" * 32 + "-helpers.json",
+                "backend_start_receipt": "/opt/fullmag/control/docker-dev/backend-start/" + "e" * 32 + ".json",
                 "startup_helper_hashes": {
                     "docker_startup_script.py": "1" * 64,
                     "fullmag_storage.py": "2" * 64,
@@ -256,7 +227,7 @@ class DockerRuntimeContract(unittest.TestCase):
             self.assertEqual(delegation["cargo_profile"], "backend-dev")
             self.assertEqual(delegation["toolchain_image_id"], inputs["toolchain_image_id"])
             self.assertEqual(delegation["package_root"], "/opt/fullmag/package")
-            self.assertEqual(delegation["provenance_path"], "/opt/fullmag/provenance.json")
+            self.assertEqual(delegation["provenance_path"], runtime.BACKEND_PROVENANCE_PATH)
             self.assertEqual(delegation["group_identity"], "fullmag-worktree-test")
             self.assertEqual(
                 delegation["source_identity"],
@@ -1108,6 +1079,7 @@ class DockerRuntimeContract(unittest.TestCase):
             "compute_max_concurrency": 1,
             "preparation_max_concurrency": 1,
             "policy": {"schema_version": "host_resource_ledger_policy.v2",
+                       "allowed_cpu_ids": [0, 1, 2, 3],
                        "gpu_vram_bytes_by_uuid": {gpu_uuid: 4 * service.GIB}},
             "compute_placements": {
                 cpu["resource_id"]: {"cpu_ids": [0, 1, 2], "gpu_uuid": None},
@@ -1115,8 +1087,13 @@ class DockerRuntimeContract(unittest.TestCase):
             },
             "preparation_cpu_ids": {"docker-all.preparation.cpu": [3]},
         }
-        return {"schema_version": service.HOST_PROFILE_SCHEMA, "configuration": config,
-                "runtime_generation_sha256": "a" * 64}
+        return {
+            "schema_version": service.HOST_PROFILE_SCHEMA,
+            "configuration": config,
+            "host_identity": {"allowed_cpu_ids": [0, 1, 2, 3], "gpu_uuids": [gpu_uuid]},
+            "readiness": {"schema_version": service.HOST_READINESS_GPU_SCHEMA},
+            "runtime_generation_sha256": "a" * 64,
+        }
 
     def _write_authenticated_drain_fixture(self, service, paths, *, include_service_owner=True):
         import copy
@@ -2231,19 +2208,30 @@ class DockerRuntimeContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory).resolve() / "runtime.json"
             paths = replace(service.RuntimePaths(), config=config)
-            first = service.ensure_configuration(paths)
+            with patch.object(service, "initialize_host_configuration", return_value={"expected": "profile"}), \
+                    patch.dict(os.environ, {
+                "FULLMAG_HOST_LEDGER_PROFILE": service.HOST_LEDGER_PROFILE,
+                "FULLMAG_DOCKER_HOST_ID": "a" * 64,
+            }, clear=True):
+                first = service.ensure_configuration(paths)
             original = config.read_bytes()
             changed = {**first, "startup_timeout_seconds": 61}
             config.write_text(json.dumps(changed))
             retained = config.read_bytes()
-            with self.assertRaises(service.RuntimeServiceError):
+            with patch.dict(os.environ, {
+                "FULLMAG_HOST_LEDGER_PROFILE": service.HOST_LEDGER_PROFILE,
+                "FULLMAG_DOCKER_HOST_ID": "a" * 64,
+            }, clear=True), self.assertRaises(service.RuntimeServiceError):
                 service.ensure_configuration(paths)
             self.assertEqual(config.read_bytes(), retained)
             target = config.with_name("target.json")
             target.write_bytes(original)
             config.unlink()
             config.symlink_to(target)
-            with self.assertRaises((service.RuntimeServiceError, OSError)):
+            with patch.dict(os.environ, {
+                "FULLMAG_HOST_LEDGER_PROFILE": service.HOST_LEDGER_PROFILE,
+                "FULLMAG_DOCKER_HOST_ID": "a" * 64,
+            }, clear=True), self.assertRaises((service.RuntimeServiceError, OSError)):
                 service.ensure_configuration(paths)
             self.assertEqual(target.read_bytes(), original)
 

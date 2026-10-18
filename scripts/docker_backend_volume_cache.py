@@ -2,16 +2,18 @@
 
 This module is a host-side adapter contract.  It does not inspect or invent a
 Windows path for a Docker volume: the Docker Engine volume name and its
-attested inspect document are the storage identity.  The v2 cache is a pair
-of local named volumes (build and package) with one stable unit identity.
+attested inspect document are the storage identity.  The v2 cache is a set of
+local named volumes (build, package and a shared control volume) with one stable
+unit identity.
 
-``prepare`` only derives the plan and may create the exact pair when an
+``prepare`` only derives the plan and may create the exact set when an
 explicit Docker callback is supplied.  ``overlay`` describes only the runtime
 backend; ``maintenance_overlay`` separately describes the fixed maintenance
 service that initializes or reopens owner markers and performs the bounded
-readback probe.  ``validate`` admits the pair only after that receipt and
-writes the canonical run receipt.  No function removes a volume or performs a
-migration.
+readback probe.  ``validate`` admits the set only after that receipt and
+returns the canonical receipt in memory.  The receipt's ``receipt_path`` is a
+path inside the control volume; this adapter never writes build-control data to
+host storage.  No function removes a volume or performs a migration.
 """
 
 from __future__ import annotations
@@ -34,10 +36,15 @@ MAINTENANCE_SERVICE = "backend-cache-volume-maintenance"
 VOLUME_DRIVER = "local"
 BUILD_VOLUME_ROLE = "build"
 PACKAGE_VOLUME_ROLE = "package"
+CONTROL_VOLUME_ROLE = "control"
+VOLUME_ROLES = (BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE, CONTROL_VOLUME_ROLE)
 BUILD_TARGET = "/build"
 PACKAGE_TARGET = "/opt/fullmag/package"
+CONTROL_TARGET = "/opt/fullmag/control"
+CONTROL_BACKEND_TARGET = f"{CONTROL_TARGET}/backend"
 COMPOSE_BUILD_VOLUME = "backend-cache-build"
 COMPOSE_PACKAGE_VOLUME = "backend-cache-package"
+COMPOSE_CONTROL_VOLUME = "backend-cache-control"
 MAINTENANCE_ENTRYPOINT = (
     "/usr/local/bin/python3",
     "/opt/fullmag/backend_volume_cache_maintenance.py",
@@ -45,6 +52,13 @@ MAINTENANCE_ENTRYPOINT = (
 BACKEND_SERVICE = "backend"
 SUPPORTED_CARGO_PROFILES = frozenset({"backend-dev", "release"})
 RECEIPT_NAME = "backend-volume-cache-receipt.json"
+RECEIPT_TARGET = f"{CONTROL_BACKEND_TARGET}/{RECEIPT_NAME}"
+
+CONTROL_VOLUME_SCHEMA = "fullmag.docker-toolchain-control.v1"
+CONTROL_VOLUME_LABEL_SCHEMA = "com.fullmag.toolchain.control.schema"
+CONTROL_VOLUME_LABEL_PROJECT = "com.fullmag.toolchain.control.project"
+CONTROL_VOLUME_LABEL_MOUNT = "com.fullmag.toolchain.control.mount"
+CONTROL_VOLUME_MOUNT = CONTROL_TARGET
 
 LABEL_SCHEMA = "com.fullmag.backend-cache.schema"
 LABEL_PROFILE = "com.fullmag.backend-cache.profile"
@@ -139,16 +153,6 @@ def _source_root(value: str | os.PathLike[str]) -> str:
     return str(resolved)
 
 
-def _storage_root(layout: Mapping[str, Any]) -> Path:
-    value = layout.get("storage_root")
-    if not isinstance(value, str) and not isinstance(value, os.PathLike):
-        raise BackendVolumeCacheError("storage layout has no storage_root")
-    root = Path(value)
-    if not root.is_absolute() or root == Path(root.anchor) or root.is_symlink():
-        raise BackendVolumeCacheError("storage_root must be an absolute real non-root path")
-    return root
-
-
 def _safe_project_id(layout: Mapping[str, Any]) -> str:
     value = layout.get("project_id")
     if value is None:
@@ -159,30 +163,6 @@ def _safe_project_id(layout: Mapping[str, Any]) -> str:
             raise BackendVolumeCacheError("storage layout has no project identity")
         value = hashlib.sha256(str(Path(project_root).resolve()).encode()).hexdigest()[:16]
     return _require_identifier(str(value), "project_id")
-
-
-def _inside(path: Path, root: Path) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(root.resolve(strict=False))
-        return True
-    except ValueError:
-        return False
-
-
-def _receipt_path(layout: Mapping[str, Any], runroot: str | os.PathLike[str]) -> Path:
-    root = _storage_root(layout)
-    path = Path(runroot)
-    if (not path.is_absolute() or path.is_symlink() or not path.is_dir()
-            or not _inside(path, root)):
-        raise BackendVolumeCacheError(
-            "runroot must be an existing non-symlink directory inside canonical storage"
-        )
-    cursor = path
-    while cursor != cursor.parent:
-        if cursor.is_symlink():
-            raise BackendVolumeCacheError("runroot parent contains a symlink")
-        cursor = cursor.parent
-    return path / RECEIPT_NAME
 
 
 def _safe_daemon_path(value: Any, label: str) -> str:
@@ -230,19 +210,40 @@ def cache_key(
     }
 
 
-def _volume_names(project_id: str, unit_key: str) -> dict[str, str]:
+def _volume_names(
+    project_id: str, unit_key: str, control_volume_name: str
+) -> dict[str, str]:
     # Keep Docker names bounded.  Full identity remains in labels and receipts.
     name_id = hashlib.sha256(f"{project_id}:{unit_key}".encode()).hexdigest()[:24]
     base = f"fullmag-backend-v2-{name_id}"
+    if not isinstance(control_volume_name, str) or _VOLUME_NAME.fullmatch(control_volume_name) is None:
+        raise BackendVolumeCacheError("control_volume_name is not a safe Docker volume name")
     return {
         BUILD_VOLUME_ROLE: f"{base}-build",
         PACKAGE_VOLUME_ROLE: f"{base}-package",
+        CONTROL_VOLUME_ROLE: control_volume_name,
+    }
+
+
+def _control_volume_labels(profile: Mapping[str, Any]) -> dict[str, str]:
+    project = profile.get("control_project")
+    if not isinstance(project, str) or _IDENTIFIER.fullmatch(project) is None:
+        raise BackendVolumeCacheError(
+            "control_project is required to create or describe the shared control volume"
+        )
+    return {
+        "com.fullmag.compose.project": project,
+        CONTROL_VOLUME_LABEL_SCHEMA: CONTROL_VOLUME_SCHEMA,
+        CONTROL_VOLUME_LABEL_PROJECT: project,
+        CONTROL_VOLUME_LABEL_MOUNT: CONTROL_VOLUME_MOUNT,
     }
 
 
 def volume_labels(profile: Mapping[str, Any], role: str) -> dict[str, str]:
-    if role not in {BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE}:
+    if role not in set(VOLUME_ROLES):
         raise BackendVolumeCacheError(f"unknown volume role: {role}")
+    if role == CONTROL_VOLUME_ROLE:
+        return _control_volume_labels(profile)
     return {
         LABEL_SCHEMA: SCHEMA,
         LABEL_PROFILE: PROFILE,
@@ -278,6 +279,13 @@ def mount_specs(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
             "read_only": False,
             "volume": {"nocopy": True},
         },
+        {
+            "type": "volume",
+            "source": COMPOSE_CONTROL_VOLUME,
+            "target": CONTROL_TARGET,
+            "read_only": False,
+            "volume": {"nocopy": True},
+        },
     ]
 
 
@@ -298,9 +306,14 @@ def _cache_environment(profile: Mapping[str, Any]) -> dict[str, str]:
         "FULLMAG_BACKEND_CARGO_PROFILE": str(profile["cargo_profile"]),
         "FULLMAG_BACKEND_CACHE_BUILD_VOLUME": profile["volume_names"][BUILD_VOLUME_ROLE],
         "FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME": profile["volume_names"][PACKAGE_VOLUME_ROLE],
+        "FULLMAG_BUILD_CONTROL_VOLUME": profile["volume_names"][CONTROL_VOLUME_ROLE],
+        "FULLMAG_BACKEND_CACHE_CONTROL_VOLUME": profile["volume_names"][CONTROL_VOLUME_ROLE],
         "FULLMAG_BACKEND_PACKAGE": PACKAGE_TARGET,
         "FULLMAG_BACKEND_CACHE_BUILD_ROOT": BUILD_TARGET,
         "FULLMAG_BACKEND_CACHE_PACKAGE_ROOT": PACKAGE_TARGET,
+        "FULLMAG_BACKEND_CACHE_CONTROL_ROOT": CONTROL_TARGET,
+        "FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE": CONTROL_BACKEND_TARGET,
+        "FULLMAG_BACKEND_CACHE_RECEIPT": RECEIPT_TARGET,
     }
 
 
@@ -328,6 +341,10 @@ def _volume_declarations(profile: Mapping[str, Any]) -> dict[str, dict[str, Any]
         },
         COMPOSE_PACKAGE_VOLUME: {
             "name": profile["volume_names"][PACKAGE_VOLUME_ROLE],
+            "external": True,
+        },
+        COMPOSE_CONTROL_VOLUME: {
+            "name": profile["volume_names"][CONTROL_VOLUME_ROLE],
             "external": True,
         },
     }
@@ -369,6 +386,7 @@ def _plan(
     source_root: str | os.PathLike[str],
     toolchain_image: str,
     cargo_profile: str,
+    control_volume_name: str,
 ) -> dict[str, Any]:
     repo_path = Path(repo)
     if not repo_path.is_absolute() or repo_path.is_symlink() or not repo_path.is_dir():
@@ -377,7 +395,9 @@ def _plan(
     toolchain_image = _require_image_id(toolchain_image, "toolchain image")
     worktree_id = _require_identifier(str(layout.get("worktree_id", "")), "worktree_id")
     project_id = _safe_project_id(layout)
-    receipt = _receipt_path(layout, runroot)
+    control_project = layout.get("compose_project")
+    if control_project is not None:
+        control_project = _require_identifier(str(control_project), "compose_project")
     identity = cache_key(source_root, worktree_id, toolchain_image, cargo_profile)
     unit_key = _sha256({
         "schema": SCHEMA,
@@ -387,7 +407,7 @@ def _plan(
         "toolchain_image_id": toolchain_image,
         "cargo_profile": cargo_profile,
     })
-    volume_names = _volume_names(project_id, unit_key)
+    volume_names = _volume_names(project_id, unit_key, control_volume_name)
     owner_id = unit_key
     profile = {
         "schema": SCHEMA,
@@ -402,6 +422,7 @@ def _plan(
         "cargo_profile": cargo_profile,
         "runtime_image_id": image,
         "toolchain_image_id": toolchain_image,
+        "control_project": control_project,
         "volume_names": volume_names,
         "volume_roles": {
             BUILD_VOLUME_ROLE: {"target": BUILD_TARGET, "labels": _labels({
@@ -416,12 +437,25 @@ def _plan(
                 "toolchain_image_id": toolchain_image,
                 "cargo_profile": cargo_profile, "owner_id": owner_id,
             }, PACKAGE_VOLUME_ROLE)},
+            CONTROL_VOLUME_ROLE: {
+                "target": CONTROL_TARGET,
+                "labels": {
+                    "com.fullmag.compose.project": control_project,
+                    CONTROL_VOLUME_LABEL_SCHEMA: CONTROL_VOLUME_SCHEMA,
+                    CONTROL_VOLUME_LABEL_PROJECT: control_project,
+                    CONTROL_VOLUME_LABEL_MOUNT: CONTROL_VOLUME_MOUNT,
+                },
+            },
         },
         "mount_root": BUILD_TARGET,
         "build_root": BUILD_TARGET,
         "package_root": PACKAGE_TARGET,
-        "receipt_path": str(receipt),
-        "host_receipt_path": str(receipt),
+        # This is a guest path in the per-group control named volume. It is
+        # deliberately not derived from runroot: build-control records must
+        # never be materialized in the Windows project storage tree.
+        "receipt_path": RECEIPT_TARGET,
+        "receipt_storage": "docker-named-volume",
+        "host_receipt_path": None,
         "environment": {},
     }
     profile["environment"] = _cache_environment(profile)
@@ -440,6 +474,7 @@ def prepare(
     source_root: str | os.PathLike[str],
     toolchain_image: str,
     cargo_profile: str = "backend-dev",
+    control_volume_name: str | None = None,
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
 ) -> dict[str, Any]:
@@ -451,9 +486,12 @@ def prepare(
     ever attempted.
     """
 
+    if control_volume_name is None:
+        raise BackendVolumeCacheError("prepare requires the shared control_volume_name")
     profile = _plan(
         layout, repo, image, runroot, source_root=source_root,
         toolchain_image=toolchain_image, cargo_profile=cargo_profile,
+        control_volume_name=control_volume_name,
     )
     if docker is not None:
         profile["volume_documents"] = ensure_volume_pair(
@@ -473,6 +511,7 @@ def prepare_ready(
     source_root: str | os.PathLike[str],
     toolchain_image: str,
     cargo_profile: str = "backend-dev",
+    control_volume_name: str | None = None,
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
 ) -> dict[str, Any]:
@@ -493,6 +532,7 @@ def prepare_ready(
         source_root=source_root,
         toolchain_image=toolchain_image,
         cargo_profile=cargo_profile,
+        control_volume_name=control_volume_name,
         active_consumers=active_consumers,
     )
     if not isinstance(profile.get("volume_documents"), Mapping):
@@ -545,6 +585,26 @@ def _validate_volume_document(
     labels = document.get("Labels")
     if not isinstance(labels, Mapping):
         raise BackendVolumeCacheError("backend cache named volume has no labels")
+    if role == CONTROL_VOLUME_ROLE:
+        required = {
+            CONTROL_VOLUME_LABEL_SCHEMA: CONTROL_VOLUME_SCHEMA,
+            CONTROL_VOLUME_LABEL_MOUNT: CONTROL_VOLUME_MOUNT,
+        }
+        control_project = labels.get(CONTROL_VOLUME_LABEL_PROJECT)
+        compose_project = labels.get("com.fullmag.compose.project")
+        if (not isinstance(control_project, str)
+                or _IDENTIFIER.fullmatch(control_project) is None
+                or compose_project != control_project):
+            raise BackendVolumeCacheError("shared control volume group identity is invalid")
+        expected_project = profile.get("control_project")
+        if expected_project is not None and control_project != expected_project:
+            raise BackendVolumeCacheError("shared control volume belongs to another Compose group")
+        if any(labels.get(key) != value for key, value in required.items()):
+            raise BackendVolumeCacheError("shared control volume bootstrap labels are invalid")
+        if any(key.startswith(_LABEL_PREFIX) for key in labels):
+            raise BackendVolumeCacheError("shared control volume has backend cache labels")
+        mountpoint = _validate_mountpoint(document.get("Mountpoint"))
+        return {**dict(document), "Mountpoint": mountpoint, "Labels": dict(labels)}
     expected = volume_labels(profile, role)
     for key, value in expected.items():
         if labels.get(key) != value:
@@ -558,19 +618,20 @@ def _validate_volume_document(
 def _validate_volume_documents(
     documents: Mapping[str, Any], profile: Mapping[str, Any]
 ) -> dict[str, dict[str, Any]]:
-    if set(documents) != {BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE}:
-        raise BackendVolumeCacheError("backend cache requires an exact build/package volume pair")
+    if set(documents) != set(VOLUME_ROLES):
+        raise BackendVolumeCacheError("backend cache requires an exact build/package/control volume set")
     result = {
         role: _validate_volume_document(documents[role], profile, role)
-        for role in (BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE)
+        for role in VOLUME_ROLES
     }
-    build_labels = result[BUILD_VOLUME_ROLE]["Labels"]
-    package_labels = result[PACKAGE_VOLUME_ROLE]["Labels"]
-    for key in (LABEL_SCHEMA, LABEL_PROFILE, LABEL_PROJECT, LABEL_CACHE_KEY,
-                LABEL_UNIT, LABEL_WORKTREE, LABEL_TOOLCHAIN, LABEL_CARGO_PROFILE,
-                LABEL_OWNER):
-        if build_labels.get(key) != package_labels.get(key):
-            raise BackendVolumeCacheError("build/package volume identity is not paired")
+    paired_labels = result[BUILD_VOLUME_ROLE]["Labels"]
+    for role in (PACKAGE_VOLUME_ROLE,):
+        labels = result[role]["Labels"]
+        for key in (LABEL_SCHEMA, LABEL_PROFILE, LABEL_PROJECT, LABEL_CACHE_KEY,
+                    LABEL_UNIT, LABEL_WORKTREE, LABEL_TOOLCHAIN, LABEL_CARGO_PROFILE,
+                    LABEL_OWNER):
+            if paired_labels.get(key) != labels.get(key):
+                raise BackendVolumeCacheError("backend cache volume identity is not paired")
     return result
 
 
@@ -582,10 +643,10 @@ def _selected_volume_mountpoints(profile: Mapping[str, Any]) -> tuple[str, ...]:
         return ()
     if not isinstance(documents, Mapping):
         raise BackendVolumeCacheError("backend cache volume inventory is malformed")
-    if set(documents) != {BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE}:
+    if not set(documents) or not set(documents).issubset(set(VOLUME_ROLES)):
         raise BackendVolumeCacheError("backend cache volume inventory is incomplete")
     mountpoints: list[str] = []
-    for role in (BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE):
+    for role in documents:
         document = documents[role]
         if not isinstance(document, Mapping):
             raise BackendVolumeCacheError("backend cache volume inventory is malformed")
@@ -674,6 +735,11 @@ def _assert_no_active_consumers(
                 if not isinstance(name, str):
                     raise BackendVolumeCacheError("active consumer volume name is malformed")
                 if name in names:
+                    if name == profile["volume_names"][CONTROL_VOLUME_ROLE]:
+                        # Control is intentionally shared by toolchain,
+                        # frontend and backend services in one Compose group.
+                        # Build/package remain exclusive to this backend unit.
+                        continue
                     raise BackendVolumeCacheError("active consumer mounts backend cache volume")
                 source = mount.get("Source")
                 if source is not None:
@@ -700,14 +766,12 @@ def _assert_no_active_consumers(
                 )
 
 
-def inspect_volume_pair(
+def _inspect_volume_documents(
     docker: Callable[..., Any], profile: Mapping[str, Any]
-) -> dict[str, dict[str, Any]]:
-    """Inspect both names; callbacks must raise ``VolumeNotFound`` for absence."""
-
+) -> tuple[dict[str, dict[str, Any]], tuple[str, ...]]:
     documents: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
-    for role in (BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE):
+    for role in VOLUME_ROLES:
         name = profile["volume_names"][role]
         try:
             raw = docker("volume", "inspect", name)
@@ -715,14 +779,27 @@ def inspect_volume_pair(
             missing.append(role)
             continue
         documents[role] = _normal_volume_document(raw, name)
+    return documents, tuple(missing)
+
+
+def inspect_volume_pair(
+    docker: Callable[..., Any], profile: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Inspect the exact volume set; absence is never silently migrated."""
+
+    documents, missing = _inspect_volume_documents(docker, profile)
     if missing and documents:
-        raise BackendVolumeCacheError("backend cache has a partial volume pair")
+        raise BackendVolumeCacheError("backend cache has a partial volume set")
     if missing:
         return {}
     return _validate_volume_documents(documents, profile)
 
 
 def _create_volume(docker: Callable[..., Any], profile: Mapping[str, Any], role: str) -> None:
+    if role == CONTROL_VOLUME_ROLE:
+        raise BackendVolumeCacheError(
+            "shared control volume must be created and labeled by Docker bootstrap"
+        )
     name = profile["volume_names"][role]
     args: list[str] = ["volume", "create", "--driver", VOLUME_DRIVER]
     for key, value in volume_labels(profile, role).items():
@@ -750,16 +827,31 @@ def ensure_volume_pair(
         fixed_consumers = _active_consumer_snapshot(active_consumers)
         consumer_snapshot = lambda: fixed_consumers
     initial_consumers = consumer_snapshot()
-    existing = inspect_volume_pair(docker, profile)
+    documents, missing = _inspect_volume_documents(docker, profile)
+    if CONTROL_VOLUME_ROLE in missing:
+        raise BackendVolumeCacheError(
+            "shared control volume is missing; run the selected Compose-group bootstrap"
+        )
+    existing = (
+        _validate_volume_documents(documents, profile)
+        if not missing
+        else None
+    )
     checked_profile = dict(profile)
     if existing:
         checked_profile["volume_documents"] = existing
+    elif documents:
+        checked_profile["volume_documents"] = {
+            role: _validate_volume_document(documents[role], profile, role)
+            for role in documents
+        }
     _assert_no_active_consumers(checked_profile, initial_consumers)
     if existing:
         _assert_no_active_consumers(checked_profile, consumer_snapshot())
         return existing
     for role in (BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE):
-        _create_volume(docker, profile, role)
+        if role in missing:
+            _create_volume(docker, profile, role)
     created = _validate_volume_documents(inspect_volume_pair(docker, profile), profile)
     checked_profile["volume_documents"] = created
     _assert_no_active_consumers(checked_profile, consumer_snapshot())
@@ -769,6 +861,18 @@ def ensure_volume_pair(
 def _validate_marker(marker: Any, profile: Mapping[str, Any], role: str) -> None:
     if not isinstance(marker, Mapping):
         raise BackendVolumeCacheError("maintenance receipt has no owner marker")
+    if role == CONTROL_VOLUME_ROLE:
+        expected = {
+            "schema": "fullmag.docker-toolchain-control-owner.v1",
+            "state": "owned",
+            "role": CONTROL_VOLUME_ROLE,
+            "volume_name": profile["volume_names"][role],
+            "mount": CONTROL_TARGET,
+            "namespace": CONTROL_BACKEND_TARGET,
+        }
+        if any(marker.get(key) != value for key, value in expected.items()):
+            raise BackendVolumeCacheError("shared control owner marker is foreign or incomplete")
+        return
     expected = {
         "schema": OWNER_SCHEMA,
         "state": "owned",
@@ -811,9 +915,9 @@ def _validate_maintenance_receipt(
     if receipt["volume_names"] != profile["volume_names"]:
         raise BackendVolumeCacheError("maintenance receipt volume pair mismatch")
     markers = receipt["markers"]
-    if not isinstance(markers, Mapping) or set(markers) != {BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE}:
-        raise BackendVolumeCacheError("maintenance receipt has an incomplete marker pair")
-    for role in (BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE):
+    if not isinstance(markers, Mapping) or set(markers) != set(VOLUME_ROLES):
+        raise BackendVolumeCacheError("maintenance receipt has an incomplete marker set")
+    for role in VOLUME_ROLES:
         _validate_marker(markers[role], profile, role)
     probe = receipt["probe"]
     if (not isinstance(probe, Mapping)
@@ -823,9 +927,9 @@ def _validate_maintenance_receipt(
             or probe.get("owner_gid") != 65532):
         raise BackendVolumeCacheError("maintenance readback probe did not pass")
     probes = probe.get("volumes")
-    if not isinstance(probes, Mapping) or set(probes) != {BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE}:
-        raise BackendVolumeCacheError("maintenance probe has an incomplete volume pair")
-    for role in (BUILD_VOLUME_ROLE, PACKAGE_VOLUME_ROLE):
+    if not isinstance(probes, Mapping) or set(probes) != set(VOLUME_ROLES):
+        raise BackendVolumeCacheError("maintenance probe has an incomplete volume set")
+    for role in VOLUME_ROLES:
         result = probes[role]
         if not isinstance(result, Mapping) or any(
             result.get(name) is not True
@@ -833,54 +937,6 @@ def _validate_maintenance_receipt(
         ):
             raise BackendVolumeCacheError("maintenance probe did not prove the owned volume")
     return dict(receipt)
-
-
-def _validate_receipt_parent(path: Path) -> None:
-    if path.is_symlink() or not path.parent.is_dir() or path.parent.is_symlink():
-        raise BackendVolumeCacheError("backend cache receipt path is not a regular canonical path")
-    cursor = path.parent
-    while cursor != cursor.parent:
-        if cursor.is_symlink():
-            raise BackendVolumeCacheError("backend cache receipt parent contains a symlink")
-        cursor = cursor.parent
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    _validate_receipt_parent(path)
-    raw = _canonical_bytes(value) + b"\n"
-    temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
-    if temporary.exists() or temporary.is_symlink():
-        raise BackendVolumeCacheError("backend cache receipt temporary path already exists")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(temporary, flags, 0o600)
-    try:
-        offset = 0
-        while offset < len(raw):
-            written = os.write(descriptor, raw[offset:])
-            if written <= 0:
-                raise BackendVolumeCacheError("backend cache receipt short write")
-            offset += written
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    os.replace(temporary, path)
-    try:
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    except OSError:
-        # Windows has no portable directory-fsync primitive.  The file was
-        # fsynced before replace; retain that publication while keeping POSIX
-        # directory durability failures fatal.
-        if os.name != "nt":
-            raise
-    else:
-        try:
-            try:
-                os.fsync(directory)
-            except OSError:
-                if os.name != "nt":
-                    raise
-        finally:
-            os.close(directory)
 
 
 def validate(
@@ -908,9 +964,11 @@ def validate(
     )
     maintenance = _validate_maintenance_receipt(maintenance_receipt, profile)
     path = Path(receipt_path or profile["receipt_path"])
-    expected_path = Path(profile["receipt_path"])
-    if path != expected_path:
-        raise BackendVolumeCacheError("backend cache receipt must use the canonical run path")
+    expected_path = Path(RECEIPT_TARGET)
+    if path != expected_path or profile.get("receipt_storage") != "docker-named-volume":
+        raise BackendVolumeCacheError(
+            "backend cache receipt must use the canonical control-volume path"
+        )
     receipt = {
         "schema": SCHEMA,
         "profile": PROFILE,
@@ -927,18 +985,21 @@ def validate(
         "mounts": list(profile["mounts"]),
         "package_root": PACKAGE_TARGET,
         "build_root": BUILD_TARGET,
+        "control_root": CONTROL_TARGET,
         "volume_documents": inspected,
         "maintenance_receipt": maintenance,
-        "host_receipt_path": str(path),
+        "receipt_path": RECEIPT_TARGET,
+        "receipt_storage": "docker-named-volume",
+        "host_receipt_path": None,
     }
-    _write_json(path, receipt)
     result = dict(profile)
     result.update({
         "state": "ready",
         "volume_documents": inspected,
         "maintenance_receipt": maintenance,
-        "receipt_path": str(path),
-        "host_receipt_path": str(path),
+        "receipt_path": RECEIPT_TARGET,
+        "receipt_storage": "docker-named-volume",
+        "host_receipt_path": None,
         "receipt": receipt,
     })
     result["overlay"] = overlay(result)
@@ -982,11 +1043,12 @@ def _validate_volume_declarations(
     volumes: Any, profile: Mapping[str, Any]
 ) -> None:
     if not isinstance(volumes, Mapping) or set(volumes) != {
-        COMPOSE_BUILD_VOLUME, COMPOSE_PACKAGE_VOLUME
+        COMPOSE_BUILD_VOLUME, COMPOSE_PACKAGE_VOLUME, COMPOSE_CONTROL_VOLUME
     }:
         raise BackendVolumeCacheError("volume cache overlay has an incomplete volume declaration")
     for key, role in ((COMPOSE_BUILD_VOLUME, BUILD_VOLUME_ROLE),
-                      (COMPOSE_PACKAGE_VOLUME, PACKAGE_VOLUME_ROLE)):
+                      (COMPOSE_PACKAGE_VOLUME, PACKAGE_VOLUME_ROLE),
+                      (COMPOSE_CONTROL_VOLUME, CONTROL_VOLUME_ROLE)):
         declaration = volumes[key]
         if (not isinstance(declaration, Mapping)
                 or declaration.get("name") != profile["volume_names"][role]
@@ -1077,7 +1139,7 @@ def validate_maintenance_overlay(document: Mapping[str, Any], profile: Mapping[s
 
 
 def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) -> dict[str, Any]:
-    """Fail closed unless the backend owns exactly the two named volume mounts."""
+    """Fail closed unless the backend owns exactly the three named volume mounts."""
 
     if profile.get("schema") != SCHEMA or profile.get("state") != "ready":
         raise BackendVolumeCacheError("backend volume cache profile is not ready")
@@ -1131,6 +1193,7 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
     expected = {
         BUILD_TARGET: profile["volume_names"][BUILD_VOLUME_ROLE],
         PACKAGE_TARGET: profile["volume_names"][PACKAGE_VOLUME_ROLE],
+        CONTROL_TARGET: profile["volume_names"][CONTROL_VOLUME_ROLE],
     }
     matching: dict[str, Mapping[str, Any]] = {}
     for mount in mounts:
@@ -1158,5 +1221,9 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
         "state": "attested",
         "unit_key": profile["unit_key"],
         "volume_names": dict(profile["volume_names"]),
-        "targets": {BUILD_VOLUME_ROLE: BUILD_TARGET, PACKAGE_VOLUME_ROLE: PACKAGE_TARGET},
+        "targets": {
+            BUILD_VOLUME_ROLE: BUILD_TARGET,
+            PACKAGE_VOLUME_ROLE: PACKAGE_TARGET,
+            CONTROL_VOLUME_ROLE: CONTROL_TARGET,
+        },
     }

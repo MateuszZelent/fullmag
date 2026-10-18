@@ -83,9 +83,7 @@ pub(crate) fn prepare_accepted_fem_task(
             )
         })
         .context("open host resource ledger for accepted FEM preparation")?;
-        if binding.policy.schema_version
-            == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
-        {
+        if binding.policy.requires_runtime_readiness() {
             let expected_generation = binding.require_runtime_generation_sha256()?;
             retry_preparation_store_writer_busy(|| {
                 ledger.validate_runtime_generation(expected_generation)

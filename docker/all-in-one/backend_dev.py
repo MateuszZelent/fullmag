@@ -60,7 +60,15 @@ CAPTURE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 BUILD_ROOT = Path("/build")
 OUTPUT_ROOT = Path("/output")
 PACKAGE_ROOT = Path("/opt/fullmag/package")
-PROVENANCE_PATH = Path("/opt/fullmag/provenance.json")
+CONTROL_ROOT = Path("/opt/fullmag/control")
+BACKEND_CONTROL_ROOT = CONTROL_ROOT / "backend"
+PACKAGE_DEVELOPMENT_DIRNAME = ".development"
+PACKAGE_CACHE_RECEIPT_NAME = "backend-volume-cache-receipt.json"
+# Build/runtime control records are part of the per-Compose-group control
+# named volume.  The host-facing Windows session bind and package volume must
+# never be used for these records.
+PROVENANCE_PATH = BACKEND_CONTROL_ROOT / "runtime-provenance.json"
+CACHE_RECEIPT_PATH = BACKEND_CONTROL_ROOT / PACKAGE_CACHE_RECEIPT_NAME
 HOST_ATTESTATION_PATH = Path("/run/fullmag/windows-folder-host.json")
 WINDOWS_FOLDER_OWNER_PATH = Path("/state/.fullmag-windows-folder-owner.json")
 WINDOWS_FOLDER_HOST_SCHEMA = "fullmag.windows-folder-host.v1"
@@ -68,7 +76,6 @@ WINDOWS_FOLDER_DEVELOPMENT_SCHEMA = "fullmag.windows-folder-development-build.v1
 WINDOWS_FOLDER_STORAGE_PROFILE = "windows-folder-v1"
 WINDOWS_FOLDER_GATE_TIMEOUT_SECONDS = 120.0
 WINDOWS_FOLDER_GATE_POLL_SECONDS = 0.25
-PACKAGE_DEVELOPMENT_DIRNAME = ".development"
 PACKAGE_DEVELOPMENT_SCHEMA = "fullmag.direct-compose.package-development.v1"
 PACKAGE_DEVELOPMENT_OWNER = "owner.json"
 PACKAGE_CANDIDATES_DIRNAME = "candidates"
@@ -516,6 +523,93 @@ def _ensure_package_development_root(output: Path) -> Path:
     _ensure_directory(backups, "backend package backup directory")
     _ensure_directory(retired, "backend package retention archive directory")
     return control
+
+
+BACKEND_CACHE_RECEIPT_SCHEMA = "fullmag.direct-compose.backend-volume-cache-receipt.v1"
+_CACHE_VOLUME_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
+
+
+def _backend_cache_receipt() -> dict[str, Any] | None:
+    """Publish the cache identity inside the per-group control volume.
+
+    The host launcher may prepare and inspect the named volumes, but it must
+    not receive a host-side copy of this control record.  The backend owns the
+    control volume and therefore publishes the canonical record after opening
+    it.  Missing cache environment is retained for the frozen
+    ``prepare``/``build`` compatibility path, which does not use the direct
+    Compose cache adapter.
+    """
+
+    schema = os.environ.get("FULLMAG_BACKEND_CACHE_SCHEMA")
+    if schema is None:
+        return None
+    if schema != "fullmag.backend-build-cache.v2":
+        _fail("backend cache schema is unsupported")
+
+    _ensure_directory(CONTROL_ROOT, "backend control volume")
+    _ensure_directory(BACKEND_CONTROL_ROOT, "backend control namespace")
+    path = CACHE_RECEIPT_PATH
+    configured_path = Path(
+        os.environ.get("FULLMAG_BACKEND_CACHE_RECEIPT", str(path))
+    )
+    if configured_path != path:
+        _fail("backend cache receipt must remain inside the control named volume")
+
+    def required(name: str) -> str:
+        value = os.environ.get(name)
+        if not isinstance(value, str) or not value:
+            _fail(f"backend cache environment is missing {name}")
+        return value
+
+    volume_names = {
+        "build": required("FULLMAG_BACKEND_CACHE_BUILD_VOLUME"),
+        "package": required("FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME"),
+        "control": required("FULLMAG_BUILD_CONTROL_VOLUME"),
+    }
+    cache_control_volume = required("FULLMAG_BACKEND_CACHE_CONTROL_VOLUME")
+    if cache_control_volume != volume_names["control"]:
+        _fail("backend cache control volume identities differ")
+    if any(_CACHE_VOLUME_NAME_RE.fullmatch(value) is None for value in volume_names.values()):
+        _fail("backend cache volume name is invalid")
+    if required("FULLMAG_BACKEND_CACHE_BUILD_ROOT") != str(BUILD_ROOT):
+        _fail("backend cache build root differs from the fixed named-volume target")
+    if required("FULLMAG_BACKEND_CACHE_PACKAGE_ROOT") != str(PACKAGE_ROOT):
+        _fail("backend cache package root differs from the fixed named-volume target")
+    if required("FULLMAG_BACKEND_CACHE_CONTROL_ROOT") != str(CONTROL_ROOT):
+        _fail("backend cache control root differs from the per-group control volume")
+    if required("FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE") != str(BACKEND_CONTROL_ROOT):
+        _fail("backend cache control namespace differs from the fixed backend namespace")
+
+    document: dict[str, Any] = {
+        "schema": BACKEND_CACHE_RECEIPT_SCHEMA,
+        "state": "ready",
+        "cache_schema": schema,
+        "profile": required("FULLMAG_BACKEND_CACHE_PROFILE"),
+        "project_id": required("FULLMAG_BACKEND_CACHE_PROJECT_ID"),
+        "cache_key": required("FULLMAG_BACKEND_CACHE_KEY"),
+        "unit_key": required("FULLMAG_BACKEND_CACHE_UNIT_KEY"),
+        "owner_id": required("FULLMAG_BACKEND_CACHE_OWNER_ID"),
+        "worktree_id": required("FULLMAG_BACKEND_CACHE_WORKTREE_ID"),
+        "toolchain_image_id": required("FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID"),
+        "runtime_image_id": required("FULLMAG_BACKEND_RUNTIME_IMAGE_ID"),
+        "cargo_profile": required("FULLMAG_BACKEND_CARGO_PROFILE"),
+        "volume_names": volume_names,
+        "targets": {
+            "build": str(BUILD_ROOT),
+            "package": str(PACKAGE_ROOT),
+            "control": str(CONTROL_ROOT),
+            "receipt": str(path),
+        },
+        "storage": "docker-named-volume",
+    }
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            _fail("backend cache volume receipt is not one regular file")
+        previous, _ = _read_json(path, "backend cache volume receipt", 128 * 1024)
+        if previous.get("schema") != BACKEND_CACHE_RECEIPT_SCHEMA:
+            _fail("backend cache volume receipt has an unsupported schema")
+    _write_json(path, document, "backend cache volume receipt")
+    return document
 
 
 def _prepare_workspace(build_root: Path) -> Path:
@@ -2902,6 +2996,7 @@ def _start(args: argparse.Namespace) -> int:
     with _runtime_build_lock(build_root):
         try:
             control_root = _ensure_package_development_root(output)
+            _backend_cache_receipt()
             previous_receipt: tuple[dict[str, Any], bytes, dict[str, tuple[int, int, int, int, int]]] | None
             existing_children = _package_children(
                 output,
@@ -3294,7 +3389,8 @@ def _serve(extra: list[str]) -> int:
             "FULLMAG_DOCKER_ROLE": "backend",
             "FULLMAG_RUNTIME_ROOT": str(PACKAGE_ROOT),
             "FULLMAG_RUNTIME_PACKAGE_ROOT": str(PACKAGE_ROOT),
-            "FULLMAG_PACKAGE_PROVENANCE": "/opt/fullmag/provenance.json",
+            "FULLMAG_PACKAGE_PROVENANCE": str(PROVENANCE_PATH),
+            "FULLMAG_RUNTIME_PROVENANCE": str(PROVENANCE_PATH),
             "FULLMAG_WEB_STATIC_DIR": str(PACKAGE_ROOT / "web"),
             "PATH": f"{PACKAGE_ROOT / 'bin'}:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin",
         }

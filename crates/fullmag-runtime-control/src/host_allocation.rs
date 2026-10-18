@@ -212,9 +212,7 @@ fn task_claim_runtime_generation(
         // only an already-attached binding can supersede the caller pin.
         return Ok(expected_runtime_generation_sha256.map(str::to_owned));
     };
-    if binding.policy.schema_version
-        == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
-    {
+    if binding.policy.requires_runtime_readiness() {
         return Ok(Some(
             binding
                 .require_runtime_generation_sha256()?

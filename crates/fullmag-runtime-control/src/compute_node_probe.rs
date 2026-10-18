@@ -424,6 +424,106 @@ pub fn validate_native_fem_gpu_readiness(readiness: &HostRuntimeReadiness) -> Re
     Ok(())
 }
 
+/// Probe the CPU lane of the full native FEM build when no CUDA device is
+/// visible. This profile is deliberately separate from the GPU readiness
+/// contract: it never manufactures a GPU inventory or a GPU capability.
+pub fn probe_native_fem_cpu_readiness() -> Result<HostRuntimeReadiness> {
+    let build = fullmag_build_info::identity();
+    let source_snapshot_sha256 = build.source_snapshot_sha256.to_owned();
+    let status = fullmag_runner::native_fem_gpu_status();
+    if !fullmag_runner::is_native_fem_cpu_available() || !status.cpu_available {
+        bail!(
+            "native FEM CPU ABI is unavailable: {}",
+            status.reason_cpu
+        );
+    }
+    if !status.built_with_mfem_stack
+        || !status.built_with_cuda_runtime
+        || !status.built_with_ceed
+    {
+        bail!(
+            "native FEM CPU readiness requires the full MFEM/CUDA/libCEED build (mfem={}, cuda={}, ceed={})",
+            status.built_with_mfem_stack,
+            status.built_with_cuda_runtime,
+            status.built_with_ceed,
+        );
+    }
+    if status.available || status.visible_cuda_device_count != 0 || status.resolved_gpu_index >= 0 {
+        bail!(
+            "native FEM CPU readiness requires no visible CUDA device (visible={}, resolved={})",
+            status.visible_cuda_device_count,
+            status.resolved_gpu_index
+        );
+    }
+
+    let runtime_identity_sha256 = native_fem_cpu_runtime_identity(
+        build.git_commit,
+        &source_snapshot_sha256,
+        &status,
+    );
+    let readiness = HostRuntimeReadiness {
+        schema_version: fullmag_session::host_resource_ledger::HOST_RUNTIME_READINESS_SCHEMA_V2
+            .to_owned(),
+        status: "ready".to_owned(),
+        source_kind: "native_fem_cpu_abi".to_owned(),
+        source_snapshot_sha256,
+        runtime_identity_sha256,
+        capabilities: vec!["fem.cpu".to_owned()],
+        gpu_runtime_compatibility: BTreeMap::new(),
+        gpu_visibility: EnforcementStatus::Unavailable,
+        inventory_sha256: None,
+        capabilities_sha256: None,
+    };
+    readiness.validate_probe()?;
+    Ok(readiness)
+}
+
+/// Revalidate either the strict GPU profile or the explicit CPU-only profile
+/// against the running full native binary.
+pub fn validate_native_runtime_readiness(readiness: &HostRuntimeReadiness) -> Result<()> {
+    match readiness.schema_version.as_str() {
+        fullmag_session::host_resource_ledger::HOST_RUNTIME_READINESS_SCHEMA_V1 => {
+            validate_native_fem_gpu_readiness(readiness)
+        }
+        fullmag_session::host_resource_ledger::HOST_RUNTIME_READINESS_SCHEMA_V2 => {
+            validate_native_fem_cpu_readiness(readiness)
+        }
+        _ => {
+            readiness.validate_probe()?;
+            bail!("unsupported native runtime readiness profile")
+        }
+    }
+}
+
+fn validate_native_fem_cpu_readiness(readiness: &HostRuntimeReadiness) -> Result<()> {
+    readiness.validate_probe()?;
+    let build = fullmag_build_info::identity();
+    if readiness.source_snapshot_sha256 != build.source_snapshot_sha256 {
+        bail!("native CPU readiness source identity differs from the running build");
+    }
+    let status = fullmag_runner::native_fem_gpu_status();
+    if !fullmag_runner::is_native_fem_cpu_available()
+        || !status.cpu_available
+        || !status.built_with_mfem_stack
+        || !status.built_with_cuda_runtime
+        || !status.built_with_ceed
+    {
+        bail!("native FEM CPU ABI is no longer a valid full-build CPU lane");
+    }
+    if status.available || status.visible_cuda_device_count != 0 || status.resolved_gpu_index >= 0 {
+        bail!("native CPU readiness cannot survive a changed CUDA visibility state");
+    }
+    let expected_runtime_identity = native_fem_cpu_runtime_identity(
+        build.git_commit,
+        build.source_snapshot_sha256,
+        &status,
+    );
+    if readiness.runtime_identity_sha256 != expected_runtime_identity {
+        bail!("native CPU readiness runtime identity differs from the running FEM ABI");
+    }
+    Ok(())
+}
+
 fn native_fem_gpu_runtime_identity(
     git_commit: &str,
     source_snapshot_sha256: &str,
@@ -440,13 +540,30 @@ fn native_fem_gpu_runtime_identity(
     format!("{:x}", Sha256::digest(runtime_material.as_bytes()))
 }
 
-pub fn load_native_fem_gpu_readiness(path: &Path) -> Result<HostRuntimeReadiness> {
+fn native_fem_cpu_runtime_identity(
+    git_commit: &str,
+    source_snapshot_sha256: &str,
+    status: &fullmag_runner::NativeFemGpuStatus,
+) -> String {
+    let runtime_material = format!(
+        "fullmag.native-fem-cpu.v2\ngit={git_commit}\nsource={source_snapshot_sha256}\nbuilt_with_mfem_stack={}\nbuilt_with_cuda_runtime={}\nbuilt_with_ceed={}\ncpu_available={}\nvisible={}\nresolved={}\n",
+        status.built_with_mfem_stack,
+        status.built_with_cuda_runtime,
+        status.built_with_ceed,
+        status.cpu_available,
+        status.visible_cuda_device_count,
+        status.resolved_gpu_index,
+    );
+    format!("{:x}", Sha256::digest(runtime_material.as_bytes()))
+}
+
+pub fn load_native_runtime_readiness(path: &Path) -> Result<HostRuntimeReadiness> {
     if !path.is_absolute()
         || path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        bail!("native FEM/GPU readiness path must be absolute without parent traversal");
+        bail!("native runtime readiness path must be absolute without parent traversal");
     }
     let parent = path.parent().context("native readiness path has no parent")?;
     let name = path
@@ -454,10 +571,20 @@ pub fn load_native_fem_gpu_readiness(path: &Path) -> Result<HostRuntimeReadiness
         .and_then(|value| value.to_str())
         .context("native readiness file name is not UTF-8")?;
     let bytes = read_bounded_regular_file(parent, name, 256 * 1024)
-        .context("read native FEM/GPU readiness ABI result")?;
+        .context("read native runtime readiness ABI result")?;
     let readiness: HostRuntimeReadiness = serde_json::from_slice(&bytes)
-        .context("parse native FEM/GPU readiness ABI result")?;
+        .context("parse native runtime readiness ABI result")?;
     readiness.validate_probe()?;
+    Ok(readiness)
+}
+
+pub fn load_native_fem_gpu_readiness(path: &Path) -> Result<HostRuntimeReadiness> {
+    let readiness = load_native_runtime_readiness(path)?;
+    if readiness.schema_version
+        != fullmag_session::host_resource_ledger::HOST_RUNTIME_READINESS_SCHEMA_V1
+    {
+        bail!("readiness fixture is not the strict native FEM/GPU profile");
+    }
     Ok(readiness)
 }
 
@@ -494,7 +621,11 @@ fn sample_compute_node_inner(
         .map(probe_failure_reason)
         .unwrap_or(UnavailableReason::ProbeFailed);
     let memory = observe_memory();
-    let gpus = discover_nvidia_gpus();
+    // A CPU readiness profile intentionally does not query NVIDIA at all.
+    // This keeps an absent device an explicit unavailable observation rather
+    // than turning an empty probe result into a verified GPU inventory.
+    let cpu_only_profile = readiness.is_some_and(HostRuntimeReadiness::is_cpu_only_profile);
+    let gpus = (!cpu_only_profile).then(discover_nvidia_gpus);
     let now = Utc::now();
     let boot_monotonic_ns = current_boot_monotonic_ns()?;
     let boot_id = current_host_boot_id(now.clone())?;
@@ -504,7 +635,7 @@ fn sample_compute_node_inner(
         || cpu_topology_probe.is_err()
         || allowed_cpu_ids_probe.is_err();
     let memory_failed = memory.is_err();
-    let gpu_failed = gpus.is_err();
+    let gpu_failed = matches!(gpus.as_ref(), Some(Err(_)));
     let cpu_effective_capacity_millis = match cpu_capacity {
         Ok(value) if value > 0 => Observation::Available { value },
         Ok(_) => Observation::Unavailable {
@@ -532,71 +663,87 @@ fn sample_compute_node_inner(
             },
         ),
     };
-    let (gpu_inventory, capabilities, gpu_visibility) =
-        match (gpus, readiness) {
-            (Ok(mut devices), Some(readiness)) => {
-                readiness.validate_probe()?;
-                let observed = devices
-                    .iter()
-                    .map(|device| device.uuid.clone())
-                    .collect::<BTreeSet<_>>();
-                let expected = readiness
+    let (gpu_inventory, capabilities, gpu_visibility) = match (gpus, readiness) {
+        (None, Some(readiness)) if readiness.is_cpu_only_profile() => {
+            readiness.validate_probe()?;
+            (
+                Reported::Unavailable {
+                    reason: UnavailableReason::SourceUnavailable,
+                    last_known: None,
+                },
+                Reported::Available {
+                    value: readiness.capabilities.clone(),
+                },
+                readiness.gpu_visibility,
+            )
+        }
+        (None, Some(_)) => {
+            bail!("native GPU sampling requires a strict GPU readiness profile");
+        }
+        (Some(Ok(mut devices)), Some(readiness)) => {
+            readiness.validate_probe()?;
+            let observed = devices
+                .iter()
+                .map(|device| device.uuid.clone())
+                .collect::<BTreeSet<_>>();
+            let expected = readiness
+                .gpu_runtime_compatibility
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if observed != expected {
+                bail!("native FEM/GPU readiness UUIDs differ from current NVIDIA inventory");
+            }
+            for device in &mut devices {
+                let compatibility = readiness
                     .gpu_runtime_compatibility
-                    .keys()
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                if observed != expected {
-                    bail!("native FEM/GPU readiness UUIDs differ from current NVIDIA inventory");
-                }
-                for device in &mut devices {
-                    let compatibility = readiness
-                        .gpu_runtime_compatibility
-                        .get(&device.uuid)
-                        .context("native readiness is missing a current GPU UUID")?
-                        .clone();
-                    device.runtime_compatibility = Reported::Available {
-                        value: compatibility,
-                    };
-                }
-                (
-                    Reported::Available { value: devices },
-                    Reported::Available {
-                        value: readiness.capabilities.clone(),
-                    },
-                    readiness.gpu_visibility,
-                )
+                    .get(&device.uuid)
+                    .context("native readiness is missing a current GPU UUID")?
+                    .clone();
+                device.runtime_compatibility = Reported::Available {
+                    value: compatibility,
+                };
             }
-            (Ok(devices), None) => (
+            (
                 Reported::Available { value: devices },
-                Reported::Unavailable {
-                    reason: UnavailableReason::NotReported,
-                    last_known: previous
-                        .and_then(|snapshot| snapshot.capabilities.known_value().cloned()),
+                Reported::Available {
+                    value: readiness.capabilities.clone(),
                 },
-                EnforcementStatus::Unavailable,
-            ),
-            (Err(error), Some(readiness))
-                if !cpu_failed && !memory_failed && nvidia_probe_unavailable(&error).is_some() =>
-            {
-                warm_gpu_probe_projection(&error, previous, readiness)?
-            }
-            (Err(error), Some(_)) => {
-                return Err(error)
-                    .context("native FEM/GPU readiness requires a current NVIDIA inventory")
-            }
-            (Err(error), None) => (
-                Reported::Unavailable {
-                    reason: gpu_failure_reason(&error),
-                    last_known: previous.and_then(|snapshot| snapshot.gpus.known_value().cloned()),
-                },
-                Reported::Unavailable {
-                    reason: UnavailableReason::NotReported,
-                    last_known: previous
-                        .and_then(|snapshot| snapshot.capabilities.known_value().cloned()),
-                },
-                EnforcementStatus::Unavailable,
-            ),
-        };
+                readiness.gpu_visibility,
+            )
+        }
+        (Some(Ok(devices)), None) => (
+            Reported::Available { value: devices },
+            Reported::Unavailable {
+                reason: UnavailableReason::NotReported,
+                last_known: previous
+                    .and_then(|snapshot| snapshot.capabilities.known_value().cloned()),
+            },
+            EnforcementStatus::Unavailable,
+        ),
+        (Some(Err(error)), Some(readiness))
+            if !cpu_failed && !memory_failed && nvidia_probe_unavailable(&error).is_some() =>
+        {
+            warm_gpu_probe_projection(&error, previous, readiness)?
+        }
+        (Some(Err(error)), Some(_)) => {
+            return Err(error)
+                .context("native FEM/GPU readiness requires a current NVIDIA inventory")
+        }
+        (Some(Err(error)), None) => (
+            Reported::Unavailable {
+                reason: gpu_failure_reason(&error),
+                last_known: previous.and_then(|snapshot| snapshot.gpus.known_value().cloned()),
+            },
+            Reported::Unavailable {
+                reason: UnavailableReason::NotReported,
+                last_known: previous
+                    .and_then(|snapshot| snapshot.capabilities.known_value().cloned()),
+            },
+            EnforcementStatus::Unavailable,
+        ),
+        (None, None) => bail!("CPU-only sampling requires an explicit CPU readiness profile"),
+    };
 
     let cpu_quota_enforcement = {
         #[cfg(target_os = "linux")]
@@ -629,15 +776,18 @@ fn sample_compute_node_inner(
             .and_then(|snapshot| snapshot.cpu.os_constraints.quota.known_value())
             .cloned(),
     );
-    let sample_error = (cpu_failed && memory_failed && gpu_failed)
-        .then_some(UnavailableReason::ProbeFailed);
+    let sample_error = if cpu_only_profile {
+        (cpu_failed || memory_failed).then_some(UnavailableReason::ProbeFailed)
+    } else {
+        (cpu_failed && memory_failed && gpu_failed).then_some(UnavailableReason::ProbeFailed)
+    };
 
     let enforcement = EnforcementSnapshot {
         cpu_affinity: EnforcementStatus::Unavailable,
         cpu_quota: cpu_quota_enforcement,
         memory_cap: EnforcementStatus::Advisory,
-        // Native readiness is the only accepted proof for v2 GPU
-        // visibility; v1 keeps the historical explicit-unavailable state.
+        // Native readiness is the only accepted proof for runtime GPU
+        // visibility; the CPU profile intentionally publishes unavailable.
         gpu_visibility,
         storage_quota: EnforcementStatus::Advisory,
     };

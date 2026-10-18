@@ -309,9 +309,7 @@ fn verify_host_worker_launch_for_claim(
             )
         },
     )?;
-    if binding.policy.schema_version
-        == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
-    {
+    if binding.policy.requires_runtime_readiness() {
         let expected_generation = binding.require_runtime_generation_sha256()?;
         retry_worker_claim_store_busy(
             store,

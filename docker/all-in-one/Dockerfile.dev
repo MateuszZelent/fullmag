@@ -4,6 +4,8 @@ ARG RUNTIME_BASE
 FROM ${RUNTIME_BASE} AS fullmag-dev
 
 ARG FULLMAG_TOOLCHAIN_IMAGE_ID
+ARG FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA
+ARG FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SHA256
 ENV FULLMAG_TOOLCHAIN_IMAGE_ID=${FULLMAG_TOOLCHAIN_IMAGE_ID}
 
 USER root
@@ -13,13 +15,13 @@ RUN python3 -c 'import os,re,sys; value=os.environ.get("FULLMAG_TOOLCHAIN_IMAGE_
 RUN test -s /opt/fullmag-deps/share/fullmag/dependency-versions.json && \
     python3 -c 'import json,sys; p="/opt/fullmag-deps/share/fullmag/dependency-versions.json"; d=json.load(open(p,encoding="utf-8")); required=("schema","declared","actual","latest"); missing=[k for k in required if k not in d]; commits=d.get("actual",{}).get("source_commits",{}); expected=("mfem","libceed","hypre","petsc","slepc"); missing += ["actual.source_commits."+k for k in expected if not commits.get(k)]; sys.exit("invalid FEM dependency manifest: "+", ".join(missing)) if d.get("schema") != "fullmag.docker.fem-gpu-dependencies.v1" or missing else None'
 
-COPY entrypoint.py /opt/fullmag/entrypoint.py
-COPY windows_folder_probe.py /opt/fullmag/windows_folder_probe.py
-COPY runtime_service.py /opt/fullmag/runtime_service.py
-COPY frontend_dev.py /opt/fullmag/frontend_dev.py
-COPY healthcheck.py /opt/fullmag/healthcheck.py
-COPY docker_startup_script.py /opt/fullmag/docker_startup_script.py
-COPY fullmag_storage.py /opt/fullmag/fullmag_storage.py
+COPY docker/all-in-one/entrypoint.py /opt/fullmag/entrypoint.py
+COPY docker/all-in-one/windows_folder_probe.py /opt/fullmag/windows_folder_probe.py
+COPY docker/all-in-one/runtime_service.py /opt/fullmag/runtime_service.py
+COPY docker/all-in-one/frontend_dev.py /opt/fullmag/frontend_dev.py
+COPY docker/all-in-one/healthcheck.py /opt/fullmag/healthcheck.py
+COPY scripts/docker_startup_script.py /opt/fullmag/docker_startup_script.py
+COPY scripts/fullmag_storage.py /opt/fullmag/fullmag_storage.py
 
 # The pinned builder already prepared pnpm 10.8.1. Publish that immutable tool
 # for the unprivileged frontend instead of extracting it into Windows per run.
@@ -32,9 +34,9 @@ RUN mkdir -p /opt/fullmag/tooling/pnpm && \
 
 # These are image-owned mount points. Runtime bind mounts replace source,
 # package, provenance, state, and the Windows host certificate.
-RUN mkdir -p /opt/fullmag/source /opt/fullmag/package /state /run/fullmag && \
+RUN mkdir -p /opt/fullmag/source /opt/fullmag/package /opt/fullmag/control /state/development /run/fullmag && \
     touch /opt/fullmag/provenance.json && \
-    chown 65532:65532 /state /run/fullmag && \
+    chown 65532:65532 /state /state/development /run/fullmag && \
     chown root:root /opt/fullmag /opt/fullmag/docker_startup_script.py /opt/fullmag/fullmag_storage.py && \
     chmod 0755 /opt/fullmag /opt/fullmag/source /opt/fullmag/package /state /run/fullmag && \
     chmod 0644 /opt/fullmag/provenance.json && \
@@ -43,6 +45,8 @@ RUN mkdir -p /opt/fullmag/source /opt/fullmag/package /state /run/fullmag && \
 LABEL org.fullmag.runtime="docker-all-gpu-v1" \
       org.fullmag.development="source-bind-v1" \
       org.fullmag.toolchain.image-id="${FULLMAG_TOOLCHAIN_IMAGE_ID}" \
+      org.fullmag.direct-development.context-sha256="${FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SHA256}" \
+      org.fullmag.direct-development.context-schema="${FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA}" \
       org.fullmag.toolchain.dependencies="/opt/fullmag-deps/share/fullmag/dependency-versions.json"
 
 ENV FULLMAG_REPO_ROOT=/opt/fullmag/source \

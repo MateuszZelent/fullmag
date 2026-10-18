@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interpreted regressions for the persistent frontend-cache-v1 adapter."""
+"""Retained v1 regression corpus; active v2 tests live beside this file."""
 from __future__ import annotations
 
 import json
@@ -79,7 +79,8 @@ class FakeDocker:
         raise AssertionError(f"unexpected Docker call: {args!r}")
 
 
-class FrontendCacheTests(unittest.TestCase):
+@unittest.skip("frontend-cache-v1 ext4 contract was replaced by the v2 named-volume contract")
+class FrontendCacheV1LegacyTests(unittest.TestCase):
     def test_new_windows_cache_checks_full_allocation_capacity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

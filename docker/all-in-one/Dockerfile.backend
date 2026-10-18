@@ -3,6 +3,12 @@
 ARG DEV_BASE
 FROM ${DEV_BASE} AS fullmag-backend-direct
 
+ARG FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA
+ARG FULLMAG_DIRECT_DEVELOPMENT_BASE_CONTEXT_SHA256
+ARG FULLMAG_DIRECT_DEVELOPMENT_BACKEND_CONTEXT_SHA256
+ARG FULLMAG_DIRECT_DEVELOPMENT_RUNTIME_CONTEXT_SHA256
+ARG FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA
+
 USER root
 
 COPY backend_dev.py /opt/fullmag/backend_dev.py
@@ -36,6 +42,12 @@ RUN set -eu; \
     chmod 0755 /opt/fullmag/backend_dev.py; \
     chmod 0644 /opt/fullmag/backend_source.py; \
     chmod 0755 /opt/fullmag/backend_volume_cache_maintenance.py
+
+LABEL org.fullmag.direct-development.context-schema="${FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA}" \
+      org.fullmag.direct-development.base-context-sha256="${FULLMAG_DIRECT_DEVELOPMENT_BASE_CONTEXT_SHA256}" \
+      org.fullmag.direct-development.backend-context-sha256="${FULLMAG_DIRECT_DEVELOPMENT_BACKEND_CONTEXT_SHA256}" \
+      org.fullmag.direct-development.runtime-context-sha256="${FULLMAG_DIRECT_DEVELOPMENT_RUNTIME_CONTEXT_SHA256}" \
+      org.fullmag.direct-development.receipt-schema="${FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA}"
 
 ENV FULLMAG_RUNTIME_ROOT=/opt/fullmag/package \
     FULLMAG_REPO_ROOT=/opt/fullmag/source \

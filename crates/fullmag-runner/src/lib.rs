@@ -1552,6 +1552,10 @@ pub fn is_native_fem_gpu_available() -> bool {
 
 #[derive(Debug, Clone)]
 pub struct NativeFemGpuStatus {
+    pub built_with_mfem_stack: bool,
+    pub built_with_cuda_runtime: bool,
+    pub built_with_ceed: bool,
+    pub reason_cpu: String,
     pub cpu_available: bool,
     pub available: bool,
     pub visible_cuda_device_count: i32,
@@ -1565,6 +1569,10 @@ pub struct NativeFemGpuStatus {
 pub fn native_fem_gpu_status() -> NativeFemGpuStatus {
     let availability = native_fem::native_availability();
     NativeFemGpuStatus {
+        built_with_mfem_stack: availability.built_with_mfem_stack,
+        built_with_cuda_runtime: availability.built_with_cuda_runtime,
+        built_with_ceed: availability.built_with_ceed,
+        reason_cpu: availability.reason_cpu,
         cpu_available: availability.native_fem_cpu_available,
         available: availability.native_fem_gpu_available,
         visible_cuda_device_count: availability.visible_cuda_device_count,

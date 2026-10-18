@@ -1,10 +1,14 @@
-# Dockerfile.dev receives only these runtime helpers; never send app source or
-# a compiled package when someone builds it directly from this checkout.
+# Root-context allowlist for Dockerfile.dev; application sources never enter it.
 **
-!Dockerfile.dev
-!Dockerfile.dev.dockerignore
-!entrypoint.py
-!windows_folder_probe.py
-!runtime_service.py
-!frontend_dev.py
-!healthcheck.py
+!docker/
+!docker/all-in-one/
+!docker/all-in-one/Dockerfile.dev
+!docker/all-in-one/Dockerfile.dev.dockerignore
+!docker/all-in-one/entrypoint.py
+!docker/all-in-one/windows_folder_probe.py
+!docker/all-in-one/runtime_service.py
+!docker/all-in-one/frontend_dev.py
+!docker/all-in-one/healthcheck.py
+!scripts/
+!scripts/docker_startup_script.py
+!scripts/fullmag_storage.py

@@ -15,9 +15,9 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import threading
 import time
-import uuid
 
 import fullmag_storage as storage
 
@@ -25,13 +25,19 @@ PROFILE = "docker-all-gpu"
 SERVICE = "fem-gpu-toolchain"
 MAX_INPUT_BYTES = 16 * 1024 * 1024
 DEPENDENCY_MANIFEST = "/opt/fullmag-deps/share/fullmag/dependency-versions.json"
+CONTROL_VOLUME_SCHEMA = "fullmag.docker-toolchain-control.v1"
+CONTROL_VOLUME_PREFIX = "fullmag-build-control-"
+CONTROL_VOLUME_ENV = "FULLMAG_BUILD_CONTROL_VOLUME"
+CONTROL_ROOT = "/opt/fullmag/control"
+CONTROL_RECEIPT = "toolchain/bootstrap-receipt.json"
+CONTROL_BUILD_LOG = "toolchain/build.log"
 
 
 class BootstrapError(ValueError):
     pass
 
 
-def assert_fresh_host(root):
+def assert_fresh_host(root, previous=None):
     """An enrolled coordinator must own all subsequent heavy builds."""
     root = Path(root)
     for name in ("local-runner-container.json", "local-runner-container-secret.json",
@@ -42,7 +48,7 @@ def assert_fresh_host(root):
             raise BootstrapError(
                 "This host already has a build runner; dependency updates require its managed maintenance route"
             )
-    assert_bootstrap_reconciled(root)
+    assert_bootstrap_reconciled(root, previous)
     database = storage.validate_path(root / "index/runner-jobs.sqlite", root)
     if os.path.lexists(database):
         # Even an idle queue proves prior enrollment. Do not infer that it is
@@ -50,16 +56,24 @@ def assert_fresh_host(root):
         raise BootstrapError("An existing build queue requires managed maintenance; bootstrap refused")
 
 
-def assert_bootstrap_reconciled(root):
+def assert_bootstrap_reconciled(root, previous=None):
     """A previous unknown Docker outcome requires reconciliation in either mode."""
     root = Path(root)
-    admission = storage.validate_path(root / "index/docker-toolchain-bootstrap.json", root)
-    if os.path.lexists(admission):
-        previous = json.loads(read_input(root, Path("index/docker-toolchain-bootstrap.json")))
-        if (not isinstance(previous, dict)
-                or previous.get("schema") != "fullmag.docker-toolchain-bootstrap.v1"
-                or previous.get("state") not in {"built", "failed_confirmed"}):
-            raise BootstrapError("Previous Docker bootstrap outcome requires explicit resource reconciliation")
+    if previous is None:
+        # Read the pre-volume receipt only for migration safety. New receipts
+        # are never written to host storage.
+        admission = storage.validate_path(root / "index/docker-toolchain-bootstrap.json", root)
+        if os.path.lexists(admission):
+            previous = json.loads(read_input(root, Path("index/docker-toolchain-bootstrap.json")))
+    if previous is not None and (
+            not isinstance(previous, dict)
+            or previous.get("schema") not in {
+                "fullmag.docker-toolchain-bootstrap.v1",
+                CONTROL_VOLUME_SCHEMA,
+            }
+            or previous.get("state") not in {"built", "failed_confirmed"}
+        ):
+        raise BootstrapError("Previous Docker bootstrap outcome requires explicit resource reconciliation")
 
 
 def input_files(repo):
@@ -109,18 +123,12 @@ def read_input(repo, relative):
         os.close(descriptor)
 
 
-def capture_inputs(repo, destination):
-    """Freeze dependency files only; never copy .env, Git state or application code."""
+def capture_inputs(repo):
+    """Hash dependency inputs in memory; never stage a host build context."""
     names = tracked_input_files(repo)
     manifest = []
     for relative in names:
         data = read_input(repo, relative)
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
         manifest.append({"path": relative.as_posix(), "sha256": hashlib.sha256(data).hexdigest()})
     if tracked_input_files(repo) != names:
         raise BootstrapError("Tracked dependency context changed during capture")
@@ -130,17 +138,28 @@ def capture_inputs(repo, destination):
     return manifest
 
 
-def verify_capture(destination, manifest):
-    if input_files(destination) != [Path(entry["path"]) for entry in manifest]:
-        raise BootstrapError("Frozen dependency file inventory changed")
+def verify_capture(repo, manifest):
+    """Re-hash the readonly checkout after BuildKit consumed its context."""
+    if not isinstance(manifest, list):
+        raise BootstrapError("Dependency input manifest is malformed")
+    names = tracked_input_files(repo)
+    if names != [Path(entry["path"]) for entry in manifest]:
+        raise BootstrapError("Tracked dependency file inventory changed")
     for entry in manifest:
-        if hashlib.sha256(read_input(destination, entry["path"])).hexdigest() != entry["sha256"]:
+        if hashlib.sha256(read_input(repo, entry["path"])).hexdigest() != entry["sha256"]:
             raise BootstrapError("Frozen dependency input changed: " + entry["path"])
 
 
-def bounded_command(command, *, maximum=2 * 1024 * 1024, timeout=90):
+def bounded_command(command, *, maximum=2 * 1024 * 1024, timeout=90,
+                    environment=None, input_data=None):
     """Bound both pipe streams while reading, including on native Windows."""
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=None if environment is None else {**os.environ, **dict(environment)},
+    )
     output = {"stdout": bytearray(), "stderr": bytearray()}
     lock = threading.Lock()
     overflow = threading.Event()
@@ -165,6 +184,18 @@ def bounded_command(command, *, maximum=2 * 1024 * 1024, timeout=90):
                for stream, name in ((process.stdout, "stdout"), (process.stderr, "stderr"))]
     for thread in threads:
         thread.start()
+    if input_data is not None:
+        def feed_input():
+            try:
+                assert process.stdin is not None
+                process.stdin.write(input_data)
+                process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        input_thread = threading.Thread(target=feed_input, daemon=True)
+        input_thread.start()
+    else:
+        input_thread = None
     deadline = time.monotonic() + timeout
     interrupted = None
     try:
@@ -183,6 +214,8 @@ def bounded_command(command, *, maximum=2 * 1024 * 1024, timeout=90):
         process.wait(timeout=5)
         for thread in threads:
             thread.join(timeout=1)
+        if input_thread is not None:
+            input_thread.join(timeout=1)
         for stream, thread in zip((process.stdout, process.stderr), threads):
             if not thread.is_alive():
                 stream.close()
@@ -196,26 +229,163 @@ def bounded_command(command, *, maximum=2 * 1024 * 1024, timeout=90):
     return stdout
 
 
-def docker(*args):
-    return bounded_command(["docker", "--context", "desktop-linux", *args])
+def docker(*args, environment=None, input_data=None):
+    return bounded_command(
+        ["docker", "--context", "desktop-linux", *args],
+        environment=environment,
+        input_data=input_data,
+    )
+
+
+def docker_live(command, *, environment=None, timeout=4 * 60 * 60,
+                maximum=8 * 1024 * 1024):
+    """Stream a BuildKit command without creating a host-side build log."""
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=None if environment is None else {**os.environ, **dict(environment)},
+        text=False,
+        bufsize=0,
+    )
+    output = bytearray()
+    warned = False
+    deadline = time.monotonic() + timeout
+    try:
+        assert process.stdout is not None
+        for line in iter(process.stdout.readline, b""):
+            if len(output) < maximum:
+                output.extend(line[: maximum - len(output)])
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
+            if not warned and time.monotonic() >= deadline:
+                warned = True
+                print(
+                    "[docker-bootstrap] Build exceeded its observation budget; "
+                    "waiting for the Docker client to finish",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        code = process.wait()
+    except KeyboardInterrupt:
+        process.wait()
+        raise
+    return code, bytes(output)
+
+
+def _compose_prefix(repo, project):
+    repo = Path(repo).resolve(strict=True)
+    return [
+        "compose", "--project-name", project,
+        "--project-directory", str(repo),
+        "-f", str(repo / "compose.toolchain.yaml"),
+    ]
+
+
+def control_volume_name(project):
+    """Return the stable control volume for one Compose project."""
+    if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
+        raise BootstrapError("Invalid Compose project for toolchain control volume")
+    suffix = hashlib.sha256(project.encode("utf-8")).hexdigest()[:16]
+    return f"{CONTROL_VOLUME_PREFIX}{project[:180]}-{suffix}"
+
+
+def toolchain_image_reference(project):
+    """Return the immutable local tag reserved for one Compose group."""
+    if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
+        raise BootstrapError("Invalid Compose project for toolchain image")
+    suffix = hashlib.sha256(project.encode("utf-8")).hexdigest()[:16]
+    segment = project[:96].rstrip("-_") or "fullmag"
+    return f"fullmag/{segment}-{suffix}-fem-gpu-toolchain:cuda12.6.3"
+
+
+def _control_environment(project):
+    return {
+        "FULLMAG_COMPOSE_PROJECT": project,
+        CONTROL_VOLUME_ENV: control_volume_name(project),
+        "FULLMAG_CONTROL_ROOT": CONTROL_ROOT,
+    }
+
+
+def ensure_control_volume(project):
+    volume = control_volume_name(project)
+    try:
+        raw = docker("volume", "inspect", volume)
+        value = json.loads(raw)
+        if not isinstance(value, list) or len(value) != 1:
+            raise BootstrapError("Toolchain control volume inspection is malformed")
+    except BootstrapError as error:
+        if "no such volume" not in str(error).lower() and "volume not found" not in str(error).lower():
+            raise
+        docker(
+            "volume", "create",
+            "--label", f"com.fullmag.compose.project={project}",
+            "--label", f"com.fullmag.toolchain.control.schema={CONTROL_VOLUME_SCHEMA}",
+            "--label", f"com.fullmag.toolchain.control.project={project}",
+            "--label", f"com.fullmag.toolchain.control.mount={CONTROL_ROOT}",
+            volume,
+        )
+        value = json.loads(docker("volume", "inspect", volume))
+    document = value[0]
+    labels = document.get("Labels") if isinstance(document, dict) else None
+    if (not isinstance(labels, dict)
+            or labels.get("com.fullmag.compose.project") != project
+            or labels.get("com.fullmag.toolchain.control.schema") != CONTROL_VOLUME_SCHEMA
+            or labels.get("com.fullmag.toolchain.control.project") != project
+            or labels.get("com.fullmag.toolchain.control.mount") != CONTROL_ROOT):
+        raise BootstrapError("Toolchain control volume belongs to another Compose project")
+    return volume
+
+
+def _control_command(repo, project, relative, *, read=False):
+    if Path(relative).is_absolute() or ".." in Path(relative).parts:
+        raise BootstrapError("Unsafe toolchain control-volume path")
+    script = (
+        'set -eu; root="$FULLMAG_CONTROL_ROOT"; rel="$1"; '
+        'case "$rel" in /*|*..*) exit 2;; esac; '
+        'cat "$root/$rel"'
+        if read else
+        'set -eu; root="$FULLMAG_CONTROL_ROOT"; rel="$1"; '
+        'case "$rel" in /*|*..*) exit 2;; esac; '
+        'dest="$root/$rel"; mkdir -p "$(dirname "$dest")"; '
+        'tmp="$dest.$$"; cat > "$tmp"; mv -f "$tmp" "$dest"'
+    )
+    return [
+        *_compose_prefix(repo, project), "--profile", "toolchain-control",
+        "run", "--rm", "--no-deps", "-T", "--entrypoint", "/bin/sh",
+        "toolchain-control", "-c", script, "--", str(relative),
+    ]
+
+
+def write_control(repo, project, relative, data):
+    docker(
+        *_control_command(repo, project, relative),
+        environment=_control_environment(project),
+        input_data=data,
+    )
+
+
+def read_control(repo, project, relative):
+    return docker(
+        *_control_command(repo, project, relative, read=True),
+        environment=_control_environment(project),
+    ).encode("utf-8")
 
 
 
 def initialize_host_storage(layout, volume_probe):
-    """Admit the existing volume before creating the operator-selected root."""
+    """Admit an already configured Windows storage root without creating build data."""
     root = Path(layout["storage_root"])
-    ancestor = root
-    while not os.path.lexists(ancestor):
-        ancestor = ancestor.parent
-    volume_probe(ancestor)
-    storage.initialize(layout)
+    if not root.is_dir():
+        raise BootstrapError(
+            "Docker bootstrap requires an existing configured storage root; "
+            "run setup_docker.py first"
+        )
     volume_probe(root)
 
 
 def compose_project(layout, *, direct_development=False):
     """Bind development dependency builds to the registered checkout group."""
-    if not direct_development:
-        return "fullmag-toolchain"
     from docker_compose_identity import compose_project_identity
     return compose_project_identity(layout)["project_name"]
 
@@ -232,73 +402,108 @@ def build(repo, *, direct_development=False):
         raise BootstrapError("Docker Desktop must use the Linux engine")
     initialize_host_storage(layout, local_volume)
     root = Path(layout["storage_root"])
+    control_volume = ensure_control_volume(project_name)
+    control_environment = _control_environment(project_name)
+    previous = None
+    try:
+        previous = json.loads(read_control(repo, project_name, CONTROL_RECEIPT))
+    except BootstrapError as error:
+        message = str(error).lower()
+        if "no such file" not in message and "not found" not in message:
+            raise
     admission_check = assert_bootstrap_reconciled if direct_development else assert_fresh_host
-    admission_check(root)
+    admission_check(root, previous)
     lock = storage.validate_path(root / "locks/fullmag-heavy.lock", root)
     # Hold the same durable host slot through capture, Docker and inspection.
     with storage.file_lock(lock, "Docker dependency toolchain build"):
-        admission_check(root)
-        run = storage.validate_path(Path(layout["runs_root"]) / ("toolchain-bootstrap-" + uuid.uuid4().hex),
-                                    layout["build_storage_root"])
-        run.mkdir(mode=0o700)
-        context = run / "context"
-        context.mkdir(mode=0o700)
-        receipt_path = run / "receipt.json"
-        admission_path = root / "index/docker-toolchain-bootstrap.json"
-        receipt = {"schema": "fullmag.docker-toolchain-bootstrap.v1", "state": "capturing",
-                   "repo_root": str(repo), "worktree_id": layout["worktree_id"],
-                   "source_commit": storage.git(repo, "rev-parse", "HEAD"),
-                   "context_root": str(context), "receipt_path": str(receipt_path),
-                   "qualification": "NOT VERIFIED",
-                   "build_route": "direct-development" if direct_development else "fresh-host-enrollment",
-                   "compose_project": project_name}
-        storage.atomic_json(receipt_path, receipt)
-        storage.atomic_json(admission_path, receipt)
+        admission_check(root, previous)
+        manifest = capture_inputs(repo)
+        compose_file = repo / "compose.toolchain.yaml"
+        definitions = [
+            *_compose_prefix(repo, project_name),
+            "--profile", "toolchain",
+            "--profile", "toolchain-control",
+        ]
+        compose_environment = {
+            **control_environment,
+            "FULLMAG_TOOLCHAIN_CONTEXT": str(repo),
+            "FULLMAG_TOOLCHAIN_IMAGE": toolchain_image_reference(project_name),
+        }
+        configured = json.loads(docker(
+            *definitions, "config", "--format", "json", environment=compose_environment
+        ))
+        if configured.get("name") != project_name:
+            raise BootstrapError("Dependency Compose lost the selected checkout project")
+        if set(configured.get("services", {})) != {SERVICE, "toolchain-control"}:
+            raise BootstrapError("Unexpected dependency Compose services")
+        configured_volume = configured.get("volumes", {}).get("toolchain-control", {})
+        if (configured_volume.get("name") != control_volume
+                or configured_volume.get("external") is not True):
+            raise BootstrapError("Toolchain control volume is not the selected external group volume")
+        control_service = configured["services"]["toolchain-control"]
+        mounts = control_service.get("volumes", [])
+        if not any(isinstance(mount, dict)
+                   and mount.get("source") == control_volume
+                   and mount.get("target") == CONTROL_ROOT
+                   for mount in mounts):
+            raise BootstrapError("Toolchain control helper lost its group volume mount")
+        service = configured["services"][SERVICE]
+        build_definition = service.get("build", {})
+        build_context = Path(build_definition.get("context", "")).resolve()
+        if (build_definition.get("target") != "fem-gpu-dev"
+                or build_definition.get("dockerfile") != "docker/fem-gpu/Dockerfile"
+                or build_context != repo.resolve()):
+            raise BootstrapError("Dependency Compose changed the canonical Dockerfile/context/target")
+        compose_sha256 = hashlib.sha256(compose_file.read_bytes()).hexdigest()
+        receipt = {
+            "schema": "fullmag.docker-toolchain-bootstrap.v1",
+            "state": "capturing",
+            "repo_root": str(repo),
+            "worktree_id": layout["worktree_id"],
+            "source_commit": storage.git(repo, "rev-parse", "HEAD"),
+            "source_context": str(repo),
+            "control_volume": control_volume,
+            "control_root": CONTROL_ROOT,
+            "receipt_path": f"{CONTROL_ROOT}/{CONTROL_RECEIPT}",
+            "build_log_path": f"{CONTROL_ROOT}/{CONTROL_BUILD_LOG}",
+            "compose_file": str(compose_file),
+            "compose_sha256": compose_sha256,
+            "qualification": "NOT VERIFIED",
+            "build_route": "direct-development" if direct_development else "fresh-host-enrollment",
+            "compose_project": project_name,
+            "source_inputs": manifest,
+        }
         try:
-            manifest = capture_inputs(repo, context)
-            receipt["source_inputs"] = manifest
-            definitions = ["compose", "--project-name", project_name, "--project-directory", str(context), "-f",
-                           str(context / "compose.toolchain.yaml"), "--profile", "toolchain"]
-            configured = json.loads(docker(*definitions, "config", "--format", "json"))
-            if configured.get("name") != project_name:
-                raise BootstrapError("Dependency Compose lost the selected checkout project")
-            if set(configured.get("services", {})) != {SERVICE}:
-                raise BootstrapError("Unexpected dependency Compose services")
-            service = configured["services"][SERVICE]
-            if (service.get("build", {}).get("target") != "fem-gpu-dev"
-                    or service.get("build", {}).get("dockerfile") != "docker/fem-gpu/Dockerfile"
-                    or Path(service["build"]["context"]).resolve() != context.resolve()):
-                raise BootstrapError("Dependency Compose changed the canonical Dockerfile/context/target")
-            spec = run / "compose.json"
-            storage.atomic_json(spec, configured)
-            receipt.update(state="building", compose_file=str(spec),
-                           compose_sha256=hashlib.sha256(spec.read_bytes()).hexdigest())
-            storage.atomic_json(receipt_path, receipt)
-            storage.atomic_json(admission_path, receipt)
-            code = storage.run(layout, ["docker", "--context", "desktop-linux", "compose", "--project-name", project_name, "-f", str(spec),
-                                        "--profile", "toolchain", "build", SERVICE])
+            receipt["state"] = "building"
+            write_control(repo, project_name, CONTROL_RECEIPT,
+                          (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
+            build_command = [
+                "docker", "--context", "desktop-linux", *definitions,
+                "build", "--pull=false", "--progress=plain", SERVICE,
+            ]
+            code, build_output = docker_live(build_command, environment=compose_environment)
+            write_control(repo, project_name, CONTROL_BUILD_LOG, build_output)
             receipt["exit_code"] = code
             if code:
                 raise BootstrapError(f"Toolchain build failed (exit {code}); cache and context retained")
-            verify_capture(context, manifest)
-            observed = json.loads(docker("image", "inspect", service["image"]))
+            verify_capture(repo, manifest)
+            observed = json.loads(docker("image", "inspect", service["image"], environment=compose_environment))
             if len(observed) != 1 or not re.fullmatch(r"sha256:[a-f0-9]{64}", observed[0].get("Id", "")):
                 raise BootstrapError("Built image has no immutable image identity")
             immutable = observed[0]["Id"]
-            probe_name = "fullmag-toolchain-manifest-" + uuid.uuid4().hex
             receipt.update(state="reading_dependency_manifest", image=service["image"],
-                           image_id=immutable, manifest_probe_container=probe_name)
-            storage.atomic_json(receipt_path, receipt)
-            storage.atomic_json(admission_path, receipt)
-            raw_manifest = docker("run", "--rm", "--name", probe_name,
-                                  "--label", "com.docker.compose.project=" + project_name,
-                                  "--label", "com.docker.compose.service=toolchain-manifest-probe",
-                                  "--network", "none",
-                                  "--runtime", "runc", "--read-only", "--cap-drop", "ALL",
-                                  "--security-opt", "no-new-privileges:true", "--user", "65532:65532",
-                                  "--pids-limit", "16", "--memory", "64m", "--cpus", "0.25",
-                                  "--env", "NVIDIA_VISIBLE_DEVICES=void", "--entrypoint", "/bin/cat",
-                                  immutable, DEPENDENCY_MANIFEST)
+                           image_id=immutable,
+                           manifest_probe_service=SERVICE)
+            write_control(repo, project_name, CONTROL_RECEIPT,
+                          (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
+            raw_manifest = docker(
+                *definitions, "run", "--rm", "--no-deps", "-T",
+                "--network", "none", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges:true", "--user", "65532:65532",
+                "--pids-limit", "16", "--memory", "64m", "--cpus", "0.25",
+                "--env", "NVIDIA_VISIBLE_DEVICES=void", "--entrypoint", "/bin/cat",
+                SERVICE, DEPENDENCY_MANIFEST, environment=compose_environment,
+            )
             manifest_bytes = raw_manifest.encode("utf-8")
             if len(manifest_bytes) > 2 * 1024 * 1024:
                 raise BootstrapError("Built dependency manifest is too large")
@@ -309,13 +514,10 @@ def build(repo, *, direct_development=False):
                     or installed["build"].get("phase") != "runtime"
                     or not isinstance(installed.get("actual"), dict)):
                 raise BootstrapError("Built image lacks the runtime dependency manifest")
-            manifest_path = run / "dependency-versions.json"
-            with manifest_path.open("xb") as stream:
-                stream.write(manifest_bytes)
-                stream.flush()
-                os.fsync(stream.fileno())
+            manifest_path = f"{CONTROL_ROOT}/toolchain/dependency-versions.json"
+            write_control(repo, project_name, "toolchain/dependency-versions.json", manifest_bytes)
             receipt.update(state="built", dependency_manifest=DEPENDENCY_MANIFEST,
-                           installed_manifest=str(manifest_path),
+                           installed_manifest=manifest_path,
                            installed_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
                            next_step=("Start the direct Compose development services; GPU execution is not yet verified"
                                       if direct_development else
@@ -325,11 +527,21 @@ def build(repo, *, direct_development=False):
                          or receipt["state"] == "reading_dependency_manifest")
             receipt.update(state="outcome_unknown_resources_retained" if uncertain else "failed_confirmed",
                            error=str(error))
+            try:
+                write_control(repo, project_name, CONTROL_RECEIPT,
+                              (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
+            except BaseException as receipt_error:
+                print(f"Docker bootstrap: could not persist control receipt: {receipt_error}",
+                      file=sys.stderr)
             raise
         finally:
-            storage.atomic_json(receipt_path, receipt)
-            storage.atomic_json(admission_path, receipt)
-            print(json.dumps({"receipt": str(receipt_path), **receipt}, indent=2))
+            try:
+                write_control(repo, project_name, CONTROL_RECEIPT,
+                              (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
+            except BaseException as receipt_error:
+                print(f"Docker bootstrap: could not persist final control receipt: {receipt_error}",
+                      file=sys.stderr)
+            print(json.dumps({"receipt": receipt["receipt_path"], **receipt}, indent=2))
         return receipt
 
 
@@ -337,7 +549,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--direct-development", action="store_true",
-                        help="Build dependencies for the independent Compose development route")
+                        help="Build dependencies for the selected checkout's Compose development group")
     args = parser.parse_args(argv)
     try:
         build(args.repo_root, direct_development=args.direct_development)
