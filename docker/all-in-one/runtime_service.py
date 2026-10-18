@@ -713,6 +713,23 @@ def _validate_host_profile(value: Mapping[str, Any], paths: RuntimePaths) -> dic
     return config
 
 
+def _host_readiness_migration_arguments() -> list[str]:
+    path = os.environ.get("FULLMAG_HOST_READINESS_MIGRATION_REQUEST")
+    digest = os.environ.get("FULLMAG_HOST_READINESS_MIGRATION_REQUEST_SHA256")
+    if path is None and digest is None:
+        return []
+    if (
+        not isinstance(path, str)
+        or re.fullmatch(r"/run/fullmag/control/runs/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}/host-readiness-migration\.json", path) is None
+        or not isinstance(digest, str) or not HEX64.fullmatch(digest)
+    ):
+        _fail("host readiness migration requires a canonical control-volume path and SHA-256")
+    raw = _bounded_regular(Path(path), "operator host readiness migration intent", 64 * 1024)
+    if hashlib.sha256(raw).hexdigest() != digest:
+        _fail("operator host readiness migration intent differs from its pinned bytes")
+    return ["--host-readiness-migration", path]
+
+
 def initialize_host_configuration(paths: RuntimePaths) -> dict[str, Any]:
     """Discover native devices and initialize the exact shared Rust ledger."""
     daemon_host_id = _validated_docker_host_id()
@@ -724,7 +741,8 @@ def initialize_host_configuration(paths: RuntimePaths) -> dict[str, Any]:
     try:
         result = subprocess.run(
             [str(executable), "--initialize-docker-host", "--ledger-root", str(HOST_LEDGER_ROOT),
-             "--store-root", str(paths.store), "--host-id", logical_host_id],
+             "--store-root", str(paths.store), "--host-id", logical_host_id,
+             *_host_readiness_migration_arguments()],
             cwd=str(paths.state), env=process_environment(paths, service=True),
             stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
         )

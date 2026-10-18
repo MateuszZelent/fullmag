@@ -1106,6 +1106,7 @@ jobs:
             scripts/test_windows_folder_evidence.py \
             scripts/test_windows_folder_probe.py \
             scripts/test_docker_runtime_provenance.py \
+            scripts/test_docker_host_readiness_migration.py \
             scripts/test_docker_backend_dev.py; do
             echo "::group::$test_file"
             python -B "$test_file" || failed=1
@@ -1126,3 +1127,6 @@ jobs:
       - name: Verify native storage delegation contracts
         if: ${{ !cancelled() }}
         run: cargo test --locked -p fullmag-session --lib docker_desktop_storage::tests --no-fail-fast
+      - name: Verify fenced host readiness migration contracts
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p fullmag-session --lib host_resource_ledger::tests --no-fail-fast

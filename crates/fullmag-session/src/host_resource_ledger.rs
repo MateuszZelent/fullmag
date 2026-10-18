@@ -59,6 +59,21 @@ const HOST_RESOURCE_LEDGER_MARKER_FILE: &str = "HOST_RESOURCE_LEDGER.init.json";
 const HOST_COMPUTE_NODE_SNAPSHOT_FILE: &str = "COMPUTE_NODE_SNAPSHOT.json";
 const HOST_RUNTIME_READINESS_FILE: &str = "HOST_RUNTIME_READINESS.json";
 const HOST_RUNTIME_READINESS_CAS_DIR: &str = "runtime-state/cas/readiness";
+const HOST_RUNTIME_READINESS_MIGRATION_BACKUP_CAS_DIR: &str =
+    "runtime-state/cas/readiness-migration-ledger-backups";
+const HOST_RUNTIME_READINESS_MIGRATION_POST_LEDGER_CAS_DIR: &str =
+    "runtime-state/cas/readiness-migration-ledgers";
+const HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_CAS_DIR: &str =
+    "runtime-state/cas/readiness-migration-receipts";
+const HOST_RUNTIME_READINESS_MIGRATION_REQUEST_INDEX_DIR: &str =
+    "runtime-state/readiness-migrations/requests";
+pub const HOST_RUNTIME_READINESS_MIGRATION_REQUEST_SCHEMA_V1: &str =
+    "host_runtime_readiness_migration_request.v1";
+const HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_SCHEMA_V1: &str =
+    "host_runtime_readiness_migration_receipt.v1";
+const HOST_RUNTIME_READINESS_MIGRATION_INDEX_SCHEMA_V1: &str =
+    "host_runtime_readiness_migration_index.v1";
+pub const MAX_HOST_RUNTIME_READINESS_MIGRATION_REQUEST_BYTES: usize = 64 * 1024;
 const HOST_COMPUTE_NODE_SNAPSHOT_CAS_DIR: &str = "runtime-state/cas/snapshot";
 /// Boot-relative ordering of one published snapshot, keyed by its digest.
 /// Kept outside the snapshot bytes so older readers never observe it.
@@ -233,6 +248,97 @@ impl HostRuntimeState {
         }
         Ok(())
     }
+}
+
+/// A narrowly fenced operator request to rotate only the persisted host
+/// capability digest after an explicit runtime-readiness ABI migration.
+/// `expected_ledger_sha256` hashes the exact bytes of HOST_RESOURCE_LEDGER.json.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostRuntimeReadinessMigrationRequest {
+    pub schema_version: String,
+    pub expected_host_id: String,
+    pub expected_inventory_sha256: String,
+    pub expected_ledger_sha256: String,
+    pub expected_readiness_sha256: String,
+    pub expected_previous_capabilities_sha256: String,
+    pub expected_next_capabilities_sha256: String,
+}
+
+impl HostRuntimeReadinessMigrationRequest {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != HOST_RUNTIME_READINESS_MIGRATION_REQUEST_SCHEMA_V1 {
+            bail!("unsupported host runtime readiness migration request schema");
+        }
+        if self.expected_host_id.trim().is_empty()
+            || self.expected_host_id.len() > 256
+            || self.expected_host_id.chars().any(char::is_control)
+        {
+            bail!("host readiness migration expected_host_id is empty or invalid");
+        }
+        for (value, field) in [
+            (&self.expected_inventory_sha256, "expected_inventory_sha256"),
+            (&self.expected_ledger_sha256, "expected_ledger_sha256"),
+            (&self.expected_readiness_sha256, "expected_readiness_sha256"),
+            (
+                &self.expected_previous_capabilities_sha256,
+                "expected_previous_capabilities_sha256",
+            ),
+            (
+                &self.expected_next_capabilities_sha256,
+                "expected_next_capabilities_sha256",
+            ),
+        ] {
+            validate_sha256(value, field)?;
+        }
+        if self.expected_previous_capabilities_sha256 == self.expected_next_capabilities_sha256 {
+            bail!("host readiness migration must change the expected capabilities digest");
+        }
+        Ok(())
+    }
+
+    /// Digest of the canonical typed request. This is intentionally separate
+    /// from the digest of the exact operator JSON file bytes, which is recorded
+    /// alongside it in the durable migration receipt.
+    pub fn canonical_sha256(&self) -> Result<String> {
+        self.validate()?;
+        let bytes = serde_json::to_vec(self)
+            .context("serializing host runtime readiness migration request")?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+}
+
+/// Durable evidence for one exact capability-readiness migration. The request
+/// hash covers the canonical typed request; operator_request_sha256 covers the
+/// original bounded JSON file bytes provided by the gateway.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostRuntimeReadinessMigrationReceipt {
+    pub schema_version: String,
+    pub request: HostRuntimeReadinessMigrationRequest,
+    pub request_sha256: String,
+    pub operator_request_sha256: String,
+    pub old_readiness_sha256: String,
+    pub new_readiness_sha256: String,
+    pub pre_migration_ledger_sha256: String,
+    pub post_migration_ledger_sha256: String,
+    pub ledger_backup_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct HostRuntimeReadinessMigrationIndex {
+    schema_version: String,
+    request_sha256: String,
+    operator_request_sha256: String,
+    receipt_sha256: String,
+}
+
+struct ValidatedHostRuntimeReadinessMigration {
+    receipt: HostRuntimeReadinessMigrationReceipt,
+    backup_bytes: Vec<u8>,
+    post_bytes: Vec<u8>,
+    migrated_readiness: HostRuntimeReadiness,
 }
 
 impl HostRuntimeReadiness {
@@ -2121,6 +2227,32 @@ impl HostResourceLedger {
         Self::open(root, policy)
     }
 
+    /// Attach a new application state root to an already existing shared host
+    /// ledger for the explicitly fenced readiness-migration path. The global
+    /// ledger is validated before the application's registry entry is pinned;
+    /// this never creates or reconstructs a missing ledger.
+    pub fn open_existing_for_capability_migration(
+        application_state_root: &Path,
+        root: impl AsRef<Path>,
+        policy: HostResourceLedgerPolicy,
+    ) -> Result<Self> {
+        policy.validate()?;
+        if policy.schema_version != HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2 {
+            bail!("capability readiness migration requires a runtime-readiness host policy");
+        }
+        let canonical_root = canonical_ledger_root(root.as_ref(), false)?;
+        Self::open(&canonical_root, policy.clone())?;
+        let pinned_root = crate::host_ledger_registry::pin_host_ledger_root(
+            application_state_root,
+            &canonical_root,
+            &policy,
+        )?;
+        if pinned_root != canonical_root {
+            bail!("application host-ledger registry resolved a different migration root");
+        }
+        Self::open_for_application(application_state_root, &canonical_root, policy)
+    }
+
     /// Open a host ledger for a process launched by the local application.
     /// Missing or invalid application state fails closed.
     pub fn open_for_current_application(
@@ -2418,6 +2550,496 @@ impl HostResourceLedger {
         self.publish_document_locked(&document)?;
         self.gc_unreachable_snapshot_cas_locked(&document)?;
         Ok(readiness_digest)
+    }
+
+    /// Apply the one explicitly authorized capability-digest migration to an
+    /// already pinned v4 host ledger. The complete request is fenced by the
+    /// exact ledger bytes and readiness pointer observed by the operator.
+    /// Immutable evidence is published before the one pointer-document write;
+    /// no owner, reservation, policy, or legacy evidence is removed.
+    pub fn migrate_runtime_capabilities(
+        &self,
+        request: &HostRuntimeReadinessMigrationRequest,
+        operator_request_sha256: &str,
+        readiness: &HostRuntimeReadiness,
+    ) -> Result<HostRuntimeReadinessMigrationReceipt> {
+        request.validate()?;
+        validate_sha256(operator_request_sha256, "operator_request_sha256")?;
+        readiness.validate_persisted(&self.policy)?;
+        let request_sha256 = request.canonical_sha256()?;
+        let _host_writer = self.writer.acquire()?;
+        let (mut document, current_bytes) = self.read_document_locked_with_bytes()?;
+        let current_ledger_sha256 = runtime_cas_digest(&current_bytes);
+        let prepared = self.load_validated_migration_evidence_locked(
+            request,
+            operator_request_sha256,
+        )?;
+
+        if current_ledger_sha256 != request.expected_ledger_sha256 {
+            if let Some(evidence) = prepared.as_ref() {
+                if let Some(receipt) = self.verify_loaded_migration_locked(
+                    request,
+                    readiness,
+                    &document,
+                    &current_bytes,
+                    evidence,
+                )? {
+                    if current_ledger_sha256 == receipt.post_migration_ledger_sha256
+                        && document.runtime_state.as_ref().is_some_and(|state| {
+                            state.readiness_sha256 == receipt.new_readiness_sha256
+                        })
+                    {
+                        return Ok(receipt);
+                    }
+                }
+            }
+            bail!("host readiness migration base ledger digest differs from the exact operator preview");
+        }
+
+        if let Some(evidence) = prepared {
+            return self.commit_prepared_migration_locked(
+                request,
+                readiness,
+                &document,
+                &current_bytes,
+                evidence,
+            );
+        }
+
+        if document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V4 {
+            bail!("host readiness capability migration requires an existing v4 ledger");
+        }
+        if document.policy.host_id != request.expected_host_id
+            || document.policy.topology_sha256 != request.expected_inventory_sha256
+            || document.policy != self.policy
+        {
+            bail!("host readiness migration host or inventory identity differs from the pinned ledger");
+        }
+        let current_state = document
+            .runtime_state
+            .as_ref()
+            .context("v4 host ledger is missing runtime state")?;
+        if current_state.readiness_sha256 != request.expected_readiness_sha256 {
+            bail!("host readiness migration pointer differs from the exact operator preview");
+        }
+        if document
+            .reservations
+            .iter()
+            .any(|reservation| reservation.state != HostResourceReservationState::Released)
+        {
+            bail!("host readiness migration requires all reservations to be released");
+        }
+        if self.active_inventory_owner_locked()?.is_some() {
+            bail!("host readiness migration requires the active inventory owner to be absent");
+        }
+
+        let old_readiness = self.read_runtime_readiness_locked()?;
+        if old_readiness.inventory_sha256.as_deref()
+            != Some(request.expected_inventory_sha256.as_str())
+            || old_readiness.capabilities_sha256.as_deref()
+                != Some(request.expected_previous_capabilities_sha256.as_str())
+        {
+            bail!("persisted readiness digests differ from the migration request");
+        }
+        if readiness.inventory_sha256.as_deref()
+            != Some(request.expected_inventory_sha256.as_str())
+            || readiness.capabilities_sha256.as_deref()
+                != Some(request.expected_next_capabilities_sha256.as_str())
+        {
+            bail!("live readiness digests differ from the migration request");
+        }
+        let mut target_with_previous_capabilities = readiness.clone();
+        target_with_previous_capabilities.capabilities_sha256 =
+            old_readiness.capabilities_sha256.clone();
+        if !runtime_readiness_abi_compatible(&old_readiness, &target_with_previous_capabilities) {
+            bail!("host readiness migration changes ABI facts beyond the requested capability digest");
+        }
+
+        let backup_sha256 = publish_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_MIGRATION_BACKUP_CAS_DIR,
+            &current_bytes,
+            MAX_LEDGER_BYTES,
+            "pre-migration host ledger backup",
+        )?;
+        if backup_sha256 != request.expected_ledger_sha256 {
+            bail!("published host ledger backup digest differs from the operator request");
+        }
+        let readiness_bytes = bounded_json_bytes(
+            readiness,
+            MAX_HOST_RUNTIME_READINESS_BYTES,
+            "host runtime readiness migration target",
+        )?;
+        let new_readiness_sha256 = publish_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_CAS_DIR,
+            &readiness_bytes,
+            MAX_HOST_RUNTIME_READINESS_BYTES,
+            "host runtime readiness",
+        )?;
+        document.runtime_state = Some(HostRuntimeState {
+            schema_version: HOST_RUNTIME_STATE_SCHEMA_V1.to_string(),
+            readiness_sha256: new_readiness_sha256.clone(),
+            snapshot_sha256: None,
+        });
+        validate_ledger_document(&document, &self.root)?;
+        let post_ledger_bytes = bounded_json_bytes(&document, MAX_LEDGER_BYTES, "ledger")?;
+        let post_migration_ledger_sha256 = publish_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_MIGRATION_POST_LEDGER_CAS_DIR,
+            &post_ledger_bytes,
+            MAX_LEDGER_BYTES,
+            "post-migration host ledger",
+        )?;
+        let receipt = HostRuntimeReadinessMigrationReceipt {
+            schema_version: HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_SCHEMA_V1.to_string(),
+            request: request.clone(),
+            request_sha256: request_sha256.clone(),
+            operator_request_sha256: operator_request_sha256.to_string(),
+            old_readiness_sha256: request.expected_readiness_sha256.clone(),
+            new_readiness_sha256: new_readiness_sha256.clone(),
+            pre_migration_ledger_sha256: current_ledger_sha256,
+            post_migration_ledger_sha256: post_migration_ledger_sha256.clone(),
+            ledger_backup_sha256: backup_sha256,
+        };
+        validate_readiness_migration_receipt(&receipt)?;
+        let receipt_bytes = bounded_json_bytes(
+            &receipt,
+            MAX_HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_BYTES,
+            "host readiness migration receipt",
+        )?;
+        let receipt_sha256 = publish_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_CAS_DIR,
+            &receipt_bytes,
+            MAX_HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_BYTES,
+            "host readiness migration receipt",
+        )?;
+        let index = HostRuntimeReadinessMigrationIndex {
+            schema_version: HOST_RUNTIME_READINESS_MIGRATION_INDEX_SCHEMA_V1.to_string(),
+            request_sha256: request_sha256.clone(),
+            operator_request_sha256: operator_request_sha256.to_string(),
+            receipt_sha256,
+        };
+        let index_bytes = bounded_json_bytes(
+            &index,
+            MAX_HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_BYTES,
+            "host readiness migration request index",
+        )?;
+        let index_relative = readiness_migration_request_index_relative_path(&request_sha256)?;
+        crate::repository_path::create_parent(&self.root, &index_relative)?;
+        publish_immutable_exact(
+            &self.root,
+            &index_relative,
+            &index_bytes,
+            MAX_HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_BYTES,
+        )?;
+
+        // This is the sole mutable publication. The immutable backup, target,
+        // post-ledger image, receipt, and request index are already durable.
+        let ledger_path = checked_path(&self.root, HOST_RESOURCE_LEDGER_FILE)?;
+        reject_link(&ledger_path)?;
+        publish_exact(
+            &self.root,
+            HOST_RESOURCE_LEDGER_FILE,
+            &post_ledger_bytes,
+            MAX_LEDGER_BYTES,
+        )?;
+        let (published_document, published_bytes) = self.read_document_locked_with_bytes()?;
+        if published_bytes != post_ledger_bytes
+            || runtime_cas_digest(&published_bytes) != post_migration_ledger_sha256
+            || published_document.runtime_state.as_ref().is_none_or(|state| {
+                state.readiness_sha256 != new_readiness_sha256 || state.snapshot_sha256.is_some()
+            })
+        {
+            bail!("host readiness migration publication could not be confirmed from the ledger pointer");
+        }
+        Ok(receipt)
+    }
+
+    /// Verify that a prior exact migration committed and that the current
+    /// ledger still uses the approved capability ABI. This permits a persistent
+    /// operator request to survive ordinary later ledger writes/restarts while
+    /// leaving all ordinary readiness-upgrade guards in force.
+    pub fn verify_completed_runtime_capabilities_migration(
+        &self,
+        request: &HostRuntimeReadinessMigrationRequest,
+        operator_request_sha256: &str,
+        live_readiness: &HostRuntimeReadiness,
+    ) -> Result<Option<HostRuntimeReadinessMigrationReceipt>> {
+        request.validate()?;
+        validate_sha256(operator_request_sha256, "operator_request_sha256")?;
+        live_readiness.validate_persisted(&self.policy)?;
+        let _host_writer = self.writer.acquire()?;
+        let (document, bytes) = self.read_document_locked_with_bytes()?;
+        self.verify_completed_migration_locked(
+            request,
+            operator_request_sha256,
+            live_readiness,
+            &document,
+            &bytes,
+        )
+    }
+
+    fn verify_completed_migration_locked(
+        &self,
+        request: &HostRuntimeReadinessMigrationRequest,
+        operator_request_sha256: &str,
+        live_readiness: &HostRuntimeReadiness,
+        current_document: &HostResourceLedgerDocument,
+        current_bytes: &[u8],
+    ) -> Result<Option<HostRuntimeReadinessMigrationReceipt>> {
+        let Some(evidence) =
+            self.load_validated_migration_evidence_locked(request, operator_request_sha256)?
+        else {
+            return Ok(None);
+        };
+        self.verify_loaded_migration_locked(
+            request,
+            live_readiness,
+            current_document,
+            current_bytes,
+            &evidence,
+        )
+    }
+
+    fn load_validated_migration_evidence_locked(
+        &self,
+        request: &HostRuntimeReadinessMigrationRequest,
+        operator_request_sha256: &str,
+    ) -> Result<Option<ValidatedHostRuntimeReadinessMigration>> {
+        let request_sha256 = request.canonical_sha256()?;
+        let index_relative = readiness_migration_request_index_relative_path(&request_sha256)?;
+        let Some(index_bytes) = read_optional_bounded_regular_file(
+            &self.root,
+            &index_relative,
+            MAX_HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_BYTES,
+        )? else {
+            return Ok(None);
+        };
+        let index: HostRuntimeReadinessMigrationIndex = serde_json::from_slice(&index_bytes)
+            .context("corrupt host readiness migration request index")?;
+        if index.schema_version != HOST_RUNTIME_READINESS_MIGRATION_INDEX_SCHEMA_V1
+            || index.request_sha256 != request_sha256
+            || index.operator_request_sha256 != operator_request_sha256
+        {
+            bail!("host readiness migration index differs from the exact operator request");
+        }
+        let receipt_bytes = read_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_CAS_DIR,
+            &index.receipt_sha256,
+            MAX_HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_BYTES,
+            "host readiness migration receipt",
+        )?;
+        let receipt: HostRuntimeReadinessMigrationReceipt = serde_json::from_slice(&receipt_bytes)
+            .context("corrupt host readiness migration receipt")?;
+        validate_readiness_migration_receipt(&receipt)?;
+        if receipt.request != *request
+            || receipt.request_sha256 != request_sha256
+            || receipt.operator_request_sha256 != operator_request_sha256
+            || runtime_cas_digest(&receipt_bytes) != index.receipt_sha256
+        {
+            bail!("host readiness migration receipt does not bind the exact operator request");
+        }
+        let backup_bytes = read_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_MIGRATION_BACKUP_CAS_DIR,
+            &receipt.ledger_backup_sha256,
+            MAX_LEDGER_BYTES,
+            "pre-migration host ledger backup",
+        )?;
+        if runtime_cas_digest(&backup_bytes) != request.expected_ledger_sha256
+            || runtime_cas_digest(&backup_bytes) != receipt.pre_migration_ledger_sha256
+        {
+            bail!("host readiness migration backup does not match its exact base ledger");
+        }
+        let previous_document: HostResourceLedgerDocument = serde_json::from_slice(&backup_bytes)
+            .context("corrupt host ledger backup in migration receipt")?;
+        validate_ledger_document(&previous_document, &self.root)?;
+        let previous_state = previous_document
+            .runtime_state
+            .as_ref()
+            .context("migration backup is missing runtime state")?;
+        if previous_document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V4
+            || previous_document.policy != self.policy
+            || previous_document.policy.host_id != request.expected_host_id
+            || previous_document.policy.topology_sha256 != request.expected_inventory_sha256
+            || previous_state.readiness_sha256 != receipt.old_readiness_sha256
+            || previous_state.readiness_sha256 != request.expected_readiness_sha256
+        {
+            bail!("host readiness migration backup has a different host, policy, or readiness pointer");
+        }
+        let post_bytes = read_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_MIGRATION_POST_LEDGER_CAS_DIR,
+            &receipt.post_migration_ledger_sha256,
+            MAX_LEDGER_BYTES,
+            "post-migration host ledger",
+        )?;
+        let post_document: HostResourceLedgerDocument = serde_json::from_slice(&post_bytes)
+            .context("corrupt post-migration host ledger evidence")?;
+        validate_ledger_document(&post_document, &self.root)?;
+        if post_document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V4
+            || post_document.policy != previous_document.policy
+            || post_document.reservations != previous_document.reservations
+            || post_document.node_policy != previous_document.node_policy
+            || post_document.runtime_state.as_ref().is_none_or(|state| {
+                state.readiness_sha256 != receipt.new_readiness_sha256
+                    || state.snapshot_sha256.is_some()
+            })
+        {
+            bail!("post-migration ledger evidence changes state outside the readiness pointer");
+        }
+        let previous_readiness = self.read_readiness_cas_locked(&receipt.old_readiness_sha256)?;
+        let migrated_readiness = self.read_readiness_cas_locked(&receipt.new_readiness_sha256)?;
+        if previous_readiness.inventory_sha256.as_deref()
+            != Some(request.expected_inventory_sha256.as_str())
+            || previous_readiness.capabilities_sha256.as_deref()
+                != Some(request.expected_previous_capabilities_sha256.as_str())
+            || migrated_readiness.inventory_sha256.as_deref()
+                != Some(request.expected_inventory_sha256.as_str())
+            || migrated_readiness.capabilities_sha256.as_deref()
+                != Some(request.expected_next_capabilities_sha256.as_str())
+        {
+            bail!("host readiness migration evidence does not contain the requested capability transition");
+        }
+        let mut migrated_with_previous_capabilities = migrated_readiness.clone();
+        migrated_with_previous_capabilities.capabilities_sha256 =
+            previous_readiness.capabilities_sha256.clone();
+        if !runtime_readiness_abi_compatible(
+            &previous_readiness,
+            &migrated_with_previous_capabilities,
+        ) {
+            bail!("host readiness migration evidence changes additional ABI facts");
+        }
+        Ok(Some(ValidatedHostRuntimeReadinessMigration {
+            receipt,
+            backup_bytes,
+            post_bytes,
+            migrated_readiness,
+        }))
+    }
+
+    fn verify_loaded_migration_locked(
+        &self,
+        request: &HostRuntimeReadinessMigrationRequest,
+        live_readiness: &HostRuntimeReadiness,
+        current_document: &HostResourceLedgerDocument,
+        current_bytes: &[u8],
+        evidence: &ValidatedHostRuntimeReadinessMigration,
+    ) -> Result<Option<HostRuntimeReadinessMigrationReceipt>> {
+        let receipt = &evidence.receipt;
+        if current_document.policy.host_id != request.expected_host_id
+            || current_document.policy.topology_sha256 != request.expected_inventory_sha256
+        {
+            bail!("current host identity differs from the completed readiness migration");
+        }
+        let current_state = current_document
+            .runtime_state
+            .as_ref()
+            .context("current v4 ledger is missing runtime state")?;
+        if current_document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V4 {
+            bail!("completed readiness migration requires a current v4 ledger");
+        }
+        let current_ledger_sha256 = runtime_cas_digest(current_bytes);
+        if current_ledger_sha256 == request.expected_ledger_sha256
+            && current_state.readiness_sha256 == receipt.old_readiness_sha256
+        {
+            // All immutable evidence may have been published before a crash,
+            // while the mutable ledger pointer still proves no commit occurred.
+            return Ok(None);
+        }
+        if current_state.readiness_sha256 == receipt.old_readiness_sha256 {
+            bail!("host readiness migration has not committed from the exact base ledger");
+        }
+        let current_readiness = self.read_runtime_readiness_locked()?;
+        if current_readiness.capabilities_sha256.as_deref()
+            != Some(request.expected_next_capabilities_sha256.as_str())
+            || current_readiness.inventory_sha256.as_deref()
+                != Some(request.expected_inventory_sha256.as_str())
+            || live_readiness.capabilities_sha256.as_deref()
+                != Some(request.expected_next_capabilities_sha256.as_str())
+            || !runtime_readiness_abi_compatible(&current_readiness, live_readiness)
+        {
+            bail!("current readiness no longer matches the completed migration and live probe");
+        }
+        Ok(Some(evidence.receipt.clone()))
+    }
+
+    fn commit_prepared_migration_locked(
+        &self,
+        request: &HostRuntimeReadinessMigrationRequest,
+        live_readiness: &HostRuntimeReadiness,
+        current_document: &HostResourceLedgerDocument,
+        current_bytes: &[u8],
+        evidence: ValidatedHostRuntimeReadinessMigration,
+    ) -> Result<HostRuntimeReadinessMigrationReceipt> {
+        let receipt = &evidence.receipt;
+        if current_bytes != evidence.backup_bytes
+            || runtime_cas_digest(current_bytes) != request.expected_ledger_sha256
+            || current_document.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V4
+            || current_document.policy != self.policy
+            || current_document.policy.host_id != request.expected_host_id
+            || current_document.policy.topology_sha256 != request.expected_inventory_sha256
+            || current_document.runtime_state.as_ref().is_none_or(|state| {
+                state.readiness_sha256 != receipt.old_readiness_sha256
+            })
+        {
+            bail!("prepared host readiness migration no longer matches the exact base ledger");
+        }
+        if current_document
+            .reservations
+            .iter()
+            .any(|reservation| reservation.state != HostResourceReservationState::Released)
+        {
+            bail!("prepared host readiness migration requires all reservations to be released");
+        }
+        if self.active_inventory_owner_locked()?.is_some() {
+            bail!("prepared host readiness migration requires the active inventory owner to be absent");
+        }
+        if live_readiness.inventory_sha256.as_deref()
+            != Some(request.expected_inventory_sha256.as_str())
+            || live_readiness.capabilities_sha256.as_deref()
+                != Some(request.expected_next_capabilities_sha256.as_str())
+            || !runtime_readiness_abi_compatible(&evidence.migrated_readiness, live_readiness)
+        {
+            bail!("live readiness is not ABI-compatible with the prepared migration target");
+        }
+
+        let ledger_path = checked_path(&self.root, HOST_RESOURCE_LEDGER_FILE)?;
+        reject_link(&ledger_path)?;
+        publish_exact(
+            &self.root,
+            HOST_RESOURCE_LEDGER_FILE,
+            &evidence.post_bytes,
+            MAX_LEDGER_BYTES,
+        )?;
+        let (published_document, published_bytes) = self.read_document_locked_with_bytes()?;
+        if published_bytes != evidence.post_bytes
+            || runtime_cas_digest(&published_bytes) != receipt.post_migration_ledger_sha256
+            || published_document.runtime_state.as_ref().is_none_or(|state| {
+                state.readiness_sha256 != receipt.new_readiness_sha256
+                    || state.snapshot_sha256.is_some()
+            })
+        {
+            bail!("prepared host readiness migration publication could not be confirmed from the ledger pointer");
+        }
+        Ok(evidence.receipt)
+    }
+
+    fn read_readiness_cas_locked(&self, digest: &str) -> Result<HostRuntimeReadiness> {
+        let bytes = read_runtime_cas_bytes(
+            &self.root,
+            HOST_RUNTIME_READINESS_CAS_DIR,
+            digest,
+            MAX_HOST_RUNTIME_READINESS_BYTES,
+            "host runtime readiness",
+        )?;
+        let readiness: HostRuntimeReadiness = serde_json::from_slice(&bytes)
+            .context("corrupt content-addressed host runtime readiness")?;
+        readiness.validate_persisted(&self.policy)?;
+        Ok(readiness)
     }
 
     /// Open a previously initialized ledger without creating or repairing its
@@ -3261,6 +3883,13 @@ impl HostResourceLedger {
         &self,
         document: &HostResourceLedgerDocument,
     ) -> Result<()> {
+        let Some(mut retained_snapshot_digests) =
+            self.readiness_migration_snapshot_roots_locked()?
+        else {
+            // Migration evidence is immutable audit state. If the bounded scan
+            // cannot prove its full root set, leave snapshot CAS untouched.
+            return Ok(());
+        };
         let (current_snapshot_digest, is_v4) =
             if document.schema_version == HOST_RESOURCE_LEDGER_SCHEMA_V4 {
                 (
@@ -3289,23 +3918,94 @@ impl HostResourceLedger {
                 let digest = runtime_cas_digest(&bytes);
                 (Some(digest), false)
             };
+        if let Some(digest) = current_snapshot_digest.as_deref() {
+            retained_snapshot_digests.insert(digest.to_string());
+        }
         if is_v4 {
             self.gc_unreachable_cas_directory_locked(
                 HOST_COMPUTE_NODE_SNAPSHOT_CAS_DIR,
-                current_snapshot_digest.as_deref(),
+                &retained_snapshot_digests,
             )?;
         }
         self.gc_unreachable_cas_directory_locked(
             HOST_COMPUTE_NODE_SAMPLE_ORDER_CAS_DIR,
-            current_snapshot_digest.as_deref(),
+            &retained_snapshot_digests,
         )?;
         Ok(())
+    }
+
+    fn readiness_migration_snapshot_roots_locked(&self) -> Result<Option<BTreeSet<String>>> {
+        let directory = checked_path(&self.root, HOST_RUNTIME_READINESS_MIGRATION_BACKUP_CAS_DIR)?;
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Some(BTreeSet::new()))
+            }
+            Err(error) => {
+                return Err(error).context("enumerating readiness migration ledger backups")
+            }
+        };
+        let mut roots = BTreeSet::new();
+        let mut inspected = 0;
+        for entry in entries {
+            if inspected == MAX_RUNTIME_SNAPSHOT_GC_ENTRIES {
+                return Ok(None);
+            }
+            inspected += 1;
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => return Ok(None),
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_file() || reject_link(&path).is_err()
+            {
+                return Ok(None);
+            }
+            let file_name = entry.file_name();
+            let Some(digest) = file_name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".json"))
+            else {
+                return Ok(None);
+            };
+            if validate_runtime_cas_digest(digest, "migration backup filename").is_err() {
+                return Ok(None);
+            }
+            let bytes = match read_runtime_cas_bytes(
+                &self.root,
+                HOST_RUNTIME_READINESS_MIGRATION_BACKUP_CAS_DIR,
+                digest,
+                MAX_LEDGER_BYTES,
+                "pre-migration host ledger backup",
+            ) {
+                Ok(bytes) => bytes,
+                Err(_) => return Ok(None),
+            };
+            let backup: HostResourceLedgerDocument = match serde_json::from_slice(&bytes) {
+                Ok(document) => document,
+                Err(_) => return Ok(None),
+            };
+            if backup.schema_version != HOST_RESOURCE_LEDGER_SCHEMA_V4
+                || validate_ledger_document(&backup, &self.root).is_err()
+            {
+                return Ok(None);
+            }
+            if let Some(snapshot) = backup
+                .runtime_state
+                .as_ref()
+                .and_then(|state| state.snapshot_sha256.as_ref())
+            {
+                roots.insert(snapshot.clone());
+            }
+        }
+        Ok(Some(roots))
     }
 
     fn gc_unreachable_cas_directory_locked(
         &self,
         directory_relative: &str,
-        current_snapshot_digest: Option<&str>,
+        retained_snapshot_digests: &BTreeSet<String>,
     ) -> Result<()> {
         let directory = checked_path(&self.root, directory_relative)?;
         let entries = match fs::read_dir(&directory) {
@@ -3342,7 +4042,7 @@ impl HostResourceLedger {
                 continue;
             };
             if validate_runtime_cas_digest(digest, "runtime CAS filename").is_err()
-                || current_snapshot_digest == Some(digest)
+                || retained_snapshot_digests.contains(digest)
             {
                 continue;
             }
@@ -4682,6 +5382,12 @@ impl HostResourceLedger {
     }
 
     fn read_document_locked(&self) -> Result<HostResourceLedgerDocument> {
+        self.read_document_locked_with_bytes().map(|(document, _)| document)
+    }
+
+    fn read_document_locked_with_bytes(
+        &self,
+    ) -> Result<(HostResourceLedgerDocument, Vec<u8>)> {
         let marker_bytes = read_bounded_regular_file(
             &self.root,
             HOST_RESOURCE_LEDGER_MARKER_FILE,
@@ -4704,7 +5410,7 @@ impl HostResourceLedger {
         if document.policy != self.policy {
             bail!("stored host resource policy differs from explicit ledger configuration");
         }
-        Ok(document)
+        Ok((document, bytes))
     }
 
     fn publish_document_locked(&self, document: &HostResourceLedgerDocument) -> Result<()> {
@@ -4989,6 +5695,49 @@ fn runtime_readiness_abi_compatible(
         && previous.capabilities_sha256 == next.capabilities_sha256
 }
 
+fn readiness_migration_request_index_relative_path(request_sha256: &str) -> Result<String> {
+    validate_sha256(request_sha256, "request_sha256")?;
+    Ok(format!(
+        "{HOST_RUNTIME_READINESS_MIGRATION_REQUEST_INDEX_DIR}/{request_sha256}.json"
+    ))
+}
+
+fn validate_readiness_migration_receipt(
+    receipt: &HostRuntimeReadinessMigrationReceipt,
+) -> Result<()> {
+    if receipt.schema_version != HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_SCHEMA_V1 {
+        bail!("unsupported host readiness migration receipt schema");
+    }
+    receipt.request.validate()?;
+    for (value, field) in [
+        (&receipt.request_sha256, "request_sha256"),
+        (&receipt.operator_request_sha256, "operator_request_sha256"),
+        (&receipt.old_readiness_sha256, "old_readiness_sha256"),
+        (&receipt.new_readiness_sha256, "new_readiness_sha256"),
+        (
+            &receipt.pre_migration_ledger_sha256,
+            "pre_migration_ledger_sha256",
+        ),
+        (
+            &receipt.post_migration_ledger_sha256,
+            "post_migration_ledger_sha256",
+        ),
+        (&receipt.ledger_backup_sha256, "ledger_backup_sha256"),
+    ] {
+        validate_sha256(value, field)?;
+    }
+    if receipt.request_sha256 != receipt.request.canonical_sha256()?
+        || receipt.old_readiness_sha256 != receipt.request.expected_readiness_sha256
+        || receipt.pre_migration_ledger_sha256 != receipt.request.expected_ledger_sha256
+        || receipt.ledger_backup_sha256 != receipt.pre_migration_ledger_sha256
+        || receipt.old_readiness_sha256 == receipt.new_readiness_sha256
+        || receipt.pre_migration_ledger_sha256 == receipt.post_migration_ledger_sha256
+    {
+        bail!("host readiness migration receipt fields are internally inconsistent");
+    }
+    Ok(())
+}
+
 fn runtime_cas_digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -5025,6 +5774,27 @@ fn read_runtime_cas_bytes(
         bail!("{field} content-addressed payload digest differs from its pointer");
     }
     Ok(bytes)
+}
+
+fn read_optional_bounded_regular_file(
+    root: &Path,
+    relative: &str,
+    maximum: usize,
+) -> Result<Option<Vec<u8>>> {
+    let path = checked_path(root, relative)?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            reject_link(&path)?;
+            if !metadata.is_file() {
+                bail!("optional content-addressed record is not a regular file");
+            }
+            read_bounded_regular_file(root, relative, maximum)
+                .map(Some)
+                .context("reading optional bounded content-addressed record")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).context("inspecting optional content-addressed record"),
+    }
 }
 
 fn publish_runtime_cas_bytes(
@@ -6727,6 +7497,462 @@ mod tests {
             inventory_sha256: Some(policy.topology_sha256.clone()),
             capabilities_sha256: Some("3".repeat(64)),
         }
+    }
+
+    struct ReadinessMigrationFixture {
+        _directory: tempfile::TempDir,
+        ledger: HostResourceLedger,
+        request: HostRuntimeReadinessMigrationRequest,
+        operator_request_sha256: String,
+        live_readiness: HostRuntimeReadiness,
+    }
+
+    fn build_readiness_migration_request(
+        ledger: &HostResourceLedger,
+        old_readiness: &HostRuntimeReadiness,
+        live_readiness: &HostRuntimeReadiness,
+    ) -> (HostRuntimeReadinessMigrationRequest, String) {
+        let current_ledger = read_bounded_regular_file(
+            &ledger.root,
+            HOST_RESOURCE_LEDGER_FILE,
+            MAX_LEDGER_BYTES,
+        )
+        .unwrap();
+        let state = ledger.read_runtime_state().unwrap().unwrap();
+        let request = HostRuntimeReadinessMigrationRequest {
+            schema_version: HOST_RUNTIME_READINESS_MIGRATION_REQUEST_SCHEMA_V1.into(),
+            expected_host_id: ledger.policy.host_id.clone(),
+            expected_inventory_sha256: ledger.policy.topology_sha256.clone(),
+            expected_ledger_sha256: runtime_cas_digest(&current_ledger),
+            expected_readiness_sha256: state.readiness_sha256,
+            expected_previous_capabilities_sha256: old_readiness
+                .capabilities_sha256
+                .clone()
+                .unwrap(),
+            expected_next_capabilities_sha256: live_readiness
+                .capabilities_sha256
+                .clone()
+                .unwrap(),
+        };
+        let operator_request_bytes = serde_json::to_vec(&request).unwrap();
+        (
+            request,
+            runtime_cas_digest(&operator_request_bytes),
+        )
+    }
+
+    fn readiness_migration_fixture() -> ReadinessMigrationFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let mut configured_policy = policy();
+        configured_policy.schema_version = HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into();
+        let old_readiness =
+            v4_readiness(&configured_policy, &"1".repeat(64), &"2".repeat(64));
+        let ledger = HostResourceLedger::initialize_with_readiness(
+            ledger_root(directory.path()),
+            configured_policy.clone(),
+            old_readiness.clone(),
+        )
+        .unwrap();
+        let mut live_readiness = old_readiness.clone();
+        live_readiness.capabilities_sha256 = Some("a".repeat(64));
+        let (request, operator_request_sha256) =
+            build_readiness_migration_request(&ledger, &old_readiness, &live_readiness);
+        ReadinessMigrationFixture {
+            _directory: directory,
+            ledger,
+            request,
+            operator_request_sha256,
+            live_readiness,
+        }
+    }
+
+    #[test]
+    fn readiness_capability_migration_is_fenced_audited_and_restart_stable() {
+        let mut fixture = readiness_migration_fixture();
+        let initial = fixture.ledger.read().unwrap();
+        let initial_node_policy = initial.node_policy.clone().unwrap();
+        let owner = fixture.ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let owner_record_path = fixture
+            .ledger
+            .root
+            .join(HOST_INVENTORY_OWNER_RECORD_FILE);
+        let owner_record_before = fs::read(&owner_record_path).unwrap();
+        drop(owner);
+        assert_eq!(fixture.ledger.active_inventory_owner().unwrap(), None);
+
+        let receipt = fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &fixture.request,
+                &fixture.operator_request_sha256,
+                &fixture.live_readiness,
+            )
+            .unwrap();
+        assert_eq!(receipt.request, fixture.request);
+        assert_eq!(receipt.request_sha256, fixture.request.canonical_sha256().unwrap());
+        assert_eq!(receipt.operator_request_sha256, fixture.operator_request_sha256);
+        assert_eq!(receipt.ledger_backup_sha256, fixture.request.expected_ledger_sha256);
+        let migrated_state = fixture.ledger.read_runtime_state().unwrap().unwrap();
+        assert_eq!(migrated_state.readiness_sha256, receipt.new_readiness_sha256);
+        assert_eq!(migrated_state.snapshot_sha256, None);
+        let migrated = fixture.ledger.read().unwrap();
+        assert_eq!(migrated.policy, initial.policy);
+        assert_eq!(migrated.reservations, initial.reservations);
+        assert_eq!(migrated.node_policy, initial.node_policy);
+        assert_eq!(fs::read(&owner_record_path).unwrap(), owner_record_before);
+
+        let exact_retry = fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &fixture.request,
+                &fixture.operator_request_sha256,
+                &fixture.live_readiness,
+            )
+            .unwrap();
+        assert_eq!(exact_retry, receipt);
+
+        // Ordinary later ledger writes must not invalidate the evidence used
+        // by a persistent operator request on a subsequent service restart.
+        let mut next_node_policy = initial_node_policy;
+        let expected_revision = next_node_policy.revision;
+        next_node_policy.revision += 1;
+        fixture
+            .ledger
+            .update_node_policy(expected_revision, next_node_policy)
+            .unwrap();
+        assert_eq!(
+            fixture
+                .ledger
+                .verify_completed_runtime_capabilities_migration(
+                    &fixture.request,
+                    &fixture.operator_request_sha256,
+                    &fixture.live_readiness,
+                )
+                .unwrap(),
+            Some(receipt)
+        );
+    }
+
+    #[test]
+    fn prepared_readiness_migration_recovers_after_pointer_crash_with_fresh_probe() {
+        let fixture = readiness_migration_fixture();
+        let original_bytes = read_bounded_regular_file(
+            &fixture.ledger.root,
+            HOST_RESOURCE_LEDGER_FILE,
+            MAX_LEDGER_BYTES,
+        )
+        .unwrap();
+        let prepared_receipt = fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &fixture.request,
+                &fixture.operator_request_sha256,
+                &fixture.live_readiness,
+            )
+            .unwrap();
+
+        // Recreate the durable state after the immutable request index was
+        // published but before its mutable ledger pointer was committed.
+        publish_exact(
+            &fixture.ledger.root,
+            HOST_RESOURCE_LEDGER_FILE,
+            &original_bytes,
+            MAX_LEDGER_BYTES,
+        )
+        .unwrap();
+        assert_eq!(
+            fixture
+                .ledger
+                .verify_completed_runtime_capabilities_migration(
+                    &fixture.request,
+                    &fixture.operator_request_sha256,
+                    &fixture.live_readiness,
+                )
+                .unwrap(),
+            None
+        );
+
+        let mut fresh_probe = fixture.live_readiness.clone();
+        fresh_probe.source_snapshot_sha256 = "b".repeat(64);
+        fresh_probe.runtime_identity_sha256 = "c".repeat(64);
+        let recovered = fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &fixture.request,
+                &fixture.operator_request_sha256,
+                &fresh_probe,
+            )
+            .unwrap();
+        assert_eq!(recovered, prepared_receipt);
+        assert_eq!(
+            fixture.ledger.read_runtime_state().unwrap().unwrap().readiness_sha256,
+            prepared_receipt.new_readiness_sha256
+        );
+    }
+
+    #[test]
+    fn ordinary_runtime_readiness_upgrade_still_rejects_capability_change() {
+        let fixture = readiness_migration_fixture();
+        let original_bytes = read_bounded_regular_file(
+            &fixture.ledger.root,
+            HOST_RESOURCE_LEDGER_FILE,
+            MAX_LEDGER_BYTES,
+        )
+        .unwrap();
+
+        let error = fixture
+            .ledger
+            .upgrade_runtime_readiness(fixture.live_readiness.clone())
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("runtime readiness rotation changes the persisted host ABI facts"));
+        assert_eq!(
+            read_bounded_regular_file(
+                &fixture.ledger.root,
+                HOST_RESOURCE_LEDGER_FILE,
+                MAX_LEDGER_BYTES,
+            )
+            .unwrap(),
+            original_bytes
+        );
+    }
+
+    #[test]
+    fn readiness_migration_backup_keeps_snapshot_and_sample_order_roots_after_gc() {
+        let mut fixture = v4_worker_launch_fixture("capability-migration-retains-snapshot-roots");
+        fixture.inventory_owner.take();
+        {
+            let _host_writer = fixture.ledger.writer.acquire().unwrap();
+            let mut document = fixture.ledger.read_document_locked().unwrap();
+            document.reservations.clear();
+            fixture.ledger.publish_document_locked(&document).unwrap();
+        }
+
+        let original_state = fixture.ledger.read_runtime_state().unwrap().unwrap();
+        let snapshot_sha256 = original_state.snapshot_sha256.unwrap();
+        let snapshot_path = fixture
+            .ledger
+            .root
+            .join(HOST_COMPUTE_NODE_SNAPSHOT_CAS_DIR)
+            .join(format!("{snapshot_sha256}.json"));
+        let sample_order_path = fixture
+            .ledger
+            .root
+            .join(HOST_COMPUTE_NODE_SAMPLE_ORDER_CAS_DIR)
+            .join(format!("{snapshot_sha256}.json"));
+        assert!(snapshot_path.is_file());
+        assert!(sample_order_path.is_file());
+
+        let old_readiness = fixture.ledger.read_runtime_readiness().unwrap();
+        let mut live_readiness = old_readiness.clone();
+        live_readiness.capabilities_sha256 = Some("a".repeat(64));
+        let (request, operator_request_sha256) = build_readiness_migration_request(
+            &fixture.ledger,
+            &old_readiness,
+            &live_readiness,
+        );
+        fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &request,
+                &operator_request_sha256,
+                &live_readiness,
+            )
+            .unwrap();
+
+        HostResourceLedger::initialize_or_upgrade_with_readiness(
+            &fixture.ledger.root,
+            fixture.ledger.policy.clone(),
+            live_readiness,
+        )
+        .unwrap();
+        assert!(snapshot_path.is_file());
+        assert!(sample_order_path.is_file());
+    }
+
+    #[test]
+    fn readiness_capability_migration_rejects_stale_identity_owner_and_abi_changes() {
+        let fixture = readiness_migration_fixture();
+        let original_bytes = read_bounded_regular_file(
+            &fixture.ledger.root,
+            HOST_RESOURCE_LEDGER_FILE,
+            MAX_LEDGER_BYTES,
+        )
+        .unwrap();
+
+        let mut stale = fixture.request.clone();
+        stale.expected_ledger_sha256 = "b".repeat(64);
+        let error = fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &stale,
+                &fixture.operator_request_sha256,
+                &fixture.live_readiness,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("base ledger digest"));
+        assert_eq!(
+            read_bounded_regular_file(
+                &fixture.ledger.root,
+                HOST_RESOURCE_LEDGER_FILE,
+                MAX_LEDGER_BYTES,
+            )
+            .unwrap(),
+            original_bytes
+        );
+
+        let mut wrong_host = fixture.request.clone();
+        wrong_host.expected_host_id = "other-host".into();
+        assert!(fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &wrong_host,
+                &fixture.operator_request_sha256,
+                &fixture.live_readiness,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("host or inventory identity"));
+
+        let mut wrong_readiness_pointer = fixture.request.clone();
+        wrong_readiness_pointer.expected_readiness_sha256 = "c".repeat(64);
+        assert!(fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &wrong_readiness_pointer,
+                &fixture.operator_request_sha256,
+                &fixture.live_readiness,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("pointer differs"));
+
+        let owner = fixture.ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        assert!(fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &fixture.request,
+                &fixture.operator_request_sha256,
+                &fixture.live_readiness,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("inventory owner"));
+        drop(owner);
+
+        let mut changed_abi = fixture.live_readiness.clone();
+        changed_abi.capabilities.push("fem.other".into());
+        changed_abi.capabilities.sort();
+        let mut compatibility = changed_abi
+            .gpu_runtime_compatibility
+            .get(GPU_A)
+            .cloned()
+            .unwrap();
+        compatibility.push("fem.other".into());
+        compatibility.sort();
+        changed_abi
+            .gpu_runtime_compatibility
+            .insert(GPU_A.into(), compatibility);
+        assert!(fixture
+            .ledger
+            .migrate_runtime_capabilities(
+                &fixture.request,
+                &fixture.operator_request_sha256,
+                &changed_abi,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("beyond the requested capability digest"));
+        assert_eq!(
+            fixture.request.expected_previous_capabilities_sha256,
+            "3".repeat(64)
+        );
+    }
+
+    #[test]
+    fn readiness_capability_migration_rejects_nonreleased_reservations() {
+        let mut fixture = v4_worker_launch_fixture("capability-migration-active-allocation");
+        let old_readiness = fixture.ledger.read_runtime_readiness().unwrap();
+        let mut live_readiness = old_readiness.clone();
+        live_readiness.capabilities_sha256 = Some("a".repeat(64));
+        let (request, operator_request_sha256) = build_readiness_migration_request(
+            &fixture.ledger,
+            &old_readiness,
+            &live_readiness,
+        );
+        fixture.inventory_owner.take();
+        assert_eq!(fixture.ledger.active_inventory_owner().unwrap(), None);
+        let error = fixture
+            .ledger
+            .migrate_runtime_capabilities(&request, &operator_request_sha256, &live_readiness)
+            .unwrap_err();
+        assert!(error.to_string().contains("all reservations to be released"));
+        assert_eq!(
+            runtime_cas_digest(
+                &read_bounded_regular_file(
+                    &fixture.ledger.root,
+                    HOST_RESOURCE_LEDGER_FILE,
+                    MAX_LEDGER_BYTES,
+                )
+                .unwrap()
+            ),
+            request.expected_ledger_sha256
+        );
+    }
+
+    #[test]
+    fn capability_migration_attachment_requires_an_existing_global_ledger() {
+        let directory = tempfile::tempdir().unwrap();
+        let application_root = directory.path().join("new-application-state");
+        let missing_ledger_root = directory.path().join("missing-global-ledger");
+        let configured_policy = {
+            let mut value = policy();
+            value.schema_version = HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into();
+            value
+        };
+        assert!(HostResourceLedger::open_existing_for_capability_migration(
+            &application_root,
+            &missing_ledger_root,
+            configured_policy.clone(),
+        )
+        .is_err());
+        assert!(!missing_ledger_root.exists());
+
+        let global_root = ledger_root(directory.path().join("shared-host").as_path());
+        HostResourceLedger::initialize_with_readiness(
+            &global_root,
+            configured_policy.clone(),
+            v4_readiness(&configured_policy, &"1".repeat(64), &"2".repeat(64)),
+        )
+        .unwrap();
+        let attached = HostResourceLedger::open_existing_for_capability_migration(
+            &application_root,
+            &global_root,
+            configured_policy.clone(),
+        )
+        .unwrap();
+        assert_eq!(attached.root, canonical_ledger_root(&global_root, false).unwrap());
+        assert!(HostResourceLedger::open_for_application(
+            &application_root,
+            &global_root,
+            configured_policy.clone(),
+        )
+        .is_ok());
+
+        let foreign_root = ledger_root(directory.path().join("foreign-host").as_path());
+        HostResourceLedger::initialize_with_readiness(
+            &foreign_root,
+            configured_policy.clone(),
+            v4_readiness(&configured_policy, &"3".repeat(64), &"4".repeat(64)),
+        )
+        .unwrap();
+        assert!(HostResourceLedger::open_existing_for_capability_migration(
+            &application_root,
+            &foreign_root,
+            configured_policy,
+        )
+        .is_err());
     }
 
     #[test]

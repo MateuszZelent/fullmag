@@ -13,7 +13,8 @@ use fullmag_session::{
         DockerNamespaceTeardownAttestation, HostInventoryOwner, HostInventoryOwnerDescriptor,
         HostReservationIdentity, HostReservationOwner, HostResourceLedger,
         HostResourceLedgerPolicy, HostResourceReservation, HostResourceReservationState,
-        HostRuntimeReadiness, HostWorkerLaunchGate, WorkerOrphanContainerBinding,
+        HostRuntimeReadiness, HostRuntimeReadinessMigrationRequest,
+        HostRuntimeReadinessMigrationReceipt, HostWorkerLaunchGate, WorkerOrphanContainerBinding,
         WorkerOrphanContainerScope, WorkerOrphanExpectedEvidence, WorkerOrphanLaunchGate,
         WorkerOrphanReservationState, WorkerOrphanTeardownRequest,
         HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2,
@@ -35,6 +36,7 @@ use fullmag_session::{
     SessionStore, FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -860,12 +862,15 @@ struct DockerHostProfile {
     host_identity: DockerHostIdentity,
     readiness: HostRuntimeReadiness,
     runtime_generation_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_readiness_migration: Option<HostRuntimeReadinessMigrationReceipt>,
 }
 
 struct DockerHostInitArgs {
     ledger_root: PathBuf,
     store_root: PathBuf,
     readiness_path: Option<PathBuf>,
+    migration_path: Option<PathBuf>,
     host_id: String,
 }
 
@@ -888,6 +893,7 @@ fn parse_docker_host_init_args(
     let mut ledger_root = None;
     let mut store_root = None;
     let mut readiness_path = None;
+    let mut migration_path = None;
     let mut host_id = None;
     while let Some(flag) = args.next() {
         let name = flag.to_str().context("initializer argument is not UTF-8")?;
@@ -897,6 +903,11 @@ fn parse_docker_host_init_args(
             "--store-root" => store_root = Some(explicit_absolute_path(value, name)?),
             "--native-fem-gpu-readiness" => {
                 readiness_path = Some(explicit_absolute_path(value, name)?)
+            }
+            "--host-readiness-migration" => {
+                if migration_path.replace(explicit_absolute_path(value, name)?).is_some() {
+                    bail!("initializer received duplicate --host-readiness-migration");
+                }
             }
             "--host-id" => {
                 let value = value.to_str().context("host ID is not UTF-8")?.to_owned();
@@ -918,6 +929,7 @@ fn parse_docker_host_init_args(
         ledger_root: ledger_root.context("missing --ledger-root")?,
         store_root: store_root.context("missing --store-root")?,
         readiness_path,
+        migration_path,
         host_id,
     };
     if args.ledger_root == args.store_root
@@ -996,6 +1008,17 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
     let fixture_readiness = std::env::var("FULLMAG_DOCKER_HOST_READINESS_FIXTURE")
         .ok()
         .is_some_and(|value| value == "1");
+    if fixture_readiness && args.migration_path.is_some() {
+        bail!("operator capability migration requires a live native readiness probe");
+    }
+    // Observe the exact readonly control-volume intent once; never derive a
+    // migration authorization from a boolean environment variable or probe.
+    let migration = args.migration_path.as_deref().map(|path| -> Result<_> {
+        let raw = read_stable_absolute_operational_file(path, 64 * 1024)?;
+        let request: HostRuntimeReadinessMigrationRequest = serde_json::from_slice(&raw)
+            .context("decode explicit host readiness migration request")?;
+        Ok((request, format!("{:x}", Sha256::digest(&raw))))
+    }).transpose()?;
     if args.readiness_path.is_some() && !fixture_readiness {
         bail!(
             "--native-fem-gpu-readiness is restricted to FULLMAG_DOCKER_HOST_READINESS_FIXTURE=1"
@@ -1122,13 +1145,52 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
             std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
         )?
         .context("Docker host initialization requires explicit FULLMAG_STATE_ROOT")?;
-    let ledger = fullmag_runtime_control::retry_store_writer_busy(|| {
-        HostResourceLedger::initialize_or_upgrade_with_readiness_for_application(
-            &application_state_root,
-            &args.ledger_root,
-            policy.clone(),
-            persisted_readiness.clone(),
-        )
+    let mut freshly_migrated_ledger = None;
+    let host_readiness_migration = if let Some((request, operator_sha256)) = migration.as_ref() {
+        let ledger = fullmag_runtime_control::retry_store_writer_busy(|| {
+            HostResourceLedger::open_existing_for_capability_migration(
+                &application_state_root, &args.ledger_root, policy.clone(),
+            )
+        })?;
+        let completed = fullmag_runtime_control::retry_store_writer_busy(|| {
+            ledger.verify_completed_runtime_capabilities_migration(
+                request, operator_sha256, &persisted_readiness,
+            )
+        })?;
+        let receipt = match completed {
+            Some(receipt) => receipt,
+            None => {
+                let receipt = fullmag_runtime_control::retry_store_writer_busy(|| {
+                    ledger.migrate_runtime_capabilities(
+                        request, operator_sha256, &persisted_readiness,
+                    )
+                })?;
+                freshly_migrated_ledger = Some(ledger);
+                receipt
+            }
+        };
+        Some(receipt)
+    } else {
+        None
+    };
+    // A fresh transaction already published this exact live readiness. A
+    // previously completed intent returns through the ordinary ABI guard;
+    // retained opt-in cannot authorize later capability changes.
+    let ledger = match freshly_migrated_ledger {
+        Some(ledger) => ledger,
+        None => fullmag_runtime_control::retry_store_writer_busy(|| {
+            HostResourceLedger::initialize_or_upgrade_with_readiness_for_application(
+                &application_state_root,
+                &args.ledger_root,
+                policy.clone(),
+                persisted_readiness.clone(),
+            )
+        })?,
+    };
+    // Recovery may commit an already prepared target with an earlier probe
+    // timestamp. Report the exact persisted generation, not the fresh probe.
+    persisted_readiness = fullmag_runtime_control::retry_store_writer_busy(|| {
+        ledger.read_runtime_readiness()
     })?;
     let runtime_generation_sha256 = fullmag_runtime_control::retry_store_writer_busy(|| {
         ledger.read_runtime_generation_sha256()
@@ -1284,6 +1346,7 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         },
         readiness: persisted_readiness,
         runtime_generation_sha256,
+        host_readiness_migration,
     };
     let bytes = serde_json::to_vec(&profile)?;
     if bytes.len() > 256 * 1024 {
@@ -2242,7 +2305,7 @@ fn run() -> Result<()> {
             }
             run_service(path)
         }
-        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--native-fem-gpu-readiness <absolute-json-path>] [--host-id <stable-id>]")
+        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--native-fem-gpu-readiness <absolute-json-path>] [--host-id <stable-id>] [--host-readiness-migration <absolute-json-request>]")
     }
 }
 

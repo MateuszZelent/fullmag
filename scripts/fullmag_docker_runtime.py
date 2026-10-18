@@ -964,6 +964,8 @@ def _compose_spec_volume_only(image, state, port, host_certificate, *, repo,
         raise ValueError("Previous runtime configuration digest must be a lowercase SHA-256")
 
     descriptor = backend_start["build_control"]
+    from docker_host_readiness_migration import migration_environment
+    operator_migration_environment = migration_environment(backend_start, control_store)
     cache = backend_start.get("backend_cache")
     cache_adapter = _validate_backend_volume_cache(
         cache,
@@ -1080,6 +1082,7 @@ def _compose_spec_volume_only(image, state, port, host_certificate, *, repo,
             "backend": {
                 "environment": {
                     "FULLMAG_PACKAGE_PROVENANCE": _BACKEND_CONTROL_PROVENANCE,
+                    **operator_migration_environment,
                 },
                 "volumes": [{
                     "type": "volume", "source": control_alias,
@@ -2293,6 +2296,8 @@ def _validate_backend_start_inputs(value, layout):
 
     if not isinstance(value, dict) or value.get("schema") != "fullmag.direct-compose.backend-start-inputs.v1":
         raise ValueError("Backend start inputs have an unsupported schema")
+    from docker_host_readiness_migration import migration_environment
+    migration_environment(value)
     if value.get("state") != "ready" or value.get("source_mode") != "live-shadow-v1":
         raise ValueError("Backend start inputs are not ready live-source inputs")
     image = value.get("image_id")

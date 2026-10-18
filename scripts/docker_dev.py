@@ -1827,6 +1827,13 @@ def _backend_start_inputs(args: argparse.Namespace, *, run_root=None, run_id=Non
                       'build_control': {'project': identity['project_name'], 'worktree_id': identity['worktree_id'],
                                         'source_root': str(selected), 'image_id': store.image_id,
                                         'volume_name': store.volume_name, 'run_relative': run.relative}}
+            migration_request = getattr(args, 'host_readiness_migration_request', None)
+            if migration_request is not None:
+                from docker_host_readiness_migration import stage_request
+                try:
+                    inputs['host_readiness_migration'] = stage_request(migration_request, run)
+                except (ValueError, OSError) as error:
+                    raise _fail('Invalid operator host readiness migration request: ' + str(error)) from error
             inputs_path = run / 'backend-start-inputs.json'
             _write_json(inputs_path, inputs)
             terminal.update(state='ready', backend_start_inputs=str(inputs_path),
@@ -2000,6 +2007,8 @@ def _parser() -> argparse.ArgumentParser:
                              help="unsupported compatibility flag: live docker-dev does not consume frozen source manifests")
         command.add_argument("--include-untracked", action="append", default=[],
                              help="unsupported compatibility flag: add new source files to the selected Git index instead")
+        command.add_argument("--host-readiness-migration-request", type=Path,
+                             help="explicit absolute operator JSON pinning an idle shared-ledger capability migration")
         command.add_argument("--port", type=int, default=3197,
                              help="loopback frontend port (up only)")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,
