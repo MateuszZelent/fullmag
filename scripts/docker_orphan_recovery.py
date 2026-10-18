@@ -385,7 +385,7 @@ def _binds(container: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 def _validate_backend_volume_cache(value: Any) -> dict[str, Any]:
     """Validate the ready v2 cache descriptor and its published documents.
 
-    The descriptor is host provenance, while the two named volumes are
+    The descriptor is host provenance, while the three named volumes are
     daemon-owned.  This function deliberately delegates the shared label,
     volume-document, and overlay rules to the versioned adapter; an absent or
     unknown schema never falls back to the v1 bind contract.
@@ -405,12 +405,12 @@ def _validate_backend_volume_cache(value: Any) -> dict[str, Any]:
         _fail("backend volume cache daemon targets are not canonical")
     names = value.get("volume_names")
     if (not isinstance(names, Mapping)
-            or set(names) != {adapter.BUILD_VOLUME_ROLE, adapter.PACKAGE_VOLUME_ROLE}
+            or set(names) != set(adapter.VOLUME_ROLES)
             or any(not isinstance(name, str) or adapter._VOLUME_NAME.fullmatch(name) is None
                    for name in names.values())):
-        _fail("backend volume cache does not pin the exact build/package volume pair")
+        _fail("backend volume cache does not pin the exact build/package/control volume set")
     if value.get("mounts") != adapter.mount_specs(value):
-        _fail("backend volume cache mounts are not the canonical nocopy pair")
+        _fail("backend volume cache mounts are not the canonical nocopy volume set")
     environment = value.get("environment")
     if environment != adapter._cache_environment(value):
         _fail("backend volume cache environment is not canonical")
@@ -453,7 +453,7 @@ def _validate_backend_volume_cache(value: Any) -> dict[str, Any]:
             or receipt.get("package_root") != adapter.PACKAGE_TARGET
             or receipt.get("mounts") != value["mounts"]
             or receipt.get("volume_documents") != dict(documents)):
-        _fail("backend volume cache ready receipt does not pin the exact pair")
+        _fail("backend volume cache ready receipt does not pin the exact volume set")
     maintenance_receipt = receipt.get("maintenance_receipt")
     if not isinstance(maintenance_receipt, Mapping):
         _fail("backend volume cache ready receipt has no maintenance proof")
@@ -521,7 +521,7 @@ def _validate_backend_volume_cache(value: Any) -> dict[str, Any]:
 def _validate_backend_volume_mounts(
     mounts: Mapping[str, Mapping[str, Any]], cache: Mapping[str, Any]
 ) -> None:
-    """Require both daemon-owned v2 volumes by exact Name and role target."""
+    """Require all daemon-owned v2 volumes by exact Name and role target."""
     try:
         import docker_backend_volume_cache as adapter
     except ImportError as error:  # pragma: no cover - packaging error
@@ -529,6 +529,7 @@ def _validate_backend_volume_mounts(
     expected = {
         adapter.BUILD_TARGET: adapter.BUILD_VOLUME_ROLE,
         adapter.PACKAGE_TARGET: adapter.PACKAGE_VOLUME_ROLE,
+        adapter.CONTROL_TARGET: adapter.CONTROL_VOLUME_ROLE,
     }
     for target, role in expected.items():
         mount = mounts.get(target)
@@ -621,6 +622,8 @@ def _container_binding(
     cache = None
     if "backend_cache" in pins:
         cache = _validate_backend_volume_cache(pins["backend_cache"])
+        if cache.get("control_project") != project:
+            _fail("backend control volume belongs to another Compose group")
         _validate_backend_volume_mounts(binds, cache)
     state_bind = _mapping(backend.get("state_bind", binds.get("/state")), "backend.state_bind")
     package_bind = _mapping(backend.get("package_bind", binds.get("/opt/fullmag/package")), "backend.package_bind")

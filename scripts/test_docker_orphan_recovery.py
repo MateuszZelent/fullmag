@@ -44,6 +44,7 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
         "state": "ready",
         "project_id": "fullmag",
         "worktree_id": "worktree-test",
+        "control_project": "fullmag-test",
         "cache_key": "c" * 64,
         "unit_key": "d" * 64,
         "owner_id": "e" * 64,
@@ -53,6 +54,7 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
         "volume_names": {
             volume_cache.BUILD_VOLUME_ROLE: "fullmag-cache-build-test",
             volume_cache.PACKAGE_VOLUME_ROLE: "fullmag-cache-package-test",
+            volume_cache.CONTROL_VOLUME_ROLE: "fullmag-cache-control-test",
         },
         "build_root": volume_cache.BUILD_TARGET,
         "mount_root": volume_cache.BUILD_TARGET,
@@ -61,7 +63,7 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
     profile["environment"] = volume_cache._cache_environment(profile)
     profile["mounts"] = volume_cache.mount_specs(profile)
     documents: dict[str, dict[str, object]] = {}
-    for role in (volume_cache.BUILD_VOLUME_ROLE, volume_cache.PACKAGE_VOLUME_ROLE):
+    for role in volume_cache.VOLUME_ROLES:
         documents[role] = {
             "Name": profile["volume_names"][role],
             "Driver": "local",
@@ -71,6 +73,28 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
             "Labels": volume_cache.volume_labels(profile, role),
         }
     profile["volume_documents"] = documents
+    markers: dict[str, dict[str, object]] = {}
+    for role in volume_cache.VOLUME_ROLES:
+        if role == volume_cache.CONTROL_VOLUME_ROLE:
+            markers[role] = {
+                "schema": "fullmag.docker-toolchain-control-owner.v1",
+                "state": "owned",
+                "role": role,
+                "volume_name": profile["volume_names"][role],
+                "mount": volume_cache.CONTROL_TARGET,
+                "namespace": volume_cache.CONTROL_BACKEND_TARGET,
+            }
+        else:
+            markers[role] = {
+                "schema": volume_cache.OWNER_SCHEMA,
+                "state": "owned",
+                "unit_key": profile["unit_key"],
+                "owner_id": profile["owner_id"],
+                "role": role,
+                "volume_name": profile["volume_names"][role],
+                "uid": 65532,
+                "gid": 65532,
+            }
     maintenance = {
         "schema": volume_cache.MAINTENANCE_RECEIPT_SCHEMA,
         "profile": volume_cache.PROFILE,
@@ -83,19 +107,7 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
         "runtime_image_id": profile["runtime_image_id"],
         "toolchain_image_id": profile["toolchain_image_id"],
         "volume_names": dict(profile["volume_names"]),
-        "markers": {
-            role: {
-                "schema": volume_cache.OWNER_SCHEMA,
-                "state": "owned",
-                "unit_key": profile["unit_key"],
-                "owner_id": profile["owner_id"],
-                "role": role,
-                "volume_name": profile["volume_names"][role],
-                "uid": 65532,
-                "gid": 65532,
-            }
-            for role in (volume_cache.BUILD_VOLUME_ROLE, volume_cache.PACKAGE_VOLUME_ROLE)
-        },
+        "markers": markers,
         "probe": {
             "schema": volume_cache.PROBE_SCHEMA,
             "state": "passed",
@@ -108,7 +120,7 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
                     "readonly_reopen": True,
                     "no_reparse": True,
                 }
-                for role in (volume_cache.BUILD_VOLUME_ROLE, volume_cache.PACKAGE_VOLUME_ROLE)
+                for role in volume_cache.VOLUME_ROLES
             },
         },
     }
@@ -130,6 +142,7 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
         "mounts": list(profile["mounts"]),
         "package_root": volume_cache.PACKAGE_TARGET,
         "build_root": volume_cache.BUILD_TARGET,
+        "control_root": volume_cache.CONTROL_TARGET,
         "volume_documents": documents,
         "maintenance_receipt": maintenance,
         "host_receipt_path": str(receipt_path),
@@ -637,6 +650,13 @@ class OrphanRecoveryContractTests(unittest.TestCase):
                 "Destination": volume_cache.PACKAGE_TARGET,
                 "RW": True,
             },
+            {
+                "Type": "volume",
+                "Name": cache["volume_names"][volume_cache.CONTROL_VOLUME_ROLE],
+                "Source": "/var/lib/docker/volumes/control/_data",
+                "Destination": volume_cache.CONTROL_TARGET,
+                "RW": True,
+            },
         ]
         before["Mounts"] = [self.state_bind, *volume_mounts]
         pins = deepcopy(self.pins)
@@ -684,7 +704,7 @@ class OrphanRecoveryContractTests(unittest.TestCase):
         }
         return pins, self.engine, before, cache
 
-    def test_v2_request_binds_exact_named_volume_pair_and_package_probe(self) -> None:
+    def test_v2_request_binds_exact_named_volume_set_and_package_probe(self) -> None:
         pins, engine, before, cache = self._v2_request_inputs()
         request = build_orphan_request(pins, engine, before)
         self.assertEqual(request["containers"][0]["container_id"], self.container_id)
@@ -752,6 +772,20 @@ class OrphanRecoveryContractTests(unittest.TestCase):
         foreign["backend"]["package_bind"]["Name"] = "foreign-package-volume"
         with self.assertRaises(OrphanRecoveryError):
             build_orphan_request(foreign, engine, before)
+
+        foreign_control = deepcopy(pins)
+        foreign_control_mount = next(
+            mount for mount in before["Mounts"]
+            if mount["Destination"] == volume_cache.CONTROL_TARGET
+        )
+        foreign_control_mount["Name"] = "foreign-control-volume"
+        with self.assertRaises(OrphanRecoveryError):
+            build_orphan_request(foreign_control, engine, before)
+
+        wrong_group = deepcopy(pins)
+        wrong_group["backend_cache"]["control_project"] = "another-compose-group"
+        with self.assertRaises(OrphanRecoveryError):
+            build_orphan_request(wrong_group, engine, before)
 
         unknown = deepcopy(pins)
         unknown["backend_cache"]["schema"] = "fullmag.backend-build-cache.unknown"

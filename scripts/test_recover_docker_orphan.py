@@ -51,6 +51,7 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
         "state": "ready",
         "project_id": "fullmag",
         "worktree_id": "worktree-test",
+        "control_project": PROJECT,
         "cache_key": "c" * 64,
         "unit_key": "d" * 64,
         "owner_id": "e" * 64,
@@ -60,6 +61,7 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
         "volume_names": {
             volume_cache.BUILD_VOLUME_ROLE: "fullmag-cache-build-test",
             volume_cache.PACKAGE_VOLUME_ROLE: "fullmag-cache-package-test",
+            volume_cache.CONTROL_VOLUME_ROLE: "fullmag-cache-control-test",
         },
         "build_root": volume_cache.BUILD_TARGET,
         "mount_root": volume_cache.BUILD_TARGET,
@@ -68,7 +70,7 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
     profile["environment"] = volume_cache._cache_environment(profile)
     profile["mounts"] = volume_cache.mount_specs(profile)
     documents: dict[str, dict[str, object]] = {}
-    for role in (volume_cache.BUILD_VOLUME_ROLE, volume_cache.PACKAGE_VOLUME_ROLE):
+    for role in volume_cache.VOLUME_ROLES:
         documents[role] = {
             "Name": profile["volume_names"][role],
             "Driver": "local",
@@ -78,6 +80,28 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
             "Labels": volume_cache.volume_labels(profile, role),
         }
     profile["volume_documents"] = documents
+    markers: dict[str, dict[str, object]] = {}
+    for role in volume_cache.VOLUME_ROLES:
+        if role == volume_cache.CONTROL_VOLUME_ROLE:
+            markers[role] = {
+                "schema": "fullmag.docker-toolchain-control-owner.v1",
+                "state": "owned",
+                "role": role,
+                "volume_name": profile["volume_names"][role],
+                "mount": volume_cache.CONTROL_TARGET,
+                "namespace": volume_cache.CONTROL_BACKEND_TARGET,
+            }
+        else:
+            markers[role] = {
+                "schema": volume_cache.OWNER_SCHEMA,
+                "state": "owned",
+                "unit_key": profile["unit_key"],
+                "owner_id": profile["owner_id"],
+                "role": role,
+                "volume_name": profile["volume_names"][role],
+                "uid": 65532,
+                "gid": 65532,
+            }
     maintenance = {
         "schema": volume_cache.MAINTENANCE_RECEIPT_SCHEMA,
         "profile": volume_cache.PROFILE,
@@ -90,19 +114,7 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
         "runtime_image_id": profile["runtime_image_id"],
         "toolchain_image_id": profile["toolchain_image_id"],
         "volume_names": dict(profile["volume_names"]),
-        "markers": {
-            role: {
-                "schema": volume_cache.OWNER_SCHEMA,
-                "state": "owned",
-                "unit_key": profile["unit_key"],
-                "owner_id": profile["owner_id"],
-                "role": role,
-                "volume_name": profile["volume_names"][role],
-                "uid": 65532,
-                "gid": 65532,
-            }
-            for role in (volume_cache.BUILD_VOLUME_ROLE, volume_cache.PACKAGE_VOLUME_ROLE)
-        },
+        "markers": markers,
         "probe": {
             "schema": volume_cache.PROBE_SCHEMA,
             "state": "passed",
@@ -115,7 +127,7 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
                     "readonly_reopen": True,
                     "no_reparse": True,
                 }
-                for role in (volume_cache.BUILD_VOLUME_ROLE, volume_cache.PACKAGE_VOLUME_ROLE)
+                for role in volume_cache.VOLUME_ROLES
             },
         },
     }
@@ -136,6 +148,7 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
         "mounts": list(profile["mounts"]),
         "build_root": volume_cache.BUILD_TARGET,
         "package_root": volume_cache.PACKAGE_TARGET,
+        "control_root": volume_cache.CONTROL_TARGET,
         "volume_documents": documents,
         "maintenance_receipt": maintenance,
     }
@@ -156,6 +169,26 @@ def v2_backend_cache(root: Path) -> dict[str, object]:
     profile["maintenance_overlay"] = maintenance_overlay
     profile["maintenance_compose_overlay"] = str(maintenance_path)
     return profile
+
+
+def mount_v2_cache(target_document: dict[str, object], cache: dict[str, object]) -> None:
+    """Attach the exact build/package/control volumes to a backend fixture."""
+    mounts = target_document["Mounts"]
+    for destination, role in (
+        (volume_cache.BUILD_TARGET, volume_cache.BUILD_VOLUME_ROLE),
+        (volume_cache.PACKAGE_TARGET, volume_cache.PACKAGE_VOLUME_ROLE),
+        (volume_cache.CONTROL_TARGET, volume_cache.CONTROL_VOLUME_ROLE),
+    ):
+        mount = next((item for item in mounts if item["Destination"] == destination), None)
+        if mount is None:
+            mount = {"Destination": destination, "RW": True}
+            mounts.append(mount)
+        mount.pop("Source", None)
+        mount.update({
+            "Type": "volume",
+            "Name": cache["volume_names"][role],
+            "RW": True,
+        })
 
 
 def package_probe_output():
@@ -183,9 +216,15 @@ class FakeDocker:
         self.calls = []
         self.stop_error = None
         self.maintenance_documents = {}
+        self.volume_documents = {}
 
     def __call__(self, *args, timeout=60):
         self.calls.append(args)
+        if args[:2] == ("volume", "inspect"):
+            document = self.volume_documents.get(args[2])
+            if document is None:
+                raise OSError("volume is unavailable")
+            return json.dumps([document])
         if args[:2] == ("info", "--format"):
             return "sha256:" + "f" * 64
         if args == ("ps", "--quiet", "--no-trunc"):
@@ -993,28 +1032,20 @@ class RecoveryExecutionBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             cache = v2_backend_cache(Path(temporary))
             document = target()
-            package = next(item for item in document["Mounts"]
-                           if item["Destination"] == volume_cache.PACKAGE_TARGET)
-            package.pop("Source")
-            package.update({"Type": "volume",
-                            "Name": cache["volume_names"][volume_cache.PACKAGE_VOLUME_ROLE]})
-            document["Mounts"].append({
-                "Destination": volume_cache.BUILD_TARGET,
-                "Type": "volume",
-                "Name": cache["volume_names"][volume_cache.BUILD_VOLUME_ROLE],
-                "RW": True,
-            })
+            mount_v2_cache(document, cache)
             service = recovery.maintenance_compose(
                 document, PROJECT, REQUEST,
                 [recovery.NATIVE_PROGRAM, "--recover-orphan-after-teardown"],
                 backend_cache=cache,
             )["services"]["backend-recovery"]
+            mounts = {item["target"]: item for item in service["volumes"]}
             package_mount = next(item for item in service["volumes"]
                                  if item["target"] == volume_cache.PACKAGE_TARGET)
             self.assertEqual(package_mount["type"], "volume")
             self.assertEqual(package_mount["source"],
                              cache["volume_names"][volume_cache.PACKAGE_VOLUME_ROLE])
             self.assertEqual(package_mount["volume"], {"nocopy": True})
+            self.assertNotIn(volume_cache.CONTROL_TARGET, mounts)
             args = recovery._maintenance_create_args(
                 {"name": PROJECT, "services": {"backend-recovery": service}},
                 name="fullmag-recovery-test")
@@ -1031,19 +1062,23 @@ class RecoveryExecutionBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             cache = v2_backend_cache(Path(temporary))
             document = target()
-            package = next(item for item in document["Mounts"]
-                           if item["Destination"] == volume_cache.PACKAGE_TARGET)
-            package.pop("Source")
-            package.update({"Type": "volume", "Name": "foreign-cache-package"})
-            document["Mounts"].append({
-                "Destination": volume_cache.BUILD_TARGET,
-                "Type": "volume",
-                "Name": cache["volume_names"][volume_cache.BUILD_VOLUME_ROLE],
-                "RW": True,
-            })
+            mount_v2_cache(document, cache)
+            control = next(item for item in document["Mounts"]
+                           if item["Destination"] == volume_cache.CONTROL_TARGET)
+            control["Name"] = "foreign-control-volume"
             with self.assertRaises(recovery.RecoveryAborted):
                 recovery.maintenance_compose(
                     document, PROJECT, REQUEST, ["true"], backend_cache=cache)
+
+            missing_control = target()
+            mount_v2_cache(missing_control, cache)
+            missing_control["Mounts"] = [
+                item for item in missing_control["Mounts"]
+                if item["Destination"] != volume_cache.CONTROL_TARGET
+            ]
+            with self.assertRaises(recovery.RecoveryAborted):
+                recovery.maintenance_compose(
+                    missing_control, PROJECT, REQUEST, ["true"], backend_cache=cache)
 
     def test_v2_descriptor_rejection_precedes_any_maintenance_runner(self):
         for mutation in ("overlay", "receipt", "none", "absent"):
@@ -1060,21 +1095,10 @@ class RecoveryExecutionBoundaryTests(unittest.TestCase):
                         encoding="utf-8",
                     )
                 document = target()
-                if mutation == "absent":
-                    package = next(item for item in document["Mounts"]
-                                   if item["Destination"] == volume_cache.PACKAGE_TARGET)
-                    package.pop("Source")
-                    package.update({
-                        "Type": "volume",
-                        "Name": cache["volume_names"][volume_cache.PACKAGE_VOLUME_ROLE],
-                    })
-                    document["Mounts"].append({
-                        "Destination": volume_cache.BUILD_TARGET,
-                        "Type": "volume",
-                        "Name": cache["volume_names"][volume_cache.BUILD_VOLUME_ROLE],
-                        "RW": True,
-                    })
+                if mutation != "none":
+                    mount_v2_cache(document, cache)
                 docker = FakeDocker(document)
+                docker.volume_documents = cache["volume_documents"]
                 events = []
                 pins = recovery_pins()
                 if mutation == "none":

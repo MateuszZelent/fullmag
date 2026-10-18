@@ -64,13 +64,13 @@ def _backend_volume_cache_adapter(value: Any):
         raise RecoveryAborted("backend volume cache package target differs from v2")
     names = value.get("volume_names")
     if (not isinstance(names, Mapping)
-            or set(names) != {adapter.BUILD_VOLUME_ROLE, adapter.PACKAGE_VOLUME_ROLE}
+            or set(names) != set(adapter.VOLUME_ROLES)
             or any(not isinstance(name, str) or adapter._VOLUME_NAME.fullmatch(name) is None
                    for name in names.values())):
         raise RecoveryAborted("backend volume cache names are invalid")
     receipt = value.get("receipt")
     if not isinstance(receipt, Mapping) or receipt.get("volume_names") != dict(names):
-        raise RecoveryAborted("backend volume cache receipt does not pin its volume pair")
+        raise RecoveryAborted("backend volume cache receipt does not pin the exact volume set")
     receipt_path = value.get("receipt_path")
     receipt_sha = value.get("receipt_sha256")
     if not isinstance(receipt_path, str):
@@ -89,7 +89,7 @@ def _backend_volume_cache_adapter(value: Any):
         raise RecoveryAborted("backend volume cache receipt changed or differs from its pin")
     documents = value.get("volume_documents")
     if not isinstance(documents, Mapping):
-        raise RecoveryAborted("backend volume cache has no inspected volume pair")
+        raise RecoveryAborted("backend volume cache has no inspected volume set")
     try:
         adapter._validate_volume_documents(documents, value)
     except Exception as error:
@@ -113,6 +113,9 @@ def _validate_backend_volume_cache_target(
         ) from error
 
     adapter = _backend_volume_cache_adapter(cache)
+    labels = target.get("Config", {}).get("Labels", {})
+    if cache.get("control_project") != labels.get("com.docker.compose.project"):
+        raise RecoveryAborted("backend control volume belongs to another Compose group")
     mounts = {
         item.get("Destination"): item
         for item in target.get("Mounts", [])
@@ -121,6 +124,7 @@ def _validate_backend_volume_cache_target(
     expected = {
         adapter.BUILD_TARGET: adapter.BUILD_VOLUME_ROLE,
         adapter.PACKAGE_TARGET: adapter.PACKAGE_VOLUME_ROLE,
+        adapter.CONTROL_TARGET: adapter.CONTROL_VOLUME_ROLE,
     }
     for destination, role in expected.items():
         mount = mounts.get(destination)
@@ -130,7 +134,7 @@ def _validate_backend_volume_cache_target(
             raise RecoveryAborted(f"target cache mount {destination} is not the pinned named volume")
     if client is None:
         return
-    for role in (adapter.BUILD_VOLUME_ROLE, adapter.PACKAGE_VOLUME_ROLE):
+    for role in adapter.VOLUME_ROLES:
         name = cache["volume_names"][role]
         try:
             raw = _docker_call(client, "volume", "inspect", name, timeout=60)
