@@ -314,11 +314,20 @@ def _validate_build_control_descriptor(value, layout):
     if descriptor.get("volume_name") != expected_volume:
         raise ValueError("Backend build-control volume does not match its project/worktree")
     layout_source = layout.get("repo_root")
+    try:
+        from docker_compose_identity import compose_project_identity
+        resolved = compose_project_identity(layout)
+    except (ImportError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("Backend build-control source identity cannot be resolved") from error
+    resolved_project_id = resolved.get("project_id")
     if (value.get("compose_project") != project
-            or value.get("source_project_id") != layout.get("project_id")
+            or not isinstance(resolved_project_id, str)
+            or value.get("source_project_id") != resolved_project_id
             or value.get("source_worktree_id") != worktree_id
             or not isinstance(layout_source, (str, os.PathLike))
-            or Path(source_root).resolve() != Path(layout_source).resolve()):
+            or Path(source_root).resolve() != Path(layout_source).resolve()
+            or resolved.get("project_name") != project
+            or resolved.get("worktree_id") != worktree_id):
         raise ValueError("Backend build-control identity differs from the selected source")
     if value.get("provenance_path") != _BACKEND_CONTROL_PROVENANCE:
         raise ValueError("Backend provenance output is not the canonical writable build-volume path")
@@ -327,15 +336,6 @@ def _validate_build_control_descriptor(value, layout):
     if (value.get("helper_context") != expected_context
             or value.get("backend_start_receipt") != expected_receipt):
         raise ValueError("Backend start control-volume references do not match the run identity")
-    identity = layout
-    try:
-        from docker_compose_identity import compose_project_identity
-        resolved = compose_project_identity(layout)
-    except (ImportError, KeyError, TypeError, ValueError) as error:
-        raise ValueError("Backend build-control source identity cannot be resolved") from error
-    if (resolved.get("project_name") != project
-            or resolved.get("worktree_id") != worktree_id):
-        raise ValueError("Backend build-control source identity differs from the checkout")
     return descriptor
 
 
@@ -2762,7 +2762,10 @@ def _provisional_development_certificate(inputs, source_identity):
         "cargo_profile": "backend-dev",
         "toolchain_image_id": inputs["toolchain_image_id"],
         "package_root": "/opt/fullmag/package",
-        "provenance_path": inputs.get("provenance_path", "/opt/fullmag/provenance.json"),
+        "provenance_path": (
+            _BACKEND_CONTROL_PROVENANCE
+            if "build_control" in inputs else "/opt/fullmag/provenance.json"
+        ),
         "group_identity": project,
         "source_identity": {
             "commit": _PROVISIONAL_COMMIT,

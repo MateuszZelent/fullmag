@@ -1,7 +1,7 @@
 """Dependency-free checks for Docker image scoping and error reporting."""
 from __future__ import annotations
 
-from contextlib import redirect_stderr
+from contextlib import contextmanager, redirect_stderr
 import io
 from pathlib import Path
 import sys

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import docker_frontend_volume_cache as cache
@@ -41,6 +42,8 @@ class FrontendVolumePlanTests(unittest.TestCase):
             {"DOCKER_CONTEXT": "unexpected-context", "DOCKER_HOST": "tcp://example.invalid"},
         ), patch.object(cache.subprocess, "run", return_value=result) as run:
             cache._docker(["volume", "inspect", "named-volume"])
+            self.assertEqual(os.environ["DOCKER_CONTEXT"], "unexpected-context")
+            self.assertEqual(os.environ["DOCKER_HOST"], "tcp://example.invalid")
 
         args, kwargs = run.call_args
         self.assertEqual(
@@ -52,8 +55,6 @@ class FrontendVolumePlanTests(unittest.TestCase):
         self.assertTrue(kwargs["text"])
         self.assertNotIn("DOCKER_CONTEXT", kwargs["env"])
         self.assertNotIn("DOCKER_HOST", kwargs["env"])
-        self.assertEqual(os.environ["DOCKER_CONTEXT"], "unexpected-context")
-        self.assertEqual(os.environ["DOCKER_HOST"], "tcp://example.invalid")
 
     def test_volume_identity_ignores_run_and_source_changes_but_tracks_toolchain(self):
         first = self.make_plan()
@@ -113,9 +114,10 @@ class FrontendVolumePlanTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 0, json.dumps([actual]), "")
             raise AssertionError(args)
 
-        with patch.object(cache, "_docker", side_effect=docker), patch.object(
-            cache, "_maintenance"
-        ) as maintenance:
+        with patch.object(cache.uuid, "uuid4", return_value=SimpleNamespace(hex=nonce)), \
+                patch.object(cache, "_docker", side_effect=docker), patch.object(
+                    cache, "_maintenance"
+                ) as maintenance:
             effective = cache.ensure(
                 planned, source_root=self.source, image_id=self.image
             )

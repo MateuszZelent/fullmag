@@ -258,6 +258,17 @@ class DockerRuntimeContract(unittest.TestCase):
             self.assertEqual(delegation["toolchain_image_id"], inputs["toolchain_image_id"])
             self.assertEqual(delegation["package_root"], "/opt/fullmag/package")
             self.assertEqual(delegation["provenance_path"], "/opt/fullmag/provenance.json")
+            volume_inputs = {
+                **inputs,
+                "provenance_path": runtime._BACKEND_CONTROL_PROVENANCE,
+                "build_control": {"run_relative": "runs/" + "a" * 32},
+            }
+            _, _, volume_delegation = runtime._provisional_development_certificate(
+                volume_inputs, source_identity
+            )
+            self.assertEqual(
+                volume_delegation["provenance_path"], runtime._BACKEND_CONTROL_PROVENANCE
+            )
             self.assertEqual(delegation["group_identity"], "fullmag-worktree-test")
             self.assertEqual(
                 delegation["source_identity"],
@@ -2595,7 +2606,8 @@ class DockerRuntimeContract(unittest.TestCase):
         run_id = "a" * 32
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory).resolve()
-            layout = {"repo_root": str(source_root), "project_id": "source-project"}
+            layout = {"repo_root": str(source_root)}
+            project_id = "fullmag-0950f4dca4ffe38f"
             descriptor = {
                 "project": project,
                 "worktree_id": worktree_id,
@@ -2608,7 +2620,7 @@ class DockerRuntimeContract(unittest.TestCase):
                 "build_control": descriptor,
                 "run_id": run_id,
                 "compose_project": project,
-                "source_project_id": layout["project_id"],
+                "source_project_id": project_id,
                 "source_worktree_id": worktree_id,
                 "provenance_path": runtime._BACKEND_CONTROL_PROVENANCE,
                 "helper_context": runtime._build_control_uri(descriptor, "backend-start-context"),
@@ -2618,9 +2630,14 @@ class DockerRuntimeContract(unittest.TestCase):
             }
             with patch(
                 "docker_compose_identity.compose_project_identity",
-                return_value={"project_name": project, "worktree_id": worktree_id},
+                return_value={
+                    "project_name": project, "project_id": project_id, "worktree_id": worktree_id,
+                },
             ):
                 self.assertIs(runtime._validate_build_control_descriptor(value, layout), descriptor)
+                wrong_project_id = {**value, "source_project_id": "different-source-project"}
+                with self.assertRaisesRegex(ValueError, "identity differs from the selected source"):
+                    runtime._validate_build_control_descriptor(wrong_project_id, layout)
 
             boundary_project = "a" + "b" * 254
             boundary_descriptor = {
@@ -2632,10 +2649,20 @@ class DockerRuntimeContract(unittest.TestCase):
                 **value,
                 "build_control": boundary_descriptor,
                 "compose_project": boundary_project,
+                "helper_context": runtime._build_control_uri(
+                    boundary_descriptor, "backend-start-context"
+                ),
+                "backend_start_receipt": runtime._build_control_uri(
+                    boundary_descriptor, "backend-start-receipt.json"
+                ),
             }
             with patch(
                 "docker_compose_identity.compose_project_identity",
-                return_value={"project_name": boundary_project, "worktree_id": worktree_id},
+                return_value={
+                    "project_name": boundary_project,
+                    "project_id": project_id,
+                    "worktree_id": worktree_id,
+                },
             ):
                 self.assertEqual(len(boundary_project), 255)
                 self.assertIs(
@@ -2645,7 +2672,9 @@ class DockerRuntimeContract(unittest.TestCase):
 
             with patch(
                 "docker_compose_identity.compose_project_identity",
-                return_value={"project_name": project, "worktree_id": worktree_id},
+                return_value={
+                    "project_name": project, "project_id": project_id, "worktree_id": worktree_id,
+                },
             ):
                 too_long_project = "a" * 256
                 too_long = {
