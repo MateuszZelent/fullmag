@@ -3740,7 +3740,31 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
         from docker_compose_identity import validate_source_labels
         validate_source_labels(actual, source_identity)
         from docker_host_ledger import validate_container as validate_host_ledger
-        receipt["host_ledger_attestation"] = validate_host_ledger(actual, host_ledger, docker)
+        host_attestation_options = {}
+        if volume_only:
+            from docker_build_volume_io import BuildDocument
+
+            def host_attestation_compose(document, operations, *, environment=None, timeout=120):
+                try:
+                    return compose_capture(
+                        backend_start["source_root"], project, document, operations,
+                        environment=environment, timeout=timeout,
+                    )
+                except VolumeBuildOutcomeUnknown as error:
+                    raise DockerOutcomeUnknown(["compose", *map(str, operations)], timeout) from error
+                except VolumeBuildError as error:
+                    raise ValueError(f"Managed host-ledger attestation failed: {error}") from error
+
+            host_attestation_options = {
+                "run_root": Path(host_ledger["run_root"]),
+                "maintenance_volume_document": BuildDocument(
+                    control_store, control_run_relative + "/host-ledger-maintenance-compose.json"
+                ),
+                "compose_capture_runner": host_attestation_compose,
+            }
+        receipt["host_ledger_attestation"] = validate_host_ledger(
+            actual, host_ledger, docker, **host_attestation_options
+        )
         bindings = {str(receipt["container_http_port"]) + "/tcp":
                     [{"HostIp": "127.0.0.1", "HostPort": str(port)}]}
         if inputs is not None:

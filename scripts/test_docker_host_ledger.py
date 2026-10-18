@@ -141,6 +141,20 @@ class FakeDocker:
         }
 
 
+class FakeVolumeDocument:
+    def __init__(self, uri, document):
+        self.uri = uri
+        self.raw = json.dumps(document, separators=(",", ":")).encode("utf-8")
+        self.reads = 0
+
+    def __str__(self):
+        return self.uri
+
+    def read_bytes(self):
+        self.reads += 1
+        return self.raw
+
+
 class TypeErrorDocker:
     def __init__(self):
         self.calls = 0
@@ -542,9 +556,96 @@ class HostLedgerTests(unittest.TestCase):
             direct_profile["host_receipt"] = {"filesystem": "ext4", "mount_active": True}
             with self.assertRaises(ledger.HostLedgerError):
                 ledger.validate_container(backend, direct_profile, fake)
+            legacy_profile = dict(direct_profile)
+            legacy_profile["host_receipt"] = fake._receipt("verify")
+            legacy_result = ledger.validate_container(backend, legacy_profile, fake)
+            self.assertEqual(legacy_result["host_receipt"]["state"], "validated")
+            self.assertEqual(
+                sum(1 for args, _ in fake.calls if args[0] == "compose" and "run" in args),
+                1,
+            )
             backend["Mounts"][0]["RW"] = False
             with self.assertRaises(ledger.HostLedgerError):
                 ledger.validate_container(backend, profile, fake)
+
+    def test_volume_backed_container_attestation_runs_fresh_maintenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            run_root = root / "run"
+            maintenance_uri = (
+                "docker-volume://fullmag-control/runs/"
+                + "a" * 32
+                + "/host-ledger-maintenance-compose.json"
+            )
+            compose_document = {
+                "services": {"host-ledger-maintenance": {"image": IMAGE, "command": ["verify"]}}
+            }
+            volume_document = FakeVolumeDocument(maintenance_uri, compose_document)
+            fake = FakeDocker({
+                "project_id": "test-volume",
+                "mount_root": "/mnt/fullmag-host-ledger-test",
+                "backing_image": ledger._daemon_path(
+                    root / "storage" / "build-volumes" / ledger.IMAGE_NAME,
+                    "backing image",
+                ),
+            })
+            profile = {
+                "profile": ledger.PROFILE,
+                "project_id": fake.values["project_id"],
+                "mount_root": fake.values["mount_root"],
+                "image_id": IMAGE,
+                "maintenance_compose": maintenance_uri,
+                "maintenance_compose_sha256": hashlib.sha256(volume_document.raw).hexdigest(),
+                "run_root": str(run_root),
+                "run_id": "a" * 32,
+                "backing_image": fake.values["backing_image"],
+                "host_receipt": {"stale": True},
+            }
+            backend = {
+                "Id": "backend-id", "Image": IMAGE, "Config": {"User": "65532:65532", "Env": [
+                    "FULLMAG_DOCKER_HOST_EXECUTION=1", "FULLMAG_HOST_LEDGER_PROFILE=host-ledger-v1",
+                    "FULLMAG_HOST_LEDGER_ROOT=/host-ledger/ledger",
+                ]},
+                "Mounts": [{"Destination": "/host-ledger", "Type": "bind", "RW": True,
+                            "Source": profile["mount_root"]}],
+                "HostConfig": {"Privileged": False},
+            }
+            runner_calls = []
+
+            def compose_capture_runner(document, arguments, *, timeout=120):
+                runner_calls.append((document, arguments, timeout))
+                name = arguments[arguments.index("--name") + 1]
+                label = arguments[arguments.index("--label") + 1].split("=", 1)[1]
+                action = arguments[-1]
+                fake.containers[name] = fake._container(name, label, action)
+                return json.dumps(fake._receipt(action)) + "\n"
+
+            with self.assertRaisesRegex(ledger.HostLedgerError, "requires run_root"):
+                ledger.validate_container(backend, profile, fake)
+            bad_digest = {**profile, "maintenance_compose_sha256": "0" * 64}
+            with self.assertRaisesRegex(ledger.HostLedgerError, "attested digest"):
+                ledger.validate_container(
+                    backend, bad_digest, fake, run_root=run_root,
+                    maintenance_volume_document=volume_document,
+                    compose_capture_runner=compose_capture_runner,
+                )
+            self.assertEqual(runner_calls, [])
+
+            result = ledger.validate_container(
+                backend,
+                profile,
+                fake,
+                run_root=run_root,
+                maintenance_volume_document=volume_document,
+                compose_capture_runner=compose_capture_runner,
+            )
+            self.assertEqual(result["host_verification"], "PASS")
+            self.assertEqual(result["host_receipt"]["state"], "validated")
+            self.assertEqual(volume_document.reads, 2)
+            self.assertEqual(len(runner_calls), 1)
+            self.assertEqual(runner_calls[0][0], compose_document)
+            self.assertEqual(runner_calls[0][1][-1], "verify")
+            self.assertFalse(any(args[0] == "compose" for args, _ in fake.calls))
 
 
 if __name__ == "__main__":

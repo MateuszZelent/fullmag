@@ -1221,7 +1221,9 @@ def _env_map(config: Mapping[str, Any]) -> dict[str, str]:
 
 
 def validate_container(document: Mapping[str, Any] | list[Mapping[str, Any]], profile: Mapping[str, Any] | str,
-                       docker_callable: Callable[..., Any]) -> dict[str, Any]:
+                       docker_callable: Callable[..., Any], *, run_root: Path | str | None = None,
+                       maintenance_volume_document: Any = None,
+                       compose_capture_runner: Callable[..., str] | None = None) -> dict[str, Any]:
     """Attest backend binds and perform a live guest + host filesystem check."""
     if isinstance(document, list):
         if len(document) != 1:
@@ -1267,19 +1269,83 @@ def validate_container(document: Mapping[str, Any] | list[Mapping[str, Any]], pr
 
     maintenance = profile_values.get("maintenance_compose")
     image_id = profile_values.get("image_id")
-    run_root = Path(profile_values.get("run_root") or Path(maintenance).parent if maintenance else ".")
+    run_root_value = run_root if run_root is not None else profile_values.get("run_root")
     host_receipt = profile_values.get("host_receipt")
-    if maintenance and image_id:
-        # The maintenance file is already frozen and has no backend service.
-        run_id = profile_values.get("run_id") or hashlib.sha256(str(run_root).encode()).hexdigest()[:32]
+    maintenance_uri = isinstance(maintenance, str) and maintenance.startswith("docker-volume://")
+    volume_arguments = (
+        run_root is not None,
+        maintenance_volume_document is not None,
+        compose_capture_runner is not None,
+    )
+    if maintenance_uri or any(volume_arguments):
+        if (not maintenance_uri or not all(volume_arguments) or not image_id
+                or run_root_value is None):
+            raise HostLedgerError(
+                "volume-backed host-ledger verification requires run_root, maintenance document, and Compose runner"
+            )
+        run_root_path = Path(run_root_value)
+        if not run_root_path.is_absolute():
+            raise HostLedgerError("volume-backed host-ledger run root must be absolute")
+        document_uri = str(maintenance_volume_document)
+        if document_uri != maintenance:
+            raise HostLedgerError("volume-backed maintenance document differs from the attested URI")
+        read_document = getattr(maintenance_volume_document, "read_bytes", None)
+        if not callable(read_document):
+            raise HostLedgerError("volume-backed maintenance document cannot be read from its store")
+        try:
+            maintenance_bytes = read_document()
+        except Exception as error:
+            raise HostLedgerError("volume-backed maintenance document could not be read") from error
+        if not isinstance(maintenance_bytes, bytes) or not 0 < len(maintenance_bytes) <= MAX_COMPOSE_BYTES:
+            raise HostLedgerError("volume-backed maintenance document exceeds its byte limit")
+        expected_maintenance_sha256 = profile_values.get("maintenance_compose_sha256")
+        if (not isinstance(expected_maintenance_sha256, str)
+                or hashlib.sha256(maintenance_bytes).hexdigest() != expected_maintenance_sha256):
+            raise HostLedgerError("volume-backed maintenance document differs from its attested digest")
+        try:
+            maintenance_document = _parse_json_document(
+                maintenance_bytes.decode("utf-8"),
+                "stored host-ledger maintenance Compose document",
+            )
+        except UnicodeDecodeError as error:
+            raise HostLedgerError("volume-backed maintenance document is not UTF-8") from error
+        if not isinstance(maintenance_document, Mapping):
+            raise HostLedgerError("volume-backed maintenance Compose document must be an object")
+        if not isinstance(image_id, str) or not image_id:
+            raise HostLedgerError("volume-backed host-ledger verification has no immutable image")
+        run_id = profile_values.get("run_id") or hashlib.sha256(str(run_root_path).encode()).hexdigest()[:32]
         verify_receipt: dict[str, Any] = {
             "run_id": run_id,
             "project_id": profile_values.get("project_id"),
             "mount_root": profile_values.get("mount_root"),
             "backing_image": profile_values.get("backing_image", ""),
         }
-        host_receipt = _run_maintenance(run_root, Path(maintenance), image_id,
-                                        f"fullmag-host-ledger-{run_root.name}", "verify",
+        host_receipt = _run_maintenance(
+            run_root_path,
+            maintenance_volume_document,
+            image_id,
+            f"fullmag-host-ledger-{run_root_path.name}",
+            "verify",
+            docker_callable,
+            verify_receipt,
+            180,
+            compose_document=maintenance_document,
+            compose_capture_runner=compose_capture_runner,
+        )
+    elif maintenance and image_id:
+        # Legacy path-backed profiles retain their existing fresh host check.
+        if run_root_value is None:
+            run_root_value = Path(maintenance).parent
+        run_root_path = Path(run_root_value)
+        run_id = profile_values.get("run_id") or hashlib.sha256(str(run_root_path).encode()).hexdigest()[:32]
+        verify_receipt = {
+            "run_id": run_id,
+            "project_id": profile_values.get("project_id"),
+            "mount_root": profile_values.get("mount_root"),
+            "backing_image": profile_values.get("backing_image", ""),
+        }
+        host_receipt = _run_maintenance(run_root_path, Path(maintenance), image_id,
+                                        f"fullmag-host-ledger-{run_root_path.name}", "verify",
                                         docker_callable, verify_receipt, 180)
     elif not isinstance(host_receipt, Mapping):
         raise HostLedgerError("live host-ledger verification evidence is missing")
