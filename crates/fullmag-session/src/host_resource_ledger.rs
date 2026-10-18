@@ -7905,7 +7905,7 @@ mod tests {
     #[test]
     fn capability_migration_attachment_requires_an_existing_global_ledger() {
         let directory = tempfile::tempdir().unwrap();
-        let application_root = directory.path().join("new-application-state");
+        let application_root = create_store_root(directory.path(), "new-application-state");
         let missing_ledger_root = directory.path().join("missing-global-ledger");
         let configured_policy = {
             let mut value = policy();
@@ -7920,7 +7920,8 @@ mod tests {
         .is_err());
         assert!(!missing_ledger_root.exists());
 
-        let global_root = ledger_root(directory.path().join("shared-host").as_path());
+        let global_parent = create_store_root(directory.path(), "shared-host");
+        let global_root = ledger_root(&global_parent);
         HostResourceLedger::initialize_with_readiness(
             &global_root,
             configured_policy.clone(),
@@ -7941,7 +7942,8 @@ mod tests {
         )
         .is_ok());
 
-        let foreign_root = ledger_root(directory.path().join("foreign-host").as_path());
+        let foreign_parent = create_store_root(directory.path(), "foreign-host");
+        let foreign_root = ledger_root(&foreign_parent);
         HostResourceLedger::initialize_with_readiness(
             &foreign_root,
             configured_policy.clone(),
