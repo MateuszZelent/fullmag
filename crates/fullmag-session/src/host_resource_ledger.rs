@@ -74,6 +74,7 @@ const HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_SCHEMA_V1: &str =
 const HOST_RUNTIME_READINESS_MIGRATION_INDEX_SCHEMA_V1: &str =
     "host_runtime_readiness_migration_index.v1";
 pub const MAX_HOST_RUNTIME_READINESS_MIGRATION_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_HOST_RUNTIME_READINESS_MIGRATION_RECEIPT_BYTES: usize = 64 * 1024;
 const HOST_COMPUTE_NODE_SNAPSHOT_CAS_DIR: &str = "runtime-state/cas/snapshot";
 /// Boot-relative ordering of one published snapshot, keyed by its digest.
 /// Kept outside the snapshot bytes so older readers never observe it.
