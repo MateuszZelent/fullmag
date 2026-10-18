@@ -63,6 +63,19 @@ def load_frontend_volume_module() -> ModuleType:
     return module
 
 
+def load_frontend_volume_maintenance_module() -> ModuleType:
+    path = MODULE_PATH.with_name("frontend_volume_maintenance.py")
+    spec = importlib.util.spec_from_file_location(
+        "fullmag_frontend_volume_maintenance_test", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load frontend_volume_maintenance.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class _DeadProcess:
     pid = 49152
 
@@ -811,13 +824,11 @@ else:
                 plan["identity"]["volume_name"],
             )
 
-    @skipIf(os.name == "nt", "volume seed publication uses Linux container filesystem semantics")
-    def test_cold_named_volume_creates_freeze_root_after_owner_admission(self):
+    @skipIf(os.name == "nt", "volume initialization and runtime flock are Linux contracts")
+    def test_cold_named_volume_initializes_layout_then_creates_real_runtime_lock(self):
         host = load_frontend_volume_module()
+        maintenance = load_frontend_volume_maintenance_module()
         with isolated(self.module) as (root, source_workspace, inputs):
-            volume_workspace = root / "volume-workspace"
-            for name in self.module.LIVE_DIRECTORY_NAMES:
-                (volume_workspace / "apps" / "control-room" / name).mkdir(parents=True)
             compose_identity = {
                 "project_name": "fullmag-worktree-test",
                 "project_id": "project-test",
@@ -832,27 +843,59 @@ else:
                 )
             identity = plan["identity"]
             volume = {**identity, "creation_id": "c" * 32}
-            valid_marker = {
-                "schema": self.module.VOLUME_OWNER_SCHEMA,
-                "volume_schema": identity["schema"],
-                "project_id": identity["project_id"],
-                "worktree_id": identity["worktree_id"],
-                "toolchain_image_id": identity["toolchain_image_id"],
-                "profile": identity["profile"],
-                "role": identity["role"],
-                "owner_id": identity["owner_id"],
-                "creation_id": volume["creation_id"],
-                "volume_name": identity["volume_name"],
-                "uid": 65532,
-                "gid": 65532,
+            maintenance_environment = {
+                "FULLMAG_FRONTEND_VOLUME_SCHEMA": identity["schema"],
+                "FULLMAG_FRONTEND_VOLUME_OWNER_SCHEMA": maintenance.OWNER_SCHEMA,
+                "FULLMAG_FRONTEND_VOLUME_PROJECT_ID": identity["project_id"],
+                "FULLMAG_FRONTEND_VOLUME_WORKTREE_ID": identity["worktree_id"],
+                "FULLMAG_FRONTEND_VOLUME_TOOLCHAIN_IMAGE_ID": identity["toolchain_image_id"],
+                "FULLMAG_FRONTEND_VOLUME_PROFILE": identity["profile"],
+                "FULLMAG_FRONTEND_VOLUME_ROLE": identity["role"],
+                "FULLMAG_FRONTEND_VOLUME_OWNER_ID": identity["owner_id"],
+                "FULLMAG_FRONTEND_VOLUME_CREATION_ID": volume["creation_id"],
+                "FULLMAG_FRONTEND_VOLUME_NAME": identity["volume_name"],
+                "FULLMAG_FRONTEND_VOLUME_UID": "65532",
+                "FULLMAG_FRONTEND_VOLUME_GID": "65532",
+                "FULLMAG_FRONTEND_VOLUME_OPERATION": "initialize",
             }
-            marker_path = root / "cache" / ".fullmag-frontend-development-owner.json"
-            marker_path.write_text(json.dumps(valid_marker), encoding="utf-8")
-            freeze_root = root / "cache" / "volume-frozen-inputs"
-            freeze_state = root / "cache" / "volume-seed-state.json"
+
+            def initialize_volume(volume_root):
+                volume_root.mkdir()
+                # Exercise the production one-shot layout/nonce path.  The
+                # test host cannot chown to the fixed container UID, so only
+                # that privileged syscall is represented; file creation,
+                # paths, modes, and the guest's actual flock remain real.
+                with (
+                    patch.object(maintenance, "ROOT", volume_root),
+                    patch.object(maintenance.os, "geteuid", return_value=0),
+                    patch.object(maintenance.os, "getegid", return_value=0),
+                    patch.object(maintenance.os, "fchown"),
+                    patch.dict(os.environ, maintenance_environment, clear=False),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    maintenance.main([str(maintenance.__file__), "initialize"])
+
+            volume_root = root / "cold-volume"
+            bad_volume_root = root / "bad-cold-volume"
+            initialize_volume(volume_root)
+            initialize_volume(bad_volume_root)
+            marker_path = volume_root / ".fullmag-frontend-development-owner.json"
+            bad_marker = bad_volume_root / ".fullmag-frontend-development-owner.json"
+            valid_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            self.assertEqual(valid_marker["creation_id"], volume["creation_id"])
+            self.assertEqual(valid_marker["owner_id"], identity["owner_id"])
+            bad_marker.write_text(
+                json.dumps({**valid_marker, "project_id": "wrong-project"}),
+                encoding="utf-8",
+            )
+            freeze_root = volume_root / "volume-frozen-inputs"
+            freeze_state = volume_root / "volume-seed-state.json"
+            runtime_lock_path = volume_root / "cache" / ".fullmag-frontend-runtime.lock"
+            bad_runtime_lock_path = bad_volume_root / "cache" / ".fullmag-frontend-runtime.lock"
             manifest = dict(inputs.manifest)
             manifest.update(
-                workspace_root=str(volume_workspace),
+                workspace_root=str(volume_root / "workspace"),
+                frontend_root=str(volume_root / "cache"),
                 source_mount=str(source_workspace),
                 storage_mode="docker_named_volume_v1",
                 dependency_seed_sha256="d" * 64,
@@ -860,70 +903,138 @@ else:
                 frontend_volume=volume,
             )
             self.module.INPUTS_PATH.write_text(json.dumps(manifest), encoding="utf-8")
-
-            bad_workspace = root / "bad-volume-workspace"
-            bad_marker = root / "cache" / ".bad-frontend-development-owner.json"
-            bad_marker.write_text(
-                json.dumps({**valid_marker, "project_id": "wrong-project"}), encoding="utf-8"
+            bad_manifest = dict(
+                manifest,
+                workspace_root=str(bad_volume_root / "workspace"),
+                frontend_root=str(bad_volume_root / "cache"),
             )
-            bad_freeze_root = root / "cache" / "bad-volume-frozen-inputs"
-            bad_freeze_state = root / "cache" / "bad-volume-seed-state.json"
 
             real_lstat = Path.lstat
+            real_fstat = os.fstat
+            owner_paths = {
+                marker_path,
+                bad_marker,
+                volume_root / "cache",
+                bad_volume_root / "cache",
+            }
+            active_lock_path = [runtime_lock_path]
 
-            def owner_marker_lstat(path):
+            def volume_owner_metadata(metadata):
+                return SimpleNamespace(
+                    st_mode=metadata.st_mode,
+                    st_uid=65532,
+                    st_gid=65532,
+                    st_dev=metadata.st_dev,
+                    st_ino=metadata.st_ino,
+                    st_nlink=metadata.st_nlink,
+                    st_size=metadata.st_size,
+                    st_file_attributes=getattr(metadata, "st_file_attributes", 0),
+                )
+
+            def volume_lstat(path):
                 metadata = real_lstat(path)
-                if path in {marker_path, bad_marker}:
-                    return SimpleNamespace(
-                        st_mode=stat.S_IFREG | 0o660,
-                        st_uid=65532,
-                        st_gid=65532,
-                        st_size=metadata.st_size,
-                    )
+                if path in owner_paths or path in {runtime_lock_path, bad_runtime_lock_path}:
+                    return volume_owner_metadata(metadata)
                 return metadata
 
+            def volume_fstat(descriptor):
+                metadata = real_fstat(descriptor)
+                try:
+                    path_metadata = real_lstat(active_lock_path[0])
+                except FileNotFoundError:
+                    return metadata
+                if (metadata.st_dev, metadata.st_ino) == (
+                    path_metadata.st_dev,
+                    path_metadata.st_ino,
+                ):
+                    return volume_owner_metadata(metadata)
+                return metadata
+
+            def frontend_paths(volume_path, lock_path):
+                return {
+                    "DEVELOPMENT_ROOT": volume_path,
+                    "WORKSPACE_ROOT": volume_path / "workspace",
+                    "FRONTEND_ROOT": volume_path / "cache",
+                    "PNPM_STORE_ROOT": volume_path / "pnpm-store",
+                    "PNPM_HOME": volume_path / "pnpm-home",
+                    "COREPACK_HOME": volume_path / "corepack",
+                    "HOME_ROOT": volume_path / "home",
+                    "TEMP_ROOT": volume_path / "tmp",
+                    "FREEZE_ROOT": volume_path / "frozen-inputs",
+                    "FREEZE_PATH": volume_path / "inputs-freeze.json",
+                    "VOLUME_OWNER_MARKER": volume_path / ".fullmag-frontend-development-owner.json",
+                    "VOLUME_FREEZE_ROOT": volume_path / "volume-frozen-inputs",
+                    "VOLUME_FREEZE_PATH": volume_path / "volume-seed-state.json",
+                    "RECEIPT_PATH": volume_path / "frontend-dev-receipt.json",
+                    "LOG_PATH": volume_path / "next.log",
+                    "RUNTIME_LOCK_PATH": lock_path,
+                    "SOURCE_MOUNT_ROOT": source_workspace,
+                }
+
             with (
-                patch.object(self.module, "WORKSPACE_ROOT", volume_workspace),
-                patch.object(self.module, "SOURCE_MOUNT_ROOT", source_workspace),
-                patch.object(self.module, "VOLUME_OWNER_MARKER", marker_path),
-                patch.object(self.module, "VOLUME_FREEZE_ROOT", freeze_root),
-                patch.object(self.module, "VOLUME_FREEZE_PATH", freeze_state),
-                patch.object(Path, "lstat", owner_marker_lstat),
+                patch.multiple(self.module, **frontend_paths(volume_root, runtime_lock_path)),
+                patch.object(Path, "lstat", volume_lstat),
+                patch.object(self.module.os, "fstat", volume_fstat),
                 patch.object(self.module, "enabled", return_value=True),
                 patch.object(self.module, "_load_receipt", return_value=None),
                 patch.object(self.module, "_generated_gate", return_value=False),
                 patch.object(self.module, "_watchpack_polling_ms", return_value=5000),
-                patch.object(self.module, "_acquire_runtime_lock", return_value=object()),
-                patch.object(self.module, "_release_runtime_lock"),
                 patch.object(
                     self.module,
                     "_prepare_managed_frontend",
                     side_effect=RuntimeError("cold seed materialized"),
                 ),
             ):
+                self.assertTrue(
+                    all(
+                        (volume_root / relative).is_dir()
+                        for relative in maintenance.DIRS
+                    )
+                )
+                self.assertFalse(runtime_lock_path.exists())
+                self.assertFalse(freeze_root.exists())
                 with self.assertRaisesRegex(RuntimeError, "cold seed materialized"):
                     self.module.start(SimpleNamespace(is_set=lambda: False))
+                lock_stat = real_lstat(runtime_lock_path)
+                self.assertTrue(stat.S_ISREG(lock_stat.st_mode))
+                self.assertEqual(stat.S_IMODE(lock_stat.st_mode), 0o660)
+                self.assertEqual(lock_stat.st_nlink, 1)
                 self.assertTrue(freeze_root.is_dir())
-                self.assertEqual(json.loads(freeze_state.read_text(encoding="utf-8"))["state"], "ready")
-                self.assertTrue(all((freeze_root / seed.relative).is_file() for seed in inputs.files))
+                self.assertEqual(
+                    json.loads(freeze_state.read_text(encoding="utf-8"))["state"],
+                    "ready",
+                )
+                self.assertTrue(
+                    all((freeze_root / seed.relative).is_file() for seed in inputs.files)
+                )
 
-                bad_manifest = dict(manifest, workspace_root=str(bad_workspace))
+                parsed = self.module.read_inputs()
+                first_lock = self.module._acquire_runtime_lock(volume_inputs=parsed)
+                try:
+                    with self.assertRaisesRegex(
+                        self.module.FrontendDevError,
+                        "already held by an active consumer",
+                    ):
+                        self.module._acquire_runtime_lock(volume_inputs=parsed)
+                finally:
+                    self.module._release_runtime_lock(first_lock)
+
                 self.module.INPUTS_PATH.write_text(json.dumps(bad_manifest), encoding="utf-8")
-                with patch.object(self.module, "WORKSPACE_ROOT", bad_workspace), patch.object(
-                    self.module, "VOLUME_OWNER_MARKER", bad_marker
-                ), patch.object(
-                    self.module, "VOLUME_FREEZE_ROOT", bad_freeze_root
-                ), patch.object(self.module, "VOLUME_FREEZE_PATH", bad_freeze_state), patch.object(
-                    self.module, "_acquire_runtime_lock"
-                ) as acquire_lock:
+                active_lock_path[0] = bad_runtime_lock_path
+                with patch.multiple(
+                    self.module, **frontend_paths(bad_volume_root, bad_runtime_lock_path)
+                ):
                     with self.assertRaisesRegex(
                         self.module.FrontendDevError,
                         "frontend volume marker does not match the manifest identity",
                     ):
                         self.module.start(SimpleNamespace(is_set=lambda: False))
-                acquire_lock.assert_not_called()
-                self.assertFalse(bad_freeze_root.exists())
-                self.assertFalse(bad_freeze_state.exists())
+                self.assertFalse(bad_runtime_lock_path.exists())
+                self.assertFalse((bad_volume_root / "volume-frozen-inputs").exists())
+                self.assertFalse((bad_volume_root / "volume-seed-state.json").exists())
+                self.assertFalse((bad_volume_root / "frontend-dev-receipt.json").exists())
+                self.assertFalse((bad_volume_root / "next.log").exists())
+                self.assertFalse((bad_volume_root / "inputs-freeze.json").exists())
 
     def test_host_mount_descriptors_are_bound_to_the_fixed_workspace_targets(self):
         with isolated(self.module) as (root, workspace, inputs):

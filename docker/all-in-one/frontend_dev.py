@@ -1398,21 +1398,88 @@ def _publish_receipt(receipt: Mapping[str, Any]) -> None:
     _atomic_json(RECEIPT_PATH, dict(receipt), "frontend development receipt")
 
 
-def _acquire_runtime_lock() -> Any:
+def _acquire_runtime_lock(
+    *, volume_inputs: DevelopmentInputs | None = None
+) -> Any:
     """Own this cache key across dependency installation and the Next process."""
 
     if fcntl is None:
         _fail("frontend cache runtime locking is unavailable")
-    _assert_no_links(RUNTIME_LOCK_PATH.parent, "frontend runtime lock parent")
+    volume_only = volume_inputs is not None
+    if volume_only:
+        if volume_inputs.manifest.get("storage_mode") != "docker_named_volume_v1":
+            _fail("only a named-volume frontend may create its runtime lock")
+        # Only a manifest whose fixed volume marker was admitted may create the
+        # persistent lock entry.  Legacy cache identities still require their
+        # pre-provisioned lock file.
+        _validate_volume_owner(volume_inputs, allow_missing_freeze_root=True)
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        nonblock = getattr(os, "O_NONBLOCK", 0)
+        if not nofollow or not nonblock:
+            _fail("frontend volume runtime lock requires no-follow, nonblocking open")
+        _assert_no_links(RUNTIME_LOCK_PATH.parent, "frontend runtime lock parent")
+        try:
+            parent_before = RUNTIME_LOCK_PATH.parent.lstat()
+        except OSError as error:
+            _fail(f"frontend runtime lock parent is unavailable: {error}")
+        if (
+            not stat.S_ISDIR(parent_before.st_mode)
+            or stat.S_ISLNK(parent_before.st_mode)
+            or (parent_before.st_uid, parent_before.st_gid) != (65532, 65532)
+            or stat.S_IMODE(parent_before.st_mode) != 0o770
+        ):
+            _fail("frontend volume runtime lock parent ownership/mode is invalid")
+    else:
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        nonblock = getattr(os, "O_NONBLOCK", 0)
+        _assert_no_links(RUNTIME_LOCK_PATH.parent, "frontend runtime lock parent")
+
     descriptor: int | None = None
     try:
-        descriptor = os.open(
-            RUNTIME_LOCK_PATH,
-            os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
-        )
+        flags = os.O_RDWR | nofollow | nonblock
+        if volume_only:
+            try:
+                descriptor = os.open(
+                    RUNTIME_LOCK_PATH,
+                    flags | os.O_CREAT | os.O_EXCL,
+                    0o660,
+                )
+                os.fchmod(descriptor, 0o660)
+            except FileExistsError:
+                # Reuse the permanent lock entry; never unlink or replace it.
+                descriptor = os.open(RUNTIME_LOCK_PATH, flags)
+        else:
+            descriptor = os.open(RUNTIME_LOCK_PATH, flags)
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise FrontendDevError("frontend runtime lock is not a regular file")
+        if volume_only:
+            if (
+                (metadata.st_uid, metadata.st_gid) != (65532, 65532)
+                or stat.S_IMODE(metadata.st_mode) != 0o660
+                or metadata.st_nlink != 1
+            ):
+                raise FrontendDevError(
+                    "frontend volume runtime lock ownership/mode/link count is invalid"
+                )
+            path_metadata = RUNTIME_LOCK_PATH.lstat()
+            parent_after = RUNTIME_LOCK_PATH.parent.lstat()
+            if (
+                stat.S_ISLNK(path_metadata.st_mode)
+                or not stat.S_ISREG(path_metadata.st_mode)
+                or (path_metadata.st_dev, path_metadata.st_ino)
+                != (metadata.st_dev, metadata.st_ino)
+                or (path_metadata.st_uid, path_metadata.st_gid) != (65532, 65532)
+                or stat.S_IMODE(path_metadata.st_mode) != 0o660
+                or path_metadata.st_nlink != 1
+                or (parent_after.st_dev, parent_after.st_ino)
+                != (parent_before.st_dev, parent_before.st_ino)
+                or (parent_after.st_uid, parent_after.st_gid) != (65532, 65532)
+                or stat.S_IMODE(parent_after.st_mode) != 0o770
+            ):
+                raise FrontendDevError(
+                    "frontend volume runtime lock path changed during admission"
+                )
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
@@ -1426,6 +1493,11 @@ def _acquire_runtime_lock() -> Any:
                 pass
         raise
     except FileNotFoundError as error:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         _fail(f"frontend runtime lock is missing: {RUNTIME_LOCK_PATH}")
     except OSError as error:
         if descriptor is not None:
@@ -2180,7 +2252,7 @@ def start(stopping_event: Any) -> FrontendHandle:
     _reject_existing_owner(previous)
     allow_generated = _generated_gate(previous)
     watchpack_polling_ms = _watchpack_polling_ms()
-    runtime_lock = _acquire_runtime_lock() if volume_only else None
+    runtime_lock = _acquire_runtime_lock(volume_inputs=inputs) if volume_only else None
     try:
         _prepare_state_directories()
         if volume_only:
