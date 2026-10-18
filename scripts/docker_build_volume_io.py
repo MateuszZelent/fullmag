@@ -88,7 +88,7 @@ def control_store(layout, source_root=None, *, helper_image=None):
     reference = helper_image or os.environ.get('FULLMAG_BUILD_CONTROL_IMAGE', 'fullmag/development-base:local')
     result = subprocess.run(
         ['docker', '--context', 'desktop-linux', 'image', 'inspect', reference, '--format', '{{.Id}}'],
-        capture_output=True, text=True, timeout=60, check=True,
+        capture_output=True, text=True, encoding='utf-8', timeout=60, check=True,
     )
     image_id = result.stdout.strip()
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
@@ -103,7 +103,7 @@ def compose_capture(source_root, project, document, arguments, *, environment=No
     command = ['docker', '--context', 'desktop-linux', 'compose', '--project-name', project,
                '--project-directory', str(source_root), '-f', '-', *map(str, arguments)]
     try:
-        result = subprocess.run(command, input=json.dumps(document), text=True, capture_output=True,
+        result = subprocess.run(command, input=json.dumps(document), text=True, encoding='utf-8', capture_output=True,
                                 env={**os.environ, **(environment or {})}, timeout=timeout)
     except subprocess.TimeoutExpired as error:
         raise VolumeBuildOutcomeUnknown('Compose client timed out; daemon outcome requires reconciliation') from error
@@ -125,6 +125,7 @@ def compose_build(source_root, project, document, service, log_document, *, envi
     interrupted = False
     buffer = bytearray()
     persistence_error = None
+    display_enabled = True
 
     def publish(raw):
         nonlocal persistence_error
@@ -145,8 +146,18 @@ def compose_build(source_root, project, document, service, log_document, *, envi
             continue
         if not block:
             break
-        sys.stdout.write(block.decode('utf-8', 'replace'))
-        sys.stdout.flush()
+        if display_enabled:
+            try:
+                # Native Windows text streams may use cp1250. Console
+                # presentation must never abort observation of a live build.
+                if hasattr(sys.stdout, 'buffer'):
+                    sys.stdout.buffer.write(block)
+                    sys.stdout.buffer.flush()
+                else:
+                    sys.stdout.write(block.decode('utf-8', 'replace'))
+                    sys.stdout.flush()
+            except (UnicodeError, OSError):
+                display_enabled = False
         buffer.extend(block)
         if len(buffer) >= 1024 * 1024:
             publish(bytes(buffer))

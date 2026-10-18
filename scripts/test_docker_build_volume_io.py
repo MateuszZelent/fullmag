@@ -66,6 +66,19 @@ class BuildTransportTests(unittest.TestCase):
         self.assertEqual(receipt['chunks'][0]['path'], 'runs/id/build-log.json.chunks/00000000.log')
         self.assertEqual(store.documents[receipt['chunks'][0]['path']], b'compiler output\n')
 
+    def test_console_encoding_failure_does_not_abandon_the_build(self):
+        store = MemoryStore()
+        log = transport.BuildDocument(store, 'runs/id/build-log.json')
+        waited = Mock(return_value=0)
+        process = types.SimpleNamespace(stdin=Mock(), stdout=io.BytesIO('✓ build\n'.encode()), wait=waited)
+        def broken_write(_value):
+            raise UnicodeEncodeError('cp1250', '✓', 0, 1, 'not encodable')
+        console = types.SimpleNamespace(write=broken_write, flush=lambda: None)
+        with patch.object(transport.subprocess, 'Popen', return_value=process), patch.object(transport.sys, 'stdout', console):
+            transport.compose_build(Path('/selected'), 'fullmag-worktree-owned', {'services': {}}, 'backend', log)
+        waited.assert_called_once()
+        self.assertEqual(json.loads(log.read_bytes())['exit_code'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
