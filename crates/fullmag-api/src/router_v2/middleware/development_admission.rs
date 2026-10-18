@@ -125,7 +125,6 @@ pub(crate) async fn mutation_admission_middleware(
         && matches!(
             request.uri().path(),
             "/healthz"
-                | "/v2/platform/development-backend"
                 | "/v2/platform/openapi.json"
                 | "/v1/internal/live/current/control/wait"
         );
@@ -195,10 +194,6 @@ mod tests {
                 "/model",
                 get(|| async { StatusCode::OK }).post(|| async { StatusCode::OK }),
             )
-            .route(
-                "/v2/platform/development-backend",
-                get(|| async { StatusCode::OK }),
-            )
             .layer(axum::middleware::from_fn_with_state(
                 state,
                 mutation_admission_middleware,
@@ -216,17 +211,6 @@ mod tests {
             assert_eq!(response.headers()["x-api-contract-version"], "1.0.0");
             assert!(!response.headers()["x-fullmag-api-instance"].is_empty());
         }
-        let response = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/v2/platform/development-backend")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
         drop(freeze);
         let response = app
             .oneshot(

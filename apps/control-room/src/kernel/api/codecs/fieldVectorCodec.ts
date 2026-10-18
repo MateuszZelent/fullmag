@@ -1,3 +1,4 @@
+import { decodeArtifactFieldVector } from "./artifactFieldVectorCodec";
 import type {
   DecodedComplexFieldVector,
   DecodedFieldVector,
@@ -41,9 +42,10 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
   }
 
   const version = view.getUint8(4);
+  if (version === 6) return decodeArtifactFieldVector(buffer);
   if (!SUPPORTED_VERSIONS.has(version)) {
     throw new Error(
-      `Unsupported FMVP version: expected 2, 3, 4, or 5, got ${version}`,
+      `Unsupported FMVP version: expected 2, 3, 4, 5, or 6, got ${version}`,
     );
   }
 
@@ -474,6 +476,7 @@ export function asDecodedComplexFieldVector(
   const componentCount = fieldVector.nComp / 2;
   return {
     componentCount,
+    artifactMapping: fieldVector.artifactMapping,
     dtype: "complex128",
     domainGenerationId: fieldVector.domainGenerationId,
     fieldGenerationId: fieldVector.fieldGenerationId,

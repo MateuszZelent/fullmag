@@ -44,6 +44,7 @@ class ClientTests(unittest.TestCase):
             enable_current_contracts=False,
             enable_slepc_modal=True,
             enable_slepc_runtime_v2=False,
+            enable_boris_cpu=False,
         )
 
     def test_list_does_not_create_empty_queue(self):
@@ -147,6 +148,72 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertIn('requires --ref', errors)
         self.assertFalse((self.root / 'index').exists())
+
+    def test_snapshot_manifest_forwards_explicit_paths_to_capture(self):
+        manifest = self.root / 'source paths.json'
+        manifest.write_text(json.dumps(['new solver.rs', 'nowy/źródło.py']), encoding='utf-8')
+        with patch('local_runner.source.capture_source', return_value={'source_digest': 'c' * 64}) as capture, \
+             patch.object(local_runner_cli, 'initialize'), \
+             patch.object(local_runner_cli, 'build_lock', return_value=contextlib.nullcontext()):
+            code, _, errors = self.run_client('submit', '--source', 'snapshot',
+                '--include-untracked', 'existing.py', '--include-untracked-from', str(manifest))
+        self.assertEqual(0, code, errors)
+        self.assertEqual(('existing.py', 'new solver.rs', 'nowy/źródło.py'), capture.call_args.kwargs['include_untracked'])
+
+    def test_manifest_reaches_real_capsule_and_local_queue(self):
+        from test_local_runner_source import _git, _repository
+
+        repo, head = _repository(self.root)
+        source = repo / 'new source.py'
+        source.write_text('value = 17\n', encoding='utf-8')
+        manifest = self.root / 'explicit paths.json'
+        manifest.write_text('["new source.py"]', encoding='utf-8')
+        with patch.object(local_runner_cli, 'initialize'), \
+             patch.object(local_runner_cli, 'build_lock', return_value=contextlib.nullcontext()):
+            code, output, errors = self.run_client('submit', '--source', 'snapshot',
+                '--include-untracked-from', str(manifest))
+        self.assertEqual(0, code, errors)
+        job = json.loads(output)
+        capsule = self.root / job['payload']['capsule_relative']
+        captured = json.loads((capsule / 'manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(head, captured['resolved_commit'])
+        self.assertEqual(['new source.py'], captured['included_untracked'])
+        self.assertEqual(source.read_bytes(), (capsule / 'tree/new source.py').read_bytes())
+        self.assertEqual(captured['source_digest'], job['source_digest'])
+        self.assertEqual('queued', job['state'])
+        self.assertEqual('', _git(repo, 'diff', '--cached', '--name-only').stdout)
+
+    def test_invalid_manifest_fails_before_capture_and_initialize(self):
+        manifest = self.root / 'invalid.json'
+        for body in (b'', b'[]' + b' ' * 65535, b'{}', b'[true]', b'[null]',
+                     b'[["nested"]]', b'[""]', b'["a","a"]', b'["\\u0000"]',
+                     b'["bad\xff"]', b'[' * 2000, json.dumps(['x'] * 1025).encode()):
+            with self.subTest(body=body[:30]):
+                manifest.write_bytes(body)
+                with patch('local_runner.source.capture_source') as capture, \
+                     patch.object(local_runner_cli, 'initialize') as initialize:
+                    code, _, errors = self.run_client('submit', '--source', 'snapshot',
+                        '--include-untracked-from', str(manifest))
+                self.assertEqual(2, code, errors)
+                capture.assert_not_called()
+                initialize.assert_not_called()
+
+    def test_commit_refuses_snapshot_manifest_before_capture(self):
+        with patch('local_runner.source.capture_source') as capture, \
+             patch.object(local_runner_cli, 'initialize') as initialize:
+            code, _, errors = self.run_client('submit', '--source', 'commit', '--ref', 'HEAD',
+                '--include-untracked-from', str(self.root / 'absent.json'))
+        self.assertEqual(2, code)
+        self.assertIn('requires snapshot', errors)
+        capture.assert_not_called()
+        initialize.assert_not_called()
+
+    def test_empty_manifest_and_exact_read_bound(self):
+        manifest = self.root / 'manifest.json'
+        manifest.write_bytes(b'[]' + b' ' * 65534)
+        self.assertEqual([], local_runner_cli.read_untracked_manifest(manifest))
+        with self.assertRaises(local_runner_cli.SourceError):
+            local_runner_cli.read_untracked_manifest(self.root / 'absent.json')
 
     def test_same_source_retry_returns_same_job_despite_new_capture_id(self):
         with patch('local_runner.source.capture_source', return_value={'source_digest': 'c' * 64}), \

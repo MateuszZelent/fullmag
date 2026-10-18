@@ -1,20 +1,20 @@
 {
   "document": {
     "path": "public_docs/site/python-api/boundary-conditions/floquet-boundary-conditions.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Floquet/Bloch real-split constraint sets implemented in FEM CPU modal and frequency-response solvers"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "partial",
+      "reason": "Floquet/Bloch constraint sets planned and supported on qualified FEM GPU modal/response paths"
     },
     {
       "solver": "FDM",
@@ -31,21 +31,92 @@
   ],
   "equations": [
     {
-      "id": "eq-floquet",
+      "id": "eq-floquet-bloch",
       "symbols": [
-        "q"
+        "delta_m",
+        "delta_phi",
+        "r_minus",
+        "r_plus",
+        "delta_r",
+        "k_vec"
       ],
       "sources": [
-        "source_floquet"
+        "source_floquet",
+        "source_spin_wave_bc_ir",
+        "source_periodic_constraint_set_ir"
+      ]
+    },
+    {
+      "id": "eq-floquet-real-split",
+      "symbols": [
+        "delta_u",
+        "r_minus",
+        "r_plus",
+        "delta_r",
+        "k_vec",
+        "theta",
+        "eps_gamma"
+      ],
+      "sources": [
+        "source_periodic_phase_policy_ir",
+        "source_periodic_constraint_sets_fn"
       ]
     }
   ],
   "symbols": [
     {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
+      "id": "delta_m",
+      "latex": "\\delta\\mathbf{m}",
+      "meaning": "complex dynamic magnetization amplitude",
       "si_unit": "\\mathrm{1}"
+    },
+    {
+      "id": "delta_phi",
+      "latex": "\\delta\\phi",
+      "meaning": "complex dynamic magnetostatic scalar potential amplitude",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "delta_u",
+      "latex": "\\delta u",
+      "meaning": "generic complex dynamic field component ($\\delta\\mathbf{m}$ or $\\delta\\phi$)",
+      "si_unit": "\\mathrm{1}"
+    },
+    {
+      "id": "r_minus",
+      "latex": "\\mathbf{r}_-, \\mathbf{r}_+",
+      "meaning": "paired master and slave boundary coordinates",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "r_plus",
+      "latex": "\\Delta\\mathbf{r}",
+      "meaning": "periodic lattice translation vector $\\mathbf{r}_+ - \\mathbf{r}_-$",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "delta_r",
+      "latex": "\\mathbf{k}",
+      "meaning": "Bloch wave vector",
+      "si_unit": "\\mathrm{rad\\,m^{-1}}"
+    },
+    {
+      "id": "k_vec",
+      "latex": "\\theta",
+      "meaning": "Bloch phase angle $\\mathbf{k}\\cdot\\Delta\\mathbf{r}$ across the boundary pair",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "theta",
+      "latex": "\\varepsilon_\\Gamma",
+      "meaning": "planner $\\Gamma$-point classification threshold ($10^{-12}$)",
+      "si_unit": "\\mathrm{rad\\,m^{-1}}"
+    },
+    {
+      "id": "eps_gamma",
+      "latex": "\\varepsilon_\\Gamma",
+      "meaning": "planner $\\Gamma$-point classification threshold ($10^{-12}$)",
+      "si_unit": "\\mathrm{rad\\,m^{-1}}"
     }
   ],
   "sources": [
@@ -53,7 +124,31 @@
       "id": "source_floquet",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class FloquetBC",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public constructor and IR lowering for Bloch/Floquet boundary pairs"
+    },
+    {
+      "id": "source_spin_wave_bc_ir",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "SpinWaveBoundaryConditionIR",
+      "responsibility": "canonical IR enum for spin-wave boundary conditions"
+    },
+    {
+      "id": "source_periodic_phase_policy_ir",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "PeriodicPhasePolicyIR",
+      "responsibility": "planner IR representation of zero-phase vs Bloch-phase boundary policies"
+    },
+    {
+      "id": "source_periodic_constraint_set_ir",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "PeriodicConstraintSetIR",
+      "responsibility": "resolved periodic/Floquet constraint set for magnetic and magnetostatic domains"
+    },
+    {
+      "id": "source_periodic_constraint_sets_fn",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "frequency_response_periodic_constraint_sets",
+      "responsibility": "lowers Floquet and periodic boundary conditions into planner constraint sets"
     }
   ],
   "public_api": {

@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object materi
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,12 +54,12 @@ fm.Material(name, Ms, A, alpha, ...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | material identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```Ms``` | ```float or field``` | ```required``` | ```A/m``` | positive or typed field | saturation magnetization | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ms``` |
-| ```A``` | ```float or field``` | ```required``` | ```J/m``` | positive or typed field | exchange stiffness | FEM/FDM CPU/GPU: IR; resolver-specific | ```A``` |
-| ```alpha``` | ```float or field``` | ```required``` | ```1``` | finite and non-negative | Gilbert damping | FEM/FDM CPU/GPU: IR; resolver-specific | ```alpha``` |
-| ```Ku1/Ku2/Kc1/Kc2/Kc3``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | anisotropy constants | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisotropy``` |
-| ```Dind/Dbulk``` | ```float or field or None``` | ```None``` | ```J/m^2``` | finite when supplied | DMI constants | FEM/FDM CPU/GPU: IR; resolver-specific | ```dmi``` |
+| `name` | `str` | `required` | `1` | non-empty | material identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `Ms` | `float or field` | `required` | `A/m` | positive or typed field | saturation magnetization | FEM/FDM CPU/GPU: IR; resolver-specific | `Ms` |
+| `A` | `float or field` | `required` | `J/m` | positive or typed field | exchange stiffness | FEM/FDM CPU/GPU: IR; resolver-specific | `A` |
+| `alpha` | `float or field` | `required` | `1` | finite and non-negative | Gilbert damping | FEM/FDM CPU/GPU: IR; resolver-specific | `alpha` |
+| `Ku1/Ku2/Kc1/Kc2/Kc3` | `float or field or None` | `None` | `J/m^3` | finite when supplied | anisotropy constants | FEM/FDM CPU/GPU: IR; resolver-specific | `anisotropy` |
+| `Dind/Dbulk` | `float or field or None` | `None` | `J/m^2` | finite when supplied | DMI constants | FEM/FDM CPU/GPU: IR; resolver-specific | `dmi` |
 
 ### Stage-first example
 
@@ -88,30 +88,30 @@ The example intentionally exposes the object-level boundary. In a full stage, at
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```Material.name``` | ```str``` | ```required``` | ```1``` | non-empty | material identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```Material.Ms``` | ```float or field``` | ```required``` | ```A/m``` | positive or typed field | saturation magnetization | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ms``` |
-| ```Material.A``` | ```float or field``` | ```required``` | ```J/m``` | positive or typed field | exchange stiffness | FEM/FDM CPU/GPU: IR; resolver-specific | ```A``` |
-| ```Material.alpha``` | ```float or field``` | ```required``` | ```1``` | finite and non-negative | Gilbert damping | FEM/FDM CPU/GPU: IR; resolver-specific | ```alpha``` |
-| ```Material.Ku1``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | first uniaxial constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku1``` |
-| ```Material.Ku2``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | second uniaxial constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku2``` |
-| ```Material.anisU``` | ```tuple or None``` | ```None``` | ```1``` | typed when supplied | uniaxial axes | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisU``` |
-| ```Material.Kc1``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | first cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc1``` |
-| ```Material.Kc2``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | second cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc2``` |
-| ```Material.Kc3``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | third cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc3``` |
-| ```Material.anisC1``` | ```tuple or None``` | ```None``` | ```1``` | typed when supplied | first cubic axis | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisC1``` |
-| ```Material.anisC2``` | ```tuple or None``` | ```None``` | ```1``` | typed when supplied | second cubic axis | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisC2``` |
-| ```Material.Dind``` | ```float or field or None``` | ```None``` | ```J/m^2``` | finite when supplied | interfacial DMI constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dind``` |
-| ```Material.Dbulk``` | ```float or field or None``` | ```None``` | ```J/m^2``` | finite when supplied | bulk DMI constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dbulk``` |
-| ```Material.Ms_field``` | ```field or None``` | ```None``` | ```A/m``` | typed when supplied | spatial saturation magnetization field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ms_field``` |
-| ```Material.A_field``` | ```field or None``` | ```None``` | ```J/m``` | typed when supplied | spatial exchange field | FEM/FDM CPU/GPU: IR; resolver-specific | ```A_field``` |
-| ```Material.alpha_field``` | ```field or None``` | ```None``` | ```1``` | typed when supplied | spatial damping field | FEM/FDM CPU/GPU: IR; resolver-specific | ```alpha_field``` |
-| ```Material.Ku_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Ku1 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku_field``` |
-| ```Material.Ku2_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Ku2 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku2_field``` |
-| ```Material.Kc1_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Kc1 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc1_field``` |
-| ```Material.Kc2_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Kc2 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc2_field``` |
-| ```Material.Kc3_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Kc3 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc3_field``` |
-| ```Material.Dind_field``` | ```field or None``` | ```None``` | ```J/m^2``` | typed when supplied | spatial interfacial DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dind_field``` |
-| ```Material.Dbulk_field``` | ```field or None``` | ```None``` | ```J/m^2``` | typed when supplied | spatial bulk DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dbulk_field``` |
+| `Material.name` | `str` | `required` | `1` | non-empty | material identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `Material.Ms` | `float or field` | `required` | `A/m` | positive or typed field | saturation magnetization | FEM/FDM CPU/GPU: IR; resolver-specific | `Ms` |
+| `Material.A` | `float or field` | `required` | `J/m` | positive or typed field | exchange stiffness | FEM/FDM CPU/GPU: IR; resolver-specific | `A` |
+| `Material.alpha` | `float or field` | `required` | `1` | finite and non-negative | Gilbert damping | FEM/FDM CPU/GPU: IR; resolver-specific | `alpha` |
+| `Material.Ku1` | `float or field or None` | `None` | `J/m^3` | finite when supplied | first uniaxial constant | FEM/FDM CPU/GPU: IR; resolver-specific | `Ku1` |
+| `Material.Ku2` | `float or field or None` | `None` | `J/m^3` | finite when supplied | second uniaxial constant | FEM/FDM CPU/GPU: IR; resolver-specific | `Ku2` |
+| `Material.anisU` | `tuple or None` | `None` | `1` | typed when supplied | uniaxial axes | FEM/FDM CPU/GPU: IR; resolver-specific | `anisU` |
+| `Material.Kc1` | `float or field or None` | `None` | `J/m^3` | finite when supplied | first cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | `Kc1` |
+| `Material.Kc2` | `float or field or None` | `None` | `J/m^3` | finite when supplied | second cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | `Kc2` |
+| `Material.Kc3` | `float or field or None` | `None` | `J/m^3` | finite when supplied | third cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | `Kc3` |
+| `Material.anisC1` | `tuple or None` | `None` | `1` | typed when supplied | first cubic axis | FEM/FDM CPU/GPU: IR; resolver-specific | `anisC1` |
+| `Material.anisC2` | `tuple or None` | `None` | `1` | typed when supplied | second cubic axis | FEM/FDM CPU/GPU: IR; resolver-specific | `anisC2` |
+| `Material.Dind` | `float or field or None` | `None` | `J/m^2` | finite when supplied | interfacial DMI constant | FEM/FDM CPU/GPU: IR; resolver-specific | `Dind` |
+| `Material.Dbulk` | `float or field or None` | `None` | `J/m^2` | finite when supplied | bulk DMI constant | FEM/FDM CPU/GPU: IR; resolver-specific | `Dbulk` |
+| `Material.Ms_field` | `field or None` | `None` | `A/m` | typed when supplied | spatial saturation magnetization field | FEM/FDM CPU/GPU: IR; resolver-specific | `Ms_field` |
+| `Material.A_field` | `field or None` | `None` | `J/m` | typed when supplied | spatial exchange field | FEM/FDM CPU/GPU: IR; resolver-specific | `A_field` |
+| `Material.alpha_field` | `field or None` | `None` | `1` | typed when supplied | spatial damping field | FEM/FDM CPU/GPU: IR; resolver-specific | `alpha_field` |
+| `Material.Ku_field` | `field or None` | `None` | `J/m^3` | typed when supplied | spatial Ku1 field | FEM/FDM CPU/GPU: IR; resolver-specific | `Ku_field` |
+| `Material.Ku2_field` | `field or None` | `None` | `J/m^3` | typed when supplied | spatial Ku2 field | FEM/FDM CPU/GPU: IR; resolver-specific | `Ku2_field` |
+| `Material.Kc1_field` | `field or None` | `None` | `J/m^3` | typed when supplied | spatial Kc1 field | FEM/FDM CPU/GPU: IR; resolver-specific | `Kc1_field` |
+| `Material.Kc2_field` | `field or None` | `None` | `J/m^3` | typed when supplied | spatial Kc2 field | FEM/FDM CPU/GPU: IR; resolver-specific | `Kc2_field` |
+| `Material.Kc3_field` | `field or None` | `None` | `J/m^3` | typed when supplied | spatial Kc3 field | FEM/FDM CPU/GPU: IR; resolver-specific | `Kc3_field` |
+| `Material.Dind_field` | `field or None` | `None` | `J/m^2` | typed when supplied | spatial interfacial DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | `Dind_field` |
+| `Material.Dbulk_field` | `field or None` | `None` | `J/m^2` | typed when supplied | spatial bulk DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | `Dbulk_field` |
 
 (python-api-materials-material-problem-ir)=
 ## ProblemIR

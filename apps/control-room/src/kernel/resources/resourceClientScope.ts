@@ -14,7 +14,7 @@ export function resourceRuntimeKeyForClientScope(
   const normalizedScope = clientScope?.trim();
   if (!normalizedScope) return resourceKey;
 
-  // developmentBackendResource historically included the client scope as a
+  // Some resource keys historically included the client scope as a
   // pipe-delimited prefix. Preserve that identity without adding a second one.
   if (resourceKey.startsWith(`${normalizedScope}|`)) return resourceKey;
 

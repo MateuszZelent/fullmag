@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, StudyId,
+    ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, RunId, StudyId,
     StudyReference,
 };
 use fullmag_authoring::{
@@ -9,13 +9,14 @@ use fullmag_authoring::{
     StudyPlan, StudyPlanMigrationDefaults, StudyPrimitiveStageKind, StudySolverConfigReference,
 };
 use fullmag_ir::{
-    EnergyTermIR, InitialMagnetizationIR, OutputStorageIR, ProblemIR, SpinTorqueModuleIR,
+    EnergyTermIR, InitialMagnetizationIR, OutputStorageIR, ProblemIR, RegionRefIR,
+    SpinTorqueModuleIR,
 };
 use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry};
 use serde_json::{json, Value};
 
 fn template() -> RunSpecification {
-    RunSpecification::new(
+    let mut specification = RunSpecification::new(
         ProjectSnapshot {
             project_id: ProjectId::parse("project-batch").unwrap(),
             definition_revision: 3,
@@ -40,7 +41,10 @@ fn template() -> RunSpecification {
                 storage_bytes: 1024,
             }),
         },
-    )
+    );
+    // Batch expansion fingerprints the complete template; keep this fixture replayable.
+    specification.run_id = RunId::parse("run-batch-template").unwrap();
+    specification
 }
 
 fn axis(name: &str, values: Vec<Value>, join: BatchAxisJoin) -> BatchAxis {
@@ -778,11 +782,12 @@ fn output_storage_binding_rejects_missing_and_relative_paths() {
 fn materialization_binds_zhang_li_axis_to_named_executable_module() {
     let study = materialization_study();
     let mut problem = ProblemIR::bootstrap_example();
+    problem.magnets[0].object_id = Some("batch-magnet".into());
     problem.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
         schema_version: Some("zhang_li_torque.v1".into()),
         id: Some("batch-zl".into()),
-        target: Some(fullmag_ir::RegionRefIR {
-            object_id: "strip".into(),
+        target: Some(RegionRefIR {
+            object_id: "batch-magnet".into(),
             region_id: None,
         }),
         formula_version: "zhang_li.mumax3.v1".into(),

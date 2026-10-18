@@ -133,8 +133,8 @@ explicitly reported; no invisible nearest-neighbour or extrapolation fallback is
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
-| Cross-backend transfer | `crates/fullmag-cli/src/step_utils.rs` | `resample_continuation_if_cross_backend` | chooses and reports transfer | runtime |
-| Vector transfer primitive | `crates/fullmag-engine/src/fem_solution_transfer.rs` | `transfer_vector_field` | field interpolation and transfer result | engine |
+| Cross-backend transfer | [`crates/fullmag-cli/src/step_utils.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | [`resample_continuation_if_cross_backend`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | chooses and reports transfer | runtime |
+| Vector transfer primitive | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) | [`transfer_vector_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) | field interpolation and transfer result | engine |
 
 (numerical-methods-fdm-to-fem-validation)=
 ## Validation
@@ -164,7 +164,7 @@ artifact provenance remain runtime evidence.
 
 ## Control Room crosswalk
 
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
 
 ## Where this is implemented
 
@@ -175,5 +175,5 @@ page and its sidecar map.
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Runtime routing | `crates/fullmag-cli/src/step_utils.rs` | `resample_continuation_if_cross_backend` | transfer selection and counters | CLI tests |
-| Vector transfer | `crates/fullmag-engine/src/fem_solution_transfer.rs` | `transfer_vector_field` | interpolation primitive | engine unit tests |
+| Runtime routing | [`crates/fullmag-cli/src/step_utils.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | [`resample_continuation_if_cross_backend`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | transfer selection and counters | CLI tests |
+| Vector transfer | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) | [`transfer_vector_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) | interpolation primitive | engine unit tests |

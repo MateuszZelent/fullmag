@@ -5,6 +5,10 @@ import type { AntennaFieldSolutionResource, AntennaSourceSpectrumResource, Anten
 import { antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
 import { antennaFieldSolutionIdentityStatus, antennaSpectrumIdentityStatus, resolveAntennaRuntimeIds } from "./AntennaCompositionRuntime";
 
+const spectrumPlane = { origin_m: [0, 0, 0], axis_u: [1, 0, 0], axis_v: [0, 1, 0],
+  extent_u_m: 1e-6, extent_v_m: 1e-6, sample_count_u: 2, sample_count_v: 2,
+  interpolation: "fem_element", outside_policy: "error" as const };
+
 function sceneFixture(): SceneResource {
   return {
     antenna_field_solve_stages: [
@@ -19,6 +23,8 @@ function sceneFixture(): SceneResource {
       {
         id: "spectrum-1",
         output_id: "spectrum-output",
+        component: "x", normalization: "integral_si", transform: "spatial_fft", window: "hann",
+        target: { kind: "global" }, port_mode_id: "port", sampling_plane: spectrumPlane,
         solution_ref: { kind: "stage_output", output_id: "h-ant-output", stage_id: "solve-1" },
       },
     ],
@@ -51,6 +57,7 @@ describe("resolveAntennaRuntimeIds", () => {
       solutionId: "h-ant-output",
       spectrumOutputId: "spectrum-output",
       spectrumRequestId: "spectrum-1",
+      spectrumRequest: scene.antenna_spectrum_requests![0],
       stageId: "solve-1",
       publishedRef: null,
     });
@@ -98,6 +105,7 @@ describe("resolveAntennaRuntimeIds", () => {
 
 describe("antennaFieldSolutionIdentityStatus", () => {
   const field = {
+    bases: [],
     asset_id: "asset-1",
     content_digest: "sha256:valid",
     quantity: "H_ant_basis",
@@ -159,7 +167,9 @@ describe("antennaSpectrumIdentityStatus", () => {
     session_id: "session-1",
     session_epoch: "epoch-1",
     request_scope_epoch: "instance-1:7",
-    sampling: { solution_id: "h-ant-output" },
+    component: "x", normalization: "integral_si", port_mode_id: "port", source_object_id: "antenna",
+    sampling: { ...spectrumPlane, solution_id: "h-ant-output", source_object_id: "antenna", port_mode_id: "port",
+      target: { kind: "global" }, transform: "spatial_fft", window: "hann" },
   } as AntennaSourceSpectrumResource;
   const catalog = {
     stage_id: "solve-1", status: "ready", session_id: "session-1", session_epoch: "epoch-1",

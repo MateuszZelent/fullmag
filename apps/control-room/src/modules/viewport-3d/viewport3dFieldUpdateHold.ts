@@ -37,6 +37,21 @@ export function viewport3DFieldUpdateHoldActive(): boolean {
   return holdDepth > 0;
 }
 
+export function createViewport3DInteractionFieldHold() {
+  let active: { epoch: number | undefined } | null = null;
+  return {
+    begin(epoch?: number): void {
+      if (!active) beginViewport3DFieldUpdateHold();
+      active = { epoch };
+    },
+    end(epoch?: number): void {
+      if (!active || (epoch !== undefined && epoch !== active.epoch)) return;
+      active = null;
+      endViewport3DFieldUpdateHold();
+    },
+  };
+}
+
 export function resetViewport3DFieldUpdateHoldForTest(): void {
   releaseResourcePause?.();
   releaseResourcePause = null;

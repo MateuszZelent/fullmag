@@ -260,7 +260,8 @@ fn m2_transport_torque_is_dimensionally_converted_and_gated_by_outer_lte() {
 
     let strict_budget = CoupledTransportOuterErrorBudget {
         dt_s: 1.0e-12,
-        embedded_lte_m: 1.0e-30,
+        embedded_error_m: &[[1.0e-30, 0.0, 0.0]],
+        frozen_cells: None,
         eta_transport: 0.1,
         previous_transport_torque_per_s: vec![[0.0; 3]],
     };
@@ -275,7 +276,7 @@ fn m2_transport_torque_is_dimensionally_converted_and_gated_by_outer_lte() {
 
     let converged_budget = CoupledTransportOuterErrorBudget {
         previous_transport_torque_per_s: baseline.transport_gilbert_torque_per_s.clone(),
-        embedded_lte_m: 1.0e-12,
+        embedded_error_m: &[[1.0e-12, 0.0, 0.0]],
         ..strict_budget
     };
     let accepted = problem

@@ -31,6 +31,7 @@ use crate::types::*;
 mod manual_remesh;
 use manual_remesh::execute_manual_interactive_remesh;
 mod antenna_external_lead_inspection;
+mod antenna_closed_loop_inspection;
 
 // ── helpers local to the orchestrator ────────────────────────────────────────
 
@@ -1244,17 +1245,20 @@ fn current_live_metadata(
     status: &str,
 ) -> serde_json::Value {
     if antenna_external_lead_inspection::is_carrier(plan) {
+        let closed_loop = plan.provenance.notes.iter().any(|note| note == "antenna_closed_loop_inspection_carrier_only:no_llg_execution");
+        let inspection_family = if closed_loop { "antenna_closed_loop_inspection" } else { "antenna_external_lead_inspection" };
         return serde_json::json!({
             "session_protocol_version": "2026-04-04",
             "capability_profile_version": "2026-04-04",
             "problem_name": &problem.problem_meta.name,
             "ir_version": &problem.ir_version,
             "source_hash": &problem.problem_meta.source_hash,
-            "execution_plan": {"backend_plan": {"kind": "antenna_external_lead_inspection"}},
+            "execution_plan": if matches!(plan.backend_plan, BackendPlanIR::AntennaFieldOnly(_)) { serde_json::to_value(plan).ok() } else { Some(serde_json::json!({"backend_plan": {"kind": "antenna_external_lead_inspection"}})) },
+            "magnetic_state_present": !problem.magnets.is_empty(),
             "inspection_carrier_only": true,
             "runtime_engine": {
                 "backend_family": "fem",
-                "engine_id": "antenna_external_lead_inspection",
+                "engine_id": inspection_family,
                 "engine_label": "Inspection-only V/RT0/H",
                 "accelerator": "cpu",
             },
@@ -1266,11 +1270,11 @@ fn current_live_metadata(
             },
             "resolved_execution": {
                 "backend": "fem", "device": "cpu", "precision": "double", "mode": "strict",
-                "runtime_family": "antenna_external_lead_inspection",
-                "engine_id": "antenna_external_lead_inspection", "lossy_fallback_used": false,
+                "runtime_family": inspection_family,
+                "engine_id": inspection_family, "lossy_fallback_used": false,
             },
             "qualification": "NOT VERIFIED",
-            "field_scope": "external_electrode_truncation",
+            "field_scope": if closed_loop { "closed_geometry_coincident_cut_full_volume" } else { "external_electrode_truncation" },
             "timestep_qualification": null,
             "capabilities": null,
             "artifact_layout": current_artifact_layout(problem, plan),
@@ -1535,8 +1539,7 @@ fn torque_display_mode(problem: &ProblemIR) -> Option<TorqueDisplayMode> {
         ),
         StudyIR::Eigenmodes { .. } => return None,
         StudyIR::FrequencyResponse { .. } => return None,
-        StudyIR::Hysteresis { .. } => return None,
-        StudyIR::AntennaFieldSolve { .. } => return None,
+        StudyIR::Hysteresis { .. } | StudyIR::FieldOnly { .. } | StudyIR::AntennaFieldSolve { .. } => return None,
     };
     let damping = problem.materials.first()?.damping;
     Some(TorqueDisplayMode::FromDmdt {
@@ -1636,12 +1639,16 @@ impl LiveProgressCadence {
 }
 
 fn has_heavy_live_payload(update: &fullmag_runner::StepUpdate) -> bool {
-    update.magnetization.is_some()
-        || update.preview_field.is_some()
-        || update
-            .cached_preview_fields
-            .as_ref()
-            .is_some_and(|fields| !fields.is_empty())
+    let flags = crate::live_workspace::feature_flags();
+    let live_magnetization_disabled = flags.disable_live_magnetization && !update.finished;
+    let previews_disabled = flags.disable_preview_2d && flags.disable_preview_3d;
+    (!live_magnetization_disabled && update.magnetization.is_some())
+        || (!previews_disabled && update.preview_field.is_some())
+        || (!previews_disabled
+            && update
+                .cached_preview_fields
+                .as_ref()
+                .is_some_and(|fields| !fields.is_empty()))
 }
 
 fn fem_eigen_progress_metrics(
@@ -1851,6 +1858,9 @@ fn apply_live_step_update_to_workspace_state(
         "running".to_string()
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
+    let disable_live_magnetization = crate::live_workspace::feature_flags()
+        .disable_live_magnetization
+        && !update.finished;
     let previous_step_is_physical = state.live_state.latest_step.is_physical_observation();
     let previous_magnetization = state.live_state.latest_step.magnetization.take();
     let previous_fem_mesh_generation_id =
@@ -1882,11 +1892,18 @@ fn apply_live_step_update_to_workspace_state(
         finished: update.finished,
     };
     state.live_state = live_state_manifest_from_update(update);
+    if disable_live_magnetization {
+        // Large-grid runs do not need a full m vector in every control-plane
+        // frame. Keep the authoritative saved states and terminal artifacts,
+        // but remove the expensive live carrier after bootstrap.
+        state.latest_fields.0.remove("m");
+    }
     if previous_step_is_physical
         && state.live_state.latest_step.is_physical_observation()
         && state.live_state.latest_step.magnetization.is_none()
         && !incoming_has_magnetization
         && !incoming_has_magnetization_preview
+        && !disable_live_magnetization
     {
         state.live_state.latest_step.magnetization = previous_magnetization;
     }
@@ -1924,6 +1941,10 @@ fn ingest_magnetization_field_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &mut fullmag_runner::StepUpdate,
 ) -> bool {
+    if crate::live_workspace::feature_flags().disable_live_magnetization && !update.finished {
+        update.magnetization = None;
+        return false;
+    }
     if !update.stats.is_physical_observation() {
         return false;
     }
@@ -3266,8 +3287,10 @@ fn session_runtime_selection_for_problem(
         selection.resolved_device = Some("cpu".into());
         selection.resolved_precision = Some("double".into());
         selection.resolved_mode = Some("strict".into());
-        selection.resolved_runtime_family = Some("antenna_external_lead_inspection".into());
-        selection.resolved_engine_id = Some("antenna_external_lead_inspection".into());
+        let closed_loop = plan.is_some_and(|plan| plan.provenance.notes.iter().any(|note| note == "antenna_closed_loop_inspection_carrier_only:no_llg_execution"));
+        let inspection_family = if closed_loop { "antenna_closed_loop_inspection" } else { "antenna_external_lead_inspection" };
+        selection.resolved_runtime_family = Some(inspection_family.into());
+        selection.resolved_engine_id = Some(inspection_family.into());
         return selection;
     }
     let resolved_runtime = plan
@@ -3312,6 +3335,7 @@ fn fem_mesh_payload_from_backend_plan(
     backend_plan: &BackendPlanIR,
 ) -> Option<fullmag_runner::FemMeshPayload> {
     match backend_plan {
+        BackendPlanIR::AntennaFieldOnly(plan) => Some(fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(plan).payload),
         BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -3344,6 +3368,14 @@ fn initial_live_state_manifest_from_backend_plan(
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> anyhow::Result<(LiveStateManifest, Option<fullmag_runner::FemMeshPayload>)> {
     let mut live_state = live_state_manifest_from_update(update.clone());
+    if matches!(backend_plan, BackendPlanIR::AntennaFieldOnly(_)) {
+        if continuation_magnetization.is_some_and(|values| !values.is_empty()) {
+            bail!("field_only cannot inherit magnetic continuation state");
+        }
+        live_state.latest_step.magnetization = None;
+        live_state.latest_step.fem_mesh_generation_id = mesh_payload.as_ref().and_then(|mesh| mesh.generation_id.clone());
+        return Ok((live_state, mesh_payload));
+    }
     if matches!(backend_plan, BackendPlanIR::AntennaExternalLeadInspection(_)) {
         live_state.latest_step.magnetization = None;
         live_state.latest_step.grid = [0; 3];
@@ -3510,6 +3542,7 @@ fn adaptive_remesh_legality_reason(problem: &ProblemIR) -> Option<&'static str> 
 
 fn adaptive_remesh_backend_legality_reason(backend_plan: &BackendPlanIR) -> Option<&'static str> {
     let domain_mesh_mode = match backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => return Some("field_only_remesh_requires_explicit_source_rebinding"),
         BackendPlanIR::Fem(plan) => Some(plan.domain_mesh_mode),
         BackendPlanIR::FemEigen(plan) => Some(plan.domain_mesh_mode),
         BackendPlanIR::FemFrequencyResponse(plan) => Some(plan.domain_mesh_mode),
@@ -3737,6 +3770,13 @@ fn refresh_materialized_stage_execution_plans(
 }
 
 fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<ExecutionPlanIR> {
+    if let Some(ResolvedScriptStageAction::AntennaClosedLoopInspection {
+        input, requested_execution, output_id,
+    }) = &stage.action {
+        return antenna_external_lead_inspection::plan_closed_loop_carrier(
+            &stage.ir, input, requested_execution, output_id,
+        );
+    }
     if let Some(ResolvedScriptStageAction::AntennaExternalLeadInspection {
         input, requested_execution, output_id,
     }) = &stage.action {
@@ -3836,7 +3876,7 @@ pub(super) fn prepare_solved_antenna_drive_activation(
         BackendPlanIR::FdmMultilayer(_) => {
             bail!("solved antenna drives are not supported by the FDM multilayer lane")
         }
-        BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
+        BackendPlanIR::AntennaFieldOnly(_) | BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
             bail!("solved antenna drives are supported only by the FEM time-evolution LLG lane")
         }
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
@@ -3940,8 +3980,9 @@ pub(super) fn attach_solved_antenna_drive_bases(
             fullmag_runner::materialize_fdm_solved_antenna_drives_v03(problem, plan, &assets)
                 .map_err(|error| anyhow!("materialize solved antenna drives: {}", error.message))
         }
-        BackendPlanIR::FdmMultilayer(_)
+        BackendPlanIR::AntennaFieldOnly(_)
         | BackendPlanIR::AntennaExternalLeadInspection(_)
+        | BackendPlanIR::FdmMultilayer(_)
         | BackendPlanIR::FemEigen(_)
         | BackendPlanIR::FemFrequencyResponse(_) => unreachable!(
             "backend lane was validated before antenna solution assets were materialized"
@@ -4206,6 +4247,21 @@ fn publish_antenna_spectrum_artifacts_atomically_with_hook(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     before_rename: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<()> {
+    publish_antenna_artifacts_atomically(
+        current_stage_artifact_dir, output_id, "source_spectra",
+        &["spectrum.v2.json", "spectrum.v3.json"], artifacts, interrupt_requested, before_rename,
+    )
+}
+
+fn publish_antenna_artifacts_atomically(
+    current_stage_artifact_dir: &Path,
+    output_id: &str,
+    family: &str,
+    manifest_names: &[&str],
+    artifacts: &[fullmag_runner::AuxiliaryArtifact],
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    before_rename: Option<&dyn Fn() -> Result<()>>,
+) -> Result<()> {
     let output_id_path = Path::new(output_id);
     if output_id.trim().is_empty()
         || output_id_path.components().count() != 1
@@ -4214,16 +4270,24 @@ fn publish_antenna_spectrum_artifacts_atomically_with_hook(
             Some(Component::Normal(_))
         )
     {
-        bail!("antenna source-spectrum output_id '{output_id}' must be one safe path component");
+        bail!("antenna artifact output_id '{output_id}' must be one safe path component");
     }
     if artifacts.is_empty() {
-        bail!("antenna source-spectrum output '{output_id}' produced no artifacts");
+        bail!("antenna artifact output '{output_id}' produced no artifacts");
     }
-    let output_prefix = Path::new("antenna").join("source_spectra").join(output_id);
+    let output_prefix = Path::new("antenna").join(family).join(output_id);
     let final_dir = current_stage_artifact_dir.join(&output_prefix);
+    for ancestor in final_dir.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => bail!("antenna publication path contains a symbolic link"),
+            Ok(_) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        }
+    }
     let parent = final_dir
         .parent()
-        .ok_or_else(|| anyhow!("antenna source-spectrum output has no parent directory"))?;
+        .ok_or_else(|| anyhow!("antenna artifact output has no parent directory"))?;
     let mut normalized = Vec::with_capacity(artifacts.len());
     let mut seen = std::collections::BTreeSet::new();
     let mut has_manifest = false;
@@ -4231,7 +4295,7 @@ fn publish_antenna_spectrum_artifacts_atomically_with_hook(
         let path = Path::new(&artifact.relative_path);
         let relative = path.strip_prefix(&output_prefix).map_err(|_| {
             anyhow!(
-                "antenna source-spectrum artifact '{}' is outside output '{}'",
+                "antenna artifact artifact '{}' is outside output '{}'",
                 artifact.relative_path,
                 output_id
             )
@@ -4245,30 +4309,30 @@ fn publish_antenna_spectrum_artifacts_atomically_with_hook(
             })
         {
             bail!(
-                "antenna source-spectrum artifact '{}' has an unsafe relative path",
+                "antenna artifact artifact '{}' has an unsafe relative path",
                 artifact.relative_path
             );
         }
         if !seen.insert(relative.to_string_lossy().into_owned()) {
             bail!(
-                "antenna source-spectrum output '{}' contains duplicate artifact '{}'",
+                "antenna artifact output '{}' contains duplicate artifact '{}'",
                 output_id,
                 relative.display()
             );
         }
-        if relative == Path::new("spectrum.v2.json") {
+        if manifest_names.iter().any(|name| relative == Path::new(name)) {
             has_manifest = true;
         }
         normalized.push((relative.to_path_buf(), artifact));
     }
     if !has_manifest {
         bail!(
-            "antenna source-spectrum output '{}' has no spectrum.v2.json manifest",
+            "antenna artifact output '{}' has no required manifest",
             output_id
         );
     }
     if synthetic_interrupt_requested(interrupt_requested) {
-        bail!("antenna source-spectrum stage was cancelled before publication");
+        bail!("antenna artifact stage was cancelled before publication");
     }
 
     if final_dir.exists() {
@@ -4282,7 +4346,7 @@ fn publish_antenna_spectrum_artifacts_atomically_with_hook(
 
     fs::create_dir_all(parent).with_context(|| {
         format!(
-            "create antenna source-spectrum publication directory {}",
+            "create antenna artifact publication directory {}",
             parent.display()
         )
     })?;
@@ -4293,37 +4357,39 @@ fn publish_antenna_spectrum_artifacts_atomically_with_hook(
     ));
     fs::create_dir(&staging_dir).with_context(|| {
         format!(
-            "create antenna source-spectrum staging directory {}",
+            "create antenna artifact staging directory {}",
             staging_dir.display()
         )
     })?;
     let publish_result = (|| -> Result<()> {
-        normalized.sort_by_key(|(relative, _)| relative == Path::new("spectrum.v2.json"));
+        normalized.sort_by_key(|(relative, _)| manifest_names.iter().any(|name| relative == Path::new(name)));
         for (relative, artifact) in &normalized {
             let target = staging_dir.join(relative);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(&target, &artifact.bytes).with_context(|| {
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&target)?;
+            file.write_all(&artifact.bytes).with_context(|| {
                 format!(
-                    "write staged antenna source-spectrum artifact {}",
+                    "write staged antenna artifact artifact {}",
                     target.display()
                 )
             })?;
+            file.sync_all()?;
         }
         if synthetic_interrupt_requested(interrupt_requested) {
-            bail!("antenna source-spectrum stage was cancelled before publication");
+            bail!("antenna artifact stage was cancelled before publication");
         }
         if let Some(before_rename) = before_rename {
             before_rename()?;
         }
         verify_staged_antenna_spectrum_output(&staging_dir, &normalized)?;
         if synthetic_interrupt_requested(interrupt_requested) {
-            bail!("antenna source-spectrum stage was cancelled before publication");
+            bail!("antenna artifact stage was cancelled before publication");
         }
         fs::rename(&staging_dir, &final_dir).with_context(|| {
             format!(
-                "atomically publish antenna source-spectrum output {}",
+                "atomically publish antenna artifact output {}",
                 final_dir.display()
             )
         })?;
@@ -4433,7 +4499,13 @@ fn execute_antenna_spectrum_requests(
         let output_dir = current_stage_artifact_dir
             .join("antenna/source_spectra")
             .join(&request.output_id);
-        if fullmag_runner::reusable_antenna_source_spectrum_output(
+        let equilibrium = request.equilibrium_ref.as_ref().map(|reference|
+            fullmag_runner::load_verified_antenna_equilibrium(artifact_dir, reference)
+                .map_err(|error| anyhow!("load accepted equilibrium for '{}': {}", request.id, error.message))
+        ).transpose()?;
+        // Transverse reuse is checked by the atomic publisher after recomputing
+        // with the canonical full binding; the Cartesian cache remains v2.
+        if equilibrium.is_none() && fullmag_runner::reusable_antenna_source_spectrum_output(
             &output_dir,
             request,
             &reference.output_id,
@@ -4461,13 +4533,11 @@ fn execute_antenna_spectrum_requests(
                 error.message
             )
         })?;
-        let spectrum =
-            fullmag_runner::compute_antenna_source_spectrum_artifact_interruptible(
-                request,
-                &samples,
-                None,
-                interrupt_requested,
-            )
+        let spectrum = if let Some(context) = equilibrium.as_ref() {
+            fullmag_runner::compute_antenna_source_spectrum_with_equilibrium(request, &samples, context, interrupt_requested)
+        } else {
+            fullmag_runner::compute_antenna_source_spectrum_artifact_interruptible(request, &samples, None, interrupt_requested)
+        }
                 .map_err(|error| {
                     anyhow!(
                         "compute antenna source spectrum request '{}': {}",
@@ -5691,6 +5761,9 @@ fn attach_stage_antenna_solve_identity(
         return;
     };
     record.antenna_solve_stage_id = match action {
+        Some(ResolvedScriptStageAction::AntennaClosedLoopInspection { input, .. }) => {
+            Some(input.stage.id.clone())
+        }
         Some(ResolvedScriptStageAction::AntennaExternalLeadInspection { input, .. }) => {
             Some(input.stage.id.clone())
         }
@@ -7231,6 +7304,7 @@ fn pause_checkpoint_compatibility(
 
 fn backend_plan_family(backend_plan: &BackendPlanIR) -> &'static str {
     match backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => "fem",
         BackendPlanIR::AntennaExternalLeadInspection(_) => "antenna_external_lead_inspection",
         BackendPlanIR::Fdm(_) => "fdm",
         BackendPlanIR::FdmMultilayer(_) => "fdm_multilayer",
@@ -7590,10 +7664,14 @@ fn current_stage_magnetization_vectors(
     continuation_magnetization: Option<&[[f64; 3]]>,
     backend_plan: &BackendPlanIR,
 ) -> Vec<[f64; 3]> {
+    if matches!(backend_plan, BackendPlanIR::AntennaFieldOnly(_)) {
+        return Vec::new();
+    }
     if let Some(current) = continuation_magnetization {
         return current.to_vec();
     }
     match backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Vec::new(),
         BackendPlanIR::AntennaExternalLeadInspection(_) => Vec::new(),
         BackendPlanIR::Fdm(fdm) => fdm.initial_magnetization.clone(),
         BackendPlanIR::FdmMultilayer(fdm) => fdm
@@ -8015,6 +8093,8 @@ fn synthetic_stage_artifact_ref(
 ) -> PathBuf {
     if matches!(action, ResolvedScriptStageAction::AntennaExternalLeadInspection { .. }) {
         current_stage_artifact_dir.join(antenna_external_lead_inspection::STAGE_OUTPUT_NAME)
+    } else if matches!(action, ResolvedScriptStageAction::AntennaClosedLoopInspection { .. }) {
+        current_stage_artifact_dir.join(antenna_closed_loop_inspection::STAGE_OUTPUT_NAME)
     } else if matches!(action, ResolvedScriptStageAction::AntennaFieldSolve { .. }) {
         antenna_stage_output_catalog_path(current_stage_artifact_dir)
     } else {
@@ -8153,6 +8233,12 @@ fn execute_synthetic_stage_with_interrupt(
     >,
 ) -> Result<SyntheticStageOutcome> {
     match action {
+        ResolvedScriptStageAction::AntennaClosedLoopInspection {
+            input, requested_execution, output_id,
+        } => antenna_closed_loop_inspection::execute(
+            input, requested_execution, output_id, artifact_dir, current_stage_artifact_dir,
+            backend_plan, continuation_magnetization, interrupt_requested, progress_observer,
+        ),
         ResolvedScriptStageAction::AntennaExternalLeadInspection {
             input,
             requested_execution,
@@ -9171,7 +9257,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     crate::python_bridge::bind_script_execution_profiles(
                         &mut config,
                         &phase1_execution_layers,
-                        phase1_runtime_device,
                     )?;
                     Ok(config)
                 })
@@ -10910,7 +10995,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     if grid_refresh_command_id.is_some() {
                         let payload = live_workspace.grid_refresh_snapshot()?;
-                        sync_current_live_snapshot(&session_id, &payload)?;
+                        let publisher_scope = crate::control_room::live_publisher_scope::LivePublisherScope::new(&session_id);
+                        anyhow::ensure!(publisher_scope.is_bound()?, "grid refresh requires its attached publisher scope");
+                        sync_current_live_snapshot(&session_id, &payload, &publisher_scope)?;
                         storage_lease.finish(remesh_succeeded)?;
                         return Ok(());
                     }
@@ -11080,7 +11167,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
         let mut execution_plan = if stage_plan_reusable {
             materialized_execution_plan
-        } else if matches!(stage.action.as_ref(), Some(ResolvedScriptStageAction::AntennaExternalLeadInspection { .. })) {
+        } else if matches!(stage.action.as_ref(), Some(ResolvedScriptStageAction::AntennaExternalLeadInspection { .. } | ResolvedScriptStageAction::AntennaClosedLoopInspection { .. })) {
             plan_materialized_stage_snapshot(&stage)?
         } else {
             fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?
@@ -11297,6 +11384,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &action, ResolvedScriptStageAction::AntennaExternalLeadInspection { .. }
             ) {
                 artifact_dir.join("antenna").join("external_lead_stage_outputs").join(&current_stage_id)
+            } else if matches!(&action, ResolvedScriptStageAction::AntennaClosedLoopInspection { .. }) {
+                artifact_dir.join("antenna").join("closed_loop_stage_outputs").join(&current_stage_id)
             } else {
                 current_stage_artifact_dir.clone()
             };
@@ -11382,7 +11471,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     );
                     set_live_state_status(&mut snapshot.live_state, terminal_status, Some(true));
                     if synthetic_cancelled
-                        || matches!(&action, ResolvedScriptStageAction::AntennaExternalLeadInspection { .. })
+                        || matches!(&action, ResolvedScriptStageAction::AntennaExternalLeadInspection { .. } | ResolvedScriptStageAction::AntennaClosedLoopInspection { .. })
                     {
                         let previous_stage_execution = snapshot.stage_execution.clone();
                         let terminal_completion = fullmag_ir::StageCompletionIR {
@@ -11573,6 +11662,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if !matches!(
                 action,
                 ResolvedScriptStageAction::AntennaExternalLeadInspection { .. }
+                    | ResolvedScriptStageAction::AntennaClosedLoopInspection { .. }
             ) {
                 replace_continuation_after_synthetic_stage(
                     &mut continuation_magnetization,
@@ -11903,8 +11993,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     fdm.common_cells[1],
                     fdm.common_cells[2],
                 ],
-                BackendPlanIR::Fem(_)
+                BackendPlanIR::AntennaFieldOnly(_)
                 | BackendPlanIR::AntennaExternalLeadInspection(_)
+                | BackendPlanIR::Fem(_)
                 | BackendPlanIR::FemEigen(_)
                 | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
             };
@@ -12124,6 +12215,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             )?,
             _ => None,
         };
+        let accepted_equilibrium_artifact_refs = if let (
+            Some(receipt), Some(certificate), BackendPlanIR::Fem(plan),
+        ) = (next_relax_handoff.as_ref(), next_continuation_recomputed_certificate.as_ref(), &execution_plan.backend_plan) {
+            let engine = fullmag_runner::resolve_planned_runtime_engine(&stage.ir, &execution_plan)
+                .map_err(|error| anyhow!("accepted equilibrium execution owner: {}", error.message))?;
+            if stage_result.status == fullmag_runner::RunStatus::Completed && !stage_failed
+                && engine.engine_id == "fem_cpu_native" && plan.precision == fullmag_ir::ExecutionPrecision::Double && plan.fe_order == 1 {
+                let authored_stage_id = stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
+                    .and_then(serde_json::Value::as_str).filter(|id| !id.trim().is_empty()).unwrap_or(&current_stage_id);
+                let artifacts = fullmag_runner::accepted_antenna_equilibrium_artifacts(plan, receipt, certificate, &engine.engine_id, authored_stage_id)
+                    .map_err(|error| anyhow!("accepted equilibrium producer: {}", error.message))?;
+                fullmag_runner::publish_accepted_antenna_equilibrium(&artifact_dir, &artifacts)
+                    .map_err(|error| anyhow!("publish accepted equilibrium: {}", error.message))?
+            } else { Vec::new() }
+        } else { Vec::new() };
         continuation_magnetization = Some(next_continuation_magnetization);
         continuation_completion = next_continuation_completion;
         continuation_accepted_fields = next_continuation_accepted_fields;
@@ -12345,6 +12451,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             );
             if interactive_requested && is_session_final_stage && !stage_failed {
                 publish_scripted_stages_awaiting_command(&mut next_stage_execution);
+            }
+            if let Some(record) = next_stage_execution.stages.get_mut(stage_index) {
+                for reference in &accepted_equilibrium_artifact_refs {
+                    push_unique_artifact_ref(&mut record.artifact_refs, reference.clone());
+                }
             }
             state.stage_execution = Some(next_stage_execution);
             if stage_failed {
@@ -13956,8 +14067,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         fdm.common_cells[1],
                         fdm.common_cells[2],
                     ],
-                    BackendPlanIR::Fem(_)
+                    BackendPlanIR::AntennaFieldOnly(_)
                     | BackendPlanIR::AntennaExternalLeadInspection(_)
+                    | BackendPlanIR::Fem(_)
                     | BackendPlanIR::FemEigen(_)
                     | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
                 };

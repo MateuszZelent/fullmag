@@ -141,11 +141,11 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Result and step stats | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result`, `StepStats` | Executed outcome mapping | Ownership test |
+| Result and step stats | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77), `StepStats` | Executed outcome mapping | Ownership test |
 | Scalar access | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.series`, `Result.last` | Series/point read | Ownership test |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Resolved result record and scalar accessors. | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Resolved result record and scalar accessors. | Source-map validator and focused API tests |
+| Resolved result record and scalar accessors. | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Resolved result record and scalar accessors. | Source-map validator and focused API tests |

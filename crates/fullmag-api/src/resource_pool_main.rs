@@ -1,5 +1,8 @@
 mod worker_startup_gate;
 
+#[path = "compute_operator_env.rs"]
+mod compute_operator_env;
+
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     FmsResourceBudget, FmsResourceKind, FmsSchedulerResourceOffer, FmsSchedulerResourcePool,
@@ -198,7 +201,9 @@ fn discover_local_resources(
 }
 
 fn discover_nvidia_gpus() -> Result<Vec<LocalGpu>> {
-    let output = Command::new("nvidia-smi")
+    let mut command = Command::new("nvidia-smi");
+    crate::compute_operator_env::remove_local_compute_operator_token(&mut command);
+    let output = command
         .args([
             "--query-gpu=uuid,memory.free",
             "--format=csv,noheader,nounits",

@@ -116,7 +116,7 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
     })
 }
 
-fn collect_node_bindings(
+pub(crate) fn collect_node_bindings(
     authored: &[StudyPipelineNode],
     ancestors: &[String],
     parent_enabled: bool,

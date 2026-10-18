@@ -524,6 +524,9 @@ export class TestHTMLOptionElement extends TestElement {
   }
 }
 
+/** Keep form association checks distinct from generic HTMLElement checks. */
+export class TestHTMLFormElement extends TestElement {}
+
 /**
  * Model the select/option value and selectedness IDL used by React DOM and
  * Radix's hidden form control, without changing TestElement input values.

@@ -15,10 +15,12 @@ name = "fullmag"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 anyhow.workspace = true
 clap.workspace = true
 fullmag-build-info.workspace = true
 fullmag-application = { path = "../fullmag-application" }
+fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }

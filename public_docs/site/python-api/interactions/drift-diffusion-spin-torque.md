@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object spin_d
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,14 +54,14 @@ fm.SpinDriftDiffusion(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```id``` | ```str``` | ```required``` | ```1``` | non-empty | module identifier | FEM/FDM CPU/GPU: IR; resolved spin runtime required | ```id``` |
-| ```current_source_id``` | ```str``` | ```required``` | ```1``` | non-empty | charge-current source link | FEM/FDM CPU/GPU: IR; resolved spin runtime required | ```current_source_id``` |
-| ```domain``` | ```typed collection``` | ```required``` | ```1``` | non-empty | spin transport domain | FEM/FDM CPU/GPU: IR; resolved spin runtime required | ```domain``` |
-| ```materials``` | ```typed collection``` | ```required``` | ```1``` | non-empty | spin transport materials | FEM/FDM CPU/GPU: IR; resolved spin runtime required | ```materials``` |
-| ```interfaces/boundaries``` | ```typed collections``` | ```empty``` | ```1``` | typed entries | interface and boundary contracts | FEM/FDM CPU/GPU: IR; resolved spin runtime required | ```interfaces/boundaries``` |
-| ```solver``` | ```object or None``` | ```None``` | ```1``` | typed solver when supplied | solver request | FEM/FDM CPU/GPU: IR; resolver-specific | ```solver``` |
-| ```requested_execution``` | ```object or None``` | ```None``` | ```1``` | typed execution request | requested device/precision | FEM/FDM CPU/GPU: IR; resolver-specific | ```requested_execution``` |
-| ```mode``` | ```str``` | ```steady``` | ```1``` | steady or transient; transient requires physical capacitance | time regime | FEM/FDM CPU/GPU: IR; resolved spin runtime required | ```mode``` |
+| `id` | `str` | `required` | `1` | non-empty | module identifier | FEM/FDM CPU/GPU: IR; resolved spin runtime required | `id` |
+| `current_source_id` | `str` | `required` | `1` | non-empty | charge-current source link | FEM/FDM CPU/GPU: IR; resolved spin runtime required | `current_source_id` |
+| `domain` | `typed collection` | `required` | `1` | non-empty | spin transport domain | FEM/FDM CPU/GPU: IR; resolved spin runtime required | `domain` |
+| `materials` | `typed collection` | `required` | `1` | non-empty | spin transport materials | FEM/FDM CPU/GPU: IR; resolved spin runtime required | `materials` |
+| `interfaces/boundaries` | `typed collections` | `empty` | `1` | typed entries | interface and boundary contracts | FEM/FDM CPU/GPU: IR; resolved spin runtime required | `interfaces/boundaries` |
+| `solver` | `object or None` | `None` | `1` | typed solver when supplied | solver request | FEM/FDM CPU/GPU: IR; resolver-specific | `solver` |
+| `requested_execution` | `object or None` | `None` | `1` | typed execution request | requested device/precision | FEM/FDM CPU/GPU: IR; resolver-specific | `requested_execution` |
+| `mode` | `str` | `steady` | `1` | steady or transient; transient requires physical capacitance | time regime | FEM/FDM CPU/GPU: IR; resolved spin runtime required | `mode` |
 
 ### Stage-first example
 

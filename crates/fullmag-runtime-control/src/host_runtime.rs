@@ -6,6 +6,9 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Context, Result};
 use fullmag_application::TaskClaim;
+use fullmag_session::compute_node_snapshot::{
+    ComputeNodeSnapshot, Reported, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2,
+};
 use fullmag_session::host_resource_ledger::HostResourceLedger;
 use fullmag_session::host_resource_ledger::{HostReservationRequest, HostResourceReservationState};
 use fullmag_session::runtime_service::RuntimeServiceConfig;
@@ -24,6 +27,7 @@ pub struct HostRuntimeAdmission {
     preparation_cpu_ids: BTreeMap<String, BTreeSet<u32>>,
     compute_pool: (String, Vec<fullmag_session::FmsSchedulerResourceOffer>),
     preparation_pool: (String, Vec<fullmag_session::FmsPreparationResourceOffer>),
+    runtime_generation_sha256: Option<String>,
     cuda_device_uuids: Arc<OnceLock<std::result::Result<Vec<String>, String>>>,
 }
 
@@ -49,12 +53,22 @@ mod recovery_tests {
         _directory: tempfile::TempDir,
         store: SessionStore,
         ledger: HostResourceLedger,
+        inventory_owner: fullmag_session::host_resource_ledger::HostInventoryOwner,
         context: HostRuntimeAdmission,
+        config: RuntimeServiceConfig,
         request: HostReservationRequest,
         budget: FmsResourceBudget,
     }
 
     fn recovery_fixture() -> RecoveryFixture {
+        recovery_fixture_with_sample(true)
+    }
+
+    fn recovery_fixture_without_sample() -> RecoveryFixture {
+        recovery_fixture_with_sample(false)
+    }
+
+    fn recovery_fixture_with_sample(include_sample: bool) -> RecoveryFixture {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let budget = FmsResourceBudget {
@@ -79,7 +93,34 @@ mod recovery_tests {
             gpu_vram_bytes_by_uuid: BTreeMap::new(),
         };
         let ledger_root = directory.path().join("host");
-        let ledger = HostResourceLedger::initialize(&ledger_root, policy.clone()).unwrap();
+        let application_state_root = directory.path().join("application-state");
+        std::fs::create_dir(&application_state_root).unwrap();
+        let ledger = HostResourceLedger::initialize_for_application(
+            &application_state_root,
+            &ledger_root,
+            policy.clone(),
+        )
+        .unwrap();
+        let inventory_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        if include_sample {
+            let mut sample = crate::compute_node_probe::sample_compute_node_for_owner(
+                &ledger,
+                inventory_owner.descriptor(),
+                None,
+            )
+            .unwrap();
+            // Recovery fixtures need admission-ready capacity independently of
+            // the runner's cgroup delegation, with the real inventory owner.
+            sample.cpu.effective_capacity_millis =
+                fullmag_session::compute_node_snapshot::Observation::Available {
+                    value: policy.total_budget.cpu_millis,
+                };
+            sample.enforcement.cpu_quota =
+                fullmag_session::compute_node_snapshot::EnforcementStatus::Supported;
+            ledger
+                .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
+                .unwrap();
+        }
         let config = RuntimeServiceConfig {
             schema_version: "runtime_service_config.v2".into(),
             store_root: store.root().to_owned(),
@@ -104,6 +145,7 @@ mod recovery_tests {
                 schema_version: RUNTIME_SERVICE_HOST_EXECUTION_SCHEMA_V1.into(),
                 ledger_root,
                 policy: policy.clone(),
+                runtime_generation_sha256: None,
                 compute_max_concurrency: 1,
                 preparation_max_concurrency: 1,
                 compute_placements: BTreeMap::from([(
@@ -130,23 +172,180 @@ mod recovery_tests {
             },
             expected_host_id: policy.host_id.clone(),
             expected_policy_revision: policy.revision,
+            expected_node_policy_revision: 1,
             expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: Some(
+                inventory_owner.descriptor().host_owner_id.clone(),
+            ),
+            expected_compute_node_owner_epoch: Some(
+                inventory_owner.descriptor().host_owner_epoch,
+            ),
             expected_topology_sha256: policy.topology_sha256.clone(),
-            budget,
+            runtime_generation_sha256: None,
+            budget: budget.clone(),
             cpu_ids: BTreeSet::new(),
             exclusive_gpu_uuids: BTreeSet::new(),
             gpu_vram_bytes_by_uuid: BTreeMap::new(),
+            scheduling_priority: 0,
+            parallelism: fullmag_ir::compute_resources::ComputeParallelismIR::SingleProcess,
         };
-        let context = HostRuntimeAdmission::open(&config).unwrap().unwrap();
+        let context = HostRuntimeAdmission::open_for_application(&config, &application_state_root)
+            .unwrap()
+            .unwrap();
 
         RecoveryFixture {
             _directory: directory,
             store,
             ledger,
+            inventory_owner,
             context,
+            config,
             request,
             budget,
         }
+    }
+
+    #[test]
+    fn host_admission_retries_when_ledger_writer_is_temporarily_busy() {
+        let fixture = recovery_fixture();
+        let config = fixture.config.clone();
+        let application_state_root = fixture._directory.path().join("application-state");
+        let binding = config.host_execution.as_ref().unwrap();
+        let ledger_root = binding.ledger_root.clone();
+        let policy = binding.policy.clone();
+
+        // SessionStore exposes the public writer transaction for the same
+        // ledger-root lock used by HostResourceLedger. Keep it in a separate
+        // thread so this test exercises the real native contention path.
+        let holder_store = SessionStore::open(ledger_root.clone()).unwrap();
+        let (acquired_sender, acquired_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let holder = std::thread::spawn(move || {
+            let transaction = holder_store.write_transaction().unwrap();
+            acquired_sender.send(()).unwrap();
+            release_receiver
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            drop(transaction);
+        });
+        acquired_receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let busy = match HostResourceLedger::open_for_application(&application_state_root, &ledger_root, policy.clone()) {
+            Ok(_) => false,
+            Err(error) => error
+                .chain()
+                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()),
+        };
+        if !busy {
+            release_sender.send(()).unwrap();
+            holder.join().unwrap();
+            panic!("ledger writer fixture did not establish contention");
+        }
+
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            release_sender.send(()).unwrap();
+        });
+        let opened = HostRuntimeAdmission::open_for_application(&config, &application_state_root);
+        releaser.join().unwrap();
+        holder.join().unwrap();
+        assert!(opened
+            .expect("admission open should succeed after contention")
+            .is_some());
+
+        let mut corrupt = config;
+        corrupt
+            .host_execution
+            .as_mut()
+            .unwrap()
+            .policy
+            .topology_sha256 = "b".repeat(64);
+        let started = std::time::Instant::now();
+        let error = match HostRuntimeAdmission::open_for_application(&corrupt, &application_state_root) {
+            Ok(_) => panic!("corrupt host policy unexpectedly opened"),
+            Err(error) => error,
+        };
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "permanent host policy error was retried for too long: {error:#}"
+        );
+        assert!(format!("{error:#}").contains("marker differs"));
+    }
+
+    #[test]
+    fn missing_compute_node_sample_defers_host_admission() {
+        let fixture = recovery_fixture_without_sample();
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
+        assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
+        assert_eq!(
+            fixture.context.compute_snapshot_admission_failure().unwrap(),
+            Some("compute-node snapshot is missing".into())
+        );
+    }
+
+    #[test]
+    fn current_snapshot_requires_the_active_shared_host_inventory_owner() {
+        let fixture = recovery_fixture();
+        assert!(fixture.context.has_current_compute_snapshot().unwrap());
+        assert!(fixture.context.current_compute_node_snapshot().unwrap().is_some());
+        drop(fixture.inventory_owner);
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
+        assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
+        assert_eq!(
+            fixture.context.compute_snapshot_admission_failure().unwrap(),
+            Some("shared host inventory owner is not active".into())
+        );
+    }
+
+    #[test]
+    fn snapshot_from_previous_boot_defers_host_admission() {
+        let fixture = recovery_fixture_without_sample();
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger,
+            fixture.inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        snapshot.boot_id = "previous-host-boot".into();
+        fixture
+            .ledger
+            .publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot)
+            .unwrap();
+
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
+        assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
+    }
+
+    #[test]
+    fn stale_compute_node_sample_defers_host_admission() {
+        let fixture = recovery_fixture_without_sample();
+        let now = chrono::Utc::now();
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger,
+            fixture.inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        snapshot.sample.collected_at =
+            now.clone() - chrono::Duration::seconds(31);
+        snapshot.sample.refresh_freshness_at(now);
+        fixture
+            .ledger
+            .publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot)
+            .unwrap();
+
+        assert!(!fixture.context.has_current_compute_snapshot().unwrap());
+        assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
+        let reason = fixture
+            .context
+            .compute_snapshot_admission_failure()
+            .unwrap()
+            .unwrap();
+        assert!(reason.contains("freshness is Stale"));
+        assert!(reason.contains("collected_at="));
+        assert!(reason.contains("observed_at="));
     }
 
     fn seed_ready_queued_catalog(fixture: &RecoveryFixture, ownership_epoch: Option<u64>) {
@@ -176,7 +375,7 @@ mod recovery_tests {
     }
 
     #[test]
-    fn accepted_recovery_loads_study_assets_only_for_an_exact_preparing_claim() {
+    fn accepted_recovery_requires_release_before_loading_study_assets_for_a_preparing_claim() {
         let fixture = recovery_fixture();
         let run_id = fullmag_application::RunId::parse(&fixture.request.identity.run_id).unwrap();
         let specification: fullmag_application::RunSpecification =
@@ -194,7 +393,12 @@ mod recovery_tests {
                     "plan_sha256": "b".repeat(64)
                 },
                 "study_catalog_sha256": "c".repeat(64),
-                "parameters": {}, "seeds": {}, "dependencies": [], "immutable_assets": [],
+                "parameters": {
+                    (fullmag_session::ACCEPTED_RUN_START_POLICY_KEY): {
+                        "schema_version": "accepted_run_start_policy.v1",
+                        "mode": "manual"
+                    }
+                }, "seeds": {}, "dependencies": [], "immutable_assets": [],
                 "requested_execution": {
                     "backend": "fdm", "device": "cpu", "precision": "double", "mode": "strict",
                     "minimum_resources": {
@@ -204,14 +408,13 @@ mod recovery_tests {
                 }
             }))
             .unwrap();
-        fixture
-            .store
-            .commit_run_intent(&FmsRunIntent::new(
-                run_id.as_str(),
-                "recovery-missing-assets",
-                serde_json::to_value(specification).unwrap(),
-            ))
-            .unwrap();
+        let intent = FmsRunIntent::new(
+            run_id.as_str(),
+            "recovery-missing-assets",
+            serde_json::to_value(specification).unwrap(),
+        );
+        let specification_sha256 = intent.payload_sha256.clone();
+        fixture.store.commit_run_intent(&intent).unwrap();
 
         let catalog_task = |lifecycle, resource_id: Option<&str>| FmsTaskCatalogEntry {
             task_id: fixture.request.identity.task_id.clone(),
@@ -261,6 +464,22 @@ mod recovery_tests {
             Some("compute.cpu"),
         )];
         fixture.store.commit_run_catalog(&catalog).unwrap();
+        let held = crate::scheduler::resume_next_admitted_accepted_task_with_host(
+            &fixture.store,
+            &run_id,
+            "compute.cpu",
+            &fixture.context,
+        )
+        .unwrap();
+        assert!(held.is_none(), "manual recovery must remain held without release");
+        fixture
+            .store
+            .release_accepted_run_start(
+                run_id.as_str(),
+                &specification_sha256,
+                "recovery-compute-release",
+            )
+            .unwrap();
         let error = crate::scheduler::resume_next_admitted_accepted_task_with_host(
             &fixture.store,
             &run_id,
@@ -461,7 +680,7 @@ mod recovery_tests {
         assert_eq!(active_lease.state, FmsResourceLeaseState::Active);
         assert_eq!(
             active_lease.host_launch_binding.as_ref(),
-            Some(&fixture.ledger.worker_launch_binding())
+            Some(&fixture.ledger.worker_launch_binding().unwrap())
         );
 
         let application_claim = crate::load_current_task_claim(
@@ -642,9 +861,50 @@ impl HostRuntimeAdmission {
         let Some(binding) = config.host_execution.as_ref() else {
             return Ok(None);
         };
-        let ledger = HostResourceLedger::open(&binding.ledger_root, binding.policy.clone())
-            .context("open the exact configured physical-host resource ledger")?;
-        Ok(Some(Self {
+        let ledger = crate::retry_store_writer_busy(|| {
+            HostResourceLedger::open_for_current_application(
+                &binding.ledger_root,
+                binding.policy.clone(),
+            )
+        })
+        .context("open the exact configured physical-host resource ledger")?;
+        Self::from_config_and_ledger(config, binding, ledger).map(Some)
+    }
+
+    /// Open using an explicit local application state root. This is also used
+    /// by isolated callers that cannot rely on process-global environment.
+    pub fn open_for_application(
+        config: &RuntimeServiceConfig,
+        application_state_root: &Path,
+    ) -> Result<Option<Self>> {
+        config.validate()?;
+        let Some(binding) = config.host_execution.as_ref() else {
+            return Ok(None);
+        };
+        let ledger = crate::retry_store_writer_busy(|| {
+            HostResourceLedger::open_for_application(
+                application_state_root,
+                &binding.ledger_root,
+                binding.policy.clone(),
+            )
+        })
+        .context("open the exact configured physical-host resource ledger")?;
+        Self::from_config_and_ledger(config, binding, ledger).map(Some)
+    }
+
+    fn from_config_and_ledger(
+        config: &RuntimeServiceConfig,
+        binding: &fullmag_session::runtime_service_host::RuntimeServiceHostExecution,
+        ledger: HostResourceLedger,
+    ) -> Result<Self> {
+        if let Some(expected) = binding.runtime_generation_sha256.as_deref() {
+            crate::retry_store_writer_busy(|| ledger.validate_runtime_generation(expected))?;
+        } else if binding.policy.schema_version
+            == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
+        {
+            bail!("v2 host runtime service has no pinned runtime_generation_sha256");
+        }
+        Ok(Self {
             ledger: Arc::new(ledger),
             compute_placements: binding.compute_placements.clone(),
             preparation_cpu_ids: binding.preparation_cpu_ids.clone(),
@@ -656,12 +916,100 @@ impl HostRuntimeAdmission {
                 config.preparation_pool_id.clone(),
                 config.preparation_resources.clone(),
             ),
+            runtime_generation_sha256: binding.runtime_generation_sha256.clone(),
             cuda_device_uuids: Arc::new(OnceLock::new()),
-        }))
+        })
     }
 
     pub fn ledger(&self) -> &HostResourceLedger {
         &self.ledger
+    }
+
+    pub fn expected_runtime_generation_sha256(&self) -> Option<&str> {
+        self.runtime_generation_sha256.as_deref()
+    }
+
+    /// Defer new admissions unless the persisted sample is current for this
+    /// boot and the exact configured host ledger owner. This does not prove
+    /// that the service process itself is live; its owner/recovery gate remains
+    /// an independent prerequisite.
+    pub fn has_current_compute_snapshot(&self) -> Result<bool> {
+        Ok(self.compute_snapshot_admission_failure()?.is_none())
+    }
+
+    /// Report the reason from the same observation that gates admission.
+    /// This does not refresh a sample, acquire an inventory owner, or relax freshness.
+    pub fn compute_snapshot_admission_failure(&self) -> Result<Option<String>> {
+        Ok(self.current_compute_snapshot_or_failure()?.err())
+    }
+
+    /// Return the same validated observation used by the admission diagnostic.
+    /// I/O and ownership errors remain errors; an unavailable sample is not capacity.
+    pub fn current_compute_node_snapshot(
+        &self,
+    ) -> Result<Option<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot>> {
+        Ok(self.current_compute_snapshot_or_failure()?.ok())
+    }
+
+    fn current_compute_snapshot_or_failure(
+        &self,
+    ) -> Result<std::result::Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot, String>> {
+        if let Some(expected) = self.runtime_generation_sha256.as_deref() {
+            crate::retry_store_writer_busy(|| self.ledger.validate_runtime_generation(expected))?;
+        }
+        let Some(snapshot) =
+            crate::retry_store_writer_busy(|| self.ledger.read_compute_node_snapshot())?
+        else {
+            return Ok(Err("compute-node snapshot is missing".into()));
+        };
+        snapshot.validate()?;
+        if snapshot.node_id != self.ledger.node_id()
+            || snapshot.runtime_owner_id != self.ledger.owner_id()
+            || snapshot.owner_epoch != self.ledger.policy().owner_epoch
+        {
+            bail!("compute-node sample does not match the configured host ledger owner");
+        }
+
+        if snapshot.schema_version != COMPUTE_NODE_SNAPSHOT_SCHEMA_V2 {
+            return Ok(Err(format!(
+                "compute-node snapshot schema is {}, expected {}",
+                snapshot.schema_version, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
+            )));
+        }
+        let Some(active_owner) =
+            crate::retry_store_writer_busy(|| self.ledger.active_inventory_owner())?
+        else {
+            return Ok(Err("shared host inventory owner is not active".into()));
+        };
+        if snapshot.host_owner_id.as_deref() != Some(active_owner.host_owner_id.as_str())
+            || snapshot.host_owner_epoch != Some(active_owner.host_owner_epoch)
+        {
+            return Ok(Err(format!(
+                "compute-node inventory owner differs: sample_id={:?}, sample_epoch={:?}, active_id={}, active_epoch={}",
+                snapshot.host_owner_id,
+                snapshot.host_owner_epoch,
+                active_owner.host_owner_id,
+                active_owner.host_owner_epoch
+            )));
+        }
+
+        let now = chrono::Utc::now();
+        let current_boot_id = crate::compute_node_probe::current_host_boot_id(now.clone())?;
+        if snapshot.boot_id != current_boot_id {
+            return Ok(Err(format!(
+                "compute-node boot differs: sample={}, current={}",
+                snapshot.boot_id, current_boot_id
+            )));
+        }
+        if snapshot.is_current_at(now.clone())? {
+            return Ok(Ok(snapshot));
+        }
+        Ok(Err(format!(
+            "compute-node sample freshness is {:?}: collected_at={}, observed_at={}",
+            snapshot.sample.freshness_at(now.clone()),
+            snapshot.sample.collected_at.to_rfc3339(),
+            now.to_rfc3339()
+        )))
     }
 
     pub fn solver_placement(&self, resource_id: &str) -> Result<&HostTaskPlacement> {
@@ -678,6 +1026,9 @@ impl HostRuntimeAdmission {
         problem: &fullmag_ir::ProblemIR,
         placement: &HostTaskPlacement,
     ) -> Result<bool> {
+        if placement.gpu_uuid.is_some() && !self.current_gpu_inventory_is_available()? {
+            return Ok(false);
+        }
         if crate::host_allocation::legacy_cuda_device_index(problem)?.is_none() {
             return Ok(true);
         }
@@ -1148,6 +1499,14 @@ impl HostRuntimeAdmission {
         if !self.ledger.worker_has_pending_launch(store, &lease)? {
             return Ok(false);
         }
+        if claim.lease.kind == fullmag_application::ResourceKind::Gpu
+            && !self.current_gpu_inventory_is_available()?
+        {
+            // Keep the durable reservation and launch gate for exact recovery,
+            // but do not turn a transiently unavailable GPU into a scheduler
+            // failure or a worker spawn attempt.
+            return Ok(false);
+        }
         self.ensure_solver_claim_committed(store, claim)?;
         Ok(true)
     }
@@ -1164,8 +1523,18 @@ impl HostRuntimeAdmission {
                 claim.lease.lease_token.as_str(),
             )?
             .context("host solver claim has no durable local lease")?;
-        if lease.host_launch_binding.as_ref() != Some(&self.ledger.worker_launch_binding()) {
+        let current_binding = crate::retry_store_writer_busy(|| self.ledger.worker_launch_binding())?;
+        if lease.host_launch_binding.as_ref() != Some(&current_binding) {
             bail!("host solver claim is missing its exact durable launch binding");
+        }
+        if let Some(expected) = self.runtime_generation_sha256.as_deref() {
+            let actual = lease
+                .host_launch_binding
+                .as_ref()
+                .and_then(|binding| binding.runtime_generation_sha256.as_deref());
+            if actual != Some(expected) {
+                bail!("host solver claim has a stale or missing runtime generation");
+            }
         }
         if claim.lease.kind == fullmag_application::ResourceKind::Gpu {
             let intent = store
@@ -1202,6 +1571,7 @@ impl HostRuntimeAdmission {
             self.ledger(),
             claim,
             self.solver_placement(&claim.lease.resource_id)?,
+            self.expected_runtime_generation_sha256(),
         )?;
         self.ensure_committed_request(&request)
     }
@@ -1211,8 +1581,18 @@ impl HostRuntimeAdmission {
         store: &SessionStore,
         lease: &FmsPreparationResourceLease,
     ) -> Result<()> {
-        if lease.host_launch_binding.as_ref() != Some(&self.ledger.worker_launch_binding()) {
+        let current_binding = crate::retry_store_writer_busy(|| self.ledger.worker_launch_binding())?;
+        if lease.host_launch_binding.as_ref() != Some(&current_binding) {
             bail!("host preparation claim is missing its exact durable launch binding");
+        }
+        if let Some(expected) = self.runtime_generation_sha256.as_deref() {
+            let actual = lease
+                .host_launch_binding
+                .as_ref()
+                .and_then(|binding| binding.runtime_generation_sha256.as_deref());
+            if actual != Some(expected) {
+                bail!("host preparation claim has a stale or missing runtime generation");
+            }
         }
         let request = crate::host_allocation::host_request_for_preparation_lease(
             store,
@@ -1224,6 +1604,13 @@ impl HostRuntimeAdmission {
     }
 
     fn ensure_committed_request(&self, request: &HostReservationRequest) -> Result<()> {
+        let current_snapshot = self
+            .current_compute_node_snapshot()?
+            .context("process spawn requires a current compute-node sample for this boot")?;
+        if !request.exclusive_gpu_uuids.is_empty() && !gpu_snapshot_is_available(&current_snapshot)
+        {
+            bail!("GPU process spawn requires a current GPU inventory");
+        }
         let snapshot = self.ledger.read()?;
         let reservation = snapshot
             .reservations
@@ -1233,15 +1620,31 @@ impl HostRuntimeAdmission {
         if reservation.state != HostResourceReservationState::Committed
             || reservation.host_id != request.expected_host_id
             || reservation.host_owner_epoch != request.expected_owner_epoch
+            || reservation.compute_node_owner_id != request.expected_compute_node_owner_id
+            || reservation.compute_node_owner_epoch != request.expected_compute_node_owner_epoch
             || reservation.policy_revision != request.expected_policy_revision
             || reservation.topology_sha256 != request.expected_topology_sha256
             || reservation.budget != request.budget
             || reservation.cpu_ids != request.cpu_ids
             || reservation.exclusive_gpu_uuids != request.exclusive_gpu_uuids
             || reservation.gpu_vram_bytes_by_uuid != request.gpu_vram_bytes_by_uuid
+            || self.runtime_generation_sha256.as_deref().is_some_and(|expected| {
+                reservation.runtime_generation_sha256.as_deref() != Some(expected)
+                    || request.runtime_generation_sha256.as_deref() != Some(expected)
+            })
         {
-            bail!("process spawn requires a committed reservation matching the pinned allocation");
+            bail!("process spawn requires a committed reservation matching the pinned allocation and runtime generation");
         }
         Ok(())
     }
+
+    fn current_gpu_inventory_is_available(&self) -> Result<bool> {
+        Ok(self
+            .current_compute_node_snapshot()?
+            .is_some_and(|snapshot| gpu_snapshot_is_available(&snapshot)))
+    }
+}
+
+fn gpu_snapshot_is_available(snapshot: &ComputeNodeSnapshot) -> bool {
+    matches!(&snapshot.gpus, Reported::Available { value } if !value.is_empty())
 }

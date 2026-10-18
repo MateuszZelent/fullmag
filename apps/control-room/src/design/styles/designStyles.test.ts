@@ -35,8 +35,8 @@ describe("control-room design styles", () => {
     ).toBe(true);
     expect(statements.slice(0, 3)).toEqual([
       '@import "tailwindcss" source(none);',
-      '@source "./";',
-      '@source "../src";',
+      '@source "./**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";',
+      '@source "../src/**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";',
     ]);
     expect(globalsCss).toContain('inspector-visualization.css" layer(fm-modules)');
   });

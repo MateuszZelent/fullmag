@@ -36,6 +36,7 @@ pub struct SpinMemoryLossReservoirIR {
 pub struct ChargeTransportDefinitionIR {
     pub domain: Vec<RegionRefIR>,
     pub materials: Vec<ChargeTransportMaterialAssignmentIR>,
+    #[serde(default)]
     pub boundaries: Vec<ChargeBoundaryIR>,
     pub gauge: ChargePotentialGaugeIR,
     pub solver: ChargeSolverPolicyIR,
@@ -87,6 +88,7 @@ pub struct CurrentSourceDriveIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConservativeCurrentSourceIR {
+    ClosedGeometryPotentialJump(crate::PreparedAntennaClosedLoopSourceIR),
     ExternalLeadCurrent {
         schema_version: String,
         revision: String,
@@ -177,6 +179,7 @@ fn deserialize_current_source_lead_mesh<'de, D: serde::Deserializer<'de>>(
 impl ConservativeCurrentSourceIR {
     pub fn terminal_observations(&self) -> &[CurrentSourceTerminalObservationIR] {
         match self {
+            Self::ClosedGeometryPotentialJump(_) => &[],
             Self::ExternalLeadCurrent {
                 terminal_observations,
                 ..
@@ -185,6 +188,7 @@ impl ConservativeCurrentSourceIR {
     }
 
     pub fn validation_errors(&self, path: &str) -> Vec<String> {
+        if let Self::ClosedGeometryPotentialJump(source) = self { return source.validation_errors(path); }
         let Self::ExternalLeadCurrent {
             schema_version,
             revision,
@@ -196,7 +200,7 @@ impl ConservativeCurrentSourceIR {
             outer_terminals,
             terminal_observations,
             drives,
-        } = self;
+        } = self else { unreachable!("closed geometry validated above") };
         let mut errors = Vec::new();
         let text =
             |value: &str| !value.trim().is_empty() && value.len() <= 4096 && !value.contains('\0');
@@ -621,7 +625,7 @@ pub(crate) mod current_source_tests {
     fn current_source_roundtrip_preserves_explicit_maps_and_signed_zero_drives() {
         let mut source = fixture();
         assert!(source.validation_errors("source").is_empty());
-        let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = &mut source;
+        let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = &mut source else { unreachable!("legacy current-source fixture") };
         drives.push(CurrentSourceDriveIR {
             id: "zero".into(),
             port_mode_ref: "zero-port".into(),
@@ -719,7 +723,7 @@ pub(crate) mod current_source_tests {
                 lead_conductivity_spm_per_element,
                 lead_mesh,
                 ..
-            } = &mut source;
+            } = &mut source else { unreachable!("legacy current-source fixture") };
             match mutation {
                 0 => *schema_version = "foreign".into(),
                 1 => interface_pairs[0].vertex_pairs[1] = interface_pairs[0].vertex_pairs[0],
@@ -769,6 +773,8 @@ pub enum StructuredCutNormalIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StructuredCutPlaneIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate_frame: Option<String>,
     pub axis: StructuredCutAxisIR,
     pub offset_m: f64,
     pub normal: StructuredCutNormalIR,
@@ -829,9 +835,9 @@ impl StructuredCurrentClosureIR {
             closure_id,
             source_cuts,
         } = self;
-        if schema_version != "structured_current_closure.v1" {
+        if !matches!(schema_version.as_str(), "structured_current_closure.v1" | "structured_current_closure.v2") {
             errors.push(format!(
-                "{path}.structured_current_closure.schema_version must be 'structured_current_closure.v1'"
+                "{path}.structured_current_closure.schema_version must be structured_current_closure.v1 or structured_current_closure.v2"
             ));
         }
         if closure_id.trim().is_empty() {
@@ -843,6 +849,9 @@ impl StructuredCurrentClosureIR {
             errors.push(format!(
                 "{path}.structured_current_closure.source_cuts must not be empty"
             ));
+        }
+        if schema_version == "structured_current_closure.v2" && source_cuts.len() != 1 {
+            errors.push(format!("{path}.structured_current_closure.v2 requires exactly one source cut"));
         }
         let mut cut_ids = BTreeSet::new();
         let mut circuit_ids = BTreeSet::new();
@@ -871,6 +880,14 @@ impl StructuredCurrentClosureIR {
                 .is_some_and(|region_id| region_id.trim().is_empty())
             {
                 errors.push(format!("{cut_path}.region.region_id must not be empty"));
+            }
+            let frame = cut.plane.coordinate_frame.as_deref().unwrap_or("world");
+            if schema_version == "structured_current_closure.v2" {
+                if frame != "object" || cut.plane.axis != StructuredCutAxisIR::Z || cut.region.region_id.is_none() {
+                    errors.push(format!("{cut_path}.plane v2 requires object-frame Z and explicit inlet region"));
+                }
+            } else if frame != "world" {
+                errors.push(format!("{cut_path}.plane v1 requires world coordinate_frame"));
             }
             if !cut.plane.offset_m.is_finite() {
                 errors.push(format!("{cut_path}.plane.offset_m must be finite"));

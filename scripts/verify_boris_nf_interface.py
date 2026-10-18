@@ -13,6 +13,7 @@ from typing import Sequence
 
 
 MUB_E_V_PER_T = 5.788381608e-05
+BORIS_UNIT_ADAPTER_VERSION = "fullmag.boris_flow_major_units.v2"
 Vector3 = tuple[float, float, float]
 
 
@@ -97,7 +98,8 @@ def read_text_ovf(path: Path) -> OvfField:
 
     if not path.is_file():
         raise ValueError(f"OVF file does not exist: {path}")
-    raw = path.read_text(encoding="utf-8", errors="strict")
+    raw_bytes = path.read_bytes()
+    raw = raw_bytes.decode("utf-8", errors="strict")
     lines = raw.splitlines()
     segment_count = sum(line.strip().lower() == "# begin: segment" for line in lines)
     if segment_count != 1:
@@ -181,7 +183,7 @@ def read_text_ovf(path: Path) -> OvfField:
         step_m=(step[0], step[1], step[2]),
         valuedim=valuedim,
         values=tuple(data_rows),
-        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        sha256=hashlib.sha256(raw_bytes).hexdigest(),
     )
 
 
@@ -413,9 +415,9 @@ def compute_interface_slice(
 ) -> InterfaceSlice:
     """Extract a signed N/F interface slice from exported BORIS fields.
 
-    BORIS stores each spin-polarization current as a vector-valued field.  The
-    ``+z`` interface therefore uses component ``z`` from ``Jsx``, ``Jsy`` and
-    ``Jsz``.  Those display fields contain BORIS' explicit ``MUB_E`` factor;
+    BORIS exports flow-major rows: Jsx = (Q_xx, Q_xy, Q_xz), and likewise
+    for Jsy/Jsz. The +z interface therefore uses all three components of
+    Jsz. Those display fields contain BORIS' explicit ``MUB_E`` factor;
     the comparison adapter maps them to Fullmag's charge-equivalent
     ``Q_ia`` by dividing by ``MUB_E``.  BORIS reports ``Tsi`` in A/(m s)
     through its effective-field normalization.  We retain a documented
@@ -463,15 +465,13 @@ def compute_interface_slice(
         ]
         return sum(values) / len(values)
 
-    normal_flux = (
-        plane_average(normal.spin_current_x, n_k, 2),
-        plane_average(normal.spin_current_y, n_k, 2),
-        plane_average(normal.spin_current_z, n_k, 2),
+    normal_flux = tuple(
+        plane_average(normal.spin_current_z, n_k, polarization)
+        for polarization in range(3)
     )
-    ferromagnet_flux = (
-        plane_average(ferromagnet.spin_current_x, f_k, 2),
-        plane_average(ferromagnet.spin_current_y, f_k, 2),
-        plane_average(ferromagnet.spin_current_z, f_k, 2),
+    ferromagnet_flux = tuple(
+        plane_average(ferromagnet.spin_current_z, f_k, polarization)
+        for polarization in range(3)
     )
     torque = tuple(
         sum(
@@ -512,26 +512,120 @@ def _require_finite_number(value: object, *, label: str) -> float:
     return float(value)
 
 
-def validate_boris_artifact(root: Path) -> dict[str, object]:
-    """Validate a prepared ``fullmag.boris_she_nf.v1`` artifact directory."""
+def validate_fixed_m(root: Path, scenario: dict, native: dict) -> dict[str, object]:
+    """Recompute the fixed-M/l_J gate from retained raw outputs, never summary claims."""
+    from boris_nf_interface_smoke import FIXED_M_EXECUTION
+    import fullmag_storage as storage
+
+    if (scenario.get("schema_version") != "fullmag.boris_she_nf.scenario.v2"
+            or scenario.get("workload") != "N/F"
+            or scenario.get("execution") != FIXED_M_EXECUTION
+            or type(scenario.get("execution", {}).get("static_transport")) is not bool
+            or native.get("schema_version") != "fullmag.boris_she_nf.native.v2"
+            or native.get("scenario") != scenario or native.get("stage_complete") is not True):
+        raise ValueError("BORIS fixed-M requires the exact v2 N/F execution contract")
+    fixed = native.get("fixed_m")
+    if not isinstance(fixed, dict) or set(fixed) != {
+        "schema_version", "M_before", "M_after", "l_J_readback_m", "execution_mode"
+    } or (fixed.get("schema_version") != "fullmag.boris_fixed_m.v1"
+            or fixed.get("M_before") != "f_M_before.ovf"
+            or fixed.get("M_after") != "f_M_after.ovf"
+            or fixed.get("execution_mode") != "fixed_m_transport_only"):
+        raise ValueError("BORIS fixed-M raw proof is missing or unsupported")
+    parameters = scenario.get("parameters")
+    geometry = scenario.get("geometry")
+    if not isinstance(parameters, dict) or not isinstance(geometry, dict):
+        raise ValueError("BORIS fixed-M scenario parameters/geometry are missing")
+    if (parameters.get("magnetization") != [1.0, 0.0, 0.0]
+            or any(type(value) not in (int, float) for value in parameters["magnetization"])):
+        raise ValueError("BORIS fixed-M supports only the authored +x direction")
+    def positive(value, label):
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"BORIS fixed-M {label} must be a finite positive scalar")
+        return float(value)
+    ms = positive(parameters.get("Ms_apm"), "Ms")
+    requested_length = positive(parameters.get("l_ex_m"), "l_ex")
+    actual_length = positive(fixed.get("l_J_readback_m"), "l_J readback")
+    if not math.isclose(actual_length, requested_length,
+                        rel_tol=FIXED_M_EXECUTION["l_J_relative_tolerance"], abs_tol=0.0):
+        raise ValueError("BORIS fixed-M l_J readback differs from the requested l_ex")
+    shape = geometry.get("ferromagnet_shape")
+    step = geometry.get("cell_m")
+    normal_extent = geometry.get("normal_extent_m")
+    if (not isinstance(shape, list) or len(shape) != 3
+            or any(type(n) is not int or n < 1 for n in shape)
+            or not isinstance(step, list) or len(step) != 3
+            or not isinstance(normal_extent, list) or len(normal_extent) != 3):
+        raise ValueError("BORIS fixed-M geometry is malformed")
+    step = tuple(positive(value, "cell step") for value in step)
+    origin = (0.0, 0.0, positive(normal_extent[2], "normal thickness"))
+    fields = []
+    for name, dimension in (("f_M_before.ovf", 3), ("f_M_after.ovf", 3), ("f_V.ovf", 1)):
+        path = storage.validate_path(root / name, root)
+        if storage.is_link(path) or not path.is_file() or not 0 < path.stat().st_size <= 64 * 1024**2:
+            raise ValueError("BORIS fixed-M raw field must be a bounded regular file")
+        field = read_text_ovf(path)
+        if (field.shape != tuple(shape) or field.valuedim != dimension
+                or any(not math.isclose(a, b, rel_tol=1.0e-12, abs_tol=1.0e-18)
+                       for a, b in zip((*field.origin_m, *field.step_m), (*origin, *step)))):
+            raise ValueError("BORIS fixed-M carrier differs from the authored F grid")
+        fields.append(field)
+    before, after, _ = fields
+    maximum_before = max(abs(value - (ms if axis == 0 else 0.0))
+                         for row in before.values for axis, value in enumerate(row))
+    maximum_after = max(abs(value - (ms if axis == 0 else 0.0))
+                        for row in after.values for axis, value in enumerate(row))
+    maximum_change = max(abs(a - b) for left, right in zip(before.values, after.values)
+                         for a, b in zip(left, right))
+    tolerance = (FIXED_M_EXECUTION["magnetization_absolute_tolerance_apm"]
+                 + FIXED_M_EXECUTION["magnetization_relative_tolerance"] * ms)
+    if max(maximum_before, maximum_after, maximum_change) > tolerance:
+        raise ValueError("BORIS fixed-M all-cell magnetization gate failed")
+    return {
+        "schema_version": "fullmag.boris_fixed_m.proof.v1",
+        "M_before_sha256": before.sha256,
+        "M_after_sha256": after.sha256,
+        "sample_count": len(before.values),
+        "maximum_before_error_apm": maximum_before,
+        "maximum_after_error_apm": maximum_after,
+        "maximum_change_apm": maximum_change,
+        "l_J_readback_m": actual_length,
+    }
+
+
+def validate_boris_artifact(root: Path, *, repo_root: Path | None = None) -> dict[str, object]:
+    """Validate a prepared ``fullmag.boris_she_nf.v2`` artifact directory."""
 
     summary_path = root / "summary.json"
     if not summary_path.is_file():
         raise ValueError(f"BORIS artifact is missing {summary_path}")
     try:
-        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        from run_managed_boris_nf import read_json
+        payload = read_json(summary_path)
     except json.JSONDecodeError as error:
         raise ValueError(f"BORIS artifact summary is not JSON: {error}") from error
     if not isinstance(payload, dict):
         raise ValueError("BORIS artifact summary must be an object")
-    if payload.get("schema_version") != "fullmag.boris_she_nf.v1":
+    if payload.get("schema_version") != "fullmag.boris_she_nf.v2":
         raise ValueError("BORIS artifact schema_version is unsupported")
     runtime = payload.get("runtime")
     if not isinstance(runtime, dict) or runtime.get("identity_complete") is not True:
         raise ValueError("BORIS artifact runtime identity is incomplete")
+    from run_boris_nf_interface import validate_runtime_identity
+    retained_outputs = validate_runtime_identity(runtime, repo_root=repo_root, artifact_root=root)
     scenario = payload.get("scenario")
     if not isinstance(scenario, dict) or scenario.get("workload") != "N/F":
         raise ValueError("BORIS artifact scenario workload must be N/F")
+    from run_managed_boris_nf import read_json, require_fixed_m_members
+    retained_by_path = {entry["path"]: entry["sha256"] for entry in retained_outputs}
+    native = read_json(root / "boris_native_samples.json",
+                       expected_sha256=retained_by_path["boris_native_samples.json"])
+    fixed_m_proof = validate_fixed_m(root, scenario, native)
+    require_fixed_m_members(fixed_m_proof, retained_outputs)
+    if json.dumps(payload.get("fixed_m_proof"), sort_keys=True, allow_nan=False) != json.dumps(
+        fixed_m_proof, sort_keys=True, allow_nan=False
+    ):
+        raise ValueError("BORIS summary fixed-M proof differs from retained raw outputs")
     parameters = scenario.get("parameters")
     if not isinstance(parameters, dict):
         raise ValueError("BORIS artifact scenario parameters are missing")
@@ -591,8 +685,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--repo-root", type=Path, help="trusted managed BORIS v2 storage context")
     args = parser.parse_args()
-    report = validate_boris_artifact(args.artifact)
+    report = validate_boris_artifact(args.artifact, repo_root=args.repo_root)
     serialized = json.dumps(report, indent=2, sort_keys=True)
     if args.output is None:
         print(serialized)

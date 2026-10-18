@@ -656,7 +656,44 @@ class ScriptBuilderEigenOutputRoundTripTests(unittest.TestCase):
         self.assertLess(eigen_output, eigen_stage)
         self.assertLess(eigen_stage, autosave_action)
         self.assertLess(autosave_action, follow_up)
-        self.assertNotIn('study.save("m", every=2e-12)', rendered)
+
+        expected_outputs_by_stage = [
+            [
+                {"kind": "field", "name": "m", "every_seconds": 1e-12},
+                {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+            ],
+            [
+                {
+                    "kind": "eigen_spectrum",
+                    "quantity": "eigenfrequency",
+                    "scope": "global",
+                }
+            ],
+            [
+                {"kind": "field", "name": "m", "every_seconds": 1e-12},
+                {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+            ],
+            [
+                {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+                {"kind": "field", "name": "m", "every_seconds": 2e-12},
+            ],
+        ]
+        expected_final_outputs = [
+            {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+            {"kind": "field", "name": "m", "every_seconds": 2e-12},
+        ]
+        for candidate in (loaded, rewritten):
+            self.assertEqual(
+                [
+                    stage.problem.study.to_ir()["sampling"]["outputs"]
+                    for stage in candidate.stages
+                ],
+                expected_outputs_by_stage,
+            )
+            self.assertEqual(
+                candidate.problem.study.to_ir()["sampling"]["outputs"],
+                expected_final_outputs,
+            )
 
     def test_disabling_all_autosave_outputs_resets_between_eigen_stages(self) -> None:
         script = """
@@ -836,7 +873,6 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
             rewritten = _load_text(str(rendered), root, "rewritten.py")
 
-        self.assertNotIn('study.save("m", every=1e-12)', rendered)
         initial_stage = rendered.index("study.stages.add_relax(")
         autosave_action = rendered.index(
             'study.stages.autosave("m", every=1e-12, stage_id="enable-m-output")'
@@ -856,6 +892,10 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
                     for stage in candidate.stages
                 ],
                 expected_outputs_by_stage,
+            )
+            self.assertEqual(
+                candidate.problem.study.to_ir()["sampling"]["outputs"],
+                expected_later_outputs,
             )
 
     def test_stage_autosave_roundtrips_for_relax_and_run(self) -> None:
@@ -1979,6 +2019,36 @@ study.stages.add_run(stage_id='third', until=1e-11)
         self.assertEqual([output['kind'] for output in rendered.stages[0].problem.study.to_ir()['sampling']['outputs']], ['field_auto', 'scalar_auto'])
         self.assertIn('study.save("m", every="auto")', source)
         self.assertIn('study.save("mx", every="auto")', source)
+
+
+class ClosedLoopNonmagneticRoundTripTests(unittest.TestCase):
+    def test_original_full_3d_circuit_survives_both_export_routes(self) -> None:
+        source = Path(__file__).resolve().parents[3] / "examples/fem_antenna_closed_loop_nonmagnetic.py"
+        loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+        expected = loaded.problem.to_ir(include_geometry_assets=False, source_root=source.parent)
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        scripts = {
+            "python": render_loaded_problem_as_script(loaded),
+            "scene_document": render_scene_document_as_script(scene),
+        }
+        with TemporaryDirectory() as tmp_dir:
+            for route, script in scripts.items():
+                with self.subTest(route=route):
+                    replay = _load_text(script, Path(tmp_dir), f"{route}.py")
+                    actual = replay.problem.to_ir(include_geometry_assets=False, source_root=source.parent)
+                    for key in (
+                        "current_modules", "antenna_port_modes", "antenna_field_solve_stages",
+                        "geometry", "backend_policy", "validation_profile",
+                    ):
+                        self.assertIn(key, expected)
+                        self.assertIn(key, actual)
+                        self.assertEqual(expected[key], actual[key], key)
+                    self.assertEqual(loaded.problem.discretization, replay.problem.discretization)
+                    self.assertFalse(replay.problem.magnets)
+                    self.assertIn("closed_loop=True", script)
+                    self.assertIn("fm.AntennaSourceCutRt0(", script)
+                    self.assertNotIn("add_run(", script)
+                    self.assertNotIn("add_relax(", script)
 
 
 if __name__ == "__main__":

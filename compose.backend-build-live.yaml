@@ -1,0 +1,50 @@
+# Direct DEV backend build overlay.  The selected Windows checkout is the
+# source input; no source archive is created or mounted in this mode.
+services:
+  backend:
+    entrypoint: ["/usr/local/bin/python3", "/opt/fullmag/backend_dev.py"]
+    command:
+      - prepare
+      - --manifest
+      - /input/manifest.json
+      - --source-root
+      - /opt/fullmag/source
+      - --git-common-root
+      - /opt/fullmag/source-git
+      - --output
+      - /opt/fullmag/package
+      - --build-root
+      - /build
+    healthcheck: {disable: true}
+    environment:
+      HOME: /build/home
+      CARGO_HOME: /build/cargo
+      FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the toolchain identity}
+    volumes:
+      # Keep the durable workspace database readonly during compilation and
+      # give any build-time runtime writes a run-owned scratch state root.
+      - type: bind
+        source: ${FULLMAG_WORKSPACE_STATE_ROOT:?Managed group user-data namespace is required}
+        target: /user-data
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_BACKEND_BUILD_STATE_ROOT:?Select this build's scratch state root}
+        target: /state
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_BACKEND_SOURCE_MANIFEST:?Capture the selected checkout first}
+        target: /input/manifest.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_SOURCE_GIT_COMMON:?Mount the selected checkout's Git common directory}
+        target: /opt/fullmag/source-git
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_BACKEND_PACKAGE:?Select this build's output directory}
+        target: /opt/fullmag/package
+        read_only: false
+        bind: {create_host_path: false}

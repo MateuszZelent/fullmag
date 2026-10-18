@@ -31,8 +31,19 @@ describe("antenna field-solve authoring validation", () => {
 
   it("does not mistake an authored view reference for a mesh-exact current view", () => {
     const scene = {
-      current_transports: [{ name: "current-1", kind: "current_transport", model: "ohmic_poisson" }],
-      antenna_port_modes: [{ id: "port-1", source_object_id: "antenna-1", current_transport_id: "current-1" }],
+      objects: [{ id: "antenna-1", role: "antenna" }],
+      current_transports: [{ name: "current-1", kind: "current_transport", model: "ohmic_poisson",
+        domain: [{ object_id: "antenna-1" }],
+        boundaries: ["signal-in", "signal-out", "return-in", "return-out"].map(id => ({
+          id, kind: "equipotential_current_terminal", surfaces: [{ object_id: "antenna-1", surface_id: id, orientation: [0, 1, 0] }],
+        })),
+      }],
+      antenna_port_modes: [{ id: "port-1", schema_version: "antenna_port_mode.v2", source_object_id: "antenna-1", current_transport_id: "current-1",
+        normalization_current_a: 1, branches: [
+          { id: "signal", inlet_terminal_ref: "signal-in", outlet_terminal_ref: "signal-out", signed_weight: 1 },
+          { id: "return", inlet_terminal_ref: "return-in", outlet_terminal_ref: "return-out", signed_weight: -1 },
+        ],
+      }],
     } as SceneResource;
     expect(antennaStageValidationMessages(
       { ...stage, conservative_current_view_ref: "current-1:rt0" }, scene,

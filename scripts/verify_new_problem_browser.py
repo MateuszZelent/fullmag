@@ -166,7 +166,7 @@ def _dependency_owner(repo: Path, main: Path) -> dict:
 
     tools = {
         "next": app_real / "next/dist/bin/next",
-        "typescript": app_real / "typescript/bin/tsc",
+        "typescript": app_real / "typescript-native/bin/tsc",
         "eslint": app_real / "eslint/bin/eslint.js",
         "openapi_typescript": app_real / "openapi-typescript/bin/cli.js",
         "react_doctor": root_real / "react-doctor/bin/react-doctor.js" if root_real else None,
@@ -804,7 +804,7 @@ def _run_client_codegen_locked(
         commands = [
             (
                 "openapi_typescript",
-                [node, cli, relative_json.as_posix(), "--output", relative_types.as_posix()],
+                [node, cli, relative_json.as_posix(), "--output", relative_types.as_posix(), "--empty-objects-unknown"],
             ),
             (
                 "generate_v2_client",

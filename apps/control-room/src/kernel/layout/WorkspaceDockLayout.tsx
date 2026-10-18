@@ -16,7 +16,6 @@ import {
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
 import { useWorkspaceContentScope } from "./WorkspaceContentScope";
-import { useWorkspaceStartupInteractionBlocked } from "./SimulationStartupOverlay";
 import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
 import {
@@ -92,11 +91,6 @@ export function WorkspaceDockLayout() {
   const kernel = useKernel();
   const projectOnly = useWorkspaceContentScope() === "project";
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
-  const focusedSlot = useLayoutSelector((layout) => layout.focusedSlot);
-  const activeBottomPanelTab = useLayoutSelector(
-    (layout) => layout.activeBottomPanelTab,
-  );
-  const startupInteractionBlocked = useWorkspaceStartupInteractionBlocked();
   const hasAuxViewportModule = !projectOnly && kernel.modules.forSlot("viewport-aux").length > 0;
   const bottomVisible = !projectOnly && panelVisible.bottom;
   const [dockState, setDockState] = useState<WorkspaceDockState>({
@@ -190,22 +184,11 @@ export function WorkspaceDockLayout() {
   const columnAutoSaveId = `fullmag-workspace-columns:${visibleColumns
     .map((column) => column.slotId)
     .join("|")}`;
-  const startupDiagnosticsVisible =
-    startupInteractionBlocked &&
-    bottomVisible &&
-    focusedSlot === "panel-bottom" &&
-    activeBottomPanelTab === "diagnostics";
-  const workspacePanelsInert = startupInteractionBlocked || undefined;
-  const bottomPanelInert =
-    startupInteractionBlocked && !startupDiagnosticsVisible
-      ? true
-      : undefined;
-
   if (!restored) {
     return (
       <div className="fm-workspace-body" data-dock-hydration-pending="true" id="fm-main-content" tabIndex={-1}>
         {panelVisible.left ? (
-          <div className="fm-dock-column" inert={workspacePanelsInert}>
+          <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
               <span>Explorer</span>
               <GripVertical size={12} aria-hidden="true" />
@@ -213,7 +196,7 @@ export function WorkspaceDockLayout() {
             <WorkspaceColumnContent slotId="panel-left" />
           </div>
         ) : null}
-        <div className="fm-dock-column" inert={workspacePanelsInert}>
+        <div className="fm-dock-column">
           <div className="fm-dock-column__handle">
             <span>Viewport</span>
             <GripVertical size={12} aria-hidden="true" />
@@ -221,7 +204,7 @@ export function WorkspaceDockLayout() {
           <WorkspaceColumnContent slotId="viewport-main" />
         </div>
         {hasAuxViewportModule ? (
-          <div className="fm-dock-column" inert={workspacePanelsInert}>
+          <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
               <span>Section</span>
               <GripVertical size={12} aria-hidden="true" />
@@ -230,7 +213,7 @@ export function WorkspaceDockLayout() {
           </div>
         ) : null}
         {panelVisible.right ? (
-          <div className="fm-dock-column" inert={workspacePanelsInert}>
+          <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
               <span>Inspector</span>
               <GripVertical size={12} aria-hidden="true" />
@@ -239,13 +222,7 @@ export function WorkspaceDockLayout() {
           </div>
         ) : null}
         {bottomVisible ? (
-          <div
-            className="fm-workspace-bottom-panel"
-            data-startup-diagnostics={
-              startupDiagnosticsVisible ? "visible" : undefined
-            }
-            inert={bottomPanelInert}
-          >
+          <div className="fm-workspace-bottom-panel">
             <SlotHost slotId="panel-bottom" />
           </div>
         ) : null}
@@ -263,7 +240,6 @@ export function WorkspaceDockLayout() {
         <ResizablePanel
           defaultSize={78}
           id="workspace-main"
-          inert={workspacePanelsInert}
           minSize={42}
         >
           <SortableList
@@ -334,11 +310,7 @@ export function WorkspaceDockLayout() {
             <ResizablePanel
               defaultSize={layout.bottomDockDefaultSize}
               className="fm-workspace-bottom-panel"
-              data-startup-diagnostics={
-                startupDiagnosticsVisible ? "visible" : undefined
-              }
               id="panel-bottom"
-              inert={bottomPanelInert}
               minSize={layout.bottomDockMinSize}
             >
               <SlotHost slotId="panel-bottom" />

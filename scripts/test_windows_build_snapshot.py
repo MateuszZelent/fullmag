@@ -131,6 +131,48 @@ class SnapshotChecks(unittest.TestCase):
         self.assertEqual(build_snapshot.create_snapshot(self.repo, self.build), metadata)
         self.assertFalse((frozen / ".git").exists())
 
+    def test_ignored_patch_notes_do_not_change_dependency_identity_or_snapshot(self):
+        from windows.workspace_backend_identity import DEPENDENCY_INPUTS, fingerprint
+
+        patch = self.repo / "patches" / "next.patch"
+        patch.parent.mkdir(parents=True)
+        patch.write_bytes(b"patch input\n")
+        exclude = self.repo / ".git" / "info" / "exclude"
+        exclude.write_text("patches/*.md\n")
+        notes = self.repo / "patches" / "README.md"
+        notes.write_text("first note\n")
+        first = self.make()
+        dependency_before = fingerprint(self.repo, DEPENDENCY_INPUTS)["sha256"]
+
+        notes.write_text("edited note\n")
+        self.assertEqual(fingerprint(self.repo, DEPENDENCY_INPUTS)["sha256"], dependency_before)
+        second = self.make()
+
+        self.assertEqual(second, first)
+        record = json.loads(Path(second["record_path"]).read_text())
+        self.assertIn("patches/next.patch", record["dependency_input_paths"])
+        self.assertNotIn("patches/README.md", record["dependency_input_paths"])
+
+    def test_deleted_tracked_patch_changes_snapshot_but_remains_a_sealed_dependency_path(self):
+        patch = self.repo / "patches" / "next.patch"
+        patch.parent.mkdir(parents=True)
+        patch.write_bytes(b"patch input\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "tracked patch fixture")
+        first = self.make()
+
+        patch.unlink()
+        second = self.make()
+
+        self.assertNotEqual(second["snapshot_id"], first["snapshot_id"])
+        self.assertNotEqual(second["dependency_source_sha256"], first["dependency_source_sha256"])
+        record = json.loads(Path(second["record_path"]).read_text())
+        self.assertIn("patches/next.patch", record["dependency_input_paths"])
+        self.assertNotIn(
+            "patches/next.patch", {entry["path"] for entry in record["inventory"]}
+        )
+        self.assertEqual(build_snapshot.verify_snapshot(first, self.build), first)
+
     def test_origin_changes_do_not_affect_verification(self):
         metadata = self.make()
         self.file.write_text("changed origin")
@@ -227,6 +269,45 @@ class SnapshotChecks(unittest.TestCase):
             return copy(source, destination)
 
         with patch.object(build_snapshot, "_copy_file", side_effect=racing_copy):
+            with self.assertRaises(build_snapshot.SourceChangedSnapshot):
+                self.make()
+        self.assertFalse(list((self.build / "source-snapshots").glob("*/record.json")))
+
+    def test_native_edit_while_copying_frontend_keeps_already_sealed_inputs(self):
+        frontend = self.repo / "apps/control-room/app/page.tsx"
+        frontend.parent.mkdir(parents=True)
+        frontend.write_bytes(b"export default function Page() {}\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "frontend after native seal fixture")
+        native_before = self.file.read_bytes()
+        backend_before = build_snapshot.fingerprint(self.repo)["sha256"]
+        copy = build_snapshot._copy_file
+        copied = []
+
+        def editing_after_seal(source, destination):
+            copied.append(source)
+            if source == frontend:
+                self.assertIn(self.file, copied)
+                self.file.write_bytes(b"pub const VALUE: u8 = 42;\n")
+            return copy(source, destination)
+
+        with patch.object(build_snapshot, "_copy_file", side_effect=editing_after_seal):
+            metadata = self.make()
+        frozen = Path(metadata["source_root"])
+        self.assertEqual((frozen / "crates/demo/src/lib.rs").read_bytes(), native_before)
+        self.assertEqual(metadata["backend_source_sha256"], backend_before)
+        self.assertNotEqual(build_snapshot.fingerprint(self.repo)["sha256"], backend_before)
+        self.assertEqual(build_snapshot.verify_snapshot(metadata, self.build), metadata)
+
+    def test_native_edit_during_protected_copy_is_still_rejected(self):
+        copy = build_snapshot._copy_file
+
+        def editing_before_seal(source, destination):
+            if source == self.file:
+                self.file.write_bytes(b"pub const VALUE: u8 = 42;\n")
+            return copy(source, destination)
+
+        with patch.object(build_snapshot, "_copy_file", side_effect=editing_before_seal):
             with self.assertRaises(build_snapshot.SourceChangedSnapshot):
                 self.make()
         self.assertFalse(list((self.build / "source-snapshots").glob("*/record.json")))

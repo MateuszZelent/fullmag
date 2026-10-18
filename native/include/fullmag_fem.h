@@ -1059,6 +1059,47 @@ typedef struct {
     char error_message[256];
 } fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1;
 
+/* Independently versioned closed-loop V/RT0 source output. No v1 layout changes.
+ * J is cell-local, evaluated on the live accepted RT0 used by Oersted.
+ * Source current is signed outward through the authored minus seam.
+ * These raw outputs do not attest physical basis/LLG qualification. */
+#define FULLMAG_FEM_CLOSED_LOOP_SOURCE_SNAPSHOT_ABI_VERSION 2u
+#define FULLMAG_FEM_CLOSED_LOOP_SOURCE_SNAPSHOT_MAX_CELLS 1048576u
+typedef struct {
+    uint64_t minus_vertex_id, plus_vertex_id;
+    double minus_reaction_a, plus_reaction_a;
+} fullmag_fem_paired_charge_weak_reaction_v2;
+typedef struct {
+    uint64_t source_element_index;
+    uint64_t vertex_ids[4];
+    double vertex_xyz_m[12];
+    double center_xyz_m[3];
+    double vertex_current_xyz_apm2[12];
+    double center_current_xyz_apm2[3];
+} fullmag_fem_closed_loop_current_cell_v2;
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_closed_loop_current_cell_v2 *cells;
+    uint64_t cells_capacity;
+    uint64_t cells_len;
+    double source_current_a;
+    double source_absolute_flux_a;
+    double charge_relative_residual;
+    double potential_jump_v;
+    double gauge_mean_v;
+    double max_paired_weak_flux_mismatch_a;
+    char source_view_identity_digest[65];
+    char periodic_operator_version[96];
+    char closure_operator_version[96];
+    char error_message[256];
+    fullmag_fem_paired_charge_weak_reaction_v2 *paired_weak_reactions;
+    uint64_t paired_weak_reactions_capacity;
+    uint64_t paired_weak_reactions_len;
+    char weak_reaction_ledger_version[96];
+} fullmag_fem_closed_loop_source_snapshot_result_v2;
+
 /* Direct OE-F1 evaluation on the exact immutable RT0 view produced by the
  * closure-aware transport extension.  This is a new symbol; the RT0 result
  * above remains byte-for-byte stable. */
@@ -1316,6 +1357,89 @@ typedef struct {
     const double *requested_outward_currents_a;
     uint64_t terminal_count;
 } fullmag_fem_charge_transport_request_v3;
+
+/* Prepared closed-loop input carries no accepted field identity or output pins. */
+#define FULLMAG_FEM_PREPARED_CLOSED_LOOP_ABI_VERSION 2u
+#define FULLMAG_FEM_PREPARED_CLOSED_LOOP_CERTIFICATE_MAX_BYTES (UINT64_C(128) << 20)
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    const char *source_revision, *object_id, *geometry_id, *source_module_id;
+    const char *mesh_revision, *topology_revision, *mesh_digest;
+    const char *authored_input_digest, *materials_digest;
+    const char *envelope_revision, *envelope_digest, *expected_prepared_execution_digest;
+    uint64_t stage_identity;
+    double evaluation_time_s, evaluated_envelope_multiplier;
+} fullmag_fem_prepared_closed_loop_binding_v2;
+typedef struct {
+    const char *part_id;
+    uint32_t material_assignment_index, reserved;
+    const uint64_t *element_ordinals;
+    uint64_t element_count;
+} fullmag_fem_prepared_closed_loop_material_part_v2;
+typedef struct {
+    uint64_t face_vertex_ids[3], part_cell_ordinal, bridge_cell_ordinal;
+} fullmag_fem_prepared_closed_loop_observation_face_v2;
+typedef struct {
+    const char *id, *part_id, *selector, *normal_convention;
+    const fullmag_fem_prepared_closed_loop_observation_face_v2 *faces;
+    uint64_t face_count;
+} fullmag_fem_prepared_closed_loop_observation_v2;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_charge_transport_request_v1 base;
+    fullmag_fem_prepared_closed_loop_binding_v2 binding;
+    fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1 stable_vertex_identities;
+    const fullmag_fem_steady_transport_rt0_boundary_face_v1 *boundary_faces;
+    uint64_t boundary_face_count;
+    const fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1 *closed_geometry;
+    uint64_t material_assignment_count;
+    const fullmag_fem_prepared_closed_loop_material_part_v2 *material_parts;
+    uint64_t material_part_count;
+    const fullmag_fem_prepared_closed_loop_observation_v2 *observations;
+    uint64_t observation_count;
+    double algebraic_relative_tolerance, physical_relative_gate, physical_absolute_gate_a;
+} fullmag_fem_prepared_closed_loop_request_v2;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_prepared_closed_loop_request_v2 rt0;
+    const double *target_points_xyz;
+    uint64_t target_points_xyz_len;
+    int32_t base_quadrature_order, maximum_subdivision_depth;
+    double absolute_tolerance_apm, relative_tolerance;
+    uint64_t maximum_source_target_pairs;
+} fullmag_fem_prepared_closed_loop_oersted_request_v2;
+typedef struct {
+    fullmag_fem_closed_loop_source_snapshot_result_v2 source;
+    char prepared_execution_digest[65], accepted_charge_field_digest[65], accepted_source_state_digest[65];
+    char digest_encoding_version[96], prepared_digest_version[96], accepted_charge_digest_version[96], accepted_source_digest_version[96];
+    uint8_t *canonical_balance_certificate_bytes;
+    uint64_t canonical_balance_certificate_capacity, canonical_balance_certificate_len;
+} fullmag_fem_prepared_closed_loop_source_snapshot_result_v2;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_binding_v2) == 136, "prepared binding ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_material_part_v2) == 32, "prepared part ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_observation_face_v2) == 40, "prepared observation face ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_observation_v2) == 48, "prepared observation ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_request_v2) == 608, "prepared request ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_oersted_request_v2) == 672, "prepared Oersted ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_source_snapshot_result_v2) == 1336, "prepared source outer ABI");
+static_assert(offsetof(fullmag_fem_prepared_closed_loop_source_snapshot_result_v2, canonical_balance_certificate_bytes) == 1312, "prepared certificate pointer ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_v2(
+    const fullmag_fem_prepared_closed_loop_request_v2 *request,
+    fullmag_fem_steady_transport_rt0_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source);
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(
+    const fullmag_fem_prepared_closed_loop_oersted_request_v2 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source);
+
 
 typedef struct {
     uint32_t abi_version;
@@ -3494,6 +3618,19 @@ FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_with_snapshot
     fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
     fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot,
     fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature_snapshot
+);
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_with_source_snapshot_v2(
+    const fullmag_fem_steady_transport_rt0_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot,
+    fullmag_fem_closed_loop_source_snapshot_result_v2 *source_snapshot
+);
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_with_source_snapshot_v2(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature_snapshot,
+    fullmag_fem_closed_loop_source_snapshot_result_v2 *source_snapshot
 );
 FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
     const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,

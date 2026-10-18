@@ -80,7 +80,9 @@ interchangeable with the FEM null-space treatment.
 | $\mathbf r_i$ | FDM cell-center position | $\mathrm{m}$ |
 | $\mathbf t_{\boldsymbol\ell}$ | periodic translation vector | $\mathrm{m}$ |
 | $\mathcal I$ | finite image-index set | $1$ |
-| $n_x,n_y,n_z$ | image counts along each axis | $1$ |
+| $n_x$ | periodic image count along $x$ | $1$ |
+| $n_y$ | periodic image count along $y$ | $1$ |
+| $n_z$ | periodic image count along $z$ | $1$ |
 | $\mathbf N$ | demagnetizing tensor kernel | $1$ |
 | $\mathbf M$ | magnetization field | $\mathrm{A\,m^{-1}}$ |
 
@@ -156,7 +158,7 @@ should keep study construction and stage ordering visible.
 |---|---|---|---|---|---|---|---|
 | `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | $1$ | exactly three Boolean values | periodic status of x, y, z | FDM planner; FEM mesh planner consumes the same intent | `pbc.axes` |
 | `FdmPbc.demag` | `str` | `open` | $1$ | `open`, `truncated_images`, or `periodic_airbox_k0` | demagnetization boundary policy | FDM supports `open`/`truncated_images`; FEM supports the periodic airbox policy subject to qualification | `pbc.demag` |
-| `FdmPbc.image_counts` | `tuple[int,int,int] | None` | `None` | $1$ | exactly three non-negative integers; only with `truncated_images` | finite image counts $n_x,n_y,n_z$ | FDM CPU/GPU image policies as qualified | `pbc.image_counts` |
+| `FdmPbc.image_counts` | `tuple[int,int,int] \| None` | `None` | $1$ | exactly three non-negative integers; only with `truncated_images` | finite image counts $n_x,n_y,n_z$ | FDM CPU/GPU image policies as qualified | `pbc.image_counts` |
 | `study.pbc(..., x/y/z=...)` | `bool` flags | all `False` | $1$ | at least one axis for non-open policy | stage-first authoring facade for `FdmPbc.axes` | Python authoring; planner resolves backend legality | `pbc.axes` |
 
 (numerical-methods-periodic-demag-problem-ir)=
@@ -213,9 +215,9 @@ zero-mode handling and tolerances are recorded.
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
-| Python policy | `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` | validates axes, policy and image counts; lowers periodic intent | Python/IR |
-| FDM periodic kernel | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_periodic_newell_kernel_spectra` | computes periodic kernel spectra for the FDM convolution | FDM CPU |
-| FEM periodic reduction | `backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp` | `solve_demag_periodic_poisson_reduced` | reduces and solves the periodic Poisson system | FEM CPU |
+| Python policy | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | [`class FdmPbc`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | validates axes, policy and image counts; lowers periodic intent | Python/IR |
+| FDM periodic kernel | [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | [`compute_periodic_newell_kernel_spectra`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | computes periodic kernel spectra for the FDM convolution | FDM CPU |
+| FEM periodic reduction | [`backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp#L198) | [`solve_demag_periodic_poisson_reduced`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp#L198) | reduces and solves the periodic Poisson system | FEM CPU |
 
 (numerical-methods-periodic-demag-validation)=
 ## Validation
@@ -245,12 +247,12 @@ every periodic policy.
 
 ## Control Room workflow
 
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
 
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Python periodic contract | `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` | validation and IR lowering | Python contract tests |
-| FDM periodic spectra | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_periodic_newell_kernel_spectra` | finite-image kernel spectrum | FDM source contract |
-| FEM reduced solve | `backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp` | `solve_demag_periodic_poisson_reduced` | periodic Poisson reduction | FEM source contract |
+| Python periodic contract | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | [`class FdmPbc`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | validation and IR lowering | Python contract tests |
+| FDM periodic spectra | [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | [`compute_periodic_newell_kernel_spectra`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | finite-image kernel spectrum | FDM source contract |
+| FEM reduced solve | [`backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp#L198) | [`solve_demag_periodic_poisson_reduced`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp#L198) | periodic Poisson reduction | FEM source contract |

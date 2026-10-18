@@ -223,6 +223,11 @@ pub struct ScriptExecutionStage {
 
 #[derive(Debug, Clone)]
 pub enum ResolvedScriptStageAction {
+    AntennaClosedLoopInspection {
+        input: fullmag_ir::ResolvedAntennaClosedLoopCurrentInputIR,
+        requested_execution: fullmag_ir::RequestedTransportExecutionIR,
+        output_id: String,
+    },
     AntennaExternalLeadInspection {
         input: fullmag_ir::ResolvedAntennaExternalLeadCurrentInputIR,
         requested_execution: fullmag_ir::RequestedTransportExecutionIR,
@@ -294,6 +299,7 @@ pub enum ResolvedScriptStageAction {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionKind {
     ContinueInPlace,
+    AntennaClosedLoopInspection,
     AntennaExternalLeadInspection,
     AntennaFieldSolve,
     AntennaSourceSpectrum,
@@ -310,6 +316,7 @@ pub enum StageTransitionKind {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionReason {
     SameRuntimeContext,
+    AntennaClosedLoopInspection,
     AntennaExternalLeadInspection,
     AntennaFieldSolve,
     AntennaSourceSpectrum,
@@ -390,6 +397,7 @@ impl StageTransitionMetadata {
         }
         match self.kind {
             StageTransitionKind::ContinueInPlace => "continues",
+            StageTransitionKind::AntennaClosedLoopInspection => "closed-loop inspection computed",
             StageTransitionKind::AntennaExternalLeadInspection => "antenna inspection computed",
             StageTransitionKind::AntennaFieldSolve => "field basis solved",
             StageTransitionKind::AntennaSourceSpectrum => "source spectrum computed",
@@ -457,6 +465,17 @@ impl ResolvedScriptStage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_stage_constructors_have_no_authored_provenance() {
+        let ir = ProblemIR::bootstrap_example();
+        assert!(ResolvedScriptStage::solver(ir.clone(), 1e-12, "direct").provenance.is_none());
+        assert!(ResolvedScriptStage::synthetic(
+            ir, "save", ResolvedScriptStageAction::SaveState {
+                artifact_name: "snapshot".into(), format: None, dataset: None,
+            },
+        ).provenance.is_none());
+    }
 
     #[test]
     fn execution_config_defaults_inventory_without_activating_definitions() {

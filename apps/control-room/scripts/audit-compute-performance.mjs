@@ -771,12 +771,15 @@ function checkFieldCatalogResourceSeparation() {
   requireTokens(controlRoomApi, "ControlRoomApi field catalog facade", [
     "DATA_FIELDS_PATH",
     "FieldCatalogResource",
-    "catalog: (options?: RequestOptions)",
-    "requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options)",
+    "catalog: (options?: RequestOptions, query: ArtifactFieldCatalogQuery = {})",
+    "requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options, { query })",
   ]);
   requireTokens(studyRuntimeResources, "field catalog resource hook", [
     "export function useFieldCatalogResource",
-    "api.data.fields.catalog({ sessionScopeKey, signal })",
+    "api.data.fields.catalog({ sessionScopeKey, signal }, stageId == null ? {} : { stage_id: stageId })",
+    "[api, stageId]",
+    "stageId == null || stageId.length > 0",
+    "fieldCatalogResourceKey(DATA_FIELDS_PATH, stageId, runId)",
     "useSessionScopedResourceKey(",
     "DATA_FIELDS_PATH",
     "enabled: enabled && sessionIdentity !== null",
@@ -1181,12 +1184,15 @@ function checkCommandShortcutConnector() {
     "const runtimeResourceDataRef = useRef(runtimeResourceData)",
     "runtimeResourceDataRef.current = runtimeResourceData",
     "resourceData: runtimeResourceDataRef.current",
-    "}, [kernel, sessionScopeKey, startupVisible, paused]);",
+    "enabled: !startupVisible",
+    "dispatchShortcutCommand(kernel.commands, event, context)",
+    "}, [kernel, sessionScopeKey]);",
   ]);
   forbidTokens(block, "CommandShortcutConnector", [
     "useSessionStatus()",
     "resolveSimulationStartupOverlayState",
     "startupState.isVisible",
+    "if (startupVisible)",
     "}, [kernel, runtimeResourceData, startupVisible]);",
     "}, [kernel, runtimeResourceData, startupState.isVisible]);",
   ]);
@@ -1997,7 +2003,7 @@ function checkVisualizationDebugLifecycleBudgets() {
   ]);
   requireTokens(scanner, "visualization debug bounded samples", [
     "MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS = 12",
-    "MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS = 8",
+    "MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS = 9",
   ]);
   requireTokens(panelModel, "visualization debug bounded transport", [
     "MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES = 8",

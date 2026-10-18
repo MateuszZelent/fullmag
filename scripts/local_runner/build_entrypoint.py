@@ -187,6 +187,7 @@ PROFILES: dict[str, Profile] = {
     ),
 }
 
+PROFILES["boris-cpu-v1"] = Profile(name="boris-cpu-v1", lane="external-reference-boris-cpu", environment={})
 # Contract profiles execute a trusted, fixed script and publish one result per
 # scenario.  They intentionally keep the release profiles above unchanged.
 PROFILES["fem-cpu-current-contracts-v1"] = Profile(
@@ -1031,7 +1032,10 @@ def run_stage(
 
 
 def required_outputs_for_profile(profile_name: str) -> tuple[str, ...]:
-    # Keep release qualification independent of specialized registry additions.
+    """Keep release qualification independent of specialized registry additions."""
+    if profile_name == "boris-cpu-v1":
+        return ("BorisLin", "source_manifest.json", "compile_flags.h", "cuda_flags.h",
+                "cpu_abi_witness.cpp", "cpu_abi_witness", "cpu_abi_witness.json")
     return REQUIRED_OUTPUTS if profile_name in RELEASE_PROFILE_NAMES else BASE_REQUIRED_OUTPUTS
 
 
@@ -2045,6 +2049,18 @@ def main(argv: list[str] | None = None) -> int:
         build = _regular_directory(args.build, "build", create=True)
         _workspace_is_empty(workspace)
         materialize_capsule(manifest, source, workspace)
+        if profile.name == "boris-cpu-v1":
+            # This module is copied/hash-pinned into /runner only for this profile.
+            from boris_cpu import run_build
+            try:
+                run_build(workspace, artifacts, receipt, run_stage)
+            except subprocess.SubprocessError as error:
+                raise BuildEntryPointError("BORIS installed toolchain preflight failed") from error
+            receipt["artifacts"] = artifact_records(artifacts)
+            receipt["state"] = "succeeded"
+            receipt["finished_at"] = _utc_now()
+            _write_receipt(artifacts, receipt)
+            return 0
         _regular_directory(build / "cargo-targets", "cargo target root", create=True)
         tools = preflight(
             profile,

@@ -101,11 +101,11 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `study.build_domain_mesh()` | str | None | None | $1$ | `StudyBuilder.build_domain_mesh()` | materializes the shared domain mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.build_mesh()` | str | None | None | $1$ | `StudyBuilder.build_mesh()` | legacy mesh build entry point | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.save(path)` | str | None | None | $1$ | `StudyMeshHandle.save` | save the mesh artifact | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.load(path)` | str | None | None | $1$ | `StudyMeshHandle.load` | load the artifact; authoring-consistency validation | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
-| `study.mesh.save_or_load(path)` | str | None | None | $1$ | `StudyMeshHandle.save_or_load` | cache: load when consistent, otherwise save | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.build_domain_mesh()` | `str \| None` | `None` | $1$ | `StudyBuilder.build_domain_mesh()` | materializes the shared domain mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.build_mesh()` | `str \| None` | `None` | $1$ | `StudyBuilder.build_mesh()` | legacy mesh build entry point | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.save(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.save` | save the mesh artifact | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.load(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.load` | load the artifact; authoring-consistency validation | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.save_or_load(path)` | `str \| None` | `None` | $1$ | `StudyMeshHandle.save_or_load` | cache: load when consistent, otherwise save | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
 
 Failure behavior / invalidation:
 
@@ -195,4 +195,4 @@ No page-specific physical claims; airbox physics: {doc}`index`.
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Airbox geometry construction and mesh extraction boundary. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `add_air_box` | Airbox geometry construction and mesh extraction boundary. | Source-map validator and focused API tests |
+| Airbox geometry construction and mesh extraction boundary. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | [`add_air_box`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | Airbox geometry construction and mesh extraction boundary. | Source-map validator and focused API tests |

@@ -52,7 +52,10 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
   const nextPendingOperationId = useRef(0);
   const [feedback, setFeedback] = useState<string | null>(null);
   const drive = model.drive;
-  const draftKey = `${sessionScopeKey ?? "no-session"}:${drive?.id ?? "none"}:${model.sceneRevision ?? "none"}`;
+  const sourceObjectId = selection.ref?.type === "physics-field-drive" ? selection.ref.sourceObjectId : undefined;
+  const draftKey = model.mode === "create"
+    ? `${sessionScopeKey ?? "no-session"}:draft:${sourceObjectId ?? "global"}:${resource.data ? "loaded" : "loading"}`
+    : `${sessionScopeKey ?? "no-session"}:${drive?.id ?? "none"}:${model.sceneRevision ?? "none"}`;
   const pending = pendingOperation?.sessionScopeKey === sessionScopeKey &&
     pendingOperation.draftKey === draftKey;
   const [draftState, setDraftState] = useState<{
@@ -227,18 +230,18 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
         source: {
           id: model.driveId ?? draft?.id ?? "none",
           kind: "field_drive",
-          status: model.mode === "create" ? "configured" : model.mode === "found" ? "active" : "absent",
+          status: model.mode === "create" ? "configured" : model.mode === "found" ? drive?.enabled === false ? "inactive" : "active" : "absent",
         },
-        status: model.mode === "create" ? "configured" : model.mode === "found" ? "active" : "absent",
+        status: model.mode === "create" ? "configured" : model.mode === "found" ? drive?.enabled === false ? "inactive" : "active" : "absent",
         statusReason: model.mode === "create" ? "Draft is not committed." : model.mode === "found" ? null : "Selected field drive is unavailable.",
       })}
       primary={<div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Regional field drive" collapsible defaultOpen>
         {model.mode !== "create" && model.mode !== "found" ? <FeedbackBanner kind="warning" message="Selected field drive is unavailable." /> : null}
-        {model.mode === "create" ? <FormField label="ID" disabled={pending} value={draft?.id ?? ""} onChange={(event) => setDraft((value) => value ? { ...value, id: event.target.value } : value)} /> : <FieldRow label="ID" value={model.driveId ?? "none"} />}
+        {model.mode === "create" ? <FormField label="ID" disabled={!draft || pending} value={draft?.id ?? ""} onChange={(event) => setDraft((value) => value ? { ...value, id: event.target.value } : value)} /> : <FieldRow label="ID" value={model.driveId ?? "none"} />}
         <FormField label="Name" disabled={!draft || pending} value={draft?.name ?? ""} onChange={(event) => setDraft((value) => value ? { ...value, name: event.target.value } : value)} />
         <FormField label="Enabled" type="checkbox" disabled={!draft || pending} checked={draft?.enabled ?? false} onChange={(event) => setDraft((value) => value ? { ...value, enabled: event.target.checked } : value)} />
-        <FormField label="Amplitude" unit="mT" type="number" disabled={!draft || pending} min="0" step="0.001" value={draft ? teslaToMilliTesla(draft.amplitude_B_T) : 0} onChange={(event) => setDraft((value) => value ? { ...value, amplitude_B_T: milliTeslaToTesla(Number(event.currentTarget.value)) } : value)} />
+        <FormField label="Amplitude" unit="mT" type="number" disabled={!draft || pending} min="0" step="0.001" value={draft ? teslaToMilliTesla(draft.amplitude_B_T) : 0} onChange={(event) => { const amplitudeB = milliTeslaToTesla(Number(event.currentTarget.value)); setDraft((value) => value ? { ...value, amplitude_B_T: amplitudeB } : value); }} />
         <Vector3Field label="Direction" disabled={!draft || pending} values={(draft?.direction ?? [0, 0, 0]).map(String) as [string, string, string]} onChange={(index, nextValue) => setDraft((value) => { if (!value) return value; const direction = [...value.direction]; direction[index] = Number(nextValue); return { ...value, direction }; })} />
         <FormField label="Target" type="select" disabled={!draft || pending} value={draft?.target.kind ?? "global"} onChange={(event) => setDraft((value) => value ? { ...value, target: event.target.value === "global" ? { kind: "global" } : event.target.value === "object" ? { kind: "object", object_id: "" } : { kind: "region", object_id: "", region_id: "" } } : value)}><option value="global">Global</option><option value="object">Object</option><option value="region">Region</option></FormField>
         {draft && draft.target.kind !== "global" ? <FormField label="Object" type="select" disabled={pending} value={draft.target.object_id} onChange={(event) => setDraft((value) => value && value.target.kind !== "global" ? { ...value, target: { ...value.target, object_id: event.target.value, ...(value.target.kind === "region" ? { region_id: "" } : {}) } } : value)}><option value="">Select an object</option>{selectorOptions.objects.map((object) => <option key={object.id} value={object.id}>{object.label}</option>)}</FormField> : null}

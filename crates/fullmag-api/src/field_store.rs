@@ -353,6 +353,115 @@ pub(crate) fn serialize_field_vector_binary_v5(
     Ok(out)
 }
 
+/// Explicit immutable artifact mappings; all native IDs retain their full u64 width.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FieldVectorBinaryMetadataV6<'a> {
+    pub domain_generation_id: &'a str,
+    pub carrier_revision: u64,
+    pub carrier_digest: [u8; 32],
+    pub scope_kind: &'a str,
+    pub scope_id: &'a str,
+    pub indexing: crate::schemas::fields::ArtifactSampleIndexing,
+    pub sample_identity: &'a [crate::router_v2::handlers::data::artifact_field_carrier::ArtifactSampleIdentity],
+    pub source_id: &'a str,
+    pub source_revision: u64,
+    pub field_generation_id: &'a str,
+}
+
+pub(crate) fn serialize_field_vector_binary_v6(
+    quantity_id: &str,
+    n_comp: usize,
+    values: &[f64],
+    metadata: &FieldVectorBinaryMetadataV6<'_>,
+) -> Result<Vec<u8>, String> {
+    use crate::schemas::fields::ArtifactSampleIndexing as Index;
+    use crate::router_v2::handlers::data::artifact_field_carrier::ArtifactSampleIdentity as Identity;
+    let count = metadata.sample_identity.len();
+    let count_u32 = u32::try_from(count).map_err(|_| "FMVP v6 sample count exceeds u32")?;
+    validate_field_vector_payload(n_comp, [count_u32, 1, 1], values)?;
+    if count == 0 || metadata.carrier_revision == 0 || values.len() > u32::MAX as usize {
+        return Err("FMVP v6 requires nonempty revision-bound samples within u32 framing".into());
+    }
+    let source_kind = "artifact_inspection";
+    let strings = [metadata.scope_kind, metadata.scope_id, metadata.domain_generation_id,
+        source_kind, metadata.source_id, metadata.field_generation_id];
+    for (index, value) in strings.iter().enumerate() {
+        if value.len() > u16::MAX as usize || (index >= 2 && value.is_empty()) {
+            return Err("FMVP v6 invalid source/scope string length".into());
+        }
+    }
+    let stride: usize = if metadata.indexing == Index::Tet4CellLocalNodes { 24 } else { 8 };
+    let raw_len = strings.iter().try_fold(88usize, |len, value| len.checked_add(value.len()))
+        .and_then(|len| count.checked_mul(stride).and_then(|bytes| len.checked_add(bytes)))
+        .ok_or("FMVP v6 metadata size overflow")?;
+    let metadata_len = raw_len.checked_add(7).map(|len| len & !7)
+        .ok_or("FMVP v6 metadata alignment overflow")?;
+    let total = metadata_len.checked_add(FIELD_VECTOR_BINARY_HEADER_LEN)
+        .and_then(|len| values.len().checked_mul(8).and_then(|bytes| len.checked_add(bytes)))
+        .ok_or("FMVP v6 total size overflow")?;
+    if metadata_len > u32::MAX as usize || total > MAX_FEM_MESH_TOPOLOGY_BINARY_BYTES {
+        return Err("FMVP v6 payload exceeds bounded binary transport".into());
+    }
+    let mut block = Vec::with_capacity(metadata_len);
+    block.extend_from_slice(b"FMMI");
+    block.extend_from_slice(&4u16.to_le_bytes());
+    block.extend_from_slice(&0u16.to_le_bytes());
+    for value in [metadata.domain_generation_id, source_kind, metadata.source_id, metadata.field_generation_id] {
+        block.extend_from_slice(&(value.len() as u16).to_le_bytes());
+    }
+    block.extend_from_slice(&metadata.carrier_revision.to_le_bytes());
+    block.extend_from_slice(&metadata.carrier_digest);
+    block.extend_from_slice(&metadata.indexing.code().to_le_bytes());
+    block.extend_from_slice(&count_u32.to_le_bytes());
+    block.extend_from_slice(&(metadata.scope_kind.len() as u16).to_le_bytes());
+    block.extend_from_slice(&(metadata.scope_id.len() as u16).to_le_bytes());
+    block.extend_from_slice(&metadata.source_revision.to_le_bytes());
+    block.extend_from_slice(&(stride as u32).to_le_bytes());
+    block.extend_from_slice(&metadata.indexing.code().to_le_bytes());
+    block.extend_from_slice(&0u32.to_le_bytes());
+    debug_assert_eq!(block.len(), 88);
+    for value in strings { block.extend_from_slice(value.as_bytes()); }
+    let mut unique = std::collections::BTreeSet::new();
+    for (sample, identity) in metadata.sample_identity.iter().enumerate() {
+        let key = match (metadata.indexing, identity) {
+            (Index::SourceNodes, Identity::SourceNode(id)) => {
+                block.extend_from_slice(&id.to_le_bytes()); (*id, 0)
+            }
+            (Index::SampleNodes | Index::PointSamples, Identity::SampleOrdinal(id)) if *id == sample as u64 => {
+                block.extend_from_slice(&id.to_le_bytes()); (*id, 0)
+            }
+            (Index::CellCenters, Identity::CellCenter(id)) => {
+                block.extend_from_slice(&id.to_le_bytes()); (*id, 0)
+            }
+            (Index::Tet4CellLocalNodes, Identity::CellLocal { source_element_ordinal, local_vertex_index, stable_vertex_id })
+                if *local_vertex_index < 4 && *local_vertex_index as usize == sample % 4 => {
+                if sample % 4 != 0 {
+                    let Identity::CellLocal {source_element_ordinal: first, ..} = metadata.sample_identity[sample - sample % 4] else {
+                        return Err("FMVP v6 incomplete Tet4 identity".into());
+                    };
+                    if first != *source_element_ordinal { return Err("FMVP v6 mixed Tet4 owner".into()); }
+                }
+                block.extend_from_slice(&source_element_ordinal.to_le_bytes());
+                block.push(*local_vertex_index);
+                block.extend_from_slice(&[0u8; 7]);
+                block.extend_from_slice(&stable_vertex_id.to_le_bytes());
+                (*source_element_ordinal, *local_vertex_index)
+            }
+            _ => return Err("FMVP v6 indexing/mapping mismatch".into()),
+        };
+        if !unique.insert(key) { return Err("FMVP v6 duplicate identity".into()); }
+    }
+    if metadata.indexing == Index::Tet4CellLocalNodes && count % 4 != 0 {
+        return Err("FMVP v6 incomplete four-trace Tet4 group".into());
+    }
+    block.resize(metadata_len, 0);
+    let mut out = Vec::with_capacity(total);
+    write_field_vector_header(&mut out, 6, n_comp, metadata_len, values.len(), [count_u32, 1, 1], quantity_id);
+    out.extend_from_slice(&block);
+    write_f64_values(&mut out, values);
+    Ok(out)
+}
+
 fn point_count(values: &[f64], n_comp: usize) -> usize {
     values.len() / n_comp
 }

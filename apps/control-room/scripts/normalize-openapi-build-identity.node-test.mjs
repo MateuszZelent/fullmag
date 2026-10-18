@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   normalizeOpenApiBuildIdentity,
+  validateDockerOpenApiReceipt,
   validateManagedOpenApiIdentity,
   validateNativeOpenApiReceipt,
 } from "./normalize-openapi-build-identity.mjs";
@@ -94,6 +95,63 @@ function nativeReceipt() {
   };
 }
 
+function dockerEvidence(worktreeState = "dirty") {
+  const document = nativeDocument(worktreeState);
+  const inputPath = "/tmp/fullmag-docker/stdout.raw.json";
+  const assemblyPath = "/tmp/fullmag-docker/assembly.json";
+  const packageRoot = "/tmp/fullmag-docker/package";
+  const backendBuildReceiptPath = `${packageRoot}/backend-build-receipt.json`;
+  const imageId = `sha256:${"1".repeat(64)}`;
+  const apiBinarySha256 = "c".repeat(64);
+  const backendBuildReceiptSha256 = "d".repeat(64);
+  const assembly = {
+    schema: "fullmag.docker-all-image.v1",
+    state: "succeeded",
+    exit_code: 0,
+    commit: "a".repeat(40),
+    source_snapshot_sha256: "b".repeat(64),
+    source_digest: "e".repeat(64),
+    image_id: imageId,
+    package_root: packageRoot,
+    backend_build_receipt: backendBuildReceiptPath,
+    build_receipt_sha256: backendBuildReceiptSha256,
+    binary_hashes: { "fullmag-api": apiBinarySha256 },
+    native_source_identity: {
+      schema: "fullmag.source-snapshot.v2",
+      head_commit_full: "a".repeat(40),
+      source_snapshot_sha256: "b".repeat(64),
+      source_snapshot_dirty: worktreeState === "dirty",
+    },
+  };
+  const proof = {
+    schema: "fullmag.direct-package-openapi-export.v1",
+    state: "succeeded",
+    exit_code: 0,
+    assembly: assemblyPath,
+    input: inputPath,
+    commit: "a".repeat(40),
+    snapshot: "b".repeat(64),
+    source_digest: "e".repeat(64),
+    image_id: imageId,
+    binary_sha256: apiBinarySha256,
+    stdout_sha256: "f".repeat(64),
+  };
+  const expected = {
+    expectedCommit: "a".repeat(40),
+    expectedSnapshot: "b".repeat(64),
+    expectedSourceDigest: "e".repeat(64),
+    inputSha256: "f".repeat(64),
+    inputByteLength: 123,
+    inputPath,
+    assemblyPath,
+    packageRoot,
+    backendBuildReceiptPath,
+    apiBinarySha256,
+    backendBuildReceiptSha256,
+  };
+  return { document, assembly, proof, expected };
+}
+
 test("accepts only the exact clean managed source identity before normalization", () => {
   const document = managedDocument();
   validateManagedOpenApiIdentity(document, "a".repeat(40), "b".repeat(64));
@@ -158,5 +216,36 @@ test("native receipt requires nonempty checks and waited positive-pid process ev
     assert.throws(() => validateNativeOpenApiReceipt(
       nativeDocument(), receipt, "a".repeat(40), "b".repeat(64), "f".repeat(64),
     ));
+  }
+});
+
+test("Docker receipt binds source, image, package hashes and successful terminal evidence", () => {
+  for (const state of ["clean", "dirty"]) {
+    const evidence = dockerEvidence(state);
+    validateDockerOpenApiReceipt(
+      evidence.document,
+      evidence.assembly,
+      evidence.proof,
+      evidence.expected,
+    );
+  }
+
+  for (const mutate of [
+    (evidence) => { evidence.assembly.image_id = `sha256:${"2".repeat(64)}`; },
+    (evidence) => { evidence.assembly.binary_hashes["fullmag-api"] = "2".repeat(64); },
+    (evidence) => { evidence.proof.exit_code = 1; },
+    (evidence) => { evidence.assembly.native_source_identity.source_snapshot_dirty = false; },
+  ]) {
+    const evidence = dockerEvidence();
+    mutate(evidence);
+    assert.throws(
+      () => validateDockerOpenApiReceipt(
+        evidence.document,
+        evidence.assembly,
+        evidence.proof,
+        evidence.expected,
+      ),
+      /Docker (assembly|export proof)/,
+    );
   }
 });

@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object zeeman
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,7 +54,7 @@ fm.Zeeman(B)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```fm.Zeeman.B``` | ```tuple[float,float,float]``` | ```required``` | ```T``` | finite three-vector | applied magnetic induction | FEM/FDM CPU/GPU: IR; resolved support required | ```B``` |
+| `fm.Zeeman.B` | `tuple[float,float,float]` | `required` | `T` | finite three-vector | applied magnetic induction | FEM/FDM CPU/GPU: IR; resolved support required | `B` |
 
 ### Stage-first example
 

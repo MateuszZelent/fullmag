@@ -1424,6 +1424,7 @@ describe("study runtime command resource bundles", () => {
         request_scope_epoch: "api-instance:session-current",
         run_id: "run-current",
         runtime_state: "running",
+        request_scope_epoch: "test-api:session-current",
         session_epoch: "epoch-current",
         session_id: "session-current",
         stage_statuses: [],
@@ -1453,6 +1454,16 @@ describe("study runtime command resource bundles", () => {
         ),
       ).toBe(false);
       const noRunIdentity = { ...identity, runId: null };
+      // Current API resources require a run ID. Construct the legacy runtime
+      // payload explicitly to retain the comparator's exact-null regression.
+      const legacyNoRunExecution = { ...execution };
+      Object.defineProperty(legacyNoRunExecution, "run_id", { value: null });
+      expect(
+        stageExecutionMatchesSessionIdentity(legacyNoRunExecution, noRunIdentity),
+      ).toBe(true);
+      expect(
+        stageExecutionMatchesSessionIdentity(null, noRunIdentity),
+      ).toBe(false);
       expect(
         stageExecutionMatchesSessionIdentity(execution, noRunIdentity),
       ).toBe(false);

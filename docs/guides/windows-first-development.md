@@ -67,8 +67,8 @@ just windows-ui static 3197 false
 just windows-ui dev 3197 true
 ```
 
-Backend kompiluje się na żądanie: kliknij **Build backend** w workspace
-albo użyj polecenia:
+Backend kompiluje się przy przygotowaniu brakującego lub nieaktualnego pakietu
+przed startem albo na jawne polecenie CLI:
 
 ```powershell
 just windows-workspace-build dev dev 3197 auto
@@ -86,15 +86,16 @@ Zmiany produkcyjnego `src/` i zależności nadal wymagają właściwego buildu o
 bezpiecznego zamknięcia używanego środowiska. Szczegóły: [P8-55](../plans/active/refactor_runtime/final/p8/55-python-test-runtime-input-classification.md).
 
 Build nie restartuje działającego backendu ani symulacji. Powstaje nowy
-pakiet do późniejszego zastosowania; kontrolowany restart z odtworzeniem
-workspace pozostaje osobną bramką P8-53. Pełny log kompilatora trafia do
+pakiet do późniejszego zastosowania. Panel **Development backend**, przycisk
+**Build backend** oraz restart z UI usunięto decyzją z 14.10.2026. Zapisz projekt
+przed zamknięciem workspace i ponownym uruchomieniem z nowym pakietem. Pełny log kompilatora trafia do
 `logs/native-build-<id>.log` w rozwiązywanym katalogu buildu; jego ścieżkę
 zapisuje `build-status.json`, również gdy kompilacja się nie powiedzie.
 
 Ta decyzja z 05.10.2026 zastępuje automatyczny watcher i ustawienie
 `FULLMAG_BACKEND_DEV_DEBOUNCE_SECONDS`. Już działający starszy proces
 zachowuje stare zachowanie do zamknięcia i ponownego uruchomienia workspace.
-Aktualne dowody wdrożenia znajdują się w
+Historia dowodów buildu z utrwalonej kopii źródeł znajduje się w
 [P8-54](../plans/active/refactor_runtime/final/p8/54-manual-native-build-snapshot.md).
 
 Odpowiednik bezpośredni w PowerShell:

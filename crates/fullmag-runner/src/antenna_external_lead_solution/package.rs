@@ -84,7 +84,14 @@ pub fn load_antenna_inspection_package_for_execution_plan(
         .ok_or_else(|| RunError {
             message: "inspection input has no conservative source".into(),
         })?;
-    let fullmag_ir::ConservativeCurrentSourceIR::ExternalLeadCurrent { revision, .. } = source;
+    let revision = match source {
+        fullmag_ir::ConservativeCurrentSourceIR::ExternalLeadCurrent { revision, .. } => revision,
+        fullmag_ir::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(_) => {
+            return Err(RunError {
+                message: "inspection package requires an external-lead current source; closed geometry uses its own solution owner".into(),
+            });
+        }
+    };
     require(
         manifest.input_pins == input.pins
             && manifest.requested_execution == inspection.requested_execution

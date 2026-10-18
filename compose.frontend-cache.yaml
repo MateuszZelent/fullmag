@@ -1,0 +1,86 @@
+# Overlay for the persistent frontend-cache-v1 mount.
+# The runtime prepares the maintenance service before starting the dev stack.
+services:
+  frontend:
+    # The overlay is validated as a standalone Compose document before it is
+    # merged with compose.dev.yaml, so pin the already-attested image here too.
+    image: "${FULLMAG_FRONTEND_CACHE_RUNTIME_IMAGE_ID:?Attested image identity is required}"
+    pull_policy: never
+    labels:
+      com.fullmag.frontend-cache.profile: "${FULLMAG_FRONTEND_CACHE_PROFILE:?Resolve frontend-cache-v1 first}"
+      com.fullmag.frontend-cache.key: "${FULLMAG_FRONTEND_CACHE_KEY:?Resolved cache key is required}"
+    environment:
+      FULLMAG_FRONTEND_CACHE_SCHEMA: "${FULLMAG_FRONTEND_CACHE_SCHEMA:?Resolve frontend-cache-v1 first}"
+      FULLMAG_FRONTEND_CACHE_PROFILE: "${FULLMAG_FRONTEND_CACHE_PROFILE:?Resolve frontend-cache-v1 first}"
+      FULLMAG_FRONTEND_CACHE_PROJECT_ID: "${FULLMAG_FRONTEND_CACHE_PROJECT_ID:?Resolved cache project id is required}"
+      FULLMAG_FRONTEND_CACHE_KEY: "${FULLMAG_FRONTEND_CACHE_KEY:?Resolved cache key is required}"
+      # The preparation config is rendered before the first mount receipt;
+      # fullmag_docker_runtime supplies the attested UUID for the final config.
+      FULLMAG_FRONTEND_CACHE_FILESYSTEM_UUID: "${FULLMAG_FRONTEND_CACHE_FILESYSTEM_UUID:-pending}"
+      FULLMAG_FRONTEND_CACHE_RUNTIME_IMAGE_ID: "${FULLMAG_FRONTEND_CACHE_RUNTIME_IMAGE_ID:?Attested image identity is required}"
+    volumes:
+      - type: bind
+        source: "${FULLMAG_FRONTEND_CACHE_CACHE_SOURCE:?Resolved cache source is required}"
+        target: /state/development/cache
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${FULLMAG_FRONTEND_CACHE_PNPM_STORE_SOURCE:?Resolved pnpm store source is required}"
+        target: /state/development/pnpm-store
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${FULLMAG_FRONTEND_CACHE_WORKSPACE_NODE_MODULES_SOURCE:?Resolved workspace node_modules source is required}"
+        target: /state/development/workspace/node_modules
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${FULLMAG_FRONTEND_CACHE_CONTROL_ROOM_NODE_MODULES_SOURCE:?Resolved control-room node_modules source is required}"
+        target: /state/development/workspace/apps/control-room/node_modules
+        read_only: false
+        bind: {create_host_path: false}
+
+  frontend-cache-maintenance:
+    image: "${FULLMAG_FRONTEND_CACHE_HELPER_IMAGE:?Use the attested application image containing bash and nsenter}"
+    profiles: [fullmag-frontend-cache-maintenance-v1]
+    user: "0:0"
+    privileged: true
+    pid: host
+    network_mode: none
+    restart: "no"
+    read_only: true
+    entrypoint: ["/bin/bash", "/usr/local/sbin/docker_frontend_cache.sh"]
+    command: ["ensure"]
+    environment:
+      FULLMAG_FRONTEND_CACHE_PROFILE: "${FULLMAG_FRONTEND_CACHE_PROFILE:?Resolve frontend-cache-v1 first}"
+      FULLMAG_FRONTEND_CACHE_PROJECT_ID: "${FULLMAG_FRONTEND_CACHE_PROJECT_ID:?Resolved cache project id is required}"
+      FULLMAG_FRONTEND_CACHE_KEY: "${FULLMAG_FRONTEND_CACHE_KEY:?Resolved cache key is required}"
+      FULLMAG_FRONTEND_CACHE_STORAGE_ROOT: "${FULLMAG_FRONTEND_CACHE_STORAGE_ROOT:?Resolved storage root is required}"
+      FULLMAG_FRONTEND_CACHE_BACKING_IMAGE: "${FULLMAG_FRONTEND_CACHE_BACKING_IMAGE:?Resolved backing image is required}"
+      FULLMAG_FRONTEND_CACHE_MOUNT_ROOT: "${FULLMAG_FRONTEND_CACHE_MOUNT_ROOT:?Resolved mount root is required}"
+      FULLMAG_FRONTEND_CACHE_LOCK_PATH: "${FULLMAG_FRONTEND_CACHE_LOCK_PATH:?Resolved lock path is required}"
+      FULLMAG_FRONTEND_CACHE_OWNER_MARKER: "${FULLMAG_FRONTEND_CACHE_OWNER_MARKER:?Resolved owner marker is required}"
+      FULLMAG_FRONTEND_CACHE_SIZE_BYTES: "${FULLMAG_FRONTEND_CACHE_SIZE_BYTES:?Resolved image size is required}"
+      FULLMAG_FRONTEND_CACHE_MOUNT_TARGET: "${FULLMAG_FRONTEND_CACHE_MOUNT_TARGET:?Resolved mount target is required}"
+      FULLMAG_FRONTEND_CACHE_RUNTIME_IMAGE_ID: "${FULLMAG_FRONTEND_CACHE_RUNTIME_IMAGE_ID:?Attested image identity is required}"
+      FULLMAG_FRONTEND_CACHE_HELPER_PATH: "${FULLMAG_FRONTEND_CACHE_HELPER_PATH:?Bind the versioned helper read-only}"
+      FULLMAG_FRONTEND_CACHE_HOST_PID: "${FULLMAG_FRONTEND_CACHE_HOST_PID:-1}"
+      FULLMAG_FRONTEND_CACHE_UID: "${FULLMAG_FRONTEND_CACHE_UID:-65532}"
+      FULLMAG_FRONTEND_CACHE_GID: "${FULLMAG_FRONTEND_CACHE_GID:-65532}"
+      FULLMAG_FRONTEND_CACHE_LOCK_WAIT_SECONDS: "${FULLMAG_FRONTEND_CACHE_LOCK_WAIT_SECONDS:-120}"
+    volumes:
+      - type: bind
+        source: "${FULLMAG_FRONTEND_CACHE_HELPER_PATH:?Bind the versioned helper read-only}"
+        target: /usr/local/sbin/docker_frontend_cache.sh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${FULLMAG_FRONTEND_CACHE_STORAGE_ROOT:?Resolved storage root is required}"
+        target: "${FULLMAG_FRONTEND_CACHE_STORAGE_ROOT:?Resolved storage root is required}"
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${FULLMAG_FRONTEND_CACHE_MOUNT_ROOT:?Resolved mount root is required}"
+        target: "${FULLMAG_FRONTEND_CACHE_MOUNT_ROOT:?Resolved mount root is required}"
+        read_only: false
+        bind: {create_host_path: true}

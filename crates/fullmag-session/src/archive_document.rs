@@ -86,6 +86,20 @@ impl<'a> ArchiveDocuments<'a> {
         }
     }
 
+    /// Inventory identity without loading a numerical payload into memory.
+    pub fn identity(&self, path: &str) -> Option<ArchiveFileSnapshot> {
+        match self {
+            Self::Memory(documents) => documents
+                .get(path)
+                .map(|data| ArchiveFileSnapshot::from_bytes(data)),
+            Self::Files { snapshots, .. } => snapshots.get(path).cloned(),
+            Self::FilesWithInline { snapshots, inline, .. } => inline
+                .get(path)
+                .map(|data| ArchiveFileSnapshot::from_bytes(data))
+                .or_else(|| snapshots.get(path).cloned()),
+        }
+    }
+
     /// The caller's explicit typed role determines whether bytes are parsed.
     /// Filename extensions do not activate a structural JSON interpretation.
     pub fn read(&self, path: &str) -> Result<Option<Cow<'a, [u8]>>> {

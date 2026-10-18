@@ -277,12 +277,11 @@ planned combination to implemented status.
 
 ## Control Room crosswalk
 
-No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
 
 ## Python/API crosswalk
 
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
-ot applicable here and must be taken from the terminal API page.
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
 
 ## Bibliography and source scope
 
@@ -293,8 +292,8 @@ Use the scientific bibliography and source-code index on the linked terminal pag
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
 | Periodic Python contract | `packages/fullmag-py/src/fullmag/model/study.py` | `PeriodicBC` |
-| Stage-first declaration | `packages/fullmag-py/src/fullmag/world.py` | `study` |
-| FDM neighbor policy | `crates/fullmag-engine/src/fdm/shared/types.rs` | `neighbor_index` |
-| FEM periodic reduction | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` | `apply_periodic_consistent_mass_component` |
-| FEM interfacial DMI boundary field | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp` | `compute_interfacial_dmi_field` |
-| FEM demag closure | `backends/fem/cpu/mfem/interactions/demag.hpp` | `compute_demag_field_for_magnetization` |
+| Stage-first declaration | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) |
+| FDM neighbor policy | [`crates/fullmag-engine/src/fdm/shared/types.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/shared/types.rs#L262) | [`neighbor_index`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/shared/types.rs#L262) |
+| FEM periodic reduction | [`backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L38) | [`apply_periodic_consistent_mass_component`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp#L38) |
+| FEM interfacial DMI boundary field | [`backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) | [`compute_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) |
+| FEM demag closure | [`backends/fem/cpu/mfem/interactions/demag.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.hpp#L135) | [`compute_demag_field_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.hpp#L135) |

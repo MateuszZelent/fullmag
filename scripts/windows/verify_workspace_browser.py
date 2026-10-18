@@ -42,6 +42,8 @@ READY_SCHEMA = "fullmag.development-browser-native-ready.v1"
 RESULT_SCHEMA = "fullmag.development-browser-native-result.v1"
 API_LOG_SCHEMA = "fullmag.development-browser-api-log.v1"
 SCRATCH_CHILD_SCHEMA = "fullmag.development-browser-scratch-child.v1"
+RESTORED_SCHEMA_V1 = "fullmag.development-browser-native-restored.v1"
+RESTORED_SCHEMA_V2 = "fullmag.development-browser-native-restored.v2"
 SCRATCH_COMMAND_KINDS = frozenset({"fdm_grid_refresh", "remesh", "run", "relax", "solve"})
 COMPUTE_CHILD_KINDS = frozenset({"run", "relax", "solve"})
 EXECUTION_SCOPE_KEYS = ("api_instance_id", "session_id", "backend_session_epoch", "request_scope_epoch")
@@ -257,6 +259,60 @@ def terminal_record(value):
     return dict(value)
 
 
+def validate_restored_frame(frame, expected, before, source_api_pid=None):
+    """Validate custody metadata; v2 additionally binds the consumed request.
+
+    This does not replace HTTP scene/camera hydration or terminal process
+    verification. Legacy v1 carries no request identity and cannot qualify it.
+    """
+    fields = {"schema", "nonce", "new_api_instance_id", "api_pid",
+              "old_api_exit_code", "helper_processes"}
+    if not isinstance(frame, dict) or frame.get("schema") not in {RESTORED_SCHEMA_V1, RESTORED_SCHEMA_V2}:
+        raise storage.StorageError("Native browser restore has an unsupported schema")
+    v2 = frame["schema"] == RESTORED_SCHEMA_V2
+    if v2:
+        fields |= {"request_id", "generation_id", "old_api_instance_id", "old_api_pid"}
+    if (set(frame) != fields or frame.get("nonce") != expected.get("nonce")
+            or not valid_uuid(frame.get("new_api_instance_id"))
+            or not isinstance(before, dict)
+            or frame["new_api_instance_id"] == before.get("api_instance_id")
+            or type(frame.get("api_pid")) is not int or frame["api_pid"] <= 0
+            or type(frame.get("old_api_exit_code")) is not int):
+        raise storage.StorageError("Native browser restore has invalid custody or scope")
+    helpers = frame["helper_processes"]
+    if not isinstance(helpers, list) or not helpers:
+        raise storage.StorageError("Native browser restore lacks helper custody")
+    seen = set()
+    for helper in helpers:
+        record = terminal_record(helper)
+        if (record["pid"] in seen or record["pid"] == frame["api_pid"]
+                or (source_api_pid is not None and record["pid"] == source_api_pid)):
+            raise storage.StorageError("Native browser restore duplicated process custody")
+        seen.add(record["pid"])
+    if v2 and (not valid_uuid(frame["request_id"])
+            or not valid_uuid(frame["old_api_instance_id"])
+            or frame["old_api_instance_id"] != before.get("api_instance_id")
+            or not isinstance(frame["generation_id"], str)
+            or not BUNDLE_ID_RE.fullmatch(frame["generation_id"])
+            or frame["generation_id"] != expected.get("generation_id")
+            or type(source_api_pid) is not int or source_api_pid <= 0
+            or type(frame["old_api_pid"]) is not int
+            or frame["old_api_pid"] != source_api_pid
+            or frame["old_api_pid"] == frame["api_pid"]):
+        raise storage.StorageError("Native browser restore differs from the consumed request scope")
+    return copy.deepcopy(frame)
+
+
+def restore_protocol_scope(validated_frame):
+    """Classify an already validated frame without promoting legacy proof."""
+    schema = validated_frame.get("schema")
+    if schema not in {RESTORED_SCHEMA_V1, RESTORED_SCHEMA_V2}:
+        raise storage.StorageError("Restore protocol scope has an unsupported schema")
+    return {"schema": schema, "authenticated_request_binding": schema == RESTORED_SCHEMA_V2,
+            "qualification": "authenticated_v2" if schema == RESTORED_SCHEMA_V2
+            else "legacy_v1_without_request_identity"}
+
+
 def read_api(port, pin, path):
     request = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
                                      headers={"x-fullmag-api-instance": pin})
@@ -267,52 +323,46 @@ def read_api(port, pin, path):
         return json.loads(raw)
 
 
-def read_session_scope(api_port, api_instance_id, identity):
-    status = read_api(api_port, api_instance_id, "/v2/sessions/current/status")
-    session = status.get("session")
-    if (not isinstance(session, dict)
-            or session.get("session_id") != identity.get("session_id")
-            or not isinstance(session.get("session_epoch"), str)
-            or not session["session_epoch"]
-            or type(identity.get("session_epoch")) is not int
-            or identity["session_epoch"] < 0
-            or session.get("request_scope_epoch") != f"{api_instance_id}:{identity['session_epoch']}"):
-        raise storage.StorageError("Session resource scope is not bound to the actual API owner")
-    return {"session_resource_epoch": session["session_epoch"],
-            "request_scope_epoch": session["request_scope_epoch"]}
-
-
 def read_execution_scope(api_port, api_instance_id):
     """Read the actual pinned API/session identity used by execution resources."""
     if not valid_uuid(api_instance_id):
         raise storage.StorageError("Execution observation has no canonical API pin")
-    backend = read_api(api_port, api_instance_id, "/v2/platform/development-backend")
-    identity = backend.get("workspace_identity")
-    if (not isinstance(identity, dict)
-            or identity.get("api_instance_id") != api_instance_id
-            or not isinstance(identity.get("session_id"), str)
-            or not identity["session_id"].strip()
-            or type(identity.get("session_epoch")) is not int
-            or identity["session_epoch"] < 0):
-        raise storage.StorageError("Execution API has no exact workspace identity")
     status = read_api(api_port, api_instance_id, "/v2/sessions/current/status")
     session = status.get("session")
-    session_id = identity["session_id"]
+    session_id = session.get("session_id") if isinstance(session, dict) else None
+    session_resource_epoch = session.get("session_epoch") if isinstance(session, dict) else None
+    request_scope_epoch = session.get("request_scope_epoch") if isinstance(session, dict) else None
+    prefix = api_instance_id + ":"
+    request_counter = request_scope_epoch[len(prefix):] if isinstance(request_scope_epoch, str) \
+        and request_scope_epoch.startswith(prefix) else None
     if (not isinstance(session, dict)
-            or session.get("session_id") != session_id
-            or not isinstance(session.get("session_epoch"), str)
-            or not session["session_epoch"].startswith(session_id + "@")
-            or not session["session_epoch"][len(session_id) + 1:]
-            or session.get("request_scope_epoch") != f"{api_instance_id}:{identity['session_epoch']}"):
+            or not isinstance(session_id, str) or not session_id.strip()
+            or not isinstance(session_resource_epoch, str) or not session_resource_epoch
+            or not isinstance(request_scope_epoch, str)
+            or request_counter is None
+            or not re.fullmatch(r"(?:0|[1-9][0-9]*)", request_counter)):
+        raise storage.StorageError("Execution API has no exact workspace identity")
+    backend_session_epoch = int(request_counter)
+    parse_session_resource_epoch(session_id, session_resource_epoch)
+    if request_scope_epoch != f"{api_instance_id}:{backend_session_epoch}":
         raise storage.StorageError("Execution status is not bound to the observed API/session transition")
-    parse_session_resource_epoch(session_id, session["session_epoch"])
     return {
         "api_instance_id": api_instance_id,
         "session_id": session_id,
-        "backend_session_epoch": identity["session_epoch"],
-        "session_resource_epoch": session["session_epoch"],
-        "request_scope_epoch": session["request_scope_epoch"],
+        "backend_session_epoch": backend_session_epoch,
+        "session_resource_epoch": session_resource_epoch,
+        "request_scope_epoch": request_scope_epoch,
     }
+
+
+def read_session_identity(api_port, api_instance_id):
+    scope = read_execution_scope(api_port, api_instance_id)
+    identity = {"api_instance_id": scope["api_instance_id"],
+                "session_id": scope["session_id"],
+                "session_epoch": scope["backend_session_epoch"]}
+    session_scope = {"session_resource_epoch": scope["session_resource_epoch"],
+                    "request_scope_epoch": scope["request_scope_epoch"]}
+    return identity, session_scope
 
 
 def read_admission_observation(api_port, api_instance_id):
@@ -963,13 +1013,7 @@ class ProofBridge:
         objects = scene.get("objects")
         if not isinstance(objects, list) or not objects:
             raise storage.StorageError("Browser proof requires a nonempty canonical scene")
-        backend = read_api(self.api_port, proof["api_instance_id"], "/v2/platform/development-backend")
-        identity = backend.get("workspace_identity")
-        if (not isinstance(identity, dict) or identity.get("api_instance_id") != proof["api_instance_id"]
-                or not isinstance(identity.get("session_id"), str)
-                or type(identity.get("session_epoch")) is not int):
-            raise storage.StorageError("Nonempty browser scene has no exact workspace identity")
-        session_scope = read_session_scope(self.api_port, proof["api_instance_id"], identity)
+        identity, session_scope = read_session_identity(self.api_port, proof["api_instance_id"])
         camera = camera_for_proof(read_api(
             self.api_port, proof["api_instance_id"], "/v2/sessions/current/visualization/state"
         ).get("camera"))
@@ -1009,15 +1053,12 @@ class ProofBridge:
         ).get("camera"))
         execution = self.execution()
         scene = read_api(self.api_port, body["new_api_instance_id"], "/v2/sessions/current/model/scene")
-        backend = read_api(self.api_port, body["new_api_instance_id"], "/v2/platform/development-backend")
-        identity = backend.get("workspace_identity", {})
+        identity, session_scope = read_session_identity(self.api_port, body["new_api_instance_id"])
         if (canonical(scene) != canonical(scene_after_successful_grid(before["scene"]))
-                or identity.get("api_instance_id") != body["new_api_instance_id"]
-                or not isinstance(identity.get("session_id"), str)
+                or identity["api_instance_id"] != body["new_api_instance_id"]
                 or identity["session_id"] == before["identity"]["session_id"]
-                or identity.get("session_epoch") != 1):
+                or identity["session_epoch"] != 1):
             raise storage.StorageError("Native restart changed the scene or failed to establish the fresh session")
-        session_scope = read_session_scope(self.api_port, body["new_api_instance_id"], identity)
         if (session_scope["request_scope_epoch"] == before["session_scope"]["request_scope_epoch"]
                 or session_scope["session_resource_epoch"] == before["session_scope"]["session_resource_epoch"]):
             raise storage.StorageError("Native restart reused the old session resource scope")
@@ -1254,7 +1295,7 @@ def start_frontend(repo, native, fixture, manifest, bridge_url, api_port, receip
     next_cli = dependencies / "next/dist/bin/next"
     if not node or not next_cli.is_file():
         raise storage.StorageError("Browser proof needs existing verified Node/Next dependencies")
-    for required in ("typescript/bin/tsc", "@types/node/index.d.ts", "@types/react/index.d.ts"):
+    for required in ("typescript-native/bin/tsc", "@types/node/index.d.ts", "@types/react/index.d.ts"):
         if not (dependencies / required).is_file():
             raise storage.StorageError(f"Frozen frontend dependencies are incomplete: {required}; no automatic install")
     page, diagnostic = stage_diagnostic_page(repo, app, fixture)
@@ -1323,7 +1364,7 @@ def check_frontend_sources(fixture, receipt):
         time.sleep(0.1)
     node = shutil.which("node")
     commands = [
-        ("typecheck", [node, str(dependencies / "typescript/bin/tsc"), "--noEmit", "--project", str(config)]),
+        ("typecheck", [node, str(dependencies / "typescript-native/bin/tsc"), "--noEmit", "--project", str(config)]),
         ("lint", [node, str(dependencies / "eslint/bin/eslint.js"), "--no-cache", staged["test_route"]]),
     ]
     checks = receipt.setdefault("workspace_browser_source_checks", [])
@@ -1456,12 +1497,14 @@ def exercise(repo, run_root, manifest, receipt, binaries, owner_bundle):
                             + validated["api_instance_id"])
                         print(canonical({"event": "browser-ready", "url": receipt["workspace_browser_url"],
                                          "receipt": str(run_root / "receipt.json")}), flush=True)
-                elif schema == "fullmag.development-browser-native-restored.v1":
-                    if (frame.get("nonce") != expected["nonce"]
-                            or not valid_uuid(frame.get("new_api_instance_id"))
-                            or type(frame.get("api_pid")) is not int or frame["api_pid"] <= 0
-                            or type(frame.get("old_api_exit_code")) is not int):
-                        raise storage.StorageError("Native browser restore has invalid custody or scope")
+                elif schema in {RESTORED_SCHEMA_V1, RESTORED_SCHEMA_V2}:
+                    with bridge.lock:
+                        before = copy.deepcopy(bridge.before)
+                    source_pids = {log["pid"] for log in receipt.get("workspace_browser_api_logs", [])
+                                   if before is not None and log["api_instance_id"] == before.get("api_instance_id")}
+                    source_pid = next(iter(source_pids)) if len(source_pids) == 1 else None
+                    frame = validate_restored_frame(frame, expected, before, source_pid)
+                    receipt["workspace_browser_restore_protocol"] = restore_protocol_scope(frame)
                     with bridge.lock:
                         bridge.restored = dict(frame)
                         bridge.ready = None
@@ -1533,6 +1576,8 @@ def exercise(repo, run_root, manifest, receipt, binaries, owner_bundle):
                 or result["new_api_pid"] == result["old_api_pid"]):
             raise storage.StorageError("Native custody and actual browser hydration did not both pass")
         receipt["workspace_browser_hydration"] = bridge.browser
+        if receipt.get("workspace_browser_restore_protocol", {}).get("authenticated_request_binding") is True:
+            receipt["checks"].append("browser-authenticated-v2-request-and-source-custody")
         receipt["checks"].extend(["browser-private-native-readiness", "browser-nonempty-scene-captured",
                                    "browser-exact-scene-restored", "browser-fresh-session-and-api-pin",
                                    "browser-unsaved-document-restored", "browser-native-processes-waited",

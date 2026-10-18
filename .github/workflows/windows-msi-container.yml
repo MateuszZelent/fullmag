@@ -12,21 +12,6 @@ on:
         description: Include CUDA FDM; required for FEM gpu
         type: boolean
         default: false
-  push:
-    branches: [master, main]
-    paths:
-      - "apps/desktop/**"
-      - "crates/**"
-      - "native/**"
-      - "backends/**"
-      - "packages/**"
-      - "scripts/windows/**"
-      - "docker/windows-msi/**"
-      - ".github/workflows/windows-msi-container.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "pnpm-lock.yaml"
-
 jobs:
   build-windows-msi:
     runs-on: [self-hosted, windows, x64, fullmag-native-msvc-wix]

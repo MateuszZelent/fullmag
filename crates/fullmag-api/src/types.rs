@@ -119,9 +119,11 @@ pub(crate) struct AppState {
     pub development_backend:
         crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig,
     pub development_restart_transport:
-        crate::router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig,
+        crate::router_v2::handlers::platform::development_transport::DevelopmentRestartTransportConfig,
     pub development_consumer_readiness:
         crate::development_consumer_readiness::DevelopmentConsumerReadiness,
+    /// Short-lived desktop-app capability used only for local NodePolicy writes.
+    pub local_compute_operator_token: Option<Arc<str>>,
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,
@@ -1023,6 +1025,10 @@ impl LatestFields {
 
     pub(crate) fn insert(&mut self, quantity: String, value: Value) {
         self.0.insert(quantity, value);
+    }
+
+    pub(crate) fn remove(&mut self, quantity: &str) {
+        self.0.remove(quantity);
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {

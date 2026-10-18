@@ -137,6 +137,8 @@ pub struct AntennaSourceSpectrumSummary {
 /// large FFT array on the control plane.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AntennaSourceSpectrumManifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equilibrium_binding: Option<crate::AntennaEquilibriumBinding>,
     pub schema_version: String,
     pub request_id: String,
     pub output_id: String,
@@ -152,6 +154,8 @@ pub struct AntennaSourceSpectrumManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AntennaSourceSpectrumArtifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equilibrium_binding: Option<crate::AntennaEquilibriumBinding>,
     pub schema_version: String,
     pub request_id: String,
     pub output_id: String,
@@ -384,7 +388,7 @@ impl FieldTetraBvh {
         Self::build_interruptible(positions, cells, margin, None)
     }
 
-    fn build_interruptible(
+    pub(crate) fn build_interruptible(
         positions: &[[f64; 3]],
         cells: &[[u32; 4]],
         margin: f64,
@@ -886,7 +890,45 @@ pub fn compute_antenna_source_spectrum_artifact_interruptible(
             "antenna source-spectrum cannot publish ignored equilibrium or mode-basis references",
         ));
     }
+    compute_spectrum_artifact(request, samples, equilibrium_samples, None, interrupt_requested)
+}
+
+/// Publish transverse data only with authority issued by the canonical reader.
+pub fn compute_antenna_source_spectrum_with_equilibrium(
+    request: &AntennaSpectrumRequestIR,
+    samples: &AntennaFieldSolutionSamples,
+    equilibrium: &crate::VerifiedAntennaEquilibriumContext,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<AntennaSourceSpectrumArtifact, RunError> {
+    if request.component != "transverse" || !request.equilibrium_ref.as_ref().is_some_and(|reference| equilibrium.authorizes(reference)) || request.mode_basis_ref.is_some() {
+        return Err(error("verified equilibrium is executable only for declared transverse source spectrum"));
+    }
+    compute_spectrum_artifact(request, samples, None, Some(equilibrium), interrupt_requested)
+}
+
+fn compute_spectrum_artifact(
+    request: &AntennaSpectrumRequestIR, samples: &AntennaFieldSolutionSamples,
+    equilibrium_samples: Option<&[[f64; 3]]>,
+    equilibrium: Option<&crate::VerifiedAntennaEquilibriumContext>,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<AntennaSourceSpectrumArtifact, RunError> {
     let sampled = sample_antenna_field_on_plane_interruptible(request, samples, interrupt_requested)?;
+    let projected = if let Some(context) = equilibrium {
+        let carrier = samples.sample_carrier.as_ref().ok_or_else(|| error("transverse analysis requires explicit immutable source carrier metadata"))?;
+        if carrier.location != "node" || !carrier.carrier_kind.starts_with("fem_mesh_asset:")
+            || !(matches!(carrier.domain, fullmag_ir::FieldTargetIR::Global {}) || carrier.domain == request.target) {
+            return Err(error("transverse source carrier does not cover the authored target"));
+        }
+        let spacing_u = request.sampling_plane.extent_u_m / (request.sampling_plane.sample_count_u - 1) as f64;
+        let spacing_v = request.sampling_plane.extent_v_m / (request.sampling_plane.sample_count_v - 1) as f64;
+        let (vectors, mut binding) = context.sample(&request.target, &sampled.positions_xyz_m,
+            coordinate_tolerance(request, spacing_u, spacing_v)?, interrupt_requested)?;
+        binding.source_solution_ref = request.solution_ref.published().cloned();
+        binding.source_carrier_sha256 = sha256_bytes(&serde_json::to_vec(carrier).map_err(|cause| error(cause.to_string()))?);
+        Some((vectors, binding))
+    } else { None };
+    let equilibrium_samples = projected.as_ref().map(|(vectors, _)| vectors.as_slice()).or(equilibrium_samples);
+
     let spectrum = match request.transform {
         AntennaSpectrumTransformIR::SpatialFft => compute_structured_antenna_source_spectrum_interruptible(
             request,
@@ -943,7 +985,8 @@ pub fn compute_antenna_source_spectrum_artifact_interruptible(
         fourier_phase_convention: "centered_plane_origin_phase_corrected.v1".into(),
     };
     let mut artifact = AntennaSourceSpectrumArtifact {
-        schema_version: "antenna_source_spectrum_artifact.v2".into(),
+        equilibrium_binding: projected.map(|(_, binding)| binding),
+        schema_version: if equilibrium.is_some() { "antenna_source_spectrum_artifact.v3" } else { "antenna_source_spectrum_artifact.v2" }.into(),
         request_id: request.id.clone(),
         output_id: request.output_id.clone(),
         solution_id: samples.solution_id.clone(),
@@ -1070,7 +1113,8 @@ fn build_source_spectrum_manifest(
         wave_vector_unit: spectrum.wave_vector_unit.clone(),
     };
     let manifest = AntennaSourceSpectrumManifest {
-        schema_version: "antenna_source_spectrum_artifact.v2".into(),
+        equilibrium_binding: artifact.equilibrium_binding.clone(),
+        schema_version: artifact.schema_version.clone(),
         request_id: artifact.request_id.clone(),
         output_id: artifact.output_id.clone(),
         solution_id: artifact.solution_id.clone(),
@@ -1118,8 +1162,8 @@ pub fn antenna_source_spectrum_auxiliary_artifacts(
     })?;
     artifacts.push(AuxiliaryArtifact {
         relative_path: format!(
-            "antenna/source_spectra/{}/spectrum.v2.json",
-            artifact.output_id
+            "antenna/source_spectra/{}/{}",
+            artifact.output_id, spectrum_manifest_name(&artifact.schema_version)
         ),
         bytes,
     });
@@ -1139,7 +1183,7 @@ pub fn verify_antenna_source_spectrum_auxiliary_artifacts(
 ) -> Result<(), RunError> {
     let manifests = artifacts
         .iter()
-        .filter(|artifact| artifact.relative_path.ends_with("/spectrum.v2.json"))
+        .filter(|artifact| artifact.relative_path.ends_with("/spectrum.v2.json") || artifact.relative_path.ends_with("/spectrum.v3.json"))
         .collect::<Vec<_>>();
     if manifests.len() != 1 || artifacts.len() != 5 {
         return Err(error("antenna source-spectrum requires one manifest and four payloads"));
@@ -1158,9 +1202,9 @@ pub fn verify_antenna_source_spectrum_auxiliary_artifacts(
     canonical["content_digest"] = serde_json::Value::String(published_digest);
     let manifest: AntennaSourceSpectrumManifest = serde_json::from_value(canonical)
         .map_err(|cause| error(format!("validate antenna source-spectrum manifest: {cause}")))?;
-    if manifest.schema_version != "antenna_source_spectrum_artifact.v2"
+    if !matches!(manifest.schema_version.as_str(), "antenna_source_spectrum_artifact.v2" | "antenna_source_spectrum_artifact.v3")
         || manifests[0].relative_path
-            != format!("antenna/source_spectra/{}/spectrum.v2.json", manifest.output_id)
+            != format!("antenna/source_spectra/{}/{}", manifest.output_id, spectrum_manifest_name(&manifest.schema_version))
     {
         return Err(error("antenna source-spectrum manifest identity mismatch"));
     }
@@ -1202,8 +1246,20 @@ pub fn validate_antenna_source_spectrum_manifest_semantics(
     manifest: &AntennaSourceSpectrumManifest,
 ) -> Result<(), RunError> {
     let spectrum = &manifest.spectrum;
+    match (manifest.schema_version.as_str(), spectrum.component.as_str(), &manifest.equilibrium_binding) {
+        ("antenna_source_spectrum_artifact.v2", component, None) if component != "transverse" => {},
+        ("antenna_source_spectrum_artifact.v3", "transverse", Some(binding))
+            if binding.schema_version == "antenna_equilibrium_binding.v1"
+                && binding.target == manifest.sampling.target
+                && binding.normalization == "p1_direction_normalized.v1"
+                && binding.norm_floor == 1.0e-12
+                && binding.projection_version == "antenna_transverse_projection.v1"
+                && !binding.mapping_digest.is_empty() && !binding.source_carrier_sha256.is_empty() => {},
+        _ => return Err(error("source-spectrum equilibrium binding or version is incompatible")),
+    }
+
     let component_labels = match spectrum.component.as_str() {
-        "vector_power" => vec!["x", "y", "z"],
+        "vector_power" | "transverse" => vec!["x", "y", "z"],
         "x" | "y" | "z" | "u" | "v" | "normal" => vec![spectrum.component.as_str()],
         _ => return Err(error("antenna source-spectrum manifest component is unsupported")),
     };
@@ -1270,7 +1326,7 @@ pub fn validate_antenna_source_spectrum_manifest_semantics(
         manifest.sampling.sample_count_v as usize,
     )?;
     let base = format!("antenna/source_spectra/{}", manifest.output_id);
-    if manifest.schema_version != "antenna_source_spectrum_artifact.v2"
+    if !matches!(manifest.schema_version.as_str(), "antenna_source_spectrum_artifact.v2" | "antenna_source_spectrum_artifact.v3")
         || spectrum.schema_version != "antenna_source_spectrum.v1"
         || spectrum.k_u_count == 0
         || spectrum.k_v_count == 0
@@ -1305,6 +1361,79 @@ pub fn validate_antenna_source_spectrum_manifest_semantics(
     {
         return Err(error("antenna source-spectrum manifest shape or unit is incompatible"));
     }
+    Ok(())
+}
+
+fn spectrum_manifest_name(schema: &str) -> &'static str {
+    if schema == "antenna_source_spectrum_artifact.v3" { "spectrum.v3.json" } else { "spectrum.v2.json" }
+}
+
+/// Rebuild the owning receipt and exact ROI interpolation before exposing v3.
+pub fn verify_antenna_source_spectrum_equilibrium_binding(
+    root: &Path, manifest: &AntennaSourceSpectrumManifest,
+) -> Result<(), RunError> {
+    validate_antenna_source_spectrum_manifest_semantics(manifest)?;
+    let Some(binding) = &manifest.equilibrium_binding else { return Ok(()); };
+    let reference = fullmag_ir::EquilibriumRefIR::Reference(fullmag_ir::EquilibriumReferenceIR::Artifact {
+        asset_id: binding.asset_id.clone(), equilibrium_id: binding.equilibrium_id.clone(), content_digest: binding.content_digest.clone(),
+    });
+    let context = crate::load_verified_antenna_equilibrium(root, &reference)?;
+    let sampling = &manifest.sampling;
+    let count = (sampling.sample_count_u as usize).checked_mul(sampling.sample_count_v as usize)
+        .filter(|count| *count <= MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT).ok_or_else(|| error("equilibrium sample budget exceeded"))?;
+    if sampling.sample_count_u < 2 || sampling.sample_count_v < 2 { return Err(error("invalid equilibrium lattice")); }
+    let du = sampling.extent_u_m / (sampling.sample_count_u - 1) as f64;
+    let dv = sampling.extent_v_m / (sampling.sample_count_v - 1) as f64;
+    let scale = (0..3).map(|axis| sampling.origin_m[axis].abs() + 0.5 *
+        (sampling.extent_u_m * sampling.axis_u[axis].abs() + sampling.extent_v_m * sampling.axis_v[axis].abs())).fold(du.max(dv), f64::max);
+    let tolerance = (du.min(dv) * 1.0e-9).max(2.0 * f64::EPSILON * scale);
+    if 2.0 * tolerance >= du.min(dv) { return Err(error("unresolvable equilibrium lattice")); }
+    let mut positions = Vec::with_capacity(count);
+    for v in 0..sampling.sample_count_v { for u in 0..sampling.sample_count_u {
+        let cu = -0.5 * sampling.extent_u_m + u as f64 * du;
+        let cv = -0.5 * sampling.extent_v_m + v as f64 * dv;
+        positions.push(std::array::from_fn(|axis| sampling.origin_m[axis] + cu * sampling.axis_u[axis] + cv * sampling.axis_v[axis]));
+    }}
+    let (_, mut expected) = context.sample(&sampling.target, &positions, tolerance, None)?;
+    let source_ref = binding.source_solution_ref.as_ref().ok_or_else(|| error("transverse spectrum has no immutable source pin"))?;
+    if source_ref.output_id != manifest.solution_id || source_ref.content_digest != manifest.solution_content_digest {
+        return Err(error("transverse spectrum source pin mismatch"));
+    }
+    let asset = crate::load_published_antenna_field_solution_for_port(root, source_ref, &manifest.port_mode_id)?;
+    let samples = crate::load_antenna_field_solution_samples(&asset.manifest_bytes, &asset.payloads,
+        &manifest.port_mode_id, &manifest.solution_id, &manifest.source_object_id, &manifest.solution_content_digest)?;
+    // Reconstruct the canonical sampling request from the signed manifest.
+    // No physics or alternate field solve is introduced at this read boundary.
+    let request_value = serde_json::json!({
+        "id": manifest.request_id, "output_id": manifest.output_id,
+        "solution_ref": source_ref,
+        "port_mode_id": manifest.port_mode_id, "target": sampling.target,
+        "transform": sampling.transform, "window": sampling.window,
+        "normalization": manifest.spectrum.normalization, "component": "transverse",
+        "equilibrium_ref": reference,
+        "sampling_plane": {
+            "origin_m": sampling.origin_m, "axis_u": sampling.axis_u, "axis_v": sampling.axis_v,
+            "extent_u_m": sampling.extent_u_m, "extent_v_m": sampling.extent_v_m,
+            "sample_count_u": sampling.sample_count_u, "sample_count_v": sampling.sample_count_v,
+            "interpolation": sampling.interpolation, "outside_policy": sampling.outside_policy,
+        },
+    });
+    let request: AntennaSpectrumRequestIR = serde_json::from_value(request_value)
+        .map_err(|cause| error(format!("source sampling manifest adapter: {cause}")))?;
+    let sampled = sample_antenna_field_on_plane(&request, &samples)?;
+    if sampled.mapping_digest != sampling.mapping_digest || sampled.outside_count != sampling.outside_count
+        || samples.sample_positions_xyz_m.len() != sampling.source_sample_count {
+        return Err(error("source spectrum field-carrier mapping mismatch"));
+    }
+    let carrier = samples.sample_carrier.as_ref().ok_or_else(|| error("transverse spectrum source carrier is missing"))?;
+    if carrier.location != "node" || !carrier.carrier_kind.starts_with("fem_mesh_asset:")
+        || !(matches!(carrier.domain, fullmag_ir::FieldTargetIR::Global {}) || carrier.domain == sampling.target) {
+        return Err(error("transverse spectrum source carrier target mismatch"));
+    }
+    expected.source_solution_ref = Some(source_ref.clone());
+    expected.source_carrier_sha256 = sha256_bytes(&serde_json::to_vec(carrier).map_err(|cause| error(cause.to_string()))?);
+
+    if expected != *binding { return Err(error("source spectrum owning equilibrium binding mismatch")); }
     Ok(())
 }
 
@@ -1422,7 +1551,7 @@ pub fn reusable_antenna_source_spectrum_output(
     let sample_count = k_u.len().checked_mul(k_v.len())
         .ok_or_else(|| error("cached antenna spectrum grid size overflows"))?;
     let component_labels = match request.component.as_str() {
-        "vector_power" => vec!["x", "y", "z"],
+        "vector_power" | "transverse" => vec!["x", "y", "z"],
         "x" | "y" | "z" | "u" | "v" | "normal" => vec![request.component.as_str()],
         _ => return Err(error("cached antenna spectrum component is unsupported")),
     };
@@ -1518,7 +1647,7 @@ pub fn antenna_source_spectrum_auxiliary_artifact(
 ) -> Result<AuxiliaryArtifact, RunError> {
     antenna_source_spectrum_auxiliary_artifacts(artifact)?
         .into_iter()
-        .find(|entry| entry.relative_path.ends_with("/spectrum.v2.json"))
+        .find(|entry| entry.relative_path.ends_with("/spectrum.v2.json") || entry.relative_path.ends_with("/spectrum.v3.json"))
         .ok_or_else(|| error("source-spectrum manifest was not generated"))
 }
 
@@ -2157,7 +2286,7 @@ mod tests {
     #[test]
     fn published_spectrum_rejects_uncertified_or_ignored_analysis_references() {
         let mut transverse = request("transverse");
-        transverse.equilibrium_ref = Some("equilibrium_1".into());
+        transverse.equilibrium_ref = Some(fullmag_ir::EquilibriumRefIR::LegacyId("equilibrium_1".into()));
         let samples = solution_samples_for(&transverse);
         let equilibrium = vec![[0.0, 0.0, 1.0]; 16];
         let error = compute_antenna_source_spectrum_artifact(
@@ -2166,7 +2295,7 @@ mod tests {
         assert!(error.message.contains("verified equilibrium resource loader"));
 
         let mut cartesian = request("x");
-        cartesian.equilibrium_ref = Some("equilibrium_1".into());
+        cartesian.equilibrium_ref = Some(fullmag_ir::EquilibriumRefIR::LegacyId("equilibrium_1".into()));
         let error = compute_antenna_source_spectrum_artifact(
             &cartesian, &samples, None,
         ).unwrap_err();
@@ -2331,6 +2460,7 @@ mod tests {
             }
         }
         AntennaFieldSolutionSamples {
+            sample_carrier: None,
             solution_id: "solution".into(),
             source_object_id: "antenna".into(),
             port_mode_id: "port".into(),
@@ -2420,6 +2550,7 @@ mod tests {
             })
             .collect();
         let samples = AntennaFieldSolutionSamples {
+            sample_carrier: None,
             solution_id: "solution".into(),
             source_object_id: "antenna".into(),
             port_mode_id: "port".into(),
@@ -2498,6 +2629,7 @@ mod tests {
             request.sampling_plane.extent_u_m = 0.5 * scale_m;
             request.sampling_plane.extent_v_m = 0.5 * scale_m;
             let samples = AntennaFieldSolutionSamples {
+                sample_carrier: None,
                 solution_id: "solution".into(),
                 source_object_id: "antenna".into(),
                 port_mode_id: "port".into(),
@@ -2595,6 +2727,7 @@ mod tests {
             [0.0, 0.0, 1.0],
         ];
         let samples = AntennaFieldSolutionSamples {
+            sample_carrier: None,
             solution_id: "solution".into(),
             source_object_id: "antenna".into(),
             port_mode_id: "port".into(),
@@ -2632,6 +2765,7 @@ mod tests {
         request.sampling_plane.extent_u_m = 0.1;
         request.sampling_plane.extent_v_m = 0.1;
         let samples = AntennaFieldSolutionSamples {
+            sample_carrier: None,
             solution_id: "solution".into(),
             source_object_id: "antenna".into(),
             port_mode_id: "port".into(),

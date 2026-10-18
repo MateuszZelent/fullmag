@@ -31,6 +31,27 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
         )
         .route(
+            "/v2/platform/compute/nodes",
+            get(handlers::platform::compute_nodes::get_compute_nodes),
+        )
+        .route(
+            "/v2/platform/compute/queue",
+            get(handlers::platform::compute_queue::get_compute_queue),
+        )
+        .route(
+            "/v2/platform/compute/allocations/:allocation_id",
+            get(handlers::platform::compute_allocations::get_compute_allocation),
+        )
+        .route(
+            "/v2/platform/compute/nodes/:node_id",
+            get(handlers::platform::compute_nodes::get_compute_node),
+        )
+        .route(
+            "/v2/platform/compute/nodes/:node_id/policy",
+            get(handlers::platform::compute_nodes::get_compute_node_policy)
+                .put(handlers::platform::compute_nodes::put_compute_node_policy),
+        )
+        .route(
             "/v2/platform/compute/profiles",
             get(handlers::platform::compute_profiles::get_compute_profiles)
                 .post(handlers::platform::compute_profiles::post_compute_profile)
@@ -44,28 +65,6 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/platform/runtime-service",
             get(handlers::platform::runtime_service::get_runtime_service),
-        )
-        .route(
-            "/v2/platform/development-backend",
-            get(handlers::platform::development_backend::get_development_backend),
-        )
-        .route(
-            "/v2/platform/development-backend/build-requests",
-            post(handlers::platform::development_backend_build_request::post_development_backend_build_request)
-                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024)),
-        )
-        .route(
-            "/v2/platform/development-backend/build-requests/:request_id",
-            get(handlers::platform::development_backend_build_request::get_development_backend_build_request),
-        )
-        .route(
-            "/v2/platform/development-restart-requests",
-            post(handlers::platform::development_restart_request::post_development_restart_request)
-                .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
-        )
-        .route(
-            "/v2/platform/development-restart-requests/:request_id",
-            get(handlers::platform::development_restart_request::get_development_restart_request),
         )
         .route("/v2", get(get_v2_index))
         .route("/v2/", get(get_v2_index))
@@ -1220,6 +1219,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::persistence::projects::list_batch_cases),
         )
         .route(
+            "/v2/persistence/projects/:project_id/batches/:batch_id/commands",
+            post(handlers::persistence::projects::command_batch),
+        )
+        .route(
             "/v2/persistence/projects/:project_id/runs/:run_id",
             get(handlers::persistence::projects::get_run),
         )
@@ -1282,6 +1285,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/tasks/:task_id/cancellation",
             post(handlers::persistence::projects::cancel_run_task),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/tasks/:task_id/retry",
+            post(handlers::persistence::projects::retry_run_task),
         )
         .route(
             "/v2/sessions/current/persistence/recovery",

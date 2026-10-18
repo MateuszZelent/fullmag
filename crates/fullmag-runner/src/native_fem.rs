@@ -93,7 +93,9 @@ pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_tran
 #[cfg(feature = "fem-gpu")]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
-    solve_native_fem_steady_transport_rt0, NativeFemSteadyTransportBundle,
+    solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop,
+    NativeFemPreparedClosedLoopChargeRequest, PreparedClosedLoopRuntimeBinding,
+    NativeFemSteadyTransportBundle,
     NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
     NativeFemSteadyTransportInterface, NativeFemSteadyTransportRequest,
     NativeFemSteadyTransportResult, NativeFemSteadyTransportRt0Result,

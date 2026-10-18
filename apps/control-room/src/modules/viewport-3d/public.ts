@@ -15,6 +15,8 @@ export type {
   Viewport3DThumbnailColouring,
 } from "./viewport3dThumbnail";
 export {
+  useViewport3DArtifactInspectionPresentation,
+  type Viewport3DArtifactInspectionPresentation,
   useViewport3DRenderedScalarRange,
   type Viewport3DRenderedScalarRange,
   type Viewport3DRenderedScalarRangeQuery,

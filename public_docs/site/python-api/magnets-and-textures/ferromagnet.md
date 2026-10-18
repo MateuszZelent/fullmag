@@ -19,21 +19,11 @@ the normal user workflow; the constructor remains the canonical class API and se
 (python-api-magnets-and-textures-ferromagnet-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-record
-
-q_{\mathrm{IR}} = \mathrm{record}(\text{qualified inputs})
-```
-
 This object introduces no independent field equation. It defines ownership and identity for the
 magnetic domain consumed by interactions and dynamics.
 
 (python-api-magnets-and-textures-ferromagnet-symbols-and-si-units)=
 ## Symbols and SI units
-
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
 
 Geometry lengths use metres. Material parameters retain their interaction-specific SI units.
 Magnetization textures and region/constraint identities are dimensionless semantic data.
@@ -148,5 +138,5 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMag
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| constructor and lowering | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Ferromagnet` | canonical object API | signature/source-map tests |
+| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | canonical object API | signature/source-map tests |
 | stage-first facade | `packages/fullmag-py/src/fullmag/world.py` | `study.geometry` / magnetic handle | fluent object authoring | builder tests |

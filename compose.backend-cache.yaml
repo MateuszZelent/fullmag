@@ -1,0 +1,72 @@
+# Overlay for the persistent backend-build-cache-v1 /build mount.
+# The managed runtime prepares the maintenance service before starting the app.
+services:
+  backend:
+    image: "${FULLMAG_BACKEND_CACHE_RUNTIME_IMAGE_ID:?Attested backend image identity is required}"
+    pull_policy: never
+    user: "65532:65532"
+    read_only: true
+    labels:
+      com.fullmag.backend-cache.profile: "${FULLMAG_BACKEND_CACHE_PROFILE:?Resolve backend-build-cache-v1 first}"
+      com.fullmag.backend-cache.key: "${FULLMAG_BACKEND_CACHE_KEY:?Resolved backend cache key is required}"
+    environment:
+      FULLMAG_BACKEND_CACHE_SCHEMA: "${FULLMAG_BACKEND_CACHE_SCHEMA:?Resolve backend-build-cache-v1 first}"
+      FULLMAG_BACKEND_CACHE_PROFILE: "${FULLMAG_BACKEND_CACHE_PROFILE:?Resolve backend-build-cache-v1 first}"
+      FULLMAG_BACKEND_CACHE_PROJECT_ID: "${FULLMAG_BACKEND_CACHE_PROJECT_ID:?Resolved backend cache project id is required}"
+      FULLMAG_BACKEND_CACHE_KEY: "${FULLMAG_BACKEND_CACHE_KEY:?Resolved backend cache key is required}"
+      FULLMAG_BACKEND_CACHE_FILESYSTEM_UUID: "${FULLMAG_BACKEND_CACHE_FILESYSTEM_UUID:-pending}"
+      FULLMAG_BACKEND_CACHE_RUNTIME_IMAGE_ID: "${FULLMAG_BACKEND_CACHE_RUNTIME_IMAGE_ID:?Attested backend image identity is required}"
+      FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID: "${FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID:?Attested toolchain image identity is required}"
+    volumes:
+      - type: bind
+        source: "${FULLMAG_BACKEND_CACHE_MOUNT_ROOT:?Resolved backend cache mount is required}"
+        target: /build
+        read_only: false
+        bind: {create_host_path: false}
+
+  backend-cache-maintenance:
+    image: "${FULLMAG_BACKEND_CACHE_HELPER_IMAGE:?Use the attested application image containing bash and nsenter}"
+    profiles: [backend-build-cache-maintenance-v1]
+    user: "0:0"
+    privileged: true
+    pid: host
+    network_mode: none
+    restart: "no"
+    read_only: true
+    entrypoint: ["/bin/bash", "/usr/local/sbin/docker_backend_cache.sh"]
+    command: ["ensure"]
+    environment:
+      FULLMAG_BACKEND_CACHE_PROFILE: "${FULLMAG_BACKEND_CACHE_PROFILE:?Resolve backend-build-cache-v1 first}"
+      FULLMAG_BACKEND_CACHE_PROJECT_ID: "${FULLMAG_BACKEND_CACHE_PROJECT_ID:?Resolved backend cache project id is required}"
+      FULLMAG_BACKEND_CACHE_KEY: "${FULLMAG_BACKEND_CACHE_KEY:?Resolved backend cache key is required}"
+      FULLMAG_BACKEND_CACHE_STORAGE_ROOT: "${FULLMAG_BACKEND_CACHE_STORAGE_ROOT:?Resolved storage root is required}"
+      FULLMAG_BACKEND_CACHE_BACKING_IMAGE: "${FULLMAG_BACKEND_CACHE_BACKING_IMAGE:?Resolved backing image is required}"
+      FULLMAG_BACKEND_CACHE_MOUNT_ROOT: "${FULLMAG_BACKEND_CACHE_MOUNT_ROOT:?Resolved backend cache mount is required}"
+      FULLMAG_BACKEND_CACHE_LOCK_PATH: "${FULLMAG_BACKEND_CACHE_LOCK_PATH:?Resolved cache lock is required}"
+      FULLMAG_BACKEND_CACHE_OWNER_MARKER: "${FULLMAG_BACKEND_CACHE_OWNER_MARKER:?Resolved owner marker is required}"
+      FULLMAG_BACKEND_CACHE_SIZE_BYTES: "${FULLMAG_BACKEND_CACHE_SIZE_BYTES:?Resolved image size is required}"
+      FULLMAG_BACKEND_CACHE_MOUNT_TARGET: "${FULLMAG_BACKEND_CACHE_MOUNT_TARGET:?Resolved mount target is required}"
+      FULLMAG_BACKEND_CACHE_RUNTIME_IMAGE_ID: "${FULLMAG_BACKEND_CACHE_RUNTIME_IMAGE_ID:?Attested backend image identity is required}"
+      FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID: "${FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID:?Attested toolchain image identity is required}"
+      FULLMAG_BACKEND_CACHE_HELPER_PATH: "${FULLMAG_BACKEND_CACHE_HELPER_PATH:?Bind the versioned helper read-only}"
+      FULLMAG_BACKEND_CACHE_HOST_PID: "${FULLMAG_BACKEND_CACHE_HOST_PID:-1}"
+      FULLMAG_BACKEND_CACHE_UID: "${FULLMAG_BACKEND_CACHE_UID:-65532}"
+      FULLMAG_BACKEND_CACHE_GID: "${FULLMAG_BACKEND_CACHE_GID:-65532}"
+      FULLMAG_BACKEND_CACHE_LOCK_WAIT_SECONDS: "${FULLMAG_BACKEND_CACHE_LOCK_WAIT_SECONDS:-120}"
+      FULLMAG_BACKEND_PACKAGE: "${FULLMAG_BACKEND_PACKAGE:?Resolved backend package root is required}"
+    volumes:
+      - type: bind
+        source: "${FULLMAG_BACKEND_CACHE_HELPER_PATH:?Bind the versioned helper read-only}"
+        target: /usr/local/sbin/docker_backend_cache.sh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${FULLMAG_BACKEND_CACHE_STORAGE_ROOT:?Resolved storage root is required}"
+        target: "${FULLMAG_BACKEND_CACHE_STORAGE_ROOT:?Resolved storage root is required}"
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${FULLMAG_BACKEND_CACHE_MOUNT_ROOT:?Resolved backend cache mount is required}"
+        target: "${FULLMAG_BACKEND_CACHE_MOUNT_ROOT:?Resolved backend cache mount is required}"
+        read_only: false
+        bind: {create_host_path: true}

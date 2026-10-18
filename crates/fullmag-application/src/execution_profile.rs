@@ -10,7 +10,8 @@ pub use fullmag_ir::execution_profile_materialization::{
 
 #[cfg(test)]
 use fullmag_ir::{
-    ExecutionDevice, ExecutionOriginKindIR, ExecutionProfileIR, ExecutionRequestPatchIR, FieldPatch,
+    ExecutionDevice, ExecutionFieldOriginIR, ExecutionOriginKindIR, ExecutionProfileIR,
+    ExecutionRequestLayerIR, ExecutionRequestPatchIR, FieldPatch,
 };
 
 #[cfg(test)]

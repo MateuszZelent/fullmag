@@ -45,6 +45,7 @@ from fullmag_storage import identifier
 from windows.workspace_backend_identity import (
     DEPENDENCY_INPUTS, INPUTS, fingerprint, is_native_workspace_input,
 )
+from windows.stage_workspace_frontend import is_patch_relative, patch_file_relatives
 
 SCHEMA = "fullmag.windows-build-snapshot.v1"
 HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -148,8 +149,29 @@ def _git(repo, *arguments):
 
 def _paths(repo, inputs=()):
     raw = _git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *inputs)
-    return sorted({entry.decode("utf-8") for entry in raw.split(b"\0")
-                   if entry and (not inputs or is_native_workspace_input(entry.decode("utf-8")))})
+    normalized_inputs = tuple(str(value).replace("\\", "/") for value in inputs)
+    patch_requested = any(
+        value == "patches" or value.startswith("patches/") for value in normalized_inputs
+    )
+    paths = {
+        relative
+        for entry in raw.split(b"\0")
+        if entry
+        for relative in (entry.decode("utf-8"),)
+        if (not inputs or is_native_workspace_input(relative))
+        and (
+            not patch_requested
+            or not relative.startswith("patches/")
+            or is_patch_relative(relative)
+        )
+    }
+    try:
+        canonical_patch_paths = patch_file_relatives(repo)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise SnapshotError(f"Cannot inventory pnpm patch inputs: {error}") from error
+    if not inputs or patch_requested:
+        paths.update(path.as_posix() for path in canonical_patch_paths)
+    return sorted(paths)
 
 
 def _gitlinks(repo):
@@ -473,14 +495,25 @@ def create_snapshot(repo_root, build_root):
     source = staging / "source"
     source.mkdir()
     copied_entries = []
-    for expected in entries:
+
+    def copy_entry(expected):
         copied = _copy_file(_checked_child(repo, expected["path"]), _checked_child(source, expected["path"]))
         if expected["path"] in protected_paths and (copied["sha256"] != expected["sha256"] or copied["size"] != expected["size"]):
             raise SourceChangedSnapshot(
                 f"Origin changed while copying source input: {expected['path']}"
             )
         copied_entries.append({**copied, "path": expected["path"]})
+
+    # Seal the coherent native/dependency inputs before copying HMR, docs and
+    # qualification files. Their potentially long copy must not extend the
+    # live-checkout fence once all compiler inputs are already immutable.
+    for expected in protected_entries:
+        copy_entry(expected)
     confirm_origin()
+    for expected in entries:
+        if expected["path"] not in protected_paths:
+            copy_entry(expected)
+    copied_entries.sort(key=lambda entry: entry["path"])
     # Browser HMR/docs may keep moving during capture. Record their ACTUAL
     # copied bytes, independently of the unchanged protected native inputs.
     # Subsequent snapshot verification still checks every copied file.

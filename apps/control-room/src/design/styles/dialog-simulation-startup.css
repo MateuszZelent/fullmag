@@ -1,27 +1,32 @@
 .fm-simulation-startup {
   position: fixed;
-  inset: 0;
-  z-index: var(--fm-z-dialog-backdrop);
-  display: grid;
-  place-items: center;
-  padding: var(--fm-space-6);
-  background: color-mix(in srgb, var(--fm-bg-app) 88%, transparent);
+  inset-inline-end: var(--fm-space-4);
+  bottom: var(--fm-space-4);
+  z-index: var(--fm-z-overlay);
+  width: min(520px, calc(100vw - (2 * var(--fm-space-4))));
+  pointer-events: auto;
+}
+
+.fm-simulation-startup:has(.fm-simulation-startup__details-trigger[data-state="open"]) {
+  width: min(980px, calc(100vw - (2 * var(--fm-space-4))));
 }
 
 .fm-simulation-startup__panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: var(--fm-space-4);
-  width: min(980px, calc(100vw - var(--fm-space-8)));
-  max-height: calc(100vh - (2 * var(--fm-space-6)));
-  min-height: min(620px, calc(100vh - (2 * var(--fm-space-6))));
+  gap: var(--fm-space-2);
+  width: 100%;
+  max-height: calc(100vh - (2 * var(--fm-space-4)));
   overflow: hidden;
   border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-lg);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-overlay);
   box-shadow: var(--fm-shadow-panel);
   color: var(--fm-text-primary);
-  padding: var(--fm-space-5);
+  padding: var(--fm-space-3);
+}
+
+.fm-simulation-startup__panel:has(.fm-simulation-startup__details-trigger[data-state="open"]) {
+  width: 100%;
 }
 
 .fm-simulation-startup[data-state="stale"] .fm-simulation-startup__panel {
@@ -33,7 +38,7 @@
   border-color: color-mix(in srgb, var(--fm-danger) 58%, var(--fm-border-default));
 }
 
-.fm-simulation-startup__header,
+.fm-simulation-startup__summary,
 .fm-simulation-startup__heading-copy,
 .fm-simulation-startup__timeline,
 .fm-simulation-startup__log,
@@ -41,16 +46,13 @@
   min-width: 0;
 }
 
-.fm-simulation-startup__header {
+.fm-simulation-startup__summary {
   display: grid;
-  gap: var(--fm-space-3);
+  gap: var(--fm-space-2);
 }
 
 .fm-simulation-startup__heading-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--fm-space-6);
+  min-width: 0;
 }
 
 .fm-simulation-startup__heading-copy {
@@ -71,7 +73,7 @@
 .fm-simulation-startup__title {
   margin: 0;
   color: var(--fm-text-primary);
-  font-size: var(--fm-font-size-xl);
+  font-size: var(--fm-font-size-md);
   font-weight: 680;
   letter-spacing: -0.015em;
   line-height: 1.15;
@@ -79,6 +81,7 @@
 
 .fm-simulation-startup__detail,
 .fm-simulation-startup__progress-detail,
+.fm-simulation-startup__correlation-id,
 .fm-simulation-startup__footer p,
 .fm-simulation-startup__empty-stages,
 .fm-simulation-startup__empty-log {
@@ -86,6 +89,56 @@
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-sm);
   line-height: 1.45;
+}
+
+.fm-simulation-startup__correlation-id {
+  overflow-wrap: anywhere;
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-simulation-startup__correlation-id code {
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+}
+
+.fm-simulation-startup__reconnecting-label {
+  width: fit-content;
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-stale) 12%, var(--fm-bg-panel));
+  color: var(--fm-stale);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+}
+
+.fm-simulation-startup__accordion {
+  min-width: 0;
+  border-top: 1px solid var(--fm-border-subtle);
+}
+
+.fm-simulation-startup__accordion .fm-accordion-content[data-state="closed"] {
+  display: none;
+}
+
+.fm-simulation-startup__accordion .fm-accordion-item {
+  border-bottom: 0;
+}
+
+.fm-simulation-startup__details-trigger {
+  min-height: var(--fm-control-height-regular);
+  padding-inline: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-simulation-startup__details {
+  display: grid;
+  gap: var(--fm-space-3);
+  max-height: min(64vh, 640px);
+  overflow-y: auto;
+  padding-top: var(--fm-space-2);
+  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-width: thin;
 }
 
 .fm-simulation-startup__elapsed {
@@ -229,7 +282,7 @@
   display: grid;
   grid-template-columns: minmax(320px, 0.9fr) minmax(400px, 1.25fr);
   gap: var(--fm-space-4);
-  min-height: 0;
+  min-height: min(280px, 34vh);
 }
 
 .fm-simulation-startup__timeline,
@@ -447,19 +500,6 @@
   gap: var(--fm-space-2);
 }
 
-.fm-workspace-bottom-panel[data-startup-diagnostics="visible"] {
-  position: fixed;
-  inset-inline: var(--fm-space-6);
-  bottom: var(--fm-space-6);
-  z-index: var(--fm-z-dialog-content);
-  height: min(360px, calc(100vh - (2 * var(--fm-space-6))));
-  min-height: 240px;
-  overflow: hidden;
-  border-radius: var(--fm-radius-lg);
-  box-shadow: var(--fm-shadow-panel);
-  pointer-events: auto;
-}
-
 @keyframes fm-simulation-startup-progress-indeterminate {
   0% {
     transform: translateX(-115%);
@@ -476,15 +516,21 @@
 
 @media (max-width: 720px) {
   .fm-simulation-startup {
-    padding: var(--fm-space-3);
+    inset-inline-end: var(--fm-space-3);
+    bottom: var(--fm-space-3);
+    width: calc(100vw - (2 * var(--fm-space-3)));
   }
 
   .fm-simulation-startup__panel {
-    width: calc(100vw - (2 * var(--fm-space-3)));
-    min-height: 0;
     max-height: calc(100vh - (2 * var(--fm-space-3)));
-    overflow-y: auto;
-    padding: var(--fm-space-4);
+  }
+
+  .fm-simulation-startup__panel:has(.fm-simulation-startup__details-trigger[data-state="open"]) {
+    width: 100%;
+  }
+
+  .fm-simulation-startup__details {
+    max-height: min(58vh, 520px);
   }
 
   .fm-simulation-startup__body {
@@ -500,7 +546,6 @@
     min-height: 220px;
   }
 
-  .fm-simulation-startup__heading-row,
   .fm-simulation-startup__footer {
     align-items: stretch;
     flex-direction: column;
@@ -522,12 +567,6 @@
     flex-wrap: wrap;
   }
 
-  .fm-workspace-bottom-panel[data-startup-diagnostics="visible"] {
-    inset-inline: var(--fm-space-3);
-    bottom: var(--fm-space-3);
-    height: min(50vh, calc(100vh - (2 * var(--fm-space-3))));
-    min-height: 220px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

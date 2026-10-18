@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object interf
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,8 +54,8 @@ fm.InterfacialDMI(D, interface_normal=None)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```fm.InterfacialDMI.D``` | ```float``` | ```required``` | ```J/m^2``` | finite; sign preserved | interfacial DMI constant | FEM/FDM CPU/GPU: IR; resolved support required | ```D``` |
-| ```fm.InterfacialDMI.interface_normal``` | ```tuple[float,float,float] or None``` | ```None``` | ```1``` | finite non-zero when supplied; normalized | interface normal | FEM/FDM CPU/GPU: IR; resolved support required | ```interface_normal``` |
+| `fm.InterfacialDMI.D` | `float` | `required` | `J/m^2` | finite; sign preserved | interfacial DMI constant | FEM/FDM CPU/GPU: IR; resolved support required | `D` |
+| `fm.InterfacialDMI.interface_normal` | `tuple[float,float,float] or None` | `None` | `1` | finite non-zero when supplied; normalized | interface normal | FEM/FDM CPU/GPU: IR; resolved support required | `interface_normal` |
 
 ### Stage-first example
 

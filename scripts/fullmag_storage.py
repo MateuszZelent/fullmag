@@ -15,10 +15,11 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ import uuid
 
 
 SCHEMA = "fullmag_storage_v1"
+DOTENV_MAX_BYTES = 1024 * 1024
 NATIVE_BUILD_LOCK_WAIT_SECONDS = 120
 WINDOWS_WORKSPACE_BUILD_REQUEST_RECEIPT_SCHEMA = "fullmag.windows-workspace-build-request-receipt.v1"
 WINDOWS_WORKSPACE_BUILD_REQUEST_RECEIPT_FIELDS = frozenset({
@@ -37,6 +39,9 @@ WINDOWS_WORKSPACE_STORAGE_PROFILES = {
     "release": "windows-native-fdm-cpu",
     "dev": "windows-native-fdm-cpu-dev",
 }
+HOST_LEDGER_PROFILE = "host-ledger-v1"
+HOST_LEDGER_IMAGE_NAME = "fullmag-host-ledger-v1.ext4"
+HOST_LEDGER_SIZE_BYTES = 128 * 1024 * 1024
 PATH_OVERRIDES = {
     "FULLMAG_WINDOWS_BUILD_ROOT": "build_root",
     "FULLMAG_WINDOWS_CACHE_ROOT": "cache_root",
@@ -66,6 +71,12 @@ MANAGED_VARIABLES = set(PATH_OVERRIDES) | {
     "FULLMAG_BUILD_STORAGE_ROOT", "FULLMAG_STORAGE_USE_MANAGED_EXT4",
     "FULLMAG_NATIVE_STORAGE_PROFILE", "FULLMAG_NATIVE_BUILD_IMAGE",
     "FULLMAG_NATIVE_MOUNT_VIEW", "FULLMAG_MANAGED_NATIVE_ROOT",
+    "FULLMAG_HOST_LEDGER_PROFILE", "FULLMAG_HOST_LEDGER_PROJECT_ID",
+    "FULLMAG_HOST_LEDGER_STORAGE_ROOT", "FULLMAG_HOST_LEDGER_BACKING_IMAGE",
+    "FULLMAG_HOST_LEDGER_MOUNT_ROOT", "FULLMAG_HOST_LEDGER_LOCK_PATH",
+    "FULLMAG_HOST_LEDGER_OWNER_MARKER", "FULLMAG_HOST_LEDGER_MOUNT_TARGET",
+    "FULLMAG_HOST_LEDGER_ROOT", "FULLMAG_HOST_LEDGER_LEDGER_ROOT",
+    "FULLMAG_HOST_LEDGER_SIZE_BYTES",
     "FULLMAG_FRONTEND_CONTAINER_ROOT",
     "FULLMAG_WINDOWS_VOLATILE_ROOT",
 }
@@ -222,6 +233,31 @@ def linux_infrastructure(root, env):
             "native_backing_image": str(image), "native_storage_legacy": image == legacy}
 
 
+def linux_host_ledger_infrastructure(root, project_id, profile):
+    """Resolve the Linux daemon ledger image on any host-side path syntax."""
+    if profile != HOST_LEDGER_PROFILE:
+        raise StorageError(f"Unknown host ledger profile: {profile}")
+    if not isinstance(project_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", project_id):
+        raise StorageError(f"Invalid host ledger project id: {project_id!r}")
+    image = root / "build-volumes" / HOST_LEDGER_IMAGE_NAME
+    # The mount and guest paths belong to the Linux Docker daemon even when
+    # the resolver itself runs under native Windows Python.
+    mount = PurePosixPath("/mnt") / f"fullmag-host-ledger-{project_id}"
+    return {
+        "host_ledger_profile": profile,
+        "host_ledger_project_id": project_id,
+        "host_ledger_storage_root": str(root),
+        "host_ledger_backing_image": str(image),
+        "host_ledger_mount_root": str(mount),
+        "host_ledger_lock_path": str(image) + ".lock",
+        "host_ledger_owner_marker": str(mount / ".fullmag-host-ledger-owner.json"),
+        "host_ledger_mount_target": "/host-ledger",
+        "host_ledger_root": "/host-ledger/ledger",
+        "host_ledger_ledger_root": str(mount / "ledger"),
+        "host_ledger_size_bytes": HOST_LEDGER_SIZE_BYTES,
+    }
+
+
 def validate_managed_view(layout):
     if not layout.get("managed_ext4"):
         return
@@ -238,11 +274,32 @@ def validate_managed_view(layout):
 
 def storage_dotenv(main_repo):
     """Read only storage settings; never execute or interpolate dotenv values."""
-    path = main_repo / ".env"
-    if not path.is_file():
+    path = absolute(Path(main_repo) / ".env", "storage dotenv")
+    if not path.exists():
         return {}
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        raise StorageError(f"Cannot read storage dotenv {path}: {error}") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > DOTENV_MAX_BYTES:
+            raise StorageError(f"Storage dotenv must be a bounded regular file: {path}")
+        if getattr(metadata, "st_file_attributes", 0) & 0x400:
+            raise StorageError(f"Storage dotenv must not be a Windows reparse point: {path}")
+        data = os.read(descriptor, DOTENV_MAX_BYTES + 1)
+    except OSError as error:
+        raise StorageError(f"Cannot read storage dotenv {path}: {error}") from error
+    finally:
+        os.close(descriptor)
+    if len(data) > DOTENV_MAX_BYTES:
+        raise StorageError(f"Storage dotenv is too large: {path}")
     values = {}
-    for number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+    managed_seen = set()
+    for number, line in enumerate(data.decode("utf-8-sig").splitlines(), 1):
         line = line.strip()
         if line.startswith("export "):
             line = line[7:].lstrip()
@@ -250,6 +307,9 @@ def storage_dotenv(main_repo):
         key = key.strip()
         if not sep or key not in MANAGED_VARIABLES:
             continue
+        if key in managed_seen:
+            raise StorageError(f"Duplicate storage setting at {path}:{number}: {key}")
+        managed_seen.add(key)
         value = value.strip()
         if value.startswith(("'", '"')):
             if len(value) < 2 or value[-1] != value[0]:
@@ -262,7 +322,7 @@ def storage_dotenv(main_repo):
     return values
 
 
-def resolve_layout(repo_root, profile=None, environ=None):
+def resolve_layout(repo_root, profile=None, environ=None, host_ledger_profile=None):
     env = os.environ if environ is None else environ
     repo = Path(git(repo_root, "rev-parse", "--show-toplevel")).resolve()
     if git(repo, "rev-parse", "--show-superproject-working-tree"):
@@ -270,11 +330,9 @@ def resolve_layout(repo_root, profile=None, environ=None):
     registrations = worktree_records(repo)
     main_repo = Path(registrations[0]["worktree"]).resolve()
     env = {**storage_dotenv(main_repo), **env}
-    # This Windows checkout keeps its worktrees below the canonical checkout
-    # itself (`D:\\git\\fullmag\\worktrees`), so its durable storage belongs
-    # to the checkout (`D:\\git\\fullmag\\storage`). Linux keeps the existing
-    # sibling-project layout used by the managed native storage contract.
-    project = main_repo if os.name == "nt" else main_repo.parent
+    # Derive the shared project boundary from Git on every platform. Storage
+    # and worktrees are siblings of the main checkout, regardless of cwd.
+    project = main_repo.parent
     canonical_storage = project / "storage"
     profile = profile or env.get("FULLMAG_STORAGE_PROFILE") or ("windows-native" if os.name == "nt" else "linux-host")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", profile):
@@ -298,17 +356,47 @@ def resolve_layout(repo_root, profile=None, environ=None):
         # their relative spelling as a directory in the current checkout.
         if candidate.is_absolute():
             checkouts.append(candidate.resolve())
+    # Compatibility for an operator-registered storage directory in the main
+    # checkout only. All other checkout and worktree overlaps remain forbidden.
+    registered_main_storage = bool(env.get("FULLMAG_PROJECT_STORAGE_ROOT")) and marker.is_file() and root == main_repo / "storage"
     for checkout in checkouts:
-        # The Windows canonical storage directory is deliberately inside the
-        # main checkout, but remains outside every worktree checkout. No other
-        # in-repository or worktree-overlapping path receives this exception.
-        if os.name == "nt" and checkout == main_repo and root == canonical_storage:
+        if checkout == main_repo and registered_main_storage:
             continue
         if inside(root, checkout) or inside(checkout, root):
-            raise StorageError(f"Storage must be outside all worktrees and non-canonical checkout paths: {root} overlaps {checkout}")
+            raise StorageError(f"Storage must be outside the repository and all worktrees: {root} overlaps {checkout}")
     wt = identifier(repo)
+    project_id = identifier(main_repo)
     platform = "windows" if os.name == "nt" else "linux"
     infrastructure = linux_infrastructure(root, env) if os.name != "nt" else {}
+    selected_host_ledger_profile = host_ledger_profile or env.get("FULLMAG_HOST_LEDGER_PROFILE")
+    host_ledger = (
+        linux_host_ledger_infrastructure(root, project_id, selected_host_ledger_profile)
+        if selected_host_ledger_profile else {}
+    )
+    if host_ledger:
+        for name, field in (
+            ("FULLMAG_HOST_LEDGER_STORAGE_ROOT", "host_ledger_storage_root"),
+            ("FULLMAG_HOST_LEDGER_BACKING_IMAGE", "host_ledger_backing_image"),
+            ("FULLMAG_HOST_LEDGER_MOUNT_ROOT", "host_ledger_mount_root"),
+            ("FULLMAG_HOST_LEDGER_LOCK_PATH", "host_ledger_lock_path"),
+            ("FULLMAG_HOST_LEDGER_OWNER_MARKER", "host_ledger_owner_marker"),
+        ):
+            if env.get(name) and absolute(env[name], name) != Path(host_ledger[field]):
+                raise StorageError(f"{name} must match the host-ledger-v1 resolver: {host_ledger[field]}")
+        if env.get("FULLMAG_HOST_LEDGER_PROJECT_ID") and env["FULLMAG_HOST_LEDGER_PROJECT_ID"] != project_id:
+            raise StorageError("FULLMAG_HOST_LEDGER_PROJECT_ID must match the main checkout identity")
+        if env.get("FULLMAG_HOST_LEDGER_MOUNT_TARGET") and env["FULLMAG_HOST_LEDGER_MOUNT_TARGET"] != host_ledger["host_ledger_mount_target"]:
+            raise StorageError("FULLMAG_HOST_LEDGER_MOUNT_TARGET is fixed at /host-ledger")
+        if env.get("FULLMAG_HOST_LEDGER_ROOT") and env["FULLMAG_HOST_LEDGER_ROOT"] != host_ledger["host_ledger_root"]:
+            raise StorageError("FULLMAG_HOST_LEDGER_ROOT is fixed at /host-ledger/ledger")
+        if env.get("FULLMAG_HOST_LEDGER_LEDGER_ROOT"):
+            if os.name == "nt":
+                if env["FULLMAG_HOST_LEDGER_LEDGER_ROOT"] != host_ledger["host_ledger_ledger_root"]:
+                    raise StorageError("FULLMAG_HOST_LEDGER_LEDGER_ROOT must match the project mount child")
+            elif absolute(env["FULLMAG_HOST_LEDGER_LEDGER_ROOT"], "FULLMAG_HOST_LEDGER_LEDGER_ROOT") != Path(host_ledger["host_ledger_ledger_root"]):
+                raise StorageError("FULLMAG_HOST_LEDGER_LEDGER_ROOT must match the project mount child")
+        if env.get("FULLMAG_HOST_LEDGER_SIZE_BYTES") and env["FULLMAG_HOST_LEDGER_SIZE_BYTES"] != str(host_ledger["host_ledger_size_bytes"]):
+            raise StorageError("FULLMAG_HOST_LEDGER_SIZE_BYTES must be exactly 134217728")
     if os.name != "nt":
         for name, field in (("FULLMAG_NATIVE_BUILD_IMAGE", "native_backing_image"), ("FULLMAG_NATIVE_MOUNT_VIEW", "native_mount_view")):
             if env.get(name) and absolute(env[name], name) != Path(infrastructure[field]):
@@ -330,6 +418,7 @@ def resolve_layout(repo_root, profile=None, environ=None):
         "frontend_root": str(build_storage / "builds" / wt / "frontend"),
         "runs_root": str(root / "runs" / wt),
         **infrastructure,
+        **host_ledger,
     }
     if env.get("FULLMAG_BUILD_STORAGE_ROOT") and absolute(env["FULLMAG_BUILD_STORAGE_ROOT"], "FULLMAG_BUILD_STORAGE_ROOT") != build_storage:
         raise StorageError("FULLMAG_BUILD_STORAGE_ROOT must match the resolved host/managed build view")
@@ -350,7 +439,7 @@ def resolve_layout(repo_root, profile=None, environ=None):
     target = env.get("FULLMAG_WINDOWS_TARGET_DIR") or env.get("CARGO_TARGET_DIR") or str(build / "cargo-target")
     variables = {
         "FULLMAG_PROJECT_STORAGE_ROOT": str(root),
-        "FULLMAG_PROJECT_ID": identifier(main_repo),
+        "FULLMAG_PROJECT_ID": project_id,
         "FULLMAG_BUILD_STORAGE_ROOT": str(build_storage),
         "FULLMAG_STORAGE_PROFILE": profile,
         "FULLMAG_WORKTREE_ID": wt,
@@ -384,6 +473,20 @@ def resolve_layout(repo_root, profile=None, environ=None):
                          FULLMAG_NATIVE_MOUNT_VIEW=infrastructure["native_mount_view"],
                          FULLMAG_NATIVE_STORAGE_LEGACY="1" if infrastructure["native_storage_legacy"] else "0",
                          FULLMAG_MANAGED_EXT4="1" if managed else "0")
+    if host_ledger:
+        variables.update(
+            FULLMAG_HOST_LEDGER_PROFILE=host_ledger["host_ledger_profile"],
+            FULLMAG_HOST_LEDGER_PROJECT_ID=host_ledger["host_ledger_project_id"],
+            FULLMAG_HOST_LEDGER_STORAGE_ROOT=host_ledger["host_ledger_storage_root"],
+            FULLMAG_HOST_LEDGER_BACKING_IMAGE=host_ledger["host_ledger_backing_image"],
+            FULLMAG_HOST_LEDGER_MOUNT_ROOT=host_ledger["host_ledger_mount_root"],
+            FULLMAG_HOST_LEDGER_LOCK_PATH=host_ledger["host_ledger_lock_path"],
+            FULLMAG_HOST_LEDGER_OWNER_MARKER=host_ledger["host_ledger_owner_marker"],
+            FULLMAG_HOST_LEDGER_MOUNT_TARGET=host_ledger["host_ledger_mount_target"],
+            FULLMAG_HOST_LEDGER_ROOT=host_ledger["host_ledger_root"],
+            FULLMAG_HOST_LEDGER_LEDGER_ROOT=host_ledger["host_ledger_ledger_root"],
+            FULLMAG_HOST_LEDGER_SIZE_BYTES=str(host_ledger["host_ledger_size_bytes"]),
+        )
     if profile in WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
         # Reduce intermediate path length for the MSVC linker's legacy path limit.
         # Final artifacts remain in target; existing caches are never removed.
@@ -899,7 +1002,13 @@ def _run_logged_command(command, repo_root, child_env, log_path, *, cancelled=No
             for line in iter(child.stdout.readline, b""):
                 log.write(line)
                 log.flush()
-                print(line.decode("utf-8", errors="replace"), end="", flush=True)
+                console_line = line.decode("utf-8", errors="replace")
+                encoding = getattr(sys.stdout, "encoding", None)
+                if encoding:
+                    # The binary log is authoritative. A legacy Windows console
+                    # must not interrupt the child merely to display Unicode.
+                    console_line = console_line.encode(encoding, errors="backslashreplace").decode(encoding)
+                print(console_line, end="", flush=True)
             return subprocess.CompletedProcess(command, child.wait())
 
 
@@ -1232,6 +1341,7 @@ def main(argv=None):
     parser.add_argument("action", choices=("resolve", "validate", "run", "run-windows-workspace", "run-windows-workspace-build", "register", "finish", "inventory", "prepare-links", "assert-lock"))
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--profile")
+    parser.add_argument("--host-ledger-profile", choices=(HOST_LEDGER_PROFILE,))
     parser.add_argument("--format", choices=("json", "sh"), default="json")
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--path")
@@ -1275,9 +1385,9 @@ def main(argv=None):
         if selected_storage_profile:
             if args.profile and args.profile != selected_storage_profile:
                 raise StorageError("Windows workspace storage profile does not match the selected compiler profile")
-            layout = resolve_layout(args.repo_root, selected_storage_profile)
+            layout = resolve_layout(args.repo_root, selected_storage_profile, host_ledger_profile=args.host_ledger_profile)
         else:
-            layout = resolve_layout(args.repo_root, args.profile)
+            layout = resolve_layout(args.repo_root, args.profile, host_ledger_profile=args.host_ledger_profile)
         if args.action == "assert-lock":
             if not os.environ.get("FULLMAG_STORAGE_LOCK_TOKEN") or os.environ.get("FULLMAG_STORAGE_LOCK_KEY") != layout["worktree_id"]:
                 raise StorageError("No inherited managed lock; enter through the storage runner")

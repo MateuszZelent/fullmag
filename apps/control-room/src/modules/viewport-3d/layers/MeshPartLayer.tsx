@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useId, useMemo, memo, useRef } from "react";
+import { useCallback, useEffect, useId, useMemo, memo, useRef, useLayoutEffect } from "react";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -168,7 +168,6 @@ export function createMeshPartSurfaceGeometry({
   if (!expandSurfaceFaces) {
     attachViewport3DSharedTopologyPosition(next, positions);
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
-    next.computeVertexNormals();
     return next;
   }
 
@@ -185,7 +184,6 @@ export function createMeshPartSurfaceGeometry({
     expandedPositions[targetOffset + 2] = positions[sourceOffset + 2] ?? 0;
   }
   next.setAttribute("position", new BufferAttribute(expandedPositions, 3));
-  next.computeVertexNormals();
   return next;
 }
 
@@ -1023,6 +1021,15 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   );
   const scalarShaderMaterial = scalarShaderMaterials.back;
   const scalarShaderMaterialFront = scalarShaderMaterials.front;
+
+  useLayoutEffect(() => {
+    // Unlit fallback passes never consume normals. Allocate them only when a
+    // scalar shader needs the original per-part smooth shading, before its
+    // first frame; keep the same geometry and shared topology position buffer.
+    if (!geometry || !scalarShaderMaterial || geometry.getAttribute("normal")) return;
+    geometry.computeVertexNormals();
+    invalidate();
+  }, [geometry, invalidate, scalarShaderMaterial]);
 
   useEffect(
     () => () => {

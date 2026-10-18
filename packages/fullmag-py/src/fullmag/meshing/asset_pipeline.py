@@ -1309,6 +1309,11 @@ def _sanitize_surface_mesh_for_stl_export(surface: object) -> object:
     return mesh
 
 
+def _export_surface_for_gmsh(surface: Any, destination: Path) -> None:
+    """Export a surface in the ASCII STL form accepted by the Gmsh bridge."""
+    surface.export(destination, file_type="stl_ascii")
+
+
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
     nodes = np.asarray(preview.get("nodes", []), dtype=np.float64)
     if nodes.ndim != 2 or nodes.shape[1] != 3:
@@ -1341,6 +1346,7 @@ def realize_fem_mesh_asset(
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     _owner_geometry_names: Sequence[str] | None = None,
     object_id: str | None = None,
+    _coincident_closure: object | None = None,
 ) -> MeshData:
     """Resolve a FEM mesh asset from either a prebuilt mesh or geometry source.
 
@@ -1373,6 +1379,15 @@ def realize_fem_mesh_asset(
         owner_geometry_names=_owner_geometry_names,
         per_object_recipes=per_object_recipes,
     )
+
+    if _coincident_closure is not None:
+        if hints.mesh is not None or target.order != 1 or mesh_options.periodic_pair_ids:
+            raise ValueError("coincident source requires generated nonperiodic P1 geometry mesh")
+        from ._antenna_coincident_cut import realize_antenna_coincident_loop_mesh
+        return realize_antenna_coincident_loop_mesh(
+            _coincident_closure, geometry=geometry, object_id=object_id,
+            hmax_m=target.hmax, mesh_options=mesh_options,
+        )
 
     preview = build_surface_preview_payload(geometry)
     if preview is not None:
@@ -2855,7 +2870,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 b_max = tuple(float(v) for v in verts.max(axis=0))
                 bounds_by_name[geometry.geometry_name] = (b_min, b_max)
                 comp_path = Path(tmp_dir) / f"{geometry.geometry_name}.stl"
-                comp_mesh.export(comp_path)
+                _export_surface_for_gmsh(comp_mesh, comp_path)
                 component_descriptors.append(
                     ComponentDescriptor(
                         geometry_name=geometry.geometry_name,
@@ -3502,7 +3517,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             trimesh.util.concatenate(component_meshes)
                         )
                         surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
-                        combined_surface.export(surface_path)
+                        _export_surface_for_gmsh(combined_surface, surface_path)
                         from .gmsh_bridge import generate_mesh_from_file
                         fallback_geometry_binding = (
                             {"geometry_name": geometries[0].geometry_name}

@@ -35,7 +35,7 @@ pub fn resolve_script_until_seconds(
         ),
         fullmag_ir::StudyIR::Eigenmodes { .. } => Ok(0.0),
         fullmag_ir::StudyIR::FrequencyResponse { .. } => Ok(0.0),
-        fullmag_ir::StudyIR::Hysteresis { .. } => Ok(0.0),
+        fullmag_ir::StudyIR::Hysteresis { .. } | fullmag_ir::StudyIR::FieldOnly { .. } => Ok(0.0),
     }
 }
 
@@ -622,6 +622,7 @@ fn materialize_script_stages_with_stage_limit(
                 configure_stage_output_storage(stage, output_storage.as_ref(), output_policy)?;
             }
             // An authored empty/all-disabled pipeline must not start a legacy solver.
+            validate_antenna_equilibrium_dependencies(&materialized)?;
             return Ok(annotate_stage_transitions(materialized));
         }
         ensure_stage_capacity(expansion_budget.as_ref(), 1)?;
@@ -673,7 +674,47 @@ fn materialize_script_stages_with_stage_limit(
             materialized.push(resolved);
         }
     }
+    validate_antenna_equilibrium_dependencies(&materialized)?;
     Ok(annotate_stage_transitions(materialized))
+}
+
+// Validate executable consumers, not inherited authoring inventory. Runtime
+// acceptance, mesh/material signatures and target ROI remain mandatory gates.
+fn validate_antenna_equilibrium_dependencies(stages: &[ResolvedScriptStage]) -> Result<()> {
+    for (consumer_index, consumer) in stages.iter().enumerate() {
+        let Some(ResolvedScriptStageAction::AntennaSourceSpectrum { request_id }) = &consumer.action else {
+            continue;
+        };
+        let mut requests = consumer.ir.antenna_spectrum_requests.iter().filter(|request| &request.id == request_id);
+        let request = requests.next().with_context(|| format!("spectrum action references missing request '{request_id}'"))?;
+        if requests.next().is_some() {
+            bail!("spectrum action references an ambiguous request '{request_id}'");
+        }
+        let Some(fullmag_ir::EquilibriumRefIR::Reference(
+            fullmag_ir::EquilibriumReferenceIR::StageOutput { stage_id, output_id },
+        )) = request.equilibrium_ref.as_ref() else {
+            continue;
+        };
+        if stage_id.trim().is_empty() || output_id != "accepted_equilibrium" {
+            bail!("spectrum '{request_id}' requires an explicit Relax stage and its accepted_equilibrium output");
+        }
+        let mut producers = stages.iter().enumerate().filter(|(_, stage)| {
+            stage.action.is_none()
+                && matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
+                && stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
+                    .and_then(Value::as_str) == Some(stage_id.as_str())
+        });
+        let (producer_index, _) = producers.next().with_context(|| {
+            format!("spectrum '{request_id}' references missing executable Relax stage '{stage_id}'")
+        })?;
+        if producers.next().is_some() {
+            bail!("spectrum '{request_id}' references ambiguous Relax stage '{stage_id}'");
+        }
+        if producer_index >= consumer_index {
+            bail!("spectrum '{request_id}' requires Relax stage '{stage_id}' before the spectrum stage");
+        }
+    }
+    Ok(())
 }
 
 fn configure_stage_output_storage(
@@ -748,6 +789,11 @@ fn classify_stage_transition(
 
 fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> StageTransitionMetadata {
     match action {
+        ResolvedScriptStageAction::AntennaClosedLoopInspection { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaClosedLoopInspection,
+            StageTransitionReason::AntennaClosedLoopInspection,
+            None,
+        ),
         ResolvedScriptStageAction::AntennaExternalLeadInspection { .. } => StageTransitionMetadata::boundary(
             StageTransitionKind::AntennaExternalLeadInspection,
             StageTransitionReason::AntennaExternalLeadInspection,
@@ -871,6 +917,11 @@ fn resolve_antenna_field_solve_action(
                 plan,
             }
         }
+        fullmag_plan::AntennaFieldSolveExecutionPlan::ClosedLoopInspection {
+            input, requested_execution, output_id,
+        } => ResolvedScriptStageAction::AntennaClosedLoopInspection {
+            input, requested_execution, output_id,
+        },
         fullmag_plan::AntennaFieldSolveExecutionPlan::ExternalLeadInspection {
             input,
             requested_execution,
@@ -1971,6 +2022,7 @@ fn frequency_response_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir
 
 fn normalize_stage_sampling(ir: &mut ProblemIR) {
     match &mut ir.study {
+        fullmag_ir::StudyIR::FieldOnly { .. } => {}
         fullmag_ir::StudyIR::AntennaFieldSolve { .. } => {}
         fullmag_ir::StudyIR::TimeEvolution { sampling, .. }
         | fullmag_ir::StudyIR::Relaxation { sampling, .. }

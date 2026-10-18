@@ -36,7 +36,7 @@ export function useFieldDrivesResource(
   );
 
   return useResource<FieldDriveListResource>({
-    enabled: options.enabled && sessionIdentity !== null,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.scene_revision ?? null,
     resourceKey,

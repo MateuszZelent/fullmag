@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object mechan
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,12 +54,12 @@ fm.MechanicalBoundaryCondition(...) and fm.MechanicalLoad(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```MechanicalBoundaryCondition.kind``` | ```Literal[str]``` | ```required``` | ```1``` | prescribed_displacement or prescribed_traction | boundary data family | FEM CPU/GPU: IR; FDM not currently resolved | ```kind``` |
-| ```MechanicalBoundaryCondition.surface``` | ```str``` | ```required``` | ```1``` | non-empty | surface selector | FEM CPU/GPU: IR; FDM not currently resolved | ```surface``` |
-| ```MechanicalBoundaryCondition.u``` | ```tuple[float,float,float]``` | ```None``` | ```m``` | required for displacement; finite | displacement vector | FEM CPU/GPU: IR; FDM not currently resolved | ```u``` |
-| ```MechanicalBoundaryCondition.t``` | ```tuple[float,float,float]``` | ```None``` | ```Pa``` | required for traction; finite | traction vector | FEM CPU/GPU: IR; FDM not currently resolved | ```t``` |
-| ```MechanicalLoad.kind``` | ```Literal[str]``` | ```required``` | ```1``` | body_force, prescribed_strain, or prescribed_stress | volume load family | FEM CPU/GPU: IR; FDM not currently resolved | ```kind``` |
-| ```MechanicalLoad.f/strain/stress``` | ```tuple[float,...]``` | ```None``` | ```N/m^3, 1, or Pa``` | payload required by kind; strain/stress six Voigt values | body force, strain, or stress | FEM CPU/GPU: IR; FDM not currently resolved | ```payload``` |
+| `MechanicalBoundaryCondition.kind` | `Literal[str]` | `required` | `1` | prescribed_displacement or prescribed_traction | boundary data family | FEM CPU/GPU: IR; FDM not currently resolved | `kind` |
+| `MechanicalBoundaryCondition.surface` | `str` | `required` | `1` | non-empty | surface selector | FEM CPU/GPU: IR; FDM not currently resolved | `surface` |
+| `MechanicalBoundaryCondition.u` | `tuple[float,float,float]` | `None` | `m` | required for displacement; finite | displacement vector | FEM CPU/GPU: IR; FDM not currently resolved | `u` |
+| `MechanicalBoundaryCondition.t` | `tuple[float,float,float]` | `None` | `Pa` | required for traction; finite | traction vector | FEM CPU/GPU: IR; FDM not currently resolved | `t` |
+| `MechanicalLoad.kind` | `Literal[str]` | `required` | `1` | body_force, prescribed_strain, or prescribed_stress | volume load family | FEM CPU/GPU: IR; FDM not currently resolved | `kind` |
+| `MechanicalLoad.f/strain/stress` | `tuple[float,...]` | `None` | `N/m^3, 1, or Pa` | payload required by kind; strain/stress six Voigt values | body force, strain, or stress | FEM CPU/GPU: IR; FDM not currently resolved | `payload` |
 
 ### Stage-first example
 

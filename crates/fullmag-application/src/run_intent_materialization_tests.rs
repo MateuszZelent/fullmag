@@ -71,6 +71,8 @@ fn inputs() -> (
     };
     fixture["study_problem_catalog"]["entries"][0]["problem"]["geometry_assets"] =
         serde_json::to_value(geometry_assets).unwrap();
+    fixture["study_problem_catalog"]["entries"][0]["problem"]["study"]["dynamics"]
+        ["fixed_timestep"] = serde_json::json!(1e-15);
     let original: RunIntent = serde_json::from_value(fixture["run_intent"].clone()).unwrap();
     let authored = RunIntentAuthoring {
         run_id: original.specification.run_id,

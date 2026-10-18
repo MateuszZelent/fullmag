@@ -5,7 +5,7 @@ import type {
 } from "@/kernel/visualization/visualizationDebugTypes";
 
 export const MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS = 12;
-export const MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS = 8;
+export const MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS = 9;
 const SCAN_CHUNK_SIZE = 65_536;
 
 export function selectFieldVectorDebugSampleIndices(pointCount: number): readonly number[] {
@@ -32,13 +32,13 @@ export function buildFieldVectorDebugSamples({
   const shownComponents = Math.min(Math.max(0, nComp), MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS);
   const samples = selectFieldVectorDebugSampleIndices(pointCount).map((pointIndex) => {
     const componentValues: (number | null)[] = [];
-    let magnitudeSquared = 0;
+    let magnitude = 0;
     let allFinite = nComp <= MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS;
     for (let component = 0; component < shownComponents; component += 1) {
       const value = values[pointIndex * nComp + component] ?? Number.NaN;
       if (Number.isFinite(value)) {
         componentValues.push(value);
-        magnitudeSquared += value * value;
+        magnitude = Math.hypot(magnitude, value);
       } else {
         componentValues.push(null);
         allFinite = false;
@@ -46,13 +46,13 @@ export function buildFieldVectorDebugSamples({
     }
     return Object.freeze({
       componentValues: Object.freeze(componentValues),
-      magnitude: allFinite ? Math.sqrt(magnitudeSquared) : null,
+      magnitude: allFinite ? magnitude : null,
       nodeIndex: normalizeNodeIndex(nodeIndices?.[pointIndex]),
       pointIndex,
     });
   });
   const issues: VisualizationDebugIssue[] = nComp > MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS
-    ? [Object.freeze({ code: "component-display-cap", evidence: Object.freeze([`nComp=${nComp}`, `shown=${MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS}`]), message: "Only the first eight components are displayed.", severity: "info", source: "ui-derived" })]
+    ? [Object.freeze({ code: "component-display-cap", evidence: Object.freeze([`nComp=${nComp}`, `shown=${MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS}`]), message: "Only the first nine components are displayed.", severity: "info", source: "ui-derived" })]
     : [];
   return Object.freeze({ issues: Object.freeze(issues), samples: Object.freeze(samples) });
 }

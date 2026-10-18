@@ -24,6 +24,7 @@ pub(crate) mod eigen_certificate;
 pub(crate) mod eigen_constants;
 pub(crate) mod eigen_digest;
 pub(crate) mod eigen_equilibrium;
+pub(crate) mod antenna_equilibrium;
 pub(crate) mod eigen_equilibrium_contract;
 pub(crate) mod eigen_execution;
 pub(crate) mod eigen_execution_resolution;

@@ -2,12 +2,15 @@
 
 import { cva } from "class-variance-authority";
 import { Cpu, RefreshCw, Settings } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 import { cn } from "@/shared/utils/className";
 
 import { formatTelemetrySampleTime } from "../model/computeTelemetry";
-import type { ComputeEnvironment, ComputeProbeState, GpuInfo } from "../model/types";
+import { ComputeNodeOverviewSummary } from "../ComputeNodeOverviewSummary";
+import { ComputeNodeInventoryStatus } from "../ComputeNodeInventoryStatus";
+import type { ComputeEnvironment, ComputeNodeInventorySummary, ComputeProbeState, GpuInfo } from "../model/types";
 
 type EnvironmentTone = "busy" | "degraded" | "idle" | "observed";
 
@@ -24,6 +27,7 @@ const environmentVariants = cva("fm-start-env", {
 });
 
 const GIGABYTE = 1e9;
+const INITIAL_GPU_SUMMARY_COUNT = 3;
 
 const gigabytes = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
@@ -87,6 +91,7 @@ export function resolveEnvironmentTone(
 export interface ComputeEnvironmentWidgetProps {
   readonly className?: string;
   readonly compute: ComputeProbeState;
+  readonly nodeInventory?: ComputeNodeInventorySummary;
   readonly onConfigure: () => void;
   readonly refreshing?: boolean;
   readonly stale?: boolean;
@@ -98,6 +103,7 @@ export interface ComputeEnvironmentWidgetProps {
 export function ComputeEnvironmentWidget({
   className,
   compute,
+  nodeInventory,
   onConfigure,
   refreshing = false,
   stale = false,
@@ -136,6 +142,15 @@ export function ComputeEnvironmentWidget({
 
       <div className="fm-start-env__body">
         <ProbeStatus compute={compute} error={error} refreshing={refreshing} stale={stale} />
+        {nodeInventory ? (
+          <>
+            <ComputeNodeInventoryStatus
+              className="fm-start-env__note"
+              summary={nodeInventory}
+            />
+            <ComputeNodeOverviewSummary summary={nodeInventory} />
+          </>
+        ) : null}
         {sampleTime ? (
           <p className="fm-start-env__note">
             Latest available telemetry sample: <time dateTime={sampleTime.dateTime}>{sampleTime.label}</time>
@@ -178,6 +193,7 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
             (candidate) => candidate.backend === backend && candidate.device === device,
           );
           const availability = lane?.availability ?? "unknown";
+          const diagnostic = availability === "unknown" ? lane?.diagnostic : undefined;
           let label: string;
           if (compute === undefined) {
             label = "Loading";
@@ -185,6 +201,10 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
             label = "Available";
           } else if (availability === "unavailable") {
             label = "Unavailable";
+          } else if (diagnostic?.state === "available") {
+            label = "Experimental";
+          } else if (diagnostic?.state === "unavailable") {
+            label = "Experimental unavailable";
           } else {
             label = "Not reported";
           }
@@ -193,13 +213,18 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
             <li
               className="fm-start-env__lane"
               data-availability={availability}
+              data-diagnostic-state={diagnostic?.state}
               data-state={compute === undefined ? "loading" : undefined}
               key={`${backend}-${device}`}
             >
               <span className="fm-start-env__lane-name">
                 {backend} · {device}
               </span>
-              <span className="fm-start-env__lane-state">
+              <span
+                aria-label={diagnostic?.reason ? `${label}: ${diagnostic.reason}` : undefined}
+                className="fm-start-env__lane-state"
+                title={diagnostic?.reason}
+              >
                 <span aria-hidden="true" className="fm-start-env__lane-dot" />
                 {label}
               </span>
@@ -208,7 +233,7 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
         })}
       </ul>
       <p className="fm-start-env__note">
-        Runtime support is separate from detected hardware. A concrete device is resolved when a run starts.
+        Runtime support is separate from detected hardware. Experimental entries are diagnostic only. A concrete device is resolved when a run starts.
       </p>
     </section>
   );
@@ -291,6 +316,7 @@ function ProbeStatus({
 }
 
 function ProbedEnvironment({ compute }: { readonly compute: ComputeEnvironment }) {
+  const [showAllGpus, setShowAllGpus] = useState(false);
   const threadsAvailable = Number.isFinite(compute.cpuThreads) && compute.cpuThreads > 0;
   const ram =
     compute.cpuProbeStatus === "unavailable"
@@ -317,11 +343,27 @@ function ProbedEnvironment({ compute }: { readonly compute: ComputeEnvironment }
         </p>
       ) : null}
       {compute.gpus.length > 0 ? (
-        <ul aria-label="Detected GPUs" className="fm-start-env__gpu-list">
-          {compute.gpus.map((gpu, index) => (
+        <>
+          {compute.gpus.length > INITIAL_GPU_SUMMARY_COUNT ? (
+            <Button
+              aria-expanded={showAllGpus}
+              className="fm-start-env__gpu-expand"
+              onClick={() => setShowAllGpus((current) => !current)}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              {showAllGpus ? "Show fewer GPUs" : `Show all ${compute.gpus.length} GPUs`}
+            </Button>
+          ) : null}
+          <ul aria-label="Detected GPUs" className="fm-start-env__gpu-list">
+            {compute.gpus
+              .slice(0, showAllGpus ? compute.gpus.length : INITIAL_GPU_SUMMARY_COUNT)
+              .map((gpu, index) => (
             <GpuSummary gpu={gpu} key={gpu.index ?? gpu.name} position={index + 1} />
-          ))}
-        </ul>
+              ))}
+          </ul>
+        </>
       ) : null}
 
       <div className="fm-start-env__cpu">

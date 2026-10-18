@@ -20,6 +20,7 @@ from validate_scientific_docs import (
 
 SCIENTIFIC_ROOTS = (
     "docs/physics",
+    "docs/audits",
     "public_docs/site/physics",
     "public_docs/site/numerical-methods",
 )
@@ -39,10 +40,15 @@ NUMERICAL_EXPECTED_LANES = {
     for solver in ("FEM", "FDM")
     for device in ("CPU", "GPU")
 }
+SCIENTIFIC_AUDIT_ROOTS = ("docs/audits/llg-solver",)
+SCIENTIFIC_AUDIT_FILES = {
+    "docs/audits/2026-08-24-fem-fdm-3d-visualization-frontend-backend-audit.md",
+}
 EXEMPT_NAMES = {"README.md", "index.md"}
 EXEMPT_PATHS = {
     # Governance for authoring physics notes, not a physical/numerical model note.
     "docs/physics/0000-physics-documentation-standard.md",
+    "public_docs/site/physics/conventions.md",
 }
 
 
@@ -65,10 +71,17 @@ def _read(repo: Path, revision: str, path: str) -> bytes | None:
 
 def _is_scientific_page(path: str) -> bool:
     candidate = PurePosixPath(path)
-    return (
-        candidate.suffix == ".md"
-        and candidate.name not in EXEMPT_NAMES
-        and any(candidate.is_relative_to(root) for root in SCIENTIFIC_ROOTS)
+    if candidate.suffix != ".md" or candidate.name in EXEMPT_NAMES:
+        return False
+    if candidate.is_relative_to("docs/audits"):
+        return (
+            path in SCIENTIFIC_AUDIT_FILES
+            or any(candidate.is_relative_to(root) for root in SCIENTIFIC_AUDIT_ROOTS)
+        )
+    return any(
+        candidate.is_relative_to(root)
+        for root in SCIENTIFIC_ROOTS
+        if root != "docs/audits"
     )
 
 
@@ -124,9 +137,18 @@ def _validate_numerical_method_manifest(
     if page_bytes is None:
         errors.append(f"document page does not exist at {head}: {expected_page}")
     else:
-        for marker in NUMERICAL_METHOD_REQUIRED_MARKERS:
-            if marker not in page:
-                errors.append(f"page missing required numerical-method section: {marker}")
+        is_full_publication = all(
+            key in manifest for key in ("equations", "symbols", "public_api")
+        )
+        publication_errors = (
+            validate_page(repo, manifest, read_file=lambda path: _read(repo, head, path))
+            if is_full_publication
+            else ["not a full publication"]
+        )
+        if publication_errors:
+            for marker in NUMERICAL_METHOD_REQUIRED_MARKERS:
+                if marker not in page:
+                    errors.append(f"page missing required numerical-method section: {marker}")
         if "```{math}" not in page or ":label:" not in page:
             errors.append("page requires at least one labelled MyST math equation")
         if not re.search(r"(?i)\\mathrm|\bSI\b|\bunit", page):

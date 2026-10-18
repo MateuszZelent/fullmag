@@ -1,25 +1,33 @@
 //! Read-only, generation-bound observation of the native development watcher.
 
-use std::{
-    path::PathBuf,
-    sync::{atomic::Ordering, Arc},
-    time::SystemTime,
-};
-
-use axum::{extract::State, http::HeaderMap, response::Response};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 
-use crate::{
-    error::ApiError,
-    router_v2::handlers::shared::{conditional_json_response, stable_strong_etag},
-    schemas::development_backend::{
-        DevelopmentBackendReason as Reason, DevelopmentBackendResource,
-        DevelopmentBackendState as BuildState, DevelopmentBackendWorkspaceIdentity,
-        DevelopmentBuildIdentity,
-    },
-    types::AppState,
-};
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DevelopmentBuildIdentity {
+    pub(crate) id: String,
+    pub(crate) source_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DevelopmentBackendState {
+    Disabled,
+    Waiting,
+    Building,
+    Ready,
+    Failed,
+    Superseded,
+    Stopped,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DevelopmentBackendStatus {
+    pub(crate) configured: bool,
+    pub(crate) state: DevelopmentBackendState,
+    pub(crate) current_build: Option<DevelopmentBuildIdentity>,
+    pub(crate) ready_build: Option<DevelopmentBuildIdentity>,
+}
 
 const PRIVATE_SCHEMA: &str = "fullmag.backend-watch.v2";
 const MAX_STATUS_BYTES: usize = 8192;
@@ -51,7 +59,7 @@ pub(crate) enum DevelopmentBackendConfig {
 /// Internal watcher view with the immutable generation/worktree scope retained for private checks.
 #[derive(Debug, Clone)]
 pub(crate) struct DevelopmentBackendObservation {
-    pub(crate) resource: DevelopmentBackendResource,
+    pub(crate) resource: DevelopmentBackendStatus,
     pub(crate) generation_id: Option<String>,
     pub(crate) worktree_id: Option<String>,
 }
@@ -143,19 +151,12 @@ impl DevelopmentBackendConfig {
         }
     }
 
-    pub(crate) fn observe(&self, now_ms: u64) -> DevelopmentBackendResource {
-        let mut result = DevelopmentBackendResource {
-            schema_version: "1.0.0".into(),
+    pub(crate) fn observe(&self, now_ms: u64) -> DevelopmentBackendStatus {
+        let mut result = DevelopmentBackendStatus {
             configured: !matches!(self, Self::Disabled),
-            revision: 0,
-            state: BuildState::Unknown,
+            state: DevelopmentBackendState::Unknown,
             current_build: None,
             ready_build: None,
-            build_available: false,
-            build_request_id: None,
-            workspace_identity: None,
-            restart_available: false,
-            reason: Reason::ConfigurationInvalid,
         };
         let Self::Managed {
             storage_root,
@@ -166,8 +167,7 @@ impl DevelopmentBackendConfig {
         } = self
         else {
             if matches!(self, Self::Disabled) {
-                result.state = BuildState::Disabled;
-                result.reason = Reason::Disabled;
+                result.state = DevelopmentBackendState::Disabled;
             }
             return result;
         };
@@ -177,7 +177,6 @@ impl DevelopmentBackendConfig {
             .as_ref()
             != Some(storage_root)
         {
-            result.reason = Reason::ObservationUnavailable;
             return result;
         }
         let Ok(bytes) = fullmag_session::repository_path::read_bounded_regular_file(
@@ -185,11 +184,9 @@ impl DevelopmentBackendConfig {
             relative_status,
             MAX_STATUS_BYTES,
         ) else {
-            result.reason = Reason::ObservationUnavailable;
             return result;
         };
         let Ok(frame) = serde_json::from_slice::<PrivateFrame>(&bytes) else {
-            result.reason = Reason::ObservationInvalid;
             return result;
         };
         if frame.schema != PRIVATE_SCHEMA
@@ -210,23 +207,20 @@ impl DevelopmentBackendConfig {
             || (frame.state != PrivateState::Ready
                 && (frame.ready_build_id.is_some() || frame.ready_source_sha256.is_some()))
         {
-            result.reason = Reason::ObservationInvalid;
             return result;
         }
-        result.revision = frame.revision;
         if frame.updated_unix_ms > now_ms.saturating_add(MAX_FUTURE_MS)
             || now_ms.saturating_sub(frame.updated_unix_ms) > MAX_AGE_MS
         {
-            result.reason = Reason::ObservationStale;
             return result;
         }
-        (result.state, result.reason) = match frame.state {
-            PrivateState::Waiting => (BuildState::Waiting, Reason::BuildPending),
-            PrivateState::Building => (BuildState::Building, Reason::BuildPending),
-            PrivateState::Ready => (BuildState::Ready, Reason::RestartIntegrationPending),
-            PrivateState::Failed => (BuildState::Failed, Reason::BuildFailed),
-            PrivateState::Superseded => (BuildState::Superseded, Reason::BuildPending),
-            PrivateState::Stopped => (BuildState::Stopped, Reason::WatcherStopped),
+        result.state = match frame.state {
+            PrivateState::Waiting => DevelopmentBackendState::Waiting,
+            PrivateState::Building => DevelopmentBackendState::Building,
+            PrivateState::Ready => DevelopmentBackendState::Ready,
+            PrivateState::Failed => DevelopmentBackendState::Failed,
+            PrivateState::Superseded => DevelopmentBackendState::Superseded,
+            PrivateState::Stopped => DevelopmentBackendState::Stopped,
         };
         if frame.state == PrivateState::Ready {
             result.ready_build = Some(DevelopmentBuildIdentity {
@@ -236,7 +230,6 @@ impl DevelopmentBackendConfig {
                 source_sha256: frame.source_sha256,
             });
         }
-        result.build_request_id = frame.request_id;
         result
     }
 
@@ -293,53 +286,4 @@ enum PrivateState {
     Failed,
     Superseded,
     Stopped,
-}
-
-#[utoipa::path(
-    get, path = "/v2/platform/development-backend",
-    responses(
-        (status = 200, description = "Read-only native development compilation status", body = DevelopmentBackendResource),
-        (status = 304, description = "Development backend status has not changed"),
-    ), tag = "platform"
-)]
-pub async fn get_development_backend(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    let config = state.development_backend.clone();
-    let build_transport_configured = matches!(&config, DevelopmentBackendConfig::Managed { .. })
-        && state.development_restart_transport.is_configured();
-    let workspace_identity = if matches!(&config, DevelopmentBackendConfig::Managed { .. }) {
-        let _transition = state.current_live_session_transition.lock().await;
-        let current = state.current_live_state.read().await;
-        Some(DevelopmentBackendWorkspaceIdentity {
-            api_instance_id: state.request_scope_instance_id.clone(),
-            session_id: current
-                .as_ref()
-                .map(|snapshot| snapshot.session.session_id.clone()),
-            session_epoch: state.current_live_session_epoch.load(Ordering::Acquire),
-        })
-    } else {
-        None
-    };
-    let mut body = tokio::task::spawn_blocking(move || {
-        let now_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|value| value.as_millis().min(u64::MAX as u128) as u64)
-            .unwrap_or(0);
-        config.observe(now_ms)
-    })
-    .await
-    .map_err(|_| ApiError::internal("development observer task failed"))?;
-    body.workspace_identity = workspace_identity;
-    body.build_available = build_transport_configured
-        && body.configured
-        && matches!(
-            body.state,
-            BuildState::Waiting | BuildState::Building | BuildState::Ready | BuildState::Failed
-        );
-    let bytes = serde_json::to_vec(&body)
-        .map_err(|_| ApiError::internal("development observer serialization failed"))?;
-    let etag = stable_strong_etag(&format!("development-backend:{:x}", Sha256::digest(bytes)));
-    Ok(conditional_json_response(&headers, &etag, &body))
 }

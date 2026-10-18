@@ -158,7 +158,7 @@ def _problem(resolution: Resolution) -> fm.Problem:
         g_up_Spm2=1.0e15,
         g_down_Spm2=0.5e15,
         g_r_Spm2=BORIS_GMIX_SPM2[0],
-        g_i_Spm2=BORIS_GI_SPM2,
+        g_i_Spm2=BORIS_GMIX_SPM2[1],
     )
     spin = fm.SpinDriftDiffusion(
         id="spin",
@@ -386,6 +386,15 @@ def _materialize_comparison_artifact(
     telemetry = module.get("telemetry")
     if not isinstance(telemetry, dict):
         raise RuntimeError("not_run: Fullmag transport telemetry is missing")
+    measured_charge_closure = telemetry.get("charge_net_boundary_current_a")
+    if isinstance(measured_charge_closure, bool) or not isinstance(measured_charge_closure, (int, float)):
+        raise RuntimeError("not_run: Fullmag measured charge closure is missing or invalid")
+    try:
+        charge_closure = float(measured_charge_closure)
+    except OverflowError as error:
+        raise RuntimeError("not_run: Fullmag measured charge closure is outside finite range") from error
+    if not math.isfinite(charge_closure):
+        raise RuntimeError("not_run: Fullmag measured charge closure is non-finite")
     interface_fluxes = module.get("interface_fluxes")
     if not isinstance(interface_fluxes, list) or not interface_fluxes:
         raise RuntimeError("not_run: Fullmag transport interface flux is missing")
@@ -433,7 +442,7 @@ def _materialize_comparison_artifact(
             "spin_flux_jump": spin_flux_jump,
             "interface_observation_count": len(interface_fluxes),
             "torque": torque,
-            "charge_closure": telemetry.get("charge_net_boundary_current_a", 0.0),
+            "charge_closure": charge_closure,
             "torque_source": "sum of Fullmag cellwise Gilbert transport torque; not BORIS Tsi",
         },
         "conventions": {

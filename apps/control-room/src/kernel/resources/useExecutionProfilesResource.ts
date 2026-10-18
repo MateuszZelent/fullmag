@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 
 import { PLATFORM_COMPUTE_PROFILES_PATH } from "../api/apiPaths";
-import type { ExecutionProfileCatalogResource, PublishExecutionProfileRequest } from "../api/apiTypes";
+import type { ExecutionProfileCatalogResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { useResource } from "./useResource";
 
@@ -35,11 +35,9 @@ export function useExecutionProfilesResource() {
     resourceKey: PLATFORM_COMPUTE_PROFILES_PATH,
     resolveRevision: (catalog) => catalog.revision,
   });
-  const publish = useCallback((request: PublishExecutionProfileRequest) =>
-    api.platform.publishComputeProfile(request), [api]);
   const findPublication = useCallback(async (intentId: string) => {
     const page = await api.platform.computeProfiles({ client_intent_id: intentId, limit: 1 });
     return page.entries[0] ?? null;
   }, [api]);
-  return { ...resource, publish, findPublication, scope: api.resourceCacheScope };
+  return { ...resource, findPublication, scope: api.resourceCacheScope };
 }

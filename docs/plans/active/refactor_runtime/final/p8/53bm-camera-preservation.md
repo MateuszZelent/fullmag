@@ -2,9 +2,13 @@
 
 ## Status
 
-Potwierdzony błąd P1: restart zachowuje scenę, lecz traci projekcję kamery.
-Poprawka ownera jest w realizacji; runtime po poprawce pozostaje **NOT VERIFIED**.
-Nie zamyka to P8-53 ani całego planu.
+Potwierdzony wcześniej błąd P1 odtworzenia kamery ma poprawkę ownera
+oraz dodatni dowód natywnego restartu Windows/FDM CPU z Grid/Compute.
+Terminalna bramka `2998926363e84fd5b32569767c9a44b0`: **10 PASS, exit 0,
+27/27 procesów odebranych**, wszystkie sześć pól kamery preserved=true.
+Guard capture kamery także ma regresję z rzeczywistego UI.
+Integracja PR #160 i odrębna poprawka korelacji modalu Grid pozostają
+otwarte. Nie zamyka to P8-53, pozostałych lane ani całego planu.
 
 ## Dowód przed poprawką
 
@@ -516,3 +520,460 @@ bez natywnego consumera i bez niepustego dokumentu.
 Scoped lint PASS, exit 0, `0c39a4a0de25403ebe26a99dae50f580`.
 Przyczyna odmowy rzeczywistej próby 4f501 nadal nie jest potwierdzona:
 ten przyrost usuwa lukę diagnostyczną, nie kwalifikuje restartu.
+
+### Pakiet diagnostyki i odmowa produkcyjnego typechecku
+
+Przyrost diagnostyki kandydata zapisano na remote master:
+`279b634ea57f0d6383d58793c9e065e58ad45eea`
+(`fix: distinguish candidate confirmation capture refusals`). Niezależny
+review nie znalazł P0/P1/P2. Managed build-only
+`native-build-a491c62a9cb84fa8aaf9d7c0cdbd92aa.log` zakończył się
+`completed`, exit 0, `2026-10-13T23:21:49.195357+02:00`.
+API/CLI: 1m05s, desktop: 1m10s (fazy Cargo, nie całe przygotowanie).
+Manifest SHA256 `3ab4d4ca2feb2a3fee1ab859e70992c8d0838d86c8f6ca65eccd0c252532b0d4`;
+API SHA256 `7ebef7b8d249453af53c18aa3a9c3ebad3682716ed05dfd6c4ce73f13e231865`.
+Kapsuła `c51d4a7f9fd00d76be469846f3a42040262bb403a14315c260270454cbc8c04a`,
+source snapshot `81f4edbc50b611424f0aa6ff2dc17c6c0bae3c51e4da79b7565a242f5c767b0f`,
+inventory `4d9a8e59b7d197250d3dd9d2f1b86a59e6a18b1dea4189622099feca4ae3f105`.
+Hashy ownerów, kontrolera i action service w kapsule i checkoutcie są zgodne.
+
+Następna prywatna próba `2217069eff234263823106a5d37a1928` zakończyła się
+przed otwarciem UI: `Staged frontend typecheck failed`, exit 1 (recipe 2),
+17/17 procesów terminalnych. Nie wykonano restartu ani nowej próby capture.
+Pełne diagnozy produkcyjnego TypeScript:
+
+- `ComputeEnvironmentSettings.tsx(124,27) TS2322`: przekazanie
+  `ComputeEnvironment | null` do panelu wymagającego niepustego odczytu;
+- `ExecutionProfilesSettings.tsx(210,92) TS2339`: odwołanie do `kind`
+  po wyczerpaniu zamkniętego union distributed/single_process.
+
+W checkoutcie dodano tylko jawny warunek `compute !== null` do gałęzi
+szczegółów oraz usunięto niemożliwe odwołanie do `parallelism?.kind`
+w końcowej gałęzi; brak konfiguracji nadal jest prezentowany jako Inherit.
+Obie linie znajdują się w cudzych nowych, niezacommitowanych sekcjach,
+nieobecnych w HEAD. Nie stage'owano całych plików ani nie przypisano sobie
+tych implementacji. Nowy snapshot musi zawierać te poprawki; istniejącej
+kapsuły nie modyfikowano.
+
+`just check-control-room-production-source`: PASS, exit 0,
+`f49b7b793a844873a05e7a0bc9e91a21`, digest przed i po
+`83605d27af259a3c64e9144e11f5dfce29c84398a126fdb394c9aaa113d397b9`.
+Nie kompilowano testów jednostkowych. Ten dowód usuwa blokadę typów bieżącego
+checkoutu, lecz nie zmienia wyniku próby 221706 ani nie potwierdza restartu.
+
+### Kontrola pakietu diagnostyki podczas oczekiwania na slot
+
+Niezależny review dwóch lokalnych poprawek TypeScript zakończył się bez
+P0/P1/P2. Wcześniejsze zgłoszenie dotyczące końcowego `parallelism?.kind`
+wycofano jako false positive: poprawiona gałąź kończy się `undefined`,
+zachowując etykietę Single process dla właściwego wariantu.
+
+`just verify-windows-frozen-development-backend-api` z manifestem
+`3ab4d4ca2feb2a3fee1ab859e70992c8d0838d86c8f6ca65eccd0c252532b0d4`
+zakończył się niepowodzeniem, exit 1 (recipe 2), receipt
+`caab51c039de43a38d93fc3d93c830d2`, po 7 kontrolach. Timeout 10 sekund
+wystąpił w końcowym `child.wait` dla własnego API `owner-empty`, po żądaniu
+zatrzymania przez weryfikator. Receipt ma 4/5 procesów z `waited=true`;
+PID 158332 nie występował już w późniejszym odczycie procesów, ale brak
+terminalnego wait w receipt pozostaje luką dowodową. Nie przedstawiać
+tej próby jako pełnej regresji API ani jako potwierdzonego błędu restartu.
+Nie uruchomiono UI, nie restartowano sesji użytkownika.
+Hash weryfikatora `931ebdb1afedab11dd41b63b437f5038ccc44301f86a6ab60c4cacc2c94934ef`.
+
+Główny checkout został w międzyczasie zaktualizowany przez inną pracę do
+`7224c257b36ca1ed6dc6c54290ddedbf14caf73d`. Lokalne poprawki TypeScript
+pozostają obecne, cudze pliki pozostają poza stagingiem tego zadania.
+Po potwierdzeniu zakończenia obcego buildu FEM zlecono nowy
+`just windows-workspace-build dev dev 3258 true`. Wynik tego buildu i
+rzeczywisty restart z kamerą wymagają odrębnego terminalnego dowodu.
+
+### Kontynuacja 14.10.2026 — utrwalony snapshot i integracja
+
+Checkpoint powyżej zapisano w commicie
+`e1ff1a7af12b7077bc6f5f6043fc061ceab4ce35`. Bezpośredni push do master
+odmówił fast-forward przez równoległe aktualizacje remote. Commit jest
+na `codex/camera-handoff-checkpoint-20261014`, PR
+[160](https://github.com/MateuszZelent/fullmag/pull/160): tylko trzy pliki
+dokumentacji, bez konfliktów, lecz CI nie pozwala uznać integracji za gotową.
+Główny dirty checkout pozostaje na master; nie scalano do niego szerokiej
+aktualizacji ani nie zmieniano cudzych plików.
+
+Build `native-build-9a26cabc0ca14011ac32330ca4c90ab7.log` utrwalił snapshot
+`acfc1505daeb0eb07850aea7179aeee0c452f95f277d307bf7e1236ab43d5630`.
+Fingerprint backendu `ae78a1a5fe3109786cfb6933dc4c6c7fc5be2230b5cdf69e9b8f5c262c2506d2`,
+inventory `02f10c90e35bcc5fd417176c66127542c9f10bdc4ece39042e96b14fcd65096f`.
+Bezpośredni odczyt obu plików ze snapshotu potwierdza warunek `compute !== null`
+oraz końcową gałąź `undefined`, z zachowaną etykietą Single process.
+Wersja pakietu `0.1.0-dev.20261013.ge1ff1a7af12b.dirty.s6137d856bd99+9782`.
+pnpm odtworzył 771 pakietów z cache, bez pobrań, w 3m 59,5s;
+to koszt przygotowania zależności, nie czas kompilacji Cargo.
+W chwili tego checkpointu build ma `running`; nie jest to PASS pakietu.
+
+Logi CI PR160 wskazują odrębne problemy w testowanym drzewie merge:
+
+- [generated-api-determinism](https://github.com/MateuszZelent/fullmag/actions/runs/38477816344/job/115572761459)
+  oraz [rust-contracts](https://github.com/MateuszZelent/fullmag/actions/runs/38477816344/job/115572760912):
+  `E0063`, `crates/fullmag-authoring/src/scene.rs:75`. `SceneDocument::default()`
+  nie inicjalizuje `antenna_port_modes`, `antenna_field_solve_stages`,
+  `antenna_target_projections`, `solved_antenna_drives`, `antenna_spectrum_requests`.
+  Odczyt źródła base `911902d6d545d1471c77290eedef1a1b6937fb62` potwierdza
+  deklaracje pięciu wektorów i brak ich inicjalizacji w Default.
+- [control-room-contracts](https://github.com/MateuszZelent/fullmag/actions/runs/38477816344/job/115572761308):
+  `ERR_PACKAGE_PATH_NOT_EXPORTED` dla `typescript/bin/tsc`,
+  `apps/control-room/scripts/typecheck-control-room.mjs:21`. Odczyt tego samego
+  base potwierdza odwołanie do nieeksportowanej ścieżki. Nie jest to wynik
+  sprawdzenia typów ani dowód naprawienia go przez lokalny f49.
+
+Nie uruchamiano ponownie CI ani kompilacji testów jednostkowych. Diagnozy
+nie oznaczają poprawienia źródeł remote; PR i rzeczywisty restart pozostają otwarte.
+
+Niezależny read-only audyt czterech dalszych jobów tego samego workflow
+potwierdził następujące granice:
+
+- `python-contracts` (job `115572761655`): dwie odrębne niespójności
+  oczekiwań `scripts/test_bootstrap_workflow_contract.py:246,299` względem
+  YAML. Test zakłada bezpośrednią kolejność kroku quantity po poprzedniku,
+  pomijając dodany krok session reachability, oraz równość liczby wystąpień
+  checkout@v7 z krokami nazwanymi Checkout (`6 != 5`). Nie naprawiono testu.
+- `checkpoint-windows-contracts` (job `115572761660`) oraz
+  `fdm-relaxation-qualification` (job `115572761217`): wspólny E0063
+  zatrzymuje kompilację. Walidator Python relaksacji ma 16 PASS, lecz test
+  Rust nie wystartował. Nie wnioskować z tego o błędzie fizyki relaksacji.
+- `browser-fixture-smoke` (job `115572761782`): build TypeScript kończy się
+  przed próbą aplikacji. Pierwsze błędy dotyczą `BufferSource` w
+  `fdmRegionMembershipCodec.ts:482` i `BlobPart` w
+  `ProjectDocumentController.ts:938`. Dalej są niespójne fixture'y scope
+  oraz brak symboli AST (`createSourceFile`, `Node`, `SyntaxKind`) w użytej
+  wersji TypeScript. Base ma 7.0.2, a HEAD dokumentacyjnego PR ma 5.8.3;
+  lokalny typecheck f49 nie kwalifikuje tego nowego toolchainu.
+
+To diagnoza logów i źródeł, bez ponowienia jobów i bez zmian zależności.
+Nie zmienia wyniku ani zakresu natywnego pakietu z snapshotu acfc.
+
+### Pakiet 94fc, desynchronizacja typów i blokada writera fixture
+
+Build acfc zakończył się `completed`, exit 0. Manifest
+`94fc81b9c323e28f93fa8549bea299ad5c380075a07714d1e71cb0fecd09d45f`,
+API `deac8a4a07a5ec128d4cd53d775ce9a4a750b34f6d1c958a1e865d3e1724a7b3`,
+CLI `8799d7b22531eef75d342dff57d8b8da628977266a59a39d6c290749c5207a83`,
+desktop `09f17b743276933323bc9bc15613d484747085717d3ce43fa8cd79773cc8c0ce`.
+Source snapshot `6137d856bd9995b4b75cf6a41d4ead7bade7b090198ba26110df6a97897a627b`.
+Fazy Cargo: API/CLI 4m 28s, desktop 1m 30s; to nie cały koszt przygotowania.
+
+Próba browser `57e2b855f74948a9bf510fb5f3ca326b`: failed przed UI,
+18/18 procesów odebranych. Nowa diagnoza:
+`computeNodeInventory.ts(382,40) TS2339`, brak `node_policy` w wygenerowanym
+typie odpowiedzi. Poprzednie dwie poprawki były obecne w snapshocie.
+Wynik nie obejmuje capture ani restartu.
+
+Pełna bramka API `9467e0693243475491737c29e57b778e` wykonała 290 kontroli,
+po czym zakończyła się failed przez WinError 10054. Wszystkie 97 procesów
+ma waited=true. Przyczyna źródłowa w `preparation.stderr.log`:
+`preparation resource lease file name must end in .json`.
+Fixture publikował lease przez Python `atomic_json` bez natywnej blokady;
+scheduler mógł zobaczyć tymczasowy `.<name>.<uuid>.tmp`. Nie jest to dowód
+naprawienia lub awarii fizyki ani PASS całej bramki.
+
+Poprawiono tylko publikację własnych fixture w weryfikatorze: istniejący
+`WRITER.lock`, `r+b`, bounded retry, 1 bajt od offsetu 0; odczyt dokładnego
+deskryptora `fullmag.writer.lock.v1\n`. `mkdir` i zapisy active/released są
+pod blokadą, release następuje przed zapytaniem `drain_idle_confirmed`.
+Nie tworzono ani nie naprawiano deskryptora i nie zmieniono walidatora Rust.
+Review potwierdził, że legacy scheduler i idle fence skanują lease'y pod
+`write_transaction()`; nie znalazł P0/P1/P2 w poprawce i jej regresjach.
+
+`just verify-windows-development-handoff`: PASS, exit 0, 186 kontroli,
+receipt `900fb3ed7e7e4659b95a51210d70c635`. Fingerprint before/after
+`78d8bb0cf05b61ea73302cc76a3af343e431bbc62d4595c3a89304542da3a8dc`.
+Pięć nowych kontroli używa rzeczywistych Windows locks i sprawdza blokadę
+podczas publikacji, oczekiwanie na konkurenta, cleanup po błędzie,
+odmowę brakującego/niepoprawnego deskryptora i ścieżki spoza własnego store.
+Nie kompilowano testów natywnych. Pełna bramka API po poprawce zakończyła
+się PASS: receipt `ee9dc8ae88c840b09716322aba936a9c`, exit 0,
+301 kontroli i 98/98 procesów z waited=true (0 nieodebranych).
+Wynik dotyczy zamrożonego pakietu 94fc i poprawionego weryfikatora;
+nie zastępuje dowodu odtworzenia kamery w rzeczywistej przeglądarce.
+
+Odrębna bramka `verify-windows-project-document-frozen` na 94fc: PASS,
+33 kontrole, 6/6 procesów odebranych, receipt
+`26329c681a074c8294d2a1685d1d90ce`. Kanoniczny eksport OpenAPI exit 0,
+SHA256 `75f4aba5570a6edc7955cd651d839d77b381721f2d17c7d71240d22289770687`.
+Zakres runtime-free archive i eksportu nie zastępuje pełnego service gate.
+
+Importowano kontrakt przez `generate-openapi-v2.mjs --input --native-receipt`,
+z jawnym e1ff i snapshotem 6137, bez Cargo fallbacku. Poprzednie cztery
+artefakty zachowano w `contracts-before-sync` pod receipt 26329.
+Nie zmieniono zestawu endpointów; różnice schematów dotyczą
+ComputeNodeResource/ComputeNodePolicyResource. `just generate-control-room-client`
+PASS (`adbccec0f42745918811aa2094077c20`). `node_policy` jest teraz
+optional/nullable w wygenerowanym typie. Artefakty pozostają częścią
+cudzej niezacommitowanej implementacji; nie stage'owano całych tych plików.
+
+Production typecheck PASS, exit 0, `13d3c33c7a3643ec8f9b3719e05a04c8`,
+before/after `7160cc932c63c402d90b5472cc6dd80562501fed7c27e7145c209544946f49cf`.
+Nie zmienia to wyniku próby 57e2 ani nie kwalifikuje TypeScript 7 z remote.
+Nowy snapshot frontendu i rzeczywiste odtworzenie kamery nadal są wymagane.
+
+### Kolejny pakiet z synchronizowanym frontendem
+
+`just windows-workspace-build dev dev 3258 auto` zakończył się exit 0.
+Log: `native-build-7fa6330d12054c53a66c3efdaa1aa91c.log` w profilu
+`windows-native-fdm-cpu-dev`. Manifest SHA256
+`cd7fe207b6bc615ddc4e4b0fd7c07ba90c724ed199d0c5aff410996dd8c7be3f`.
+Kopia źródeł `e89a8bd16bc6dc3a571f5de9d5fa19a8aa4a5c9678ba96292af080d276b689a1`
+zawiera optional/nullable `node_policy` w typach wygenerowanych.
+Tożsamość źródeł `bd1ad70a52633a30e1ab2bb89f7db2dcd51c878e606695606dcc41f5912e1400`,
+backend `64b1cff84bd247a20ea3a831bedf057d6a2642e91049307e2aae88b2ad4f5184`.
+EXE API `fd4a83bde75610f41abf2f5126e6ae022058d59c3b6d71ffde8710ac88b5332f`,
+CLI `ff286708557fccb0bd692a05acb97183982f2b7f26f7d2cb8c123f8338cc4fbc`,
+desktop `1255b7bb9112090cc68219fda7b538ccf2f078b532ba05606e5f5d05ff5d1ba0`.
+`source_identity_check=passed`. Cargo API/CLI 59.48 s, desktop 1 min;
+przygotowanie źródeł i publikacja są odrębnymi kosztami. pnpm ponownie
+użył 771 pakietów, 0 pobranych, 49.8 s.
+
+Uruchomiono prywatny browser gate z bazowym owner bundle
+`12984ba740244e5e86d8878814069155`. Sukces buildu nie zamyka P8-53BM:
+wynik odtworzenia modelu i kamery po restarcie pozostaje do potwierdzenia.
+
+Próba `14152bbfe6a44c23a485176a4c0ff127` dotarła do rzeczywistego UI:
+1 obiekt, 1 region, 1 materiał, dirty document revision 2. Restart przez
+normalny przycisk, następnie Check restart, zmienił API instance
+`9e748fd2-c2f2-4f5f-878d-40149e15092e` na
+`9c0b447e-fd00-45f4-b334-f1bafd3dd955`; stary API exit 0.
+Nowy workspace zachował hash archiwum
+`a883afeee8f8dab12ec46b6b9b4f743f8c0d5f355920fc6e3e656f406efa3393`,
+dirty flag oraz authored scene hash
+`1fe9c88901466a2490c24995ca9d2030352155d6d027d53a1cad92214ec9a2f6`.
+Canvas po odtworzeniu: 700×297, context_lost=false.
+
+Uzupełniający odczyt `/visualization/state` z nowego API, z kontrolą
+response pin, porównał sześć pól kamery: projection, position, target,
+up, fov_degrees, orthographic_scale. Wszystkie identyczne, projection
+orthographic, scale null. Odczyt zapisano jako `camera-observation.json`
+pod receipt tej próby; nie jest to zamiennik pełnego browser gate.
+[Obraz odtworzonego workspace](evidence/53bm-camera-preserved-partial-20261014.png).
+
+Normalny Build Grid odmówił: obiekt nie miał `magnetization_ref`.
+Command log: `Object 'camera-proof-film-mv7bu6go' must reference a
+magnetization asset before mesh/compute.` Jest to brak wejścia mojego
+modelu kontrolnego. Próba została anulowana przez prywatny, uwierzytelniony
+protokół: failed exit 1, 24/24 procesów odebranych i frontend waited=true.
+Nie zaliczono Grid/Compute ani całego P8-53BM.
+
+Korekta wejścia następnej próby: jeszcze **przed Setup draft i restartem**
+w Inspectorze obiektu Magnetic Texture utworzyć oraz przypisać Uniform
+texture, zatwierdzić Save Texture/Apply i odczytać niepusty
+`magnetization_ref` z committed scene. Dopiero wtedy przechwycić scenę,
+dirty document i kamerę. Bieżący `ObjectMagneticTexturePanel.tsx` posiada
+`saveTexture()`, które buduje asset i zatwierdza transakcję authoring;
+`scene_after_successful_grid()` pozwala tylko usunąć tag mesh:dirty,
+więc dodawanie magnetyzacji dopiero po restarcie nie spełni bramki.
+Nie zmieniać walidatora ani oczekiwanych hashów, by akceptowały poprzednie
+niekompletne wejście. Ponowna próba używa tego samego poprawnie zbudowanego
+pakietu, lecz nowego, kompletnego modelu wejściowego.
+
+### Próba z assetem Uniform: kolejka oraz timing punktu before
+
+Próba `40e080f9a0af4c3d9e1cfb47f4de5f32` używa pakietu cd7fe207.
+Przed capture odczyt zatwierdzonej sceny z kontrolą response pin potwierdził
+`material_ref=mat:complete-proof-film` oraz
+`magnetization_ref=mag:complete-proof-film-mv7cagtf:uniform`; odpowiadający
+asset ma kind=preset_texture. Utworzono również authored region.
+Restart zmienił API instance z `c1d7dde5-0a5d-4fa8-b029-53be97d9d5bb`
+na `d28d631b-02a3-4536-a504-a7685d3446a7`, stary API exit 0;
+nowy API zachował to samo przypisanie magnetyzacji, model i dirty document.
+
+Normalny Build Grid został przyjęty do kolejki: command
+`fm-6f9ffaa7-e555-4d4f-835c-34819bf6cc0d`, kind=fdm_grid_refresh,
+seq=1, status=queued, created_at_unix_ms=1791935937616.
+Odczyt szczegółów z przypiętego nowego API nadal pokazuje
+started_at_unix_ms=null i completed_at_unix_ms=null; nie wysłano duplikatu.
+Po utrwaleniu obserwacji próbę anulowano kontrolowanym protokołem:
+failed exit 1, 24/24 procesów odebranych i frontend waited=true.
+Native cleanup result także ma status=failed; nie oznaczono go PASS.
+Diagnoza wykonawcy po restore trwa na zachowanych źródłach i logach.
+[Obserwacja UI](evidence/53bm-grid-queued-after-restore-20261014.png).
+
+Ten punkt before zapisał perspective, a odczyt po restore orthographic.
+Zmianę projekcji i Setup draft wykonano bez oczekiwania na ACK; domyślny
+idle flush w CameraRegistryController to 8000 ms. Produkcyjny capture
+w DevelopmentKernelOwners wymaga czystego, zaobserwowanego registry,
+natomiast diagnostyczny capture_before czyta API bez takiej bramki.
+To wspiera hipotezę wyścigu punktu pomiaru; nie dowodzi nowego błędu
+odtworzenia kamery. `pending-observation.json` pod receipt zachowuje oba
+odczyty i kolejkę. Porównania ani receipt nie zmieniono dla uzyskania PASS.
+
+WIP strony diagnostycznej: `assertConfirmedCameraForCapture` odmawia przy
+dirty/syncInFlight/error, braku remote revision/camera lub różnicy między
+camera i remoteCamera. Wywołania przed przygotowaniem oraz przed claim
+zapobiegają utrwaleniu punktu before podczas oczekiwania na zapis.
+Diff check PASS; staged-page typecheck/lint i rzeczywista regresja
+toggle→odmowa Setup draft→potwierdzony zapis→ponowne Setup draft pozostają
+NOT VERIFIED. Cały P8-53BM/P8-53 nadal IN PROGRESS.
+
+### Przyczyna kolejki: potwierdzona niekompletna fizyka jako HTTP 500
+
+Po terminalnym zamknięciu próby 40e08 log `native.stderr.log` zachował:
+`model sync returned HTTP 500 Internal Server Error; helper shutdown is not confirmed`.
+Scratch supervisor uruchamia sync przed solverem; na takim wyniku przechodzi
+w synchronization_unknown i nie odtwarza write automatycznie.
+Nowy scratch observer jest uruchamiany w CLI development_restart.rs;
+queued Grid nie dowodzi braku przepięcia obserwatora ani błędu plannera.
+
+Diagnostyka bez API POST, zapisu i solvera: renderer z zainstalowanego
+zamrożonego pakietu cd7fe207 otrzymał dokładną captured scene z receipt.
+Zgłosił `IncompletePhysicsError: Problem requires at least one interaction
+or material anisotropy`. Study miał exchange_enabled=false,
+demag_enabled=false i brak object physics_stack. Sam asset Uniform
+i materiał nie aktywują modułów fizyki. To potwierdzona przyczyna błędu
+renderowania; nie zmienia wymagań fizyki ani dowodów scientific qualification.
+
+WIP poprawki: wejście CLI helpera przechwytuje wyłącznie typed
+IncompletePhysicsError dla render-scene-document, emituje dwupolowy
+`fullmag.scene-render-rejection.v1` / incomplete_physics i exit 2 przed
+publikacją źródła. Direct helper.main/renderer oraz --allow-incomplete
+zachowują dotychczasową semantykę. API uznaje za znaną odmowę tylko
+dokładny exit 2 i envelope o dokładnie dwóch polach; zwraca HTTP 400,
+code=scene_incomplete_physics. Unknown/malformed/timeout nadal 500.
+Scratch klient odczytuje ograniczone body wyłącznie HTTP 400 i dla tego
+kodu pokazuje stały komunikat o aktywacji interakcji/anizotropii;
+pozostałe 4xx/5xx zachowują poprzednią klasyfikację.
+
+Regresja red `b85bbc5fd93148cfbc0422322cbac854`: 189 kontroli, 3 błędy
+wyłącznie brakującego _run_cli. Green po poprawce
+`bf7a73ec129b490eb6d7de045d2529d4`: 189 PASS, exit 0, 0 skips;
+before/after `115c0e96e8ee0ca4e1d2ffcd8720518bf9319b2638c7b9eb94f8684a17f6f76a`.
+Pokrycie: zachowanie istniejącego pliku przy typed odmowie, brak połknięcia
+nieznanego ValueError i niekompletna persistence z written=false.
+Review podstawowego mapowania i guardu kamery: brak P0/P1, source only.
+
+Dodano dwa native API assertions: odmowa 400/code oraz niezmieniona scena
+i rewizja. Są NOT RUN do nowego buildu; nie kompilowano testów jednostkowych.
+Nowy managed build z dirty snapshotem jest w toku, log
+`native-build-996985fbff454e83847b2c2f88eed31e.log`.
+Kolejne wymagane dowody: kompilacja API/CLI, kanoniczny OpenAPI/client,
+frozen native API gate, regresja guardu kamery oraz pełny browser restart
+z jawnie aktywną fizyką przed capture. Nie oznaczono poprawki ani P8-53BM
+jako ukończonych na podstawie samego green Pythona.
+
+### Ukończony build poprawki — 14.10.2026
+
+Managed `just windows-workspace-build dev dev 3258 auto` zakończył się
+exit 0. Zbudowano produkcyjne API, CLI i desktop w profilu backend-dev;
+nie kompilowano testów jednostkowych. Manifest pakietu:
+`1bcaf4c15c4acf4a813d172021c9b00c5ffdbe84ad7c2d8a2c16b41efdd10d0e`.
+Commit bazowy `99d6be2f97976f5392b419f2ecd03b70b4fdaac1`, dirty source
+`9f2473863cf9959f3cb163a9456398b53a4c126fda2d6a921e4751f0f3bcb9f1`,
+backend `a79bc49d271115f57bbdee8c72f40dbcc452623888a954b54a78aa236cb7d46e`.
+Log: `native-build-996985fbff454e83847b2c2f88eed31e.log`.
+
+Przypięta do manifestu frozen API gate zakończyła się exit 0:
+**303 PASS, 99/99 procesów odebranych**, receipt
+`a6c4edb5665f46709d61fa5b535fd3d9`. Nowe kontrole
+`incomplete-physics-render-is-confirmed-input-rejection` oraz
+`incomplete-physics-render-preserves-scene-and-revision` potwierdzają
+HTTP 400/code i brak zmiany sceny/revision. Końcowy backend source pozostał
+`a79bc49d271115f57bbdee8c72f40dbcc452623888a954b54a78aa236cb7d46e`.
+Kanoniczny OpenAPI SHA-256:
+`54c16a8be054a9eadeb034dc40f023e72e72e8249f6d25f3ce85a82482d9acdf`.
+Import przypięty do terminalnego receipt oraz generate-client PASS,
+receipt `9d12898d331f4be9a0218bcf070e6018`.
+Istniejące cudze wygenerowane pliki zachowano przed importem w
+`contracts-before-sync` pod receipt API; do commita zadania wolno włączyć
+wyłącznie własne hunki odpowiedzi 400.
+
+Te dowody nie potwierdzają jeszcze terminalnej obsługi Grid przez scratch
+po odmowie ani pełnego Grid/Compute po restarcie. Regresja kamery i pełna
+próba przeglądarkowa pozostają NOT VERIFIED; P8-53BM nadal IN PROGRESS.
+
+### Regresja capture kamery i jawna odmowa Grid — 14.10.2026
+
+Prywatna próba `a7e054cc1fb44299b8caf33a59877b11` użyła pakietu
+`1bcaf4c15c4acf4a813d172021c9b00c5ffdbe84ad7c2d8a2c16b41efdd10d0e`.
+Staged diagnostyczna strona przeszła typecheck i lint, oba exit 0.
+Normalnymi kontrolkami UI utworzono box `film-mv7ehc2v`, region
+`film-mv7ehc2v:r1`, materiał `mat:proof-film`, Uniform texture
+`mag:film-mv7ehc2v:uniform`, jawną anizotropię Ku1=1000 J/m³ z osią
+[0,0,1] oraz Run `run-1` do 1e-12 s. Wszystko przygotowano przed capture.
+
+Regresja guardu: View → toggle projection i natychmiast Setup draft
+zwróciły `Wait for camera synchronization before preparing the
+before-capture. No before-capture was submitted.`. Po potwierdzonym
+odczycie camera.projection=orthographic z przypiętego API ponowne
+Setup draft utrwaliło punkt before. [Dowód odmowy](evidence/53bm-camera-capture-refused-20261014.png).
+
+Restart zmienił API `d5a6b8f0-1725-4cd2-b28f-7dc375c9fe5c` na
+`07e9ad04-190f-49f1-baa2-bb56fbd471a0`; stary API zakończył się exit 0.
+Dirty document zachował revision=2 i archive SHA-256
+`b0e09ad307e0fb81c72ce2e323868e79eac2e5318907b648f2cba9504ebdac04`.
+Odczyt nowego API oraz before z terminalnego receipt mają identyczne
+projection, position, target, up, fov_degrees i orthographic_scale.
+Viewport po restore: 700×297, context_lost=false.
+
+Build Grid `fm-00ef8ee5-d09b-4017-9833-acd1218f4f36` doszedł do nowego
+scratch wykonawcy i zakończył się status=failed, pending_count=0.
+Log materializacji wskazuje: `FDM discretization hints (cell size) are
+required for Phase 1 execution`. To kolejna brakująca właściwość wejścia
+kontrolnego: w Study nie ustawiono rozmiaru komórki przed capture.
+Modal nadal pokazywał submitting mimo terminalnej odmowy w katalogu
+komend; wymaga to odrębnego sprawdzenia obsługi terminalnego failure.
+Nie wysłano duplikatu Grid i nie zmiękczono porównania sceny.
+
+Odczyty kamery, sceny i komend zapisano osobno jako
+`camera-and-grid-observation.json` pod receipt. Próba została świadomie
+anulowana: terminalny failed/exit 1, 25/25 procesów waited=true.
+Nie uznano jej za PASS całej bramki. [Stan po restore](evidence/53bm-camera-preserved-grid-cell-refusal-20261014.png).
+
+Guard capture kamery ma dowód negatywny i pozytywny z rzeczywistego UI.
+Pełne P8-53BM/P8-53 pozostaje IN PROGRESS: kolejna próba musi ustawić
+FDM default cell (np. 5e-9 m dla tego małego boxu), jawne Ku1, Uniform
+oraz skończony Run przed capture, a następnie wykonać Grid/Compute/Close
+i Finish proof. Wynik tego małego scenariusza nie kwalifikuje naukowo
+pozostałych lane ani wydania.
+
+### Pełna bramka Windows/FDM CPU — PASS 14.10.2026
+
+Receipt `2998926363e84fd5b32569767c9a44b0`: completed, exit 0,
+10 kontroli i 27/27 procesów waited=true. Pakiet B to manifest
+`1bcaf4c15c4acf4a813d172021c9b00c5ffdbe84ad7c2d8a2c16b41efdd10d0e`;
+backend source before/after identyczny:
+`a79bc49d271115f57bbdee8c72f40dbcc452623888a954b54a78aa236cb7d46e`.
+Nie ponawiano kompilacji ani nie zmieniono weryfikatora, aby uzyskać PASS.
+
+Model przed capture zawierał jawne default_cell=[5e-9,5e-9,5e-9] m,
+Ku1=1000 J/m³, Uniform +X i Run do 1e-12 s. Dane API zapisano jako
+`pre-capture-authoring-input.json` pod receipt. Kontrolka Apply Grid
+wykonała też Grid w starym API przed capture; ten sukces nie zastąpił
+wymaganej nowej komendy Grid po restarcie.
+
+API zmieniło się z `1fc80b0b-e160-46e4-a511-0c2127127402` na
+`7648c98c-cfc5-4e28-96ac-afd867748001`, z nową sesją i request scope.
+Scena before/after ma hash dowodu
+`5c28a2a69063f2720bd1e4cadd00f848903e707e11da967d45c5c6da319246cf`.
+Dirty document zachował revision=2 i archive SHA-256
+`1effe614c3cb7ccb42c38e636418a3abec654d1a8c53bb570bb33f182fe91c39`.
+Kamera before/after: orthographic, position=[2e-6,1.4e-6,2e-6],
+target=[0,0,0], up=[0,0,1], fov_degrees=45, orthographic_scale=null.
+Receipt `workspace_browser_camera.preserved=true` porównuje sześć pól.
+Canvas po restore/Compute pozostał 700×297, context_lost=false.
+
+Nowy Grid `fm-1325a9f8-a33e-449a-884e-0ff826ad790b` oraz Compute
+`fm-eae55ced-5114-4289-88ff-190a7ccf0fcd` zakończyły się completed.
+Compute: etap stage-000, completed_step=10, total_stages=1.
+Oba dzieci zakończone exit 0, kill_requested=false. Requested/resolved:
+fdm/cpu/double/strict; runtime_family=cpu-reference,
+engine_id=fdm_cpu_reference. Nie przedstawiać tego jako wykonania GPU
+ani przyszłego compiled-native FDM CPU.
+
+Normalne Close `fm-b7b0e542-9b15-47b2-9f6b-119708c31f0f` zakończyło
+solver i opublikowało tombstone sesji; Finish proof zweryfikował ten
+przepływ oraz niezmieniony dokument. Nie zamykano workspace3197.
+[Dowód UI po Grid/Compute/Close](evidence/53bm-camera-grid-compute-completed-20261014.png).
+
+Niezależnie potwierdzono problem prezentacji: modal Grid pozostał
+submitting mimo status=completed z listy i szczegółu tej samej komendy.
+Read-only diagnoza: grid.build-fdm gubi confirmation.requestId
+(`mesh-confirm-*`), a runFdmGridRefreshOperation generuje inne
+`fdm-grid-refresh-*`. Reducer modalu odrzuca niepasujące eventy.
+Wymagana jest osobna korekta korelacji oraz browser proof modalu;
+PASS natywnej bramki kamery nie dowodzi naprawy tego UI.

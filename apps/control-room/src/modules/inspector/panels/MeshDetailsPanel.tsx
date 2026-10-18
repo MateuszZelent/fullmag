@@ -26,7 +26,6 @@ import { MeshViewportDeliverySection } from "./mesh-details/MeshViewportDelivery
 import { MixedTopologyProvenanceSection } from "./mesh-details/MixedTopologyProvenanceSection";
 import { SharedDomainMeshPolicySection } from "./mesh-details/SharedDomainMeshPolicySection";
 import { FdmGridInspectorPanel } from "./fdm-grid/FdmGridInspectorPanel";
-import { FemMeshReadinessGuideCard } from "./mesh-guide/FemMeshReadinessGuideCard";
 import {
   type MeshDetailsLane,
   useMeshDetailsModel,
@@ -179,18 +178,12 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   }
   const sections = meshDetailsInspectorSections(selection.kind);
   const showSection = (section: string) => sections.includes(section);
-  const showGuide =
-    selection.kind === "mesh.root" ||
-    selection.kind === "mesh.shared-domain" ||
-    selection.kind === "mesh.builds" ||
-    selection.kind === "mesh.quality";
 
   return (
     <div
       key={selection.kind ?? "default"}
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
     >
-      {showGuide ? <FemMeshReadinessGuideCard /> : null}
       {showSection("overview") ? (
         <MeshOverviewSection
           activeBuildRevision={model.activeBuildRevision}

@@ -96,12 +96,17 @@ pub fn host_gpu_ordinal_matches_placement(
 /// Pin the claim's local offer, attempt and budget to one physical host request.
 /// A GPU UUID must be supplied explicitly, even if the local offer label embeds
 /// a UUID. Its identity and capacity are checked by the host ledger at admission.
+/// For a fresh claim, `expected_runtime_generation_sha256` is the immutable
+/// service pin; once a durable lease exists, its binding is authoritative.
 pub fn host_request_for_task_claim(
     store: &SessionStore,
     ledger: &HostResourceLedger,
     claim: &TaskClaim,
     placement: &HostTaskPlacement,
+    expected_runtime_generation_sha256: Option<&str>,
 ) -> Result<HostReservationRequest> {
+    let runtime_generation_sha256 =
+        task_claim_runtime_generation(store, claim, expected_runtime_generation_sha256)?;
     let gpu = match claim.lease.kind {
         ResourceKind::Cpu => {
             if placement.gpu_uuid.is_some() || claim.lease.budget.gpu_memory_bytes != 0 {
@@ -120,7 +125,7 @@ pub fn host_request_for_task_claim(
         }
         _ => bail!("solver host allocation requires a CPU or GPU lease"),
     };
-    Ok(request(
+    request(
         ledger,
         HostReservationIdentity {
             store_id: HostResourceLedger::store_id(store.root())?,
@@ -141,7 +146,8 @@ pub fn host_request_for_task_claim(
         },
         placement.cpu_ids.clone(),
         gpu,
-    ))
+        runtime_generation_sha256,
+    )
 }
 
 /// Preparation retains its own process attempt instead of borrowing the solver
@@ -156,7 +162,11 @@ pub fn host_request_for_preparation_lease(
     if lease.budget.gpu_memory_bytes != 0 {
         bail!("preparation host allocation cannot reserve solver GPU memory");
     }
-    Ok(request(
+    let runtime_generation_sha256 = lease
+        .host_launch_binding
+        .as_ref()
+        .and_then(|binding| binding.runtime_generation_sha256.clone());
+    request(
         ledger,
         HostReservationIdentity {
             store_id: HostResourceLedger::store_id(store.root())?,
@@ -171,7 +181,47 @@ pub fn host_request_for_preparation_lease(
         lease.budget.clone(),
         cpu_ids.clone(),
         None,
-    ))
+        runtime_generation_sha256,
+    )
+}
+
+/// Prefer the durable lease binding over any caller-supplied fallback. A
+/// current ledger read is intentionally not a source of execution identity.
+fn task_claim_runtime_generation(
+    store: &SessionStore,
+    claim: &TaskClaim,
+    expected_runtime_generation_sha256: Option<&str>,
+) -> Result<Option<String>> {
+    let durable_lease = store.read_resource_lease(
+        claim.run_id.as_str(),
+        claim.lease.resource_id.as_str(),
+        claim.lease.lease_token.as_str(),
+    )?;
+    let Some(lease) = durable_lease else {
+        return Ok(expected_runtime_generation_sha256.map(str::to_owned));
+    };
+    if lease.task_id != claim.task_id.as_str()
+        || lease.attempt_id != claim.attempt_id.as_str()
+        || lease.ownership_epoch != claim.ownership_epoch.value()
+    {
+        bail!("durable task lease differs from the host allocation claim");
+    }
+    let Some(binding) = lease.host_launch_binding else {
+        // A fresh local lease is durable before host admission attaches its
+        // binding. Preserve the immutable service pin for that first request;
+        // only an already-attached binding can supersede the caller pin.
+        return Ok(expected_runtime_generation_sha256.map(str::to_owned));
+    };
+    if binding.policy.schema_version
+        == fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2
+    {
+        return Ok(Some(
+            binding
+                .require_runtime_generation_sha256()?
+                .to_owned(),
+        ));
+    }
+    Ok(binding.runtime_generation_sha256)
 }
 
 fn request(
@@ -180,8 +230,15 @@ fn request(
     budget: FmsResourceBudget,
     cpu_ids: BTreeSet<u32>,
     gpu: Option<(String, u64)>,
-) -> HostReservationRequest {
+    runtime_generation_sha256: Option<String>,
+) -> Result<HostReservationRequest> {
     let policy = ledger.policy();
+    let node_policy_revision = ledger
+        .read()?
+        .node_policy
+        .map(|node_policy| node_policy.revision)
+        .ok_or_else(|| anyhow::anyhow!("compute host has no configured node policy"))?;
+    let compute_node_owner = ledger.current_compute_node_owner_for_admission()?;
     let (exclusive_gpu_uuids, gpu_vram_bytes_by_uuid) = match gpu {
         Some((uuid, bytes)) => (
             BTreeSet::from([uuid.clone()]),
@@ -189,17 +246,23 @@ fn request(
         ),
         None => (BTreeSet::new(), BTreeMap::new()),
     };
-    HostReservationRequest {
+    Ok(HostReservationRequest {
         identity,
         expected_host_id: policy.host_id.clone(),
         expected_policy_revision: policy.revision,
+        expected_node_policy_revision: node_policy_revision,
         expected_owner_epoch: policy.owner_epoch,
+        expected_compute_node_owner_id: Some(compute_node_owner.host_owner_id),
+        expected_compute_node_owner_epoch: Some(compute_node_owner.host_owner_epoch),
         expected_topology_sha256: policy.topology_sha256.clone(),
+        runtime_generation_sha256,
         budget,
         exclusive_gpu_uuids,
         gpu_vram_bytes_by_uuid,
         cpu_ids,
-    }
+        scheduling_priority: 0,
+        parallelism: fullmag_ir::compute_resources::ComputeParallelismIR::SingleProcess,
+    })
 }
 
 #[cfg(test)]
@@ -214,10 +277,18 @@ mod tests {
 
     const GPU: &str = "GPU-00000000-0000-4000-8000-000000000001";
 
-    fn fixture() -> (tempfile::TempDir, SessionStore, HostResourceLedger) {
+    fn fixture() -> (
+        tempfile::TempDir,
+        SessionStore,
+        HostResourceLedger,
+        fullmag_session::host_resource_ledger::HostInventoryOwner,
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
-        let ledger = HostResourceLedger::initialize(
+        let application_state_root = directory.path().join("application-state");
+        std::fs::create_dir(&application_state_root).unwrap();
+        let ledger = HostResourceLedger::initialize_for_application(
+            &application_state_root,
             directory.path().join("host"),
             HostResourceLedgerPolicy {
                 schema_version: HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1.into(),
@@ -236,7 +307,17 @@ mod tests {
             },
         )
         .unwrap();
-        (directory, store, ledger)
+        let inventory_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let sample = crate::compute_node_probe::sample_compute_node_for_owner(
+            &ledger,
+            inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        ledger
+            .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
+            .unwrap();
+        (directory, store, ledger, inventory_owner)
     }
 
     fn claim(kind: ResourceKind, gpu_memory_bytes: u64) -> TaskClaim {
@@ -345,15 +426,16 @@ mod tests {
 
     #[test]
     fn gpu_offer_label_cannot_replace_explicit_physical_placement() {
-        let (_directory, store, ledger) = fixture();
+        let (_directory, store, ledger, _inventory_owner) = fixture();
         let claim = claim(ResourceKind::Gpu, 2048);
         let mut placement = HostTaskPlacement {
             cpu_ids: BTreeSet::new(),
             gpu_uuid: None,
         };
-        assert!(host_request_for_task_claim(&store, &ledger, &claim, &placement).is_err());
+        assert!(host_request_for_task_claim(&store, &ledger, &claim, &placement, None).is_err());
         placement.gpu_uuid = Some(GPU.into());
-        let request = host_request_for_task_claim(&store, &ledger, &claim, &placement).unwrap();
+        let request =
+            host_request_for_task_claim(&store, &ledger, &claim, &placement, None).unwrap();
         assert_eq!(request.budget.gpu_memory_bytes, 0);
         assert_eq!(request.gpu_vram_bytes_by_uuid.get(GPU), Some(&2048));
         assert_eq!(request.identity.resource_id, claim.lease.resource_id);
@@ -366,7 +448,7 @@ mod tests {
 
     #[test]
     fn cpu_claim_cannot_acquire_gpu_capacity_from_placement() {
-        let (_directory, store, ledger) = fixture();
+        let (_directory, store, ledger, _inventory_owner) = fixture();
         let placement = HostTaskPlacement {
             cpu_ids: BTreeSet::new(),
             gpu_uuid: Some(GPU.into()),
@@ -375,7 +457,8 @@ mod tests {
             &store,
             &ledger,
             &claim(ResourceKind::Cpu, 0),
-            &placement
+            &placement,
+            None
         )
         .is_err());
     }

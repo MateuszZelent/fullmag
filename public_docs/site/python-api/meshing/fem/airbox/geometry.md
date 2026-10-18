@@ -177,4 +177,4 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Airbox option schema and validation. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class AirboxOptions` | Airbox option schema and validation. | Source-map validator and focused API tests |
+| Airbox option schema and validation. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | Airbox option schema and validation. | Source-map validator and focused API tests |

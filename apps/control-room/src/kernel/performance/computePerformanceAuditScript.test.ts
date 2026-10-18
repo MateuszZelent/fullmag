@@ -268,7 +268,10 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkVisualizationDebugLifecycleBudgets");
     expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES");
     expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS");
-    expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS");
+    expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS = 9");
+    expect(auditScript).toContain("query: ArtifactFieldCatalogQuery = {}");
+    expect(auditScript).toContain("stageId == null ? {} : { stage_id: stageId }");
+    expect(auditScript).toContain("[api, stageId]");
     expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES");
     expect(auditScript).toContain("getLifecycleStats");
     expect(auditScript).toContain("demandSubscriptionCount");

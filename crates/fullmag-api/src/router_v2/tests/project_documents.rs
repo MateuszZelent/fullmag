@@ -707,7 +707,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         PrimitiveStageNode, StudyDiscretizationReference, StudyExecutionProfileReference,
         StudyModelReference, StudyOutputPort, StudyPipelineDocument, StudyPipelineNode,
         StudyPipelineNodeSource, StudyPlan, StudyPlanMigrationDefaults, StudyPortDataKind,
-        StudyPrimitiveStageKind, StudySolverConfigReference, STUDY_PLAN_SCHEMA_VERSION,
+        StudyPrimitiveStageKind, StudySolverConfigReference, STUDY_PLAN_SCHEMA_VERSION_V2,
     };
     use fullmag_ir::ProblemIR;
     use fullmag_plan::{
@@ -814,7 +814,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         ProjectSnapshot::from_envelope(&definition).unwrap(),
         StudyReference {
             study_id: StudyId::parse("study-submit").unwrap(),
-            plan_version: STUDY_PLAN_SCHEMA_VERSION.into(),
+            plan_version: STUDY_PLAN_SCHEMA_VERSION_V2.into(),
             plan_sha256: study.canonical_sha256().unwrap(),
         },
         fullmag_session::canonical_json_sha256(&catalog_value),
@@ -999,6 +999,13 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         persisted_receipt.payload["accepted_run_source"]["step_id"],
         persisted_receipt.step_id
     );
+    assert_eq!(
+        read_back["tasks"][0]["execution"]["step_id"],
+        persisted_receipt.step_id
+    );
+    assert!(read_back["tasks"][0]["execution"]
+        .get("materialization")
+        .is_none());
     let repeated_catalog = app.clone().oneshot(materialize()).await.unwrap();
     assert_eq!(body_json(repeated_catalog).await, first_catalog);
     let submitted_again = app.clone().oneshot(submit(body.clone())).await.unwrap();
@@ -3359,7 +3366,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .expect("accepted final state bytes are stored in CAS");
     let state_artifact: serde_json::Value = serde_json::from_slice(&output_bytes).unwrap();
     let execution_resolution = &state_artifact["provenance"]["execution_resolution"];
-    assert_eq!(execution_resolution["authored_request"]["device"], "cpu");
+    assert_eq!(execution_resolution["authored_request"]["device"], "auto");
     assert_eq!(execution_resolution["effective_request"]["device"], "cpu");
     assert_eq!(execution_resolution["resolved_execution"]["device"], "cpu");
     assert_eq!(execution_resolution["resolved_execution"]["backend"], "fdm");
@@ -3779,7 +3786,6 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
         PrimitiveStageNode, StudyDiscretizationReference, StudyExecutionProfileReference,
         StudyModelReference, StudyPipelineDocument, StudyPipelineNode, StudyPipelineNodeSource,
         StudyPlan, StudyPlanMigrationDefaults, StudyPrimitiveStageKind, StudySolverConfigReference,
-        STUDY_PLAN_SCHEMA_VERSION,
     };
     use fullmag_ir::ProblemIR;
     use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry};
@@ -3832,11 +3838,29 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
         },
     )
     .unwrap();
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:core".into(),
+        owner_object: "strip".into(),
+        name: "core".into(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [200e-9, 20e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 1,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        material_transition: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    });
     let catalog = StudyProblemCatalog::from_entries(
         &study,
         vec![StudyProblemCatalogEntry::from_step(
             &study.steps[0],
-            ProblemIR::bootstrap_example(),
+            problem,
         )],
     )
     .unwrap();
@@ -3845,7 +3869,7 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
         ProjectSnapshot::from_envelope(&definition).unwrap(),
         StudyReference {
             study_id: StudyId::parse(study.study_id.clone()).unwrap(),
-            plan_version: STUDY_PLAN_SCHEMA_VERSION.into(),
+            plan_version: study.schema_version.clone(),
             plan_sha256: study.canonical_sha256().unwrap(),
         },
         fullmag_session::canonical_json_sha256(&catalog_value),
@@ -3910,8 +3934,9 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
         .oneshot(submit(body.to_string()))
         .await
         .unwrap();
-    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_status = first.status();
     let accepted = body_json(first).await;
+    assert_eq!(first_status, StatusCode::CREATED, "batch submit: {accepted}");
     assert_eq!(accepted["disposition"], "accepted");
     assert_eq!(accepted["batch_id"], "batch-http");
     assert_eq!(accepted["case_count"], 2);
@@ -3942,12 +3967,16 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
     assert_eq!(listed["batches"][0]["published_case_count"], 0);
     assert_eq!(listed["batches"][0]["expansion_state"], "pending");
 
+    let cases_route = concat!(
+        "/v2/persistence/projects/project-batch-http/batches/batch-http/cases",
+        "?limit=10",
+    );
     let cases = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v2/persistence/projects/project-batch-http/batches/batch-http/cases?limit=10")
+                .uri(cases_route)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3960,6 +3989,318 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
     assert_eq!(cases["cases"].as_array().unwrap().len(), 2);
     assert_eq!(cases["cases"][0]["state"], "pending_expansion");
     assert!(cases["cases"][0]["planned_run_id"].as_str().is_some());
+    assert!(cases["cases"][0]["published_run"].is_null());
+
+    let store = fullmag_session::SessionStore::open_existing(
+        state.submit_store_root.as_ref().unwrap(),
+    )
+    .unwrap();
+    let batch_intent = store
+        .read_batch_intent("batch-http")
+        .unwrap()
+        .expect("accepted batch intent is durable");
+    let manifest_bytes = store
+        .cas()
+        .get(&batch_intent.manifest_object_ref)
+        .unwrap()
+        .expect("accepted batch manifest is durable");
+    let mut manifest: fullmag_application::BatchExpansionManifest =
+        serde_json::from_slice(&manifest_bytes).unwrap();
+    let initial_progress = store
+        .read_batch_expansion_progress(&batch_intent.batch_id)
+        .unwrap()
+        .expect("accepted batch submission seeds durable expansion progress");
+    assert_eq!(
+        initial_progress.total_cases,
+        u64::try_from(manifest.cases.len()).unwrap()
+    );
+    assert_eq!(initial_progress.sequence, 1);
+    assert_eq!(initial_progress.next_case_index, 0);
+    assert_eq!(
+        initial_progress.state,
+        fullmag_session::FmsBatchExpansionState::Pending
+    );
+
+    // Recreate the publisher crash window: the child intent commits before
+    // next_case_index advances, so the first child is at the cursor boundary.
+    let source_study: StudyPlan = serde_json::from_value(body["study_plan"].clone()).unwrap();
+    let source_catalog: StudyProblemCatalog =
+        serde_json::from_value(body["study_problem_catalog"].clone()).unwrap();
+    let first_case_id = manifest.cases[0].case_id.clone();
+    let materialized_case = fullmag_application::materialize_independent_batch_case(
+        &mut manifest,
+        &first_case_id,
+        &source_study,
+        &source_catalog,
+    )
+    .unwrap();
+    let output_storage: fullmag_ir::OutputStorageIR = serde_json::from_value(
+        batch_intent.specification["output_storage"]["settings"].clone(),
+    )
+    .unwrap();
+    let materialized_case = fullmag_application::bind_batch_case_output_storage(
+        &materialized_case,
+        &output_storage,
+    )
+    .unwrap();
+    let child_identity = format!("{}\0{}", batch_intent.batch_id, first_case_id);
+    let child_intent = fullmag_application::RunIntent::new(
+        format!(
+            "batch-case-{}",
+            fullmag_session::hex_sha256(child_identity.as_bytes())
+        ),
+        materialized_case.specification,
+    );
+    let pre_cursor_receipt =
+        crate::run_intent_persistence::commit_validated_run_intent_with_backlog_limit(
+            &store,
+            &child_intent,
+            &definition,
+            &materialized_case.study,
+            &materialized_case.catalog,
+            &std::collections::BTreeMap::new(),
+            std::num::NonZeroUsize::new(8).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        pre_cursor_receipt.disposition,
+        fullmag_application::SubmitDisposition::Accepted
+    );
+    assert_eq!(
+        pre_cursor_receipt.run_id.as_str(),
+        child_intent.specification.run_id.as_str()
+    );
+
+    let pending_materialization = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(cases_route)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pending_materialization.status(), StatusCode::OK);
+    let pending_materialization = body_json(pending_materialization).await;
+    let pending_run = &pending_materialization["cases"][0]["published_run"];
+    assert_eq!(
+        pending_materialization["cases"][0]["state"],
+        "pending_materialization"
+    );
+    assert_eq!(pending_run["run_id"], cases["cases"][0]["planned_run_id"]);
+    assert_eq!(pending_run["catalog_state"], "pending_materialization");
+    assert!(pending_run["catalog_revision"].is_null());
+    assert_eq!(pending_run["tasks"].as_array().unwrap().len(), 0);
+
+    let batches_with_unadvanced_child = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/persistence/projects/project-batch-http/batches?limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batches_with_unadvanced_child.status(), StatusCode::OK);
+    let batches_with_unadvanced_child = body_json(batches_with_unadvanced_child).await;
+    assert_eq!(
+        batches_with_unadvanced_child["batches"][0]["published_case_count"],
+        0
+    );
+    assert_eq!(
+        batches_with_unadvanced_child["batches"][0]["expansion_state"],
+        "pending"
+    );
+
+    // Recovery replays the same child intent idempotently, then advances the
+    // durable cursor; the case row was already visible before that advance.
+    assert_eq!(
+        crate::run_intent_persistence::expand_pending_batch_children(
+            &store,
+            1,
+            std::num::NonZeroUsize::new(8).unwrap(),
+        )
+        .unwrap(),
+        1
+    );
+
+    let first_run_id = cases["cases"][0]["planned_run_id"].as_str().unwrap();
+    crate::run_intent_persistence::materialize_accepted_run_catalog(
+        &store,
+        first_run_id,
+        &ProjectId::parse("project-batch-http").unwrap(),
+    )
+    .unwrap();
+    drop(store);
+
+    let materialized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(concat!(
+                    "/v2/persistence/projects/project-batch-http/batches/batch-http/cases",
+                    "?limit=1",
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(materialized.status(), StatusCode::OK);
+    let materialized = body_json(materialized).await;
+    assert_eq!(materialized["cases"].as_array().unwrap().len(), 1);
+    assert_eq!(materialized["cases"][0]["state"], "materialized");
+    assert_eq!(
+        materialized["next_cursor"],
+        materialized["cases"][0]["case_id"]
+    );
+    let published_run = &materialized["cases"][0]["published_run"];
+    assert_eq!(published_run["run_id"], first_run_id);
+    assert_eq!(published_run["catalog_state"], "materialized");
+    assert_eq!(published_run["catalog_revision"], 1);
+    assert_eq!(published_run["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(published_run["tasks"][0]["lifecycle"], "accepted");
+    assert_eq!(published_run["tasks"][0]["cancellation_requested"], false);
+
+    let task_id = published_run["tasks"][0]["task_id"].as_str().unwrap();
+    let case_id = materialized["cases"][0]["case_id"].as_str().unwrap();
+    let retry_not_terminal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v2/persistence/projects/project-batch-http/runs/{first_run_id}/tasks/{task_id}/retry",
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "retry_id": "retry-batch-case",
+                        "expected_catalog_revision": 1,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry_not_terminal.status(), StatusCode::CONFLICT);
+
+    let batch_retry_not_terminal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/persistence/projects/project-batch-http/batches/batch-http/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "command_id": "batch-retry-not-terminal",
+                        "expected_revision": 0,
+                        "action": "retry",
+                        "reason": "operator retry reconciliation test",
+                        "retry": {
+                            "case_id": case_id,
+                            "task_id": task_id,
+                            "retry_id": "retry-batch-command",
+                            "expected_catalog_revision": 1,
+                        },
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batch_retry_not_terminal.status(), StatusCode::CONFLICT);
+
+    let batches_after_retry_rejection = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/persistence/projects/project-batch-http/batches?limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batches_after_retry_rejection.status(), StatusCode::OK);
+    let batches_after_retry_rejection = body_json(batches_after_retry_rejection).await;
+    assert_eq!(
+        batches_after_retry_rejection["batches"][0]["command_revision"],
+        0
+    );
+
+    let cancellation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v2/persistence/projects/project-batch-http/runs/{first_run_id}/tasks/{task_id}/cancellation",
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "reason": "batch cancellation reconciliation test",
+                        "cancellation_id": "cancel-batch-case",
+                        "expected_catalog_revision": 1,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancellation.status(), StatusCode::ACCEPTED);
+
+    let cancellation_reflected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(concat!(
+                    "/v2/persistence/projects/project-batch-http/batches/batch-http/cases",
+                    "?limit=1",
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancellation_reflected.status(), StatusCode::OK);
+    let cancellation_reflected = body_json(cancellation_reflected).await;
+    assert_eq!(
+        cancellation_reflected["cases"][0]["published_run"]["tasks"][0]
+            ["cancellation_requested"],
+        true
+    );
+
+    let second_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/persistence/projects/project-batch-http/batches/batch-http/cases?limit=1&cursor={}",
+                    materialized["next_cursor"].as_str().unwrap(),
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let second_page = body_json(second_page).await;
+    assert_eq!(second_page["cases"].as_array().unwrap().len(), 1);
+    assert_eq!(second_page["cases"][0]["state"], "pending_expansion");
+    assert!(second_page["cases"][0]["published_run"].is_null());
 
     let mut changed = body;
     changed["batch_request"]["axes"][0]["values"]["values"][0] = json!(-0.02);

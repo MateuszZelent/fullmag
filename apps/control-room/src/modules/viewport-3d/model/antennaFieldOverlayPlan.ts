@@ -13,15 +13,18 @@ export function resolveAntennaBasisOverlayPlan(
   if (!intent || intent.kind !== "basis" || solution.status !== "ready" || catalog.status !== "ready") return null;
   const data = solution.data;
   const stage = catalog.data;
-  const output = stage?.outputs.find((item) => item.output_id === intent.solutionId);
+  const outputs = stage?.outputs.filter((item) => item.output_id === intent.solutionId);
+  const output = outputs?.length === 1 ? outputs[0] : null;
   if (!data || !stage || data.status !== "ready" || stage.status !== "ready" ||
       data.solution_id !== intent.solutionId || data.stage_id !== intent.stageId || data.quantity !== "H_ant_basis" ||
       data.source_object_id !== intent.sourceObjectId || data.content_digest !== intent.contentDigest ||
       data.session_id !== intent.sessionId || data.session_epoch !== intent.sessionEpoch || data.request_scope_epoch !== intent.requestScopeEpoch ||
       stage.stage_id !== intent.stageId || stage.session_id !== intent.sessionId || stage.session_epoch !== intent.sessionEpoch || stage.request_scope_epoch !== intent.requestScopeEpoch ||
-      output?.solution_ref.content_digest !== intent.contentDigest || output.solution_ref.asset_id !== data.asset_id || output.solution_ref.stage_id !== intent.stageId) return null;
-  const basis = data.bases.find((candidate) => candidate.port_mode_id === intent.portModeId);
-  if (!basis) return null;
+      output?.solution_ref.content_digest !== intent.contentDigest || output.solution_ref.asset_id !== data.asset_id ||
+      output.solution_ref.stage_id !== intent.stageId || output.solution_ref.output_id !== intent.solutionId) return null;
+  const bases = data.bases.filter((candidate) => candidate.port_mode_id === intent.portModeId);
+  if (bases.length !== 1) return null;
+  const basis = bases[0];
   const quantity = intent.quantity;
   if (quantity === "device_potential" || quantity === "current_density" || quantity === "magnetic_field") return null;
   const positionKind = quantity === "magnetic_field_per_ampere" ? "sample_positions" as const : "conductor_positions" as const;

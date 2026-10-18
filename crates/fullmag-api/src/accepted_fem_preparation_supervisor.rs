@@ -7,6 +7,7 @@ use fullmag_session::{
     PreparationProcessLaunchCommitDisposition, SessionStore,
     FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA, FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA,
 };
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -16,6 +17,8 @@ use std::time::{Duration, Instant};
 
 #[path = "owned_worker_process.rs"]
 mod owned_worker_process;
+#[path = "compute_operator_env.rs"]
+mod compute_operator_env;
 use owned_worker_process::OwnedWorkerProcess;
 
 const STORE_WRITER_RETRY_LIMIT: Duration = Duration::from_secs(5);
@@ -141,14 +144,52 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
         bail!("legacy preparation launch has no process exit; spawn outcome is ambiguous and lease remains retained");
     }
     if let Some(host) = host {
-        host.ensure_preparation_lease_committed(store, &active_lease)?;
-        if !host
-            .ledger()
-            .preparation_lease_has_pending_launch(store, &active_lease)?
-        {
+        retry_store_writer_busy(|| host.ensure_preparation_lease_committed(store, &active_lease))?;
+        if !retry_store_writer_busy(|| {
+            host.ledger()
+                .preparation_lease_has_pending_launch(store, &active_lease)
+        })? {
             bail!("host preparation launch gate is not Pending; explicit migration or recovery is required before publishing a launch record");
         }
     }
+    let cpu_ids = host
+        .map(|host| host.preparation_cpu_ids(&active_lease.resource_id).cloned())
+        .transpose()?
+        .unwrap_or_default();
+    let thread_environment = preparation_thread_environment(&cpu_ids, host.is_some())?;
+    let _cpu_capacity_millis = if let Some(host) = host {
+        let snapshot = host
+            .current_compute_node_snapshot()?
+            .context("FEM preparation launch requires a current compute-node sample")?;
+        match snapshot.cpu.effective_capacity_millis {
+            fullmag_session::compute_node_snapshot::Observation::Available { value } => value,
+            _ => bail!("FEM preparation launch requires measured effective CPU capacity"),
+        }
+    } else {
+        0
+    };
+    let _allocated_cpu_millis = active_lease.budget.cpu_millis;
+    #[cfg(windows)]
+    let cpu_rate_limit = if host.is_some() {
+        Some(owned_worker_process::cpu_rate_limit(
+            _allocated_cpu_millis,
+            _cpu_capacity_millis,
+        )?)
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    let cpu_rate_limit = None;
+    #[cfg(target_os = "linux")]
+    let linux_cgroup = if host.is_some() {
+        Some(owned_worker_process::LinuxWorkerCgroup::prepare(
+            _allocated_cpu_millis,
+        )?)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let linux_cgroup = None;
     validate_preparer_executable(preparer_executable)?;
 
     let supervisor_process_id = std::process::id();
@@ -185,12 +226,14 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
     }
     let host_launch_token = host
         .map(|host| {
-            host.ledger().authorize_preparation_launch(
-                store,
-                &active_lease,
-                &launch,
-                spawn_supervisor_start_token.clone(),
-            )
+            retry_store_writer_busy(|| {
+                host.ledger().authorize_preparation_launch(
+                    store,
+                    &active_lease,
+                    &launch,
+                    spawn_supervisor_start_token.clone(),
+                )
+            })
         })
         .transpose()?;
     let spawn_lease = active_lease.clone();
@@ -198,7 +241,11 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
         preparer_executable,
         store.root(),
         &spawn_lease,
+        &cpu_ids,
+        &thread_environment,
         host_launch_token.as_deref(),
+        cpu_rate_limit,
+        linux_cgroup,
         process_timeout,
         heartbeat_interval,
         || renew_preparation_lease(store, &mut active_lease),
@@ -307,7 +354,11 @@ fn observe_preparer<H>(
     executable: &Path,
     store_root: &Path,
     lease: &FmsPreparationResourceLease,
+    cpu_ids: &BTreeSet<u32>,
+    thread_environment: &[(&'static str, Option<String>)],
     host_launch_token: Option<&str>,
+    cpu_rate_limit: Option<u32>,
+    linux_cgroup: Option<owned_worker_process::LinuxWorkerCgroup>,
     timeout: Duration,
     heartbeat_interval: Duration,
     mut heartbeat: H,
@@ -316,6 +367,7 @@ where
     H: FnMut() -> Result<()>,
 {
     let mut command = Command::new(executable);
+    compute_operator_env::remove_local_compute_operator_token(&mut command);
     command
         .arg("--store-root")
         .arg(store_root)
@@ -334,17 +386,189 @@ where
         .stderr(Stdio::piped());
     if let Some(token) = host_launch_token {
         command.env("FULLMAG_HOST_PREPARATION_LAUNCH_TOKEN", token);
+        if thread_environment.is_empty() {
+            bail!(
+                "host-bound FEM preparation requires an allocation-derived thread environment"
+            );
+        }
+        for (name, value) in thread_environment {
+            match value {
+                Some(value) => {
+                    command.env(*name, value.as_str());
+                }
+                None => {
+                    command.env_remove(*name);
+                }
+            }
+        }
     } else {
         command.env_remove("FULLMAG_HOST_PREPARATION_LAUNCH_TOKEN");
+        if !thread_environment.is_empty() {
+            bail!(
+                "unbound FEM preparation cannot receive a host allocation thread environment"
+            );
+        }
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP);
+        let mut flags = windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
+        if !cpu_ids.is_empty() {
+            flags |= windows_sys::Win32::System::Threading::INHERIT_PARENT_AFFINITY;
+        }
+        command.creation_flags(flags);
     }
-    let child = OwnedWorkerProcess::spawn(&mut command)
+    let child = OwnedWorkerProcess::spawn(&mut command, cpu_ids, cpu_rate_limit, linux_cgroup)
         .with_context(|| format!("spawn FEM preparer `{}`", executable.display()))?;
     observe_child(child, timeout, heartbeat_interval, &mut heartbeat)
+}
+
+fn preparation_thread_environment(
+    cpu_ids: &BTreeSet<u32>,
+    host_bound: bool,
+) -> Result<Vec<(&'static str, Option<String>)>> {
+    if !host_bound {
+        return Ok(Vec::new());
+    }
+    let cpu_threads = u32::try_from(cpu_ids.len())
+        .context(
+            "preparation CPU placement has more entries than the thread policy can represent",
+        )?;
+    if cpu_threads == 0 {
+        bail!("host-bound FEM preparation has no allocated CPU IDs");
+    }
+    let count = cpu_threads.to_string();
+    let mut environment = HOST_PREPARATION_PARENT_THREAD_ENV
+        .iter()
+        .map(|name| (*name, None))
+        .collect::<Vec<_>>();
+    // Native FEM/OpenMP owns parallel work for preparation; keep Rayon serial.
+    environment.extend([
+        ("FULLMAG_CPU_THREADS", Some(count.clone())),
+        ("FULLMAG_CPU_THREADS_AUTO_RESOLVED", Some(count.clone())),
+        ("RAYON_NUM_THREADS", Some("1".into())),
+        ("FULLMAG_GMSH_THREADS", Some(count.clone())),
+        ("OMP_NUM_THREADS", Some(count.clone())),
+        ("OMP_THREAD_LIMIT", Some(count)),
+        ("OMP_DYNAMIC", Some("FALSE".into())),
+        ("OMP_NESTED", Some("FALSE".into())),
+        ("OMP_MAX_ACTIVE_LEVELS", Some("1".into())),
+        ("OPENBLAS_NUM_THREADS", Some("1".into())),
+        ("GOTO_NUM_THREADS", Some("1".into())),
+        ("MKL_NUM_THREADS", Some("1".into())),
+        ("MKL_DOMAIN_NUM_THREADS", Some("1".into())),
+        ("BLIS_NUM_THREADS", Some("1".into())),
+        ("VECLIB_MAXIMUM_THREADS", Some("1".into())),
+        ("NUMEXPR_NUM_THREADS", Some("1".into())),
+    ]);
+    Ok(environment)
+}
+
+const HOST_PREPARATION_PARENT_THREAD_ENV: [&str; 21] = [
+    "FULLMAG_CPU_THREADS",
+    "FULLMAG_CPU_THREADS_AUTO_RESOLVED",
+    "FULLMAG_NATIVE_THREADS_AUTO_RESOLVED",
+    "RAYON_NUM_THREADS",
+    "FULLMAG_GMSH_THREADS",
+    "OMP_NUM_THREADS",
+    "OMP_THREAD_LIMIT",
+    "OMP_DYNAMIC",
+    "OMP_NESTED",
+    "OMP_MAX_ACTIVE_LEVELS",
+    "OMP_PLACES",
+    "OMP_PROC_BIND",
+    "OPENBLAS_NUM_THREADS",
+    "GOTO_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "MKL_DOMAIN_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "GOMP_CPU_AFFINITY",
+    "KMP_AFFINITY",
+];
+
+#[cfg(test)]
+mod thread_environment_tests {
+    use super::preparation_thread_environment;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn host_preparation_threads_follow_cpu_placement_and_clear_parent_overrides() {
+        let environment = preparation_thread_environment(&BTreeSet::from([2, 7]), true).unwrap();
+        let value = |name: &str| {
+            environment
+                .iter()
+                .rev()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| value.as_deref())
+        };
+        let is_unset = |name: &str| {
+            environment
+                .iter()
+                .rev()
+                .find(|(key, _)| *key == name)
+                .is_some_and(|(_, value)| value.is_none())
+        };
+        assert_eq!(value("FULLMAG_CPU_THREADS"), Some("2"));
+        assert_eq!(value("FULLMAG_CPU_THREADS_AUTO_RESOLVED"), Some("2"));
+        assert_eq!(value("FULLMAG_GMSH_THREADS"), Some("2"));
+        assert_eq!(value("RAYON_NUM_THREADS"), Some("1"));
+        assert_eq!(value("OMP_NUM_THREADS"), Some("2"));
+        assert_eq!(value("OPENBLAS_NUM_THREADS"), Some("1"));
+        assert!(is_unset("GOMP_CPU_AFFINITY"));
+        assert!(is_unset("KMP_AFFINITY"));
+    }
+
+    #[test]
+    fn legacy_preparation_keeps_its_existing_environment() {
+        assert!(preparation_thread_environment(&BTreeSet::new(), false)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn host_preparation_rejects_an_empty_cpu_allocation() {
+        assert!(preparation_thread_environment(&BTreeSet::new(), true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pre_spawn_store_writer_retry_tests {
+    use super::retry_store_writer_busy;
+    use anyhow::Error;
+    use chrono::Utc;
+    use fullmag_session::{FmsPreparationProcessLaunch, FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA};
+
+    #[test]
+    fn typed_writer_busy_retry_preserves_preparation_launch_identity() {
+        let expected = FmsPreparationProcessLaunch {
+            schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-test".into(),
+            run_id: "run-test".into(),
+            task_id: "task-test".into(),
+            preparation_attempt_id: "preparation-attempt-test".into(),
+            resource_id: "prep.cpu".into(),
+            lease_token: "lease-test".into(),
+            lease_heartbeat_sequence: 7,
+            supervisor_process_id: 1,
+            supervisor_start_token: Some("start-token-test".into()),
+            created_at: Utc::now(),
+        };
+        let mut attempts = 0;
+        let observed = retry_store_writer_busy(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(Error::new(fullmag_session::StoreWriterBusy))
+            } else {
+                Ok(expected.clone())
+            }
+        })
+        .unwrap();
+
+        assert_eq!(attempts, 2);
+        assert_eq!(observed, expected);
+    }
 }
 
 fn validate_preparer_executable(executable: &Path) -> Result<()> {

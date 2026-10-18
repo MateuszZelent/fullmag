@@ -36,6 +36,25 @@ pub(crate) struct FrozenSpinsPreviewRecord {
 
 const MAX_FROZEN_SPINS_PREVIEWS: usize = 32;
 
+// Large-grid live runs do not need these duplicated spatial carriers in the
+// control-plane snapshot while the solver is active. The authoritative
+// magnetization and material fields remain in the saved run artifacts; field
+// metadata and on-demand data-plane routes are unaffected.
+const LARGE_LIVE_FIELD_QUANTITIES: [&str; 6] = [
+    "m",
+    "mat_ms",
+    "mat_aex",
+    "mat_alpha",
+    "mat_dind",
+    "mat_dbulk",
+];
+
+fn drop_large_live_field_carriers(latest_fields: &mut LatestFields) {
+    for quantity in LARGE_LIVE_FIELD_QUANTITIES {
+        latest_fields.remove(quantity);
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct FrozenSpinsPreviewStore {
     records: BTreeMap<String, FrozenSpinsPreviewRecord>,
@@ -1624,12 +1643,12 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
             .and_then(|plan| plan.get("backend_plan"))
             .and_then(|plan| plan.get("kind"))
             .and_then(Value::as_str)
-            .is_some_and(|kind| kind.eq_ignore_ascii_case("fdm"))
+            .is_some_and(|kind| matches!(kind.to_ascii_lowercase().as_str(), "fdm" | "fdm_multilayer"))
             || metadata
                 .get("artifact_layout")
                 .and_then(|layout| layout.get("backend"))
                 .and_then(Value::as_str)
-                .is_some_and(|backend| backend.eq_ignore_ascii_case("fdm"));
+                .is_some_and(|backend| matches!(backend.to_ascii_lowercase().as_str(), "fdm" | "fdm_multilayer"));
         if backend_is_fdm {
             current.fem_mesh = None;
         }
@@ -1924,14 +1943,8 @@ fn expand_uniform_material_latest_fields(latest_fields: &mut LatestFields, sampl
     }
 }
 
-fn finalize_current_live_apply(
-    current: &mut SessionStateResponse,
-    flags: CurrentLiveApplyFlags,
-) -> Result<(), ApiError> {
-    // A standalone inspection has its own owner-bound conductor/sampling
-    // payloads. Neither a previous magnetic frame nor a late runtime frame
-    // may provide magnetic state for this read model.
-    if current
+fn is_standalone_antenna_lead_inspection(current: &SessionStateResponse) -> bool {
+    current
         .metadata
         .as_ref()
         .and_then(|value| value.get("execution_plan"))
@@ -1939,7 +1952,16 @@ fn finalize_current_live_apply(
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
         == Some("antenna_external_lead_inspection")
-    {
+}
+
+fn finalize_current_live_apply(
+    current: &mut SessionStateResponse,
+    flags: CurrentLiveApplyFlags,
+) -> Result<(), ApiError> {
+    // A standalone inspection has its own owner-bound conductor/sampling
+    // payloads. Neither a previous magnetic frame nor a late runtime frame
+    // may provide magnetic state for this read model.
+    if is_standalone_antenna_lead_inspection(current) {
         let mut removed_quantities: BTreeSet<String> = current
             .latest_fields
             .entries()
@@ -2195,8 +2217,16 @@ pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
     req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
+    apply_current_live_snapshot_with_options(current, req, false)
+}
+
+pub(crate) fn apply_current_live_snapshot_with_options(
+    current: &mut SessionStateResponse,
+    req: CurrentLiveSnapshotRequest,
+    drop_live_magnetization: bool,
+) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_snapshot_in_place(&mut candidate, req)?;
+    apply_current_live_snapshot_in_place(&mut candidate, req, drop_live_magnetization)?;
     *current = candidate;
     Ok(())
 }
@@ -2204,6 +2234,7 @@ pub(crate) fn apply_current_live_snapshot(
 fn apply_current_live_snapshot_in_place(
     current: &mut SessionStateResponse,
     mut req: CurrentLiveSnapshotRequest,
+    drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
     if let Some(live_state) = req.live_state.as_ref() {
@@ -2293,6 +2324,9 @@ fn apply_current_live_snapshot_in_place(
     if let Some(metadata) = req.metadata {
         apply_current_live_metadata(current, metadata);
     }
+    if drop_live_magnetization {
+        drop_large_live_field_carriers(&mut current.latest_fields);
+    }
     apply_frozen_spins_runtime_status(current, req.frozen_spins_runtime_status.take());
     if let Some(mesh_workspace) = req.mesh_workspace {
         apply_mesh_workspace_update(current, mesh_workspace);
@@ -2320,6 +2354,10 @@ fn apply_current_live_snapshot_in_place(
         if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
             apply_fem_mesh_update(current, fem_mesh);
         }
+        if drop_live_magnetization {
+            live_state.latest_step.magnetization = None;
+            drop_large_live_field_carriers(&mut current.latest_fields);
+        }
         current.live_state = Some(live_state);
     }
     if let Some(coupled_checkpoint) = req.coupled_checkpoint {
@@ -2332,10 +2370,14 @@ fn apply_current_live_snapshot_in_place(
         bind_scalar_observation_frame(current, row);
     }
     if let Some(latest_fields) = req.latest_fields.as_mut() {
+        if drop_live_magnetization {
+            drop_large_live_field_carriers(latest_fields);
+        }
         bind_latest_field_observation_frames_with_candidate(
             current,
             latest_fields,
             req.latest_scalar_row.as_ref(),
+            None,
         )?;
     }
     if let Some(preview_fields) = req.preview_fields.as_ref() {
@@ -2352,6 +2394,9 @@ fn apply_current_live_snapshot_in_place(
         } else {
             merge_latest_fields(&mut current.latest_fields, latest_fields);
         }
+    }
+    if drop_live_magnetization {
+        drop_large_live_field_carriers(&mut current.latest_fields);
     }
     if req.replace_latest_fields {
         if let Some(generation) = req.field_generation.as_ref() {
@@ -2470,8 +2515,16 @@ pub(crate) fn apply_current_live_runtime_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
 ) -> Result<(), ApiError> {
+    apply_current_live_runtime_frame_with_options(current, frame, false)
+}
+
+pub(crate) fn apply_current_live_runtime_frame_with_options(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveRuntimeFrameRequest,
+    drop_live_magnetization: bool,
+) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_runtime_frame_in_place(&mut candidate, frame)?;
+    apply_current_live_runtime_frame_in_place(&mut candidate, frame, drop_live_magnetization)?;
     *current = candidate;
     Ok(())
 }
@@ -2611,6 +2664,7 @@ fn preserve_selected_live_magnetization_before_runtime_update(
 fn apply_current_live_runtime_frame_in_place(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
+    drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
     if let Some(live_state) = frame.live_state.as_ref() {
         live_state
@@ -2619,6 +2673,7 @@ fn apply_current_live_runtime_frame_in_place(
             .map_err(|error| ApiError::bad_request(format!("invalid live step record: {error}")))?;
     }
     let apply_start = std::time::Instant::now();
+    let standalone_antenna_lead_inspection = is_standalone_antenna_lead_inspection(current);
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(preview_field) = current
         .live_state
@@ -2657,7 +2712,8 @@ fn apply_current_live_runtime_frame_in_place(
     );
     let older_live_m_replay =
         runtime_frame_has_older_selected_live_magnetization(current, &frame, has_qualified_incoming_m);
-    if frame.session_id == current.session.session_id
+    if !drop_live_magnetization
+        && frame.session_id == current.session.session_id
         && (!has_qualified_incoming_m || older_live_m_replay)
         && (frame.live_state.is_some() || frame.fem_mesh.is_some())
     {
@@ -2718,6 +2774,10 @@ fn apply_current_live_runtime_frame_in_place(
                 }
             }
         }
+        if drop_live_magnetization {
+            live_state.latest_step.magnetization = None;
+            drop_large_live_field_carriers(&mut current.latest_fields);
+        }
         // Promote the active preview field into preview_cache so that API
         // query handlers (get_field_meta, get_field_vector, etc.) can find
         // it — same rationale as in apply_current_live_snapshot.
@@ -2728,8 +2788,17 @@ fn apply_current_live_runtime_frame_in_place(
             .flatten();
         current.live_state = Some(live_state);
         if let Some(preview_field) = active_preview {
-            validate_preview_field_sources(current, std::slice::from_ref(&preview_field), None)?;
-            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+            // Standalone inspection is finalized as a nonmagnetic read model
+            // below. Its transient preview is not an accepted public source,
+            // so do not validate or promote it before finalization removes it.
+            if !standalone_antenna_lead_inspection {
+                validate_preview_field_sources(
+                    current,
+                    std::slice::from_ref(&preview_field),
+                    None,
+                )?;
+                merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+            }
         }
     }
     if let Some(fem_mesh) = frame.fem_mesh {
@@ -2811,7 +2880,24 @@ pub(crate) fn apply_current_live_field_frame(
     frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_field_frame_in_place(&mut candidate, frame)?;
+    apply_current_live_field_frame_in_place(&mut candidate, frame, None)?;
+    *current = candidate;
+    Ok(())
+}
+
+/// Apply a field carrier whose observation identity was verified from an
+/// immutable accepted Study output.  Accepted Study workers may publish a
+/// magnetization carrier before the legacy scalar-row stream exists, so the
+/// normal live-frame applicator cannot infer an observation frame from the
+/// current solver callback.  The caller still supplies the complete frame
+/// identity; this helper applies all ordinary field-source/revision guards.
+pub(crate) fn apply_current_live_accepted_field_frame(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveFieldFrameRequest,
+    accepted_source_frame: crate::schemas::common::AcceptedObservationFrameRef,
+) -> Result<(), ApiError> {
+    let mut candidate = current.clone();
+    apply_current_live_field_frame_in_place(&mut candidate, frame, Some(&accepted_source_frame))?;
     *current = candidate;
     Ok(())
 }
@@ -2819,6 +2905,7 @@ pub(crate) fn apply_current_live_field_frame(
 fn apply_current_live_field_frame_in_place(
     current: &mut SessionStateResponse,
     mut frame: CurrentLiveFieldFrameRequest,
+    accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
 ) -> Result<(), ApiError> {
     if matches!(
         validate_terminal_field_replacement(
@@ -2862,7 +2949,12 @@ fn apply_current_live_field_frame_in_place(
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
     if let Some(latest_fields) = frame.latest_fields.as_mut() {
-        bind_latest_field_observation_frames(current, latest_fields)?;
+        bind_latest_field_observation_frames_with_candidate(
+            current,
+            latest_fields,
+            None,
+            accepted_source_frame,
+        )?;
     }
     if let Some(preview_fields) = frame.preview_fields.as_ref() {
         validate_preview_field_sources(current, preview_fields, None)?;
@@ -2969,7 +3061,7 @@ pub(crate) fn merge_latest_fields(current: &mut LatestFields, incoming: LatestFi
     }
 }
 
-fn accepted_observation_frame_ref(
+pub(crate) fn accepted_observation_frame_ref(
     current: &SessionStateResponse,
     source_step: u64,
     source_time_seconds: Option<f64>,
@@ -2999,6 +3091,17 @@ fn observation_source_time_matches(source_time_seconds: Option<f64>, row_time: f
     source_time_seconds.is_none_or(|source_time| {
         source_time.is_finite() && row_time.is_finite() && source_time == row_time
     })
+}
+
+fn accepted_source_frame_matches(
+    frame: &crate::schemas::common::AcceptedObservationFrameRef,
+    source_step: Option<u64>,
+    source_time_seconds: Option<f64>,
+) -> bool {
+    Some(frame.source_step) == source_step
+        && source_time_seconds.is_none_or(|source_time| {
+            frame.source_time_seconds == Some(source_time)
+        })
 }
 
 fn accepted_observation_frame_for_source(
@@ -3416,13 +3519,14 @@ fn bind_latest_field_observation_frames(
     current: &mut SessionStateResponse,
     latest_fields: &mut LatestFields,
 ) -> Result<(), ApiError> {
-    bind_latest_field_observation_frames_with_candidate(current, latest_fields, None)
+    bind_latest_field_observation_frames_with_candidate(current, latest_fields, None, None)
 }
 
 fn bind_latest_field_observation_frames_with_candidate(
     current: &mut SessionStateResponse,
     latest_fields: &mut LatestFields,
     candidate_row: Option<&ScalarRow>,
+    accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
 ) -> Result<(), ApiError> {
     let current_step = current.live_state.as_ref().map(|state| &state.latest_step);
     let current_physical_step = current_step.filter(|step| step.is_physical_observation());
@@ -3498,6 +3602,12 @@ fn bind_latest_field_observation_frames_with_candidate(
             });
         let accepted_frame = if quantity_id == "m" {
             replay_frame.clone().or_else(|| {
+                accepted_source_frame
+                    .filter(|frame| {
+                        accepted_source_frame_matches(frame, source_step, source_time_seconds)
+                    })
+                    .cloned()
+            }).or_else(|| {
                 source_step.and_then(|step| {
                     accepted_observation_frame_for_source(
                         current,
@@ -3516,6 +3626,13 @@ fn bind_latest_field_observation_frames_with_candidate(
                         source_time_seconds,
                         candidate_row,
                     )
+                })
+                .or_else(|| {
+                    accepted_source_frame
+                        .filter(|frame| {
+                            accepted_source_frame_matches(frame, source_step, source_time_seconds)
+                        })
+                        .cloned()
                 })
                 .or(replay_frame)
         };
@@ -5357,8 +5474,10 @@ mod tests {
             current.metadata = Some(json!({
                 "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
             }));
-            // Readiness requires m to be tied to an accepted physical frame,
-            // not merely present in the preview cache.
+            // Require an accepted physical frame while retaining an independently merged preview cache.
+            if kind == "compute_fields" {
+                add_physical_observation(&mut current, 1, Some(1.0e-12));
+            }
             let mut physical = live_state_with_magnetization(1, vec![1.0, 0.0, 0.0]);
             physical.latest_step.grid = [1, 1, 1];
             let mut magnetization = preview_field("m");
@@ -5378,6 +5497,10 @@ mod tests {
                 },
             )
             .expect("physical observation should publish its m preview");
+            let mut cached_magnetization = preview_field("m");
+            cached_magnetization.source_step = 1;
+            cached_magnetization.source_time_seconds = Some(1.0e-12);
+            merge_cached_preview_fields(&mut current.preview_cache, vec![cached_magnetization]);
             let mut record = tracked_command("cmd-target", kind);
             if kind == "compute_fields" {
                 record.command.field_materialization_requirements =

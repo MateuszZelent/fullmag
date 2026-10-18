@@ -156,7 +156,7 @@ const objectMetrics: ObjectMetricsResource = {
   },
   object_id: "arch_waveguide",
   revision: 22,
-  source: "solver",
+  source: "solver_per_object",
   step: 99,
   time_seconds: 1.25e-9,
 };
@@ -951,8 +951,8 @@ describe("FooterTelemetry", () => {
   it("uses the selected scene object as the telemetry object source", () => {
     const scene = {
       objects: [
-        { id: "arch_waveguide", name: "Arch waveguide" },
-        { id: "free_layer", name: "Free layer" },
+        { id: "arch_waveguide", name: "Arch waveguide", magnetization_ref: "initial_m" },
+        { id: "free_layer", name: "Free layer", magnetization_ref: "initial_m" },
       ],
       revision: 2,
     } satisfies SceneResource;

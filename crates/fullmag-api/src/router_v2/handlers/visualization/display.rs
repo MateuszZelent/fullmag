@@ -193,6 +193,37 @@ pub async fn replace_visualization_state(
     validate_planar_target_override_identities(&state, &replacement.planar.target_overrides)
         .await?;
     validate_planar_source_selection(&state, &replacement.planar.source).await?;
+    {
+        let live_snapshot = state.current_live_state.read().await;
+        let targets = build_visualization_target_registry(
+            &replacement.quantity.active_quantity_id,
+            &replacement.quantity.colormap,
+            &replacement.layers,
+            &replacement.vector_style,
+            &replacement.overrides,
+            live_snapshot.as_ref(),
+        );
+        for entry in &replacement.overrides {
+            if let Some(projection) = entry
+                .style
+                .as_ref()
+                .and_then(|style| style.tensor_projection.as_ref())
+                .and_then(|projection| projection.as_ref())
+            {
+                if !valid_tensor_projection(projection) {
+                    return Err(ApiError::bad_request("unsupported tensor_projection"));
+                }
+                let target = std::iter::once(&targets.airbox)
+                    .chain(targets.objects.iter())
+                    .chain(targets.parts.iter())
+                    .find(|target| target.scope == entry.scope && target.scope_id == entry.scope_id)
+                    .ok_or_else(|| {
+                        ApiError::bad_request("tensor_projection requires a resolved target")
+                    })?;
+                validate_tensor_projection_quantity(&target.settings.active_quantity_id)?;
+            }
+        }
+    }
     let display_replacement = visualization_state_to_display_selection(&replacement);
     apply_display_replace(&state, display_replacement).await?;
     {
@@ -282,6 +313,30 @@ pub async fn patch_visualization_state(
         let mut next_presentation = presentation.clone();
         apply_display_patch_to_state(&mut next_selection, &mut next_presentation, display_patch);
         apply_visualization_presentation_patch(&mut next_presentation, &update)?;
+        let live_snapshot = state.current_live_state.read().await;
+        let resolved = build_visualization_state_response(
+            &next_selection,
+            &next_presentation,
+            live_snapshot.as_ref(),
+        );
+        validate_planar_tensor_projection(&resolved.planar)?;
+        if let Some(overrides) = &update.overrides {
+            for entry in overrides.iter().filter(|entry| {
+                entry
+                    .style
+                    .as_ref()
+                    .is_some_and(|style| matches!(style.tensor_projection, Some(Some(_))))
+            }) {
+                let target = std::iter::once(&resolved.targets.airbox)
+                    .chain(resolved.targets.objects.iter())
+                    .chain(resolved.targets.parts.iter())
+                    .find(|target| target.scope == entry.scope && target.scope_id == entry.scope_id)
+                    .ok_or_else(|| {
+                        ApiError::bad_request("tensor_projection requires a resolved target")
+                    })?;
+                validate_tensor_projection_quantity(&target.settings.active_quantity_id)?;
+            }
+        }
         *selection = next_selection;
         *presentation = next_presentation;
     }
@@ -516,6 +571,14 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
                 }
             }
             if let Some(style) = &target_override.style {
+                if let Some(Some(projection)) = &style.tensor_projection {
+                    if !valid_tensor_projection(projection) {
+                        return Err(ApiError::bad_request("unsupported tensor_projection"));
+                    }
+                    if let Some(quantity) = &target_override.quantity {
+                        validate_tensor_projection_quantity(&quantity.active_quantity_id)?;
+                    }
+                }
                 if matches!(style.vector_alpha, Some(value) if !(0.0..=1.0).contains(&value)) {
                     return Err(ApiError::bad_request(format!(
                         "overrides[{index}].style.vector_alpha must be between 0 and 1"
@@ -544,6 +607,41 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn valid_tensor_projection(value: &str) -> bool {
+    matches!(
+        value,
+        "c0" | "c1"
+            | "c2"
+            | "c3"
+            | "c4"
+            | "c5"
+            | "c6"
+            | "c7"
+            | "c8"
+            | "frobenius"
+            | "spin_flow_x"
+            | "spin_flow_y"
+            | "spin_flow_z"
+    )
+}
+
+fn validate_tensor_projection_quantity(quantity_id: &str) -> Result<(), ApiError> {
+    if fullmag_quantities::quantity_spec(quantity_id)
+        .and_then(|spec| spec.tensor_descriptor())
+        .is_none_or(|descriptor| {
+            descriptor.rank != 2
+                || descriptor.shape != [3, 3]
+                || descriptor.layout != "flow_major"
+                || descriptor.axes != ["flow", "spin"]
+        })
+    {
+        return Err(ApiError::bad_request(
+            "tensor_projection requires canonical flow-major tensor metadata",
+        ));
     }
     Ok(())
 }
@@ -754,7 +852,31 @@ fn dormant_planar_target_override_reasons(
         .collect()
 }
 
+fn validate_planar_tensor_projection(state: &PlanarVisualizationState) -> Result<(), ApiError> {
+    use crate::schemas::visualization_state::PlanarFieldComponent;
+    if matches!(
+        state.component,
+        PlanarFieldComponent::C0
+            | PlanarFieldComponent::C1
+            | PlanarFieldComponent::C2
+            | PlanarFieldComponent::C3
+            | PlanarFieldComponent::C4
+            | PlanarFieldComponent::C5
+            | PlanarFieldComponent::C6
+            | PlanarFieldComponent::C7
+            | PlanarFieldComponent::C8
+            | PlanarFieldComponent::Frobenius
+            | PlanarFieldComponent::SpinFlowX
+            | PlanarFieldComponent::SpinFlowY
+            | PlanarFieldComponent::SpinFlowZ
+    ) {
+        validate_tensor_projection_quantity(&state.quantity_id)?;
+    }
+    Ok(())
+}
+
 fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Result<(), ApiError> {
+    validate_planar_tensor_projection(state)?;
     validate_planar_visualization_patch(&PlanarVisualizationPatch {
         source: Some(state.source.clone()),
         default_slice: Some(state.default_slice.clone()),
@@ -1620,7 +1742,20 @@ fn project_planar_patch_to_compatibility_slice(
             | crate::schemas::visualization_state::PlanarFieldComponent::V
             | crate::schemas::visualization_state::PlanarFieldComponent::Normal
             | crate::schemas::visualization_state::PlanarFieldComponent::InPlaneMagnitude
-            | crate::schemas::visualization_state::PlanarFieldComponent::Orientation => {
+            | crate::schemas::visualization_state::PlanarFieldComponent::Orientation
+            | crate::schemas::visualization_state::PlanarFieldComponent::C0
+            | crate::schemas::visualization_state::PlanarFieldComponent::C1
+            | crate::schemas::visualization_state::PlanarFieldComponent::C2
+            | crate::schemas::visualization_state::PlanarFieldComponent::C3
+            | crate::schemas::visualization_state::PlanarFieldComponent::C4
+            | crate::schemas::visualization_state::PlanarFieldComponent::C5
+            | crate::schemas::visualization_state::PlanarFieldComponent::C6
+            | crate::schemas::visualization_state::PlanarFieldComponent::C7
+            | crate::schemas::visualization_state::PlanarFieldComponent::C8
+            | crate::schemas::visualization_state::PlanarFieldComponent::Frobenius
+            | crate::schemas::visualization_state::PlanarFieldComponent::SpinFlowX
+            | crate::schemas::visualization_state::PlanarFieldComponent::SpinFlowY
+            | crate::schemas::visualization_state::PlanarFieldComponent::SpinFlowZ => {
                 FieldComponent::Magnitude
             }
         };
@@ -2512,6 +2647,7 @@ fn object_target_settings(
         surface_mono_color: vector_style.mono_color.clone(),
         surface_opacity: layers.surface.opacity,
         surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
+        tensor_projection: None,
         surface_visible: layers.surface.visible,
         viewport_colorbar_visible: false,
         vector_alpha: vector_style.alpha,
@@ -2550,6 +2686,7 @@ fn airbox_target_settings(
         surface_mono_color: "var(--fm-airbox-fill)".to_string(),
         surface_opacity: layers.airbox.surface.opacity,
         surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
+        tensor_projection: None,
         surface_visible: layers.airbox.surface.visible,
         viewport_colorbar_visible: false,
         vector_alpha: 1.0,
@@ -2670,6 +2807,19 @@ fn apply_visualization_target_override(
     }
     if let Some(quantity) = &override_state.quantity {
         settings.active_quantity_id = quantity.active_quantity_id.clone();
+    }
+    if let Some(projection) = override_state
+        .style
+        .as_ref()
+        .and_then(|style| style.tensor_projection.as_ref())
+    {
+        settings.tensor_projection = projection.clone();
+    }
+    if fullmag_quantities::quantity_spec(&settings.active_quantity_id)
+        .and_then(|spec| spec.tensor_descriptor())
+        .is_none()
+    {
+        settings.tensor_projection = None;
     }
     settings.render_mode = visualization_target_render_mode(&settings);
     settings

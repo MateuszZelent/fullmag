@@ -124,10 +124,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/Au
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Snapshot output | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class Snapshot` | Field-component output | Ownership test |
+| Snapshot output | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L175) | [`class Snapshot`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L175) | Field-component output | Ownership test |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Snapshot field/component selection and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class Snapshot` | Snapshot field/component selection and lowering. | Source-map validator and focused API tests |
+| Snapshot field/component selection and lowering. | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L175) | [`class Snapshot`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L175) | Snapshot field/component selection and lowering. | Source-map validator and focused API tests |

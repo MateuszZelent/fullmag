@@ -1094,6 +1094,344 @@ describe("buildModelTree", () => {
     );
   });
 
+  it("combines Study and object flags for Exchange and Demag snapshots", () => {
+    const scenarios = [
+      {
+        enabled: false,
+        id: "study-disabled-defaults",
+        physicsStack: undefined,
+        study: { exchange_enabled: false, demag_enabled: false },
+      },
+      {
+        enabled: true,
+        id: "study-enabled-defaults",
+        physicsStack: undefined,
+        study: { exchange_enabled: true, demag_enabled: true },
+      },
+      {
+        enabled: true,
+        id: "missing-study-flags-default-on",
+        physicsStack: undefined,
+        study: {},
+      },
+      {
+        enabled: false,
+        id: "study-disabled-overrides-object",
+        physicsStack: [
+          { enabled: true, kind: "exchange" },
+          { enabled: true, kind: "demag" },
+        ],
+        study: { exchange_enabled: false, demag_enabled: false },
+      },
+      {
+        enabled: false,
+        id: "object-disabled",
+        physicsStack: [
+          { enabled: false, kind: "exchange" },
+          { enabled: false, kind: "demag" },
+        ],
+        study: { exchange_enabled: true, demag_enabled: true },
+      },
+      {
+        exchangeEnabled: false,
+        demagEnabled: true,
+        id: "mixed-study-flags",
+        physicsStack: [
+          { enabled: true, kind: "exchange" },
+          { enabled: true, kind: "demag" },
+        ],
+        study: { exchange_enabled: false, demag_enabled: true },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const snapshot = modelTreeSnapshotFromScene({
+        objects: [
+          {
+            id: scenario.id,
+            name: scenario.id,
+            physics_stack: scenario.physicsStack,
+          },
+        ],
+        study: scenario.study,
+      } as SceneResource);
+      const tree = flattenExplorerNodes(buildModelTree(snapshot));
+
+      for (const kind of ["exchange", "demag"] as const) {
+        const enabled = "enabled" in scenario
+          ? scenario.enabled
+          : kind === "exchange"
+            ? scenario.exchangeEnabled
+            : scenario.demagEnabled;
+        const expectedEnabledCount = enabled ? 1 : 0;
+        const expectedBadge = enabled ? "active" : "disabled";
+        const expectedStatus = enabled ? "ready" : "degraded";
+
+        expect(
+          snapshot.physicsInteractions?.find((item) => item.id === kind),
+        ).toMatchObject({ enabledCount: expectedEnabledCount, objectCount: 1 });
+        expect(
+          snapshot.objects?.[0]?.physicsInteractions?.find(
+            (item) => item.id === kind,
+          ),
+        ).toMatchObject({ enabledCount: expectedEnabledCount, objectCount: 1 });
+        expect(
+          tree.find(
+            (node) =>
+              node.id === `model:object:${scenario.id}:magnetic-parameters:${kind}`,
+          ),
+        ).toMatchObject({ badge: expectedBadge, status: expectedStatus });
+      }
+    }
+  });
+
+  it("infers material DMI only from finite nonzero canonical scalar values", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      materials: [
+        { id: "missing", name: "Missing material", properties: { Ms: 800000 } },
+        { id: "null", name: "Null material", properties: { Dind: null, Dbulk: null } },
+        { id: "zero", name: "Zero material", properties: { Dind: 0, Dbulk: -0 } },
+        {
+          id: "nonfinite",
+          name: "Nonfinite material",
+          properties: { Dind: Number.NaN, Dbulk: "Infinity" },
+        },
+        { id: "positive", name: "Positive material", properties: { Dind: 0.25, Dbulk: "0.5" } },
+        { id: "negative", name: "Negative material", properties: { Dind: "-0.25", Dbulk: -0.5 } },
+        { id: "nondecimal", name: "Nondecimal material", properties: { Dind: " ", Dbulk: "0x10" } },
+      ],
+      objects: [
+        { id: "missing", material_ref: "missing" },
+        { id: "null", material_ref: "null" },
+        { id: "zero", material_ref: "zero" },
+        { id: "nonfinite", material_ref: "nonfinite" },
+        { id: "positive", material_ref: "positive" },
+        { id: "negative", material_ref: "negative" },
+        { id: "nondecimal", material_ref: "nondecimal" },
+        {
+          id: "zero-explicit",
+          material_ref: "zero",
+          physics_stack: [{ enabled: true, kind: "interfacial_dmi" }],
+        },
+      ],
+    } as SceneResource);
+    const tree = flattenExplorerNodes(buildModelTree(snapshot));
+    const interactionsFor = (objectId: string) =>
+      snapshot.objects?.find((object) => object.id === objectId)
+        ?.physicsInteractions ?? [];
+
+    for (const objectId of [
+      "missing",
+      "null",
+      "zero",
+      "nonfinite",
+      "nondecimal",
+    ]) {
+      expect(
+        interactionsFor(objectId).map((interaction) => interaction.id),
+      ).toEqual(["exchange", "demag"]);
+    }
+    for (const objectId of ["positive", "negative"]) {
+      expect(
+        interactionsFor(objectId).map((interaction) => interaction.id),
+      ).toEqual([
+        "exchange",
+        "demag",
+        "interfacial_dmi",
+        "bulk_dmi",
+      ]);
+      expect(
+        tree.find(
+          (node) =>
+            node.id === `model:object:${objectId}:magnetic-parameters:interfacial_dmi`,
+        ),
+      ).toMatchObject({ badge: "active", status: "ready" });
+    }
+    expect(
+      interactionsFor("zero-explicit").map((interaction) => interaction.id),
+    ).toEqual(["exchange", "demag", "interfacial_dmi"]);
+
+    expect(
+      snapshot.physicsInteractions?.find(
+        (item) => item.id === "interfacial_dmi",
+      ),
+    )
+      .toMatchObject({ enabledCount: 3, objectCount: 3 });
+    expect(
+      snapshot.physicsInteractions?.find((item) => item.id === "bulk_dmi"),
+    )
+      .toMatchObject({ enabledCount: 2, objectCount: 2 });
+  });
+
+  it("aggregates the last normalized known interaction once per magnetic object", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      materials: [
+        {
+          id: "nonzero",
+          name: "Nonzero material",
+          properties: { Dind: 0.25, Dbulk: -0.5 },
+        },
+      ],
+      objects: [
+        {
+          id: "film-a",
+          material_ref: "nonzero",
+          physics_stack: [
+            { enabled: true, kind: "interfacial_dmi" },
+            { enabled: false, kind: " interfacial_dmi " },
+            { enabled: false, kind: "bulk_dmi" },
+            { enabled: true, kind: " bulk_dmi " },
+            { enabled: true, kind: "uniaxial_anisotropy" },
+            { enabled: false, kind: " uniaxial_anisotropy " },
+            { enabled: true, kind: "unknown_future_interaction" },
+            { enabled: true, kind: "exchange" },
+          ],
+        },
+        {
+          id: "film-b",
+          material_ref: "nonzero",
+          physics_stack: [
+            { enabled: true, kind: " interfacial_dmi " },
+            { enabled: false, kind: " demag " },
+            { enabled: true, kind: "demag" },
+          ],
+        },
+      ],
+      study: { exchange_enabled: false, demag_enabled: true },
+    } as SceneResource);
+    const tree = flattenExplorerNodes(buildModelTree(snapshot));
+    const aggregate = (kind: string) =>
+      snapshot.physicsInteractions?.find((interaction) => interaction.id === kind);
+    const objectInteraction = (objectId: string, kind: string) =>
+      snapshot.objects
+        ?.find((object) => object.id === objectId)
+        ?.physicsInteractions?.find((interaction) => interaction.id === kind);
+
+    expect(aggregate("interfacial_dmi")).toMatchObject({
+      enabledCount: 1,
+      objectCount: 2,
+    });
+    expect(aggregate("bulk_dmi")).toMatchObject({
+      enabledCount: 2,
+      objectCount: 2,
+    });
+    expect(aggregate("uniaxial_anisotropy")).toMatchObject({
+      enabledCount: 0,
+      objectCount: 1,
+    });
+    expect(aggregate("exchange")).toMatchObject({
+      enabledCount: 0,
+      objectCount: 2,
+    });
+    expect(aggregate("demag")).toMatchObject({ enabledCount: 2, objectCount: 2 });
+    expect(aggregate("unknown_future_interaction")).toBeUndefined();
+
+    expect(objectInteraction("film-a", "interfacial_dmi")?.enabledCount).toBe(0);
+    expect(objectInteraction("film-b", "interfacial_dmi")?.enabledCount).toBe(1);
+    expect(objectInteraction("film-a", "bulk_dmi")?.enabledCount).toBe(1);
+    expect(
+      objectInteraction("film-a", "uniaxial_anisotropy")?.enabledCount,
+    ).toBe(0);
+    expect(
+      objectInteraction("film-a", "unknown_future_interaction"),
+    ).toBeUndefined();
+
+    expect(
+      tree.find(
+        (node) =>
+          node.id === "model:object:film-a:magnetic-parameters:interfacial_dmi",
+      ),
+    ).toMatchObject({ badge: "disabled", status: "degraded" });
+    expect(
+      tree.find(
+        (node) =>
+          node.id === "model:object:film-b:magnetic-parameters:interfacial_dmi",
+      ),
+    ).toMatchObject({ badge: "active", status: "ready" });
+    expect(
+      tree.some(
+        (node) =>
+          node.id === "model:object:film-a:magnetic-parameters:unknown_future_interaction",
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores interaction stacks and inferred material physics for non-magnetic roles", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      materials: [
+        {
+          id: "aux-material",
+          name: "Auxiliary material",
+          properties: { Dbulk: 0.002, Dind: 0.001 },
+        },
+      ],
+      objects: [
+        {
+          id: "aux",
+          material_ref: "aux-material",
+          name: "Auxiliary",
+          physics_stack: [
+            { enabled: true, kind: "exchange" },
+            { enabled: true, kind: "demag" },
+            { enabled: true, kind: "uniaxial_anisotropy" },
+            { enabled: true, kind: "interfacial_dmi" },
+            { enabled: true, kind: "bulk_dmi" },
+          ],
+          role: "auxiliary",
+        },
+        {
+          id: "antenna",
+          material_ref: "aux-material",
+          name: "Antenna",
+          physics_stack: [
+            { enabled: true, kind: "exchange" },
+            { enabled: true, kind: "demag" },
+            { enabled: true, kind: "uniaxial_anisotropy" },
+            { enabled: true, kind: "interfacial_dmi" },
+            { enabled: true, kind: "bulk_dmi" },
+          ],
+          role: "antenna",
+        },
+        {
+          id: "compat-air",
+          name: "Legacy Airbox",
+          physics_stack: [
+            { enabled: true, kind: "exchange" },
+            { enabled: true, kind: "demag" },
+          ],
+          role: "airbox",
+        },
+      ],
+      study: { exchange_enabled: false, demag_enabled: true },
+    } as SceneResource);
+    const tree = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(snapshot.objects?.map((object) => object.id)).toEqual([
+      "aux",
+      "antenna",
+    ]);
+    expect(
+      snapshot.objects?.map((object) => object.physicsInteractions),
+    ).toEqual([[], []]);
+    expect(snapshot.physicsInteractions).toEqual([]);
+    for (const objectId of ["aux", "antenna"] as const) {
+      for (const kind of [
+        "exchange",
+        "demag",
+        "uniaxial_anisotropy",
+        "interfacial_dmi",
+        "bulk_dmi",
+      ]) {
+        expect(
+          tree.some(
+            (node) =>
+              node.id === `model:object:${objectId}:magnetic-parameters:${kind}`,
+          ),
+        ).toBe(false);
+      }
+    }
+  });
+
   it("projects antenna scene objects without magnetic object children", () => {
     const snapshot = modelTreeSnapshotFromScene({
       current_modules: {
@@ -1143,9 +1481,8 @@ describe("buildModelTree", () => {
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:center_microstrip:magnetic-texture",
     );
-    expect(flattened.map((node) => node.id)).not.toContain(
-      "model:object:center_microstrip:mesh",
-    );
+    expect(flattened.find((node) => node.id === "model:object:center_microstrip:mesh"))
+      .toMatchObject({ kind: "object.mesh", objectRole: "antenna" });
   });
 
   it("shows authored object regions, material fields, and couplings from model resources", () => {

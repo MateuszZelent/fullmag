@@ -75,6 +75,44 @@ def run_helper(arguments: list[str]) -> tuple[int, dict[str, object]]:
 
 
 class SceneRenderIncompleteChecks(unittest.TestCase):
+    def test_cli_reports_confirmed_incomplete_physics_without_touching_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            scene = self.write_scene(directory, interaction_enabled=False)
+            output = directory / "existing.py"
+            output.write_bytes(b"preserved managed source\n")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                status = helper._run_cli(self.render_arguments(scene, output, allow_incomplete=False))
+            self.assertEqual(status, 2)
+            self.assertEqual(json.loads(stdout.getvalue()), {
+                "schema": "fullmag.scene-render-rejection.v1", "code": "incomplete_physics",
+            })
+            self.assertEqual(output.read_bytes(), b"preserved managed source\n")
+            self.assertEqual(sorted(path.name for path in directory.iterdir()), ["existing.py", "scene.json"])
+
+    def test_cli_does_not_reclassify_an_unknown_render_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            scene = self.write_scene(directory, interaction_enabled=False)
+            output = directory / "scene.py"
+            with patch.object(helper, "render_scene_document_as_script", side_effect=ValueError("unknown render error")):
+                with self.assertRaisesRegex(ValueError, "unknown render error"):
+                    helper._run_cli(self.render_arguments(scene, output, allow_incomplete=False))
+            self.assertFalse(output.exists())
+
+    def test_cli_preserves_incomplete_persistence_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            scene = self.write_scene(directory, interaction_enabled=False)
+            output = directory / "scene.py"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                status = helper._run_cli(self.render_arguments(scene, output, allow_incomplete=True))
+            self.assertEqual(status, 0)
+            self.assertIs(json.loads(stdout.getvalue())["written"], False)
+            self.assertFalse(output.exists())
+
     def test_explicit_object_anisotropy_is_executable_without_global_interactions(self) -> None:
         from fullmag.runtime.loader import load_problem_from_script
 

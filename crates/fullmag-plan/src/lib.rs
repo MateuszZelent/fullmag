@@ -16,6 +16,7 @@ use fullmag_ir::*;
 mod antenna_composition;
 mod antenna_current_source;
 mod antenna_field_solve;
+mod antenna_field_only;
 mod antenna_projection;
 mod antenna_validity;
 mod antenna_zeeman;
@@ -51,12 +52,13 @@ mod validate;
 pub mod boundary_geometry;
 
 pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
-pub use antenna_current_source::materialize_antenna_external_lead_current_input;
+pub use antenna_field_only::plan_antenna_field_only_carrier;
+pub use antenna_current_source::{materialize_antenna_external_lead_current_input, materialize_antenna_closed_loop_current_input};
 pub use antenna_field_solve::{
     plan_antenna_external_lead_inspection, plan_antenna_field_solve_execution,
     AntennaFieldSolveExecutionPlan,
 };
-pub use antenna_projection::resolve_fem_antenna_projection_mask;
+pub use antenna_projection::{resolve_fem_antenna_projection_mask, resolve_fem_antenna_transverse_cell_mask};
 pub use antenna_validity::{
     antenna_validity_notes, antenna_waveform_bandwidth_aggregate_note,
     antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
@@ -120,6 +122,7 @@ pub use study_catalog::{
 pub use study_lowering::{
     lower_study_plan, StudyExecutionPlan, StudyLoweringError, StudyStepExecutionPlan,
     StudyStepLoweringStatus, STUDY_EXECUTION_PLAN_SCHEMA, STUDY_EXECUTION_PLAN_SCHEMA_V1,
+    STUDY_EXECUTION_PLAN_SCHEMA_V2,
 };
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
@@ -147,6 +150,17 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     execution_profile_guard::validate_bound_intent(problem).map_err(|reason| PlanError {
         reasons: vec![reason],
     })?;
+    if matches!(problem.study, fullmag_ir::StudyIR::FieldOnly { .. }) {
+        let stage_id = util::active_stage_id(problem).ok_or_else(|| PlanError {
+            reasons: vec!["field_only requires an explicitly selected antenna stage; drafts are not executable".into()],
+        })?;
+        let stage = problem.antenna_field_solve_stages.iter().find(|stage| stage.id == stage_id)
+            .ok_or_else(|| PlanError { reasons: vec!["field_only selected antenna stage is missing".into()] })?;
+        if stage.port_mode_ids.len() != 1 {
+            return Err(PlanError { reasons: vec!["field_only requires exactly one selected port mode".into()] });
+        }
+        return plan_antenna_field_only_carrier(problem, stage_id, &stage.port_mode_ids[0]);
+    }
     if matches!(problem.study, StudyIR::AntennaFieldSolve { .. }) {
         return antenna_field_solve::plan_standalone_antenna(problem);
     }
@@ -200,6 +214,44 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             BackendTarget::Fdm
         }
     };
+
+    let requests_finite_k = problem
+        .problem_meta
+        .runtime_metadata
+        .get("spin_wave_response")
+        .and_then(|request| request.get("analysis"))
+        .and_then(|analysis| analysis.as_str())
+        == Some("finite_k");
+    if requests_finite_k && resolved_backend != BackendTarget::Fem {
+        errors.push(
+            "spin_wave_response.finite_k_requires_fem_backend; fallback=none".to_string(),
+        );
+    }
+    if requests_finite_k {
+        if !has_active_finite_k_source(problem) {
+            errors.push("spin_wave_response.finite_k_requires_active_localized_or_solved_antenna_source".into());
+        }
+        let field_periods = |quantity: &str| {
+            problem.study.sampling().outputs.iter().filter_map(|output| match output {
+                fullmag_ir::OutputIR::Field { name, every_seconds }
+                | fullmag_ir::OutputIR::FieldResolvedAuto { name, every_seconds, .. }
+                    if name == quantity => Some(*every_seconds),
+                _ => None,
+            }).collect::<Vec<_>>()
+        };
+        let magnetization_periods = field_periods("m");
+        let drive_periods = field_periods("H_drive");
+        if magnetization_periods.is_empty() || drive_periods.is_empty() {
+            errors.push("spin_wave_response.finite_k_requires_m_and_h_drive_field_outputs".into());
+        } else {
+            let period = magnetization_periods[0];
+            if !period.is_finite() || period <= 0.0
+                || magnetization_periods.iter().chain(&drive_periods).any(|candidate| *candidate != period)
+            {
+                errors.push("spin_wave_response.finite_k_requires_matching_field_sampling_periods".into());
+            }
+        }
+    }
 
     if problem.validation_profile.execution_mode == ExecutionMode::Hybrid {
         errors.push("execution_mode='hybrid' is not supported by the current planner".to_string());
@@ -287,6 +339,68 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     Ok(execution_plan)
 }
 
+fn has_active_finite_k_source(problem: &ProblemIR) -> bool {
+    problem.field_drives.iter().any(|drive| {
+        util::field_drive_is_active(drive, problem)
+            && (!matches!(drive.target, fullmag_ir::FieldTargetIR::Global {})
+                || matches!(drive.spatial_profile, fullmag_ir::FieldSpatialProfileIR::GeometryMask { .. }))
+    }) || problem.solved_antenna_drives.iter().any(|drive| {
+        drive.peak_current_a.is_finite()
+            && drive.peak_current_a != 0.0
+            && util::drive_activation_is_active(&drive.activation, problem)
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn finite_k_source_gate_respects_antenna_stage_and_current() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.field_drives.clear();
+    problem.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("run"));
+    problem.solved_antenna_drives = vec![SolvedAntennaDriveIR {
+        id: "antenna-drive".into(),
+        name: "Antenna drive".into(),
+        projection_ref: "projection".into(),
+        port_mode_id: "port".into(),
+        peak_current_a: 1e-3,
+        waveform: TimeDependenceIR::Constant,
+        bandwidth_declaration: None,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds { stage_ids: vec!["other".into()] },
+    }];
+    assert!(!has_active_finite_k_source(&problem));
+    problem.field_drives.push(RegionalFieldDriveIR {
+        id: "global-drive".into(),
+        name: "Global drive".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+    assert!(!has_active_finite_k_source(&problem), "global companion must not activate an antenna assigned to another stage");
+    problem.field_drives[0].spatial_profile = FieldSpatialProfileIR::GeometryMask {
+        object_id: "strip".into(),
+        envelope: FieldEnvelopeIR::Uniform {},
+    };
+    assert!(has_active_finite_k_source(&problem));
+    problem.field_drives[0].enabled = false;
+    assert!(!has_active_finite_k_source(&problem));
+    problem.solved_antenna_drives[0].activation = DriveActivationIR::StageIds { stage_ids: vec!["run".into()] };
+    assert!(has_active_finite_k_source(&problem));
+    for current in [0.0, f64::NAN, f64::INFINITY] {
+        problem.solved_antenna_drives[0].peak_current_a = current;
+        assert!(!has_active_finite_k_source(&problem));
+    }
+    problem.solved_antenna_drives[0].peak_current_a = -1e-3;
+    assert!(has_active_finite_k_source(&problem));
+}
+
 /// Plan one explicit static antenna basis solve without authorizing LLG,
 /// relaxation, eigenmode, or frequency-response execution.
 pub fn plan_antenna_field_solve(
@@ -299,3 +413,5 @@ pub fn plan_antenna_field_solve(
 
 #[cfg(test)]
 mod tests;
+
+pub use study_lowering::{validate_closed_loop_operation, STUDY_EXECUTION_PLAN_SCHEMA_V4};

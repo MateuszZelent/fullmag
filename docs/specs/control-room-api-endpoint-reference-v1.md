@@ -1567,6 +1567,13 @@ Current implementation note:
   the canonical script is written to `<workspace_root>/exports/<name>.canonical.py` and the response
   reports `written_to = "export_copy"`, `source_script_modified = false` and `managed_copy_path`.
   Scripts inside Fullmag-managed storage (`generated`) are still rewritten in place.
+- A scratch SceneDocument render that terminates with the typed incomplete-physics
+  rejection returns HTTP 400 with code `scene_incomplete_physics`. The renderer
+  publishes no source: enable an explicit interaction or material anisotropy
+  before execution preparation. Authoring and incomplete project persistence
+  remain available. This is a confirmed input rejection; timeouts, malformed
+  helper replies and other helper failures retain an unknown/server-error
+  outcome and must not trigger automatic replay.
 
 ## 8. Display and Commands
 

@@ -1,0 +1,10 @@
+# Dockerfile.dev receives only these runtime helpers; never send app source or
+# a compiled package when someone builds it directly from this checkout.
+**
+!Dockerfile.dev
+!Dockerfile.dev.dockerignore
+!entrypoint.py
+!windows_folder_probe.py
+!runtime_service.py
+!frontend_dev.py
+!healthcheck.py

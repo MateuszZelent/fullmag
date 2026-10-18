@@ -6,6 +6,7 @@ import { composeAntennaProjectionDrive } from "./AntennaProjectionDriveComposerM
 
 const scene = {
   objects: [{ id: "conductor", name: "Conductor" }, { id: "magnet", name: "Magnet" }],
+  current_transports: [{ name: "current" }],
   study: { stages: [{ kind: "relax", stage_id: "relax" }, { kind: "run", stage_id: "run" }] },
   antenna_field_solve_stages: [{
     id: "solve", source_object_id: "conductor", current_transport_id: "current",
@@ -43,10 +44,11 @@ describe("composeAntennaProjectionDrive", () => {
     const existing = {
       ...scene,
       antenna_target_projections: [{ id: "solve:projection:1" }],
-      solved_antenna_drives: [{ id: "solve:drive:1" }],
+      solved_antenna_drives: [{ id: "solve:drive:1", name: "Current drive 1" }],
     } as SceneResource;
     const created = composeAntennaProjectionDrive(existing, "solve", "magnet", "run", "0.01", "1e9");
     expect(created.projection.id).toBe("solve:projection:2");
     expect(created.drive.id).toBe("solve:drive:2");
+    expect(created.drive.name).toBe("Current drive 2");
   });
 });

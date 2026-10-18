@@ -447,6 +447,7 @@ pub(crate) fn planned_study_controls(
                 "frequency response is a direct harmonic solve and has no time integrator"
             ),
             fullmag_ir::StudyIR::Hysteresis { .. } => Some(IntegratorChoice::Heun),
+            fullmag_ir::StudyIR::FieldOnly { .. } => None,
             fullmag_ir::StudyIR::AntennaFieldSolve { .. } => None,
         })
     } else {

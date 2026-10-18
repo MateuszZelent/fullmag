@@ -349,6 +349,7 @@ fn public_closed_loop_oersted_problem() -> ProblemIR {
             circuit_id: "loop-circuit".into(),
             region: source_arm,
             plane: StructuredCutPlaneIR {
+                coordinate_frame: None,
                 axis: StructuredCutAxisIR::Y,
                 offset_m: -0.5e-9,
                 normal: StructuredCutNormalIR::PositiveAxis,

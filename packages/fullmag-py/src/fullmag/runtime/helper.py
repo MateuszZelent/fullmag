@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -36,6 +37,9 @@ from fullmag.runtime.script_builder import (
     render_scene_document_as_script,
     rewrite_loaded_problem_script,
 )
+
+
+MAX_SOURCE_SNAPSHOT_BYTES = 1024 * 1024
 
 
 def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
@@ -72,6 +76,46 @@ def _write_json(value: object) -> None:
     sys.stdout.write("\n")
 
 
+def _read_source_snapshot(path_value: str | None) -> bytes | None:
+    if path_value is None:
+        return None
+    path = Path(path_value)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_SOURCE_SNAPSHOT_BYTES:
+            raise ValueError("captured source snapshot is not a bounded regular file")
+        chunks: list[bytes] = []
+        remaining = MAX_SOURCE_SNAPSHOT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        source = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    if len(source) > MAX_SOURCE_SNAPSHOT_BYTES:
+        raise ValueError("captured source snapshot exceeds the 1 MiB limit")
+    return source
+
+
+def _load_script(args: argparse.Namespace, *, lightweight_assets: bool):
+    return load_problem_from_script(
+        Path(args.script),
+        lightweight_assets=lightweight_assets,
+        source_bytes=_read_source_snapshot(getattr(args, "source_snapshot", None)),
+    )
+
+
+def _add_source_snapshot_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--source-snapshot",
+        help="Read immutable script bytes from this bounded snapshot while preserving --script as its logical origin.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m fullmag.runtime.helper",
@@ -93,6 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     export_ir = subparsers.add_parser("export-ir", help="Load a Python script and print canonical ProblemIR.")
     export_ir.add_argument("--script", required=True, help="Path to Python script.")
+    _add_source_snapshot_argument(export_ir)
     export_ir.add_argument(
         "--backend",
         choices=[target.value for target in BackendTarget],
@@ -111,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Load a Python script and print canonical ProblemIR plus script-owned run defaults.",
     )
     export_run_config.add_argument("--script", required=True, help="Path to Python script.")
+    _add_source_snapshot_argument(export_run_config)
     export_run_config.add_argument(
         "--backend",
         choices=[target.value for target in BackendTarget],
@@ -164,6 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Load a script and export the canonical SceneDocument authoring state.",
     )
     export_scene.add_argument("--script", required=True, help="Path to Python script.")
+    _add_source_snapshot_argument(export_scene)
 
     rewrite_scene = subparsers.add_parser(
         "rewrite-scene-document",
@@ -285,10 +332,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command in {"export-ir", "export-run-config"}:
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = load_problem_from_script(
-            Path(args.script),
+        loaded = _load_script(
+            args,
             lightweight_assets=getattr(args, "skip_geometry_assets", False),
         )
+        runtime_device_override = getattr(args, "runtime_device", None)
+        if loaded.has_declared_execution_profile():
+            # A global FEM-first/FDM-first device hint can contradict a
+            # different per-stage profile. Those requests are materialized
+            # by the Rust resolver from each stage's backend-specific env.
+            runtime_device_override = None
         asset_cache = loaded.problem.geometry_asset_cache
         requested_backend = BackendTarget(args.backend) if args.backend is not None else None
         execution_mode = ExecutionMode(args.mode) if args.mode is not None else None
@@ -302,7 +355,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             execution_precision=execution_precision,
             asset_cache=asset_cache,
             include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
-            runtime_device_override=getattr(args, "runtime_device", None),
+            runtime_device_override=runtime_device_override,
             _copy_cached_geometry_assets=False,
         )
         _write_executed_problem_ir_identity(_benchmark_problem_ir_identity(ir))
@@ -317,7 +370,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     requested_backend=requested_backend,
                     execution_mode=execution_mode,
                     execution_precision=execution_precision,
-                    runtime_device_override=getattr(args, "runtime_device", None),
+                    runtime_device_override=runtime_device_override,
                     include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
                     source_root=loaded.source_path.parent,
                     source_stem=loaded.source_path.stem,
@@ -329,7 +382,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "rewrite-script":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = load_problem_from_script(Path(args.script), lightweight_assets=True)
+        loaded = _load_script(args, lightweight_assets=True)
         overrides = None
         if args.overrides_json:
             overrides = json.loads(Path(args.overrides_json).read_text(encoding="utf-8"))
@@ -356,7 +409,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "export-scene-document":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = load_problem_from_script(Path(args.script), lightweight_assets=True)
+        loaded = _load_script(args, lightweight_assets=True)
         print(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
         emit_progress("Scene document exported")
         return 0
@@ -479,5 +532,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 2
 
 
+def _run_cli(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return main(arguments)
+    except IncompletePhysicsError:
+        if arguments[:1] != ["render-scene-document"]:
+            raise
+        # This typed refusal occurs before the renderer publishes any source.
+        # Other helper failures retain their original unknown outcome.
+        print(json.dumps({
+            "schema": "fullmag.scene-render-rejection.v1",
+            "code": "incomplete_physics",
+        }))
+        return 2
+
+
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(_run_cli())

@@ -9,16 +9,21 @@ import { KernelProvider } from "@/kernel/KernelProvider";
 
 const appMenuBarSourceUrl = new URL("./AppMenuBar.tsx", import.meta.url);
 
-import {
-  AppMenuBar,
-} from "./AppMenuBar";
+import { AppMenuBar } from "./AppMenuBar";
 import {
   resolveApiConnectionErrorDetails,
   resolveHeaderSessionDisplay,
   resolveHydrationSafeHeaderSessionSource,
+  resolveNoSessionSubtitle,
 } from "./AppMenuBarHeaderModel";
 
 describe("AppMenuBar", () => {
+  it("keeps the Home header stable while session discovery retries", () => {
+    expect(resolveNoSessionSubtitle("loading")).toBe("Home");
+    expect(resolveNoSessionSubtitle("error")).toBe("Home");
+    expect(resolveNoSessionSubtitle("no-session")).toBe("No active session");
+  });
+
   it("selects only header display fields from session status", () => {
     const source = readFileSync(appMenuBarSourceUrl, "utf8");
 
@@ -69,6 +74,17 @@ describe("AppMenuBar", () => {
     expect(source).toContain(
       '<DialogDescription id="fm-api-connection-error-description">',
     );
+  });
+
+  it("mounts the on-demand readiness helper trigger next to Local API instead of permanently in the ribbon", () => {
+    const source = readFileSync(appMenuBarSourceUrl, "utf8");
+    const ribbonSource = readFileSync(
+      new URL("../../modules/ribbon/RibbonModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("<ReadinessHelperHeaderControl");
+    expect(ribbonSource).not.toContain("<ScratchAuthoringGuide");
   });
 
   it("derives the header title and runtime badge from session status", () => {

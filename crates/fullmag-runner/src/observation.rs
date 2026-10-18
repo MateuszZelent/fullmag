@@ -235,6 +235,7 @@ impl ObservationProviderResolver {
     pub fn from_backend_plan(plan: &fullmag_ir::BackendPlanIR) -> Self {
         use fullmag_ir::{BackendPlanIR, FemDomainMeshModeIR};
         let lane = match plan {
+            BackendPlanIR::AntennaFieldOnly(_) => None,
             BackendPlanIR::Fdm(_) => Some(ObservationLane::FdmRegular),
             BackendPlanIR::FdmMultilayer(_) => Some(ObservationLane::FdmMultilayer),
             BackendPlanIR::Fem(fem)

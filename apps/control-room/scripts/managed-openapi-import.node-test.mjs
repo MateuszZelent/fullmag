@@ -132,6 +132,62 @@ function snapshotOptions(item) {
   return ["--managed-snapshot-receipt", item.receipt, "--expected-source-digest", sourceDigest];
 }
 
+function dockerFixture(worktreeState = "dirty") {
+  const item = fixture(worktreeState, "stdout.raw.json");
+  const packageRoot = join(item.root, "package");
+  const apiBinary = join(packageRoot, "bin", "fullmag-api");
+  const backendBuildReceipt = join(packageRoot, "backend-build-receipt.json");
+  mkdirSync(dirname(apiBinary), { recursive: true });
+  writeFileSync(apiBinary, Buffer.from("fixture docker api binary\n"));
+  writeFileSync(backendBuildReceipt, JSON.stringify({ state: "succeeded" }));
+  const assembly = join(item.root, "assembly.json");
+  const apiBinarySha256 = sha256(readFileSync(apiBinary));
+  const backendBuildReceiptSha256 = sha256(readFileSync(backendBuildReceipt));
+  const imageId = `sha256:${"e".repeat(64)}`;
+  writeFileSync(assembly, JSON.stringify({
+    schema: "fullmag.docker-all-image.v1",
+    state: "succeeded",
+    exit_code: 0,
+    commit,
+    source_snapshot_sha256: snapshot,
+    source_digest: sourceDigest,
+    image_id: imageId,
+    package_root: packageRoot,
+    backend_build_receipt: backendBuildReceipt,
+    build_receipt_sha256: backendBuildReceiptSha256,
+    binary_hashes: { "fullmag-api": apiBinarySha256 },
+    native_source_identity: {
+      schema: "fullmag.source-snapshot.v2",
+      head_commit_full: commit,
+      source_snapshot_sha256: snapshot,
+      source_snapshot_dirty: worktreeState === "dirty",
+    },
+  }));
+  const proof = join(item.root, "proof.json");
+  writeFileSync(proof, JSON.stringify({
+    schema: "fullmag.direct-package-openapi-export.v1",
+    state: "succeeded",
+    exit_code: 0,
+    assembly,
+    input: item.input,
+    commit,
+    snapshot,
+    source_digest: sourceDigest,
+    image_id: imageId,
+    binary_sha256: apiBinarySha256,
+    stdout_sha256: sha256(readFileSync(item.input)),
+  }));
+  return { ...item, assembly, proof, apiBinary, backendBuildReceipt };
+}
+
+function dockerOptions(item) {
+  return [
+    "--docker-assembly", item.assembly,
+    "--docker-export-receipt", item.proof,
+    "--expected-source-digest", sourceDigest,
+  ];
+}
+
 test("managed snapshot receipt binds raw bytes and proof before normalization", () => {
   for (const state of ["clean", "dirty"]) {
     const item = managedSnapshotFixture(state);
@@ -144,6 +200,49 @@ test("managed snapshot receipt binds raw bytes and proof before normalization", 
     assert.equal(published["x-fullmag-build-identity"].worktree_state, "generated-artifact");
     assert.deepEqual(readFileSync(item.input), original);
   }
+});
+
+test("Docker export binds clean and dirty source identities before normalization", () => {
+  for (const state of ["clean", "dirty"]) {
+    const item = dockerFixture(state);
+    const original = readFileSync(item.input);
+    const result = invoke(item, item.input, dockerOptions(item));
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    const published = JSON.parse(readFileSync(item.output, "utf8"));
+    assert.deepEqual(published.paths, item.document.paths);
+    assert.equal(published["x-fullmag-build-identity"].worktree_state, "generated-artifact");
+    assert.deepEqual(readFileSync(item.input), original);
+  }
+});
+
+test("Docker export hashes the package files actually read", () => {
+  const binary = dockerFixture();
+  writeFileSync(binary.apiBinary, Buffer.from("changed api binary\n"));
+  assertPreserved(binary, invoke(binary, binary.input, dockerOptions(binary)), /Docker assembly|Docker export proof/);
+
+  const receipt = dockerFixture();
+  writeFileSync(receipt.backendBuildReceipt, JSON.stringify({ state: "changed" }));
+  assertPreserved(receipt, invoke(receipt, receipt.input, dockerOptions(receipt)), /Docker assembly|Docker export proof/);
+});
+
+test("Docker export requires complete exclusive receipt paths and source pins", () => {
+  const item = dockerFixture();
+  assertPreserved(item, invoke(item, item.input, ["--docker-assembly", item.assembly]), /mutually required/);
+  assertPreserved(item, invoke(item, item.input, [
+    "--docker-assembly", item.assembly, "--docker-export-receipt", item.proof,
+  ]), /source digest/);
+  assertPreserved(item, invoke(item, item.input, [
+    ...dockerOptions(item), "--managed-snapshot-receipt", item.proof,
+  ]), /mutually exclusive/);
+  const otherInput = join(item.root, "other.json");
+  copyFileSync(item.input, otherInput);
+  assertPreserved(item, invoke(item, otherInput, dockerOptions(item)), /receipt-parent\/stdout\.raw\.json/);
+  const noInput = spawnSync(process.execPath, [item.script, ...dockerOptions(item)], {
+    cwd: item.root, encoding: "utf8", timeout: 10000,
+    env: { ...process.env, PATH: dirname(process.execPath) },
+  });
+  assertPreserved(item, noInput, /requires --input/);
 });
 
 test("managed snapshot import rejects altered raw bytes and an unbound receipt", () => {

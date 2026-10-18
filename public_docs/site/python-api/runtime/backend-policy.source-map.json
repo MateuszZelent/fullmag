@@ -44,16 +44,6 @@
   "public_api": {
     "parameters": [
       {
-        "python": "---",
-        "type": "---",
-        "default": "---",
-        "si_unit": "1",
-        "validation": "---",
-        "meaning": "---",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "---"
-      },
-      {
         "python": "BackendTarget",
         "type": "`str` enum",
         "default": "`\"auto\"`",

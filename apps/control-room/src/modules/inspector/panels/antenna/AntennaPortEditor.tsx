@@ -8,6 +8,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { antennaPortTerminalChoices } from "@/shared/domain/physics/antennaPortValidation";
 import { Button } from "@/shared/ui/Button";
 
 import { useRegisterInspectorEditSession } from "../../InspectorEditSession";
@@ -23,12 +24,12 @@ import {
 interface Props {
   objectId: string;
   portId: string;
-  scene: SceneResource | null;
+  scene: SceneResource | null; sceneScopeKey: string | null;
   status: string;
   refetch: () => void;
 }
 
-export function AntennaPortEditor({ objectId, portId, scene, status, refetch }: Props) {
+export function AntennaPortEditor({ objectId, portId, scene, sceneScopeKey, status, refetch }: Props) {
   const { api, resources, commands, authoringHistory, selection } = useKernel();
   const identity = useSessionResourceIdentity();
   const scope = sessionRequestScopeKey(identity);
@@ -48,7 +49,7 @@ export function AntennaPortEditor({ objectId, portId, scene, status, refetch }: 
     return () => { owner.current = null; };
   }, [context.token]);
 
-  const currentScene = scope && scene?.scene?.id === identity?.sessionId ? scene : null;
+  const currentScene = scope && sceneScopeKey === scope && scene?.scene?.id ? scene : null;
   const revision = typeof currentScene?.revision === "number" && Number.isSafeInteger(currentScene.revision) && currentScene.revision >= 0 ? currentScene.revision : null;
   const sources = currentScene?.objects?.filter((object) => object.id === objectId) ?? [];
   const ports = currentScene?.antenna_port_modes?.filter((port) => port.id === portId) ?? [];
@@ -80,6 +81,7 @@ export function AntennaPortEditor({ objectId, portId, scene, status, refetch }: 
   }
   const canApply = Boolean(dirty && request && !reason && !pending && !conflict);
   const branches = draft?.branches ?? [];
+  const terminalChoices = mode && draft ? antennaPortTerminalChoices(currentScene, { ...mode, current_transport_id: draft.currentTransportId }) : [];
 
   function update(patch: Partial<Pick<AntennaPortDraft, "currentTransportId" | "branches">>) {
     if (!editable || !draft) return;
@@ -116,9 +118,9 @@ export function AntennaPortEditor({ objectId, portId, scene, status, refetch }: 
         api, authoringHistory, selection, resourceData: { [MODEL_SCENE_PATH]: currentScene },
         sessionScopeKey: scope, isCurrentSessionScope: isCurrent,
       }, `Edit antenna port ${portId}`, () => api.model.commitTransaction(transaction, { sessionScopeKey: scope }),
-      (result) => committedAntennaPortScene(result, submitted, objectId, portId, identity.sessionId, mode));
+      (result) => committedAntennaPortScene(result, submitted, objectId, portId, currentScene.scene?.id ?? "", mode));
       if (!isCurrent()) return false;
-      const committed = committedAntennaPortScene(response, submitted, objectId, portId, identity.sessionId, mode);
+      const committed = committedAntennaPortScene(response, submitted, objectId, portId, currentScene.scene?.id ?? "", mode);
       publishCommittedSceneResource(resources, committed, response.scene_revision, undefined, false, scope, api.resourceCacheScope);
       invalidateAuthoringMutationDependents(resources, "interaction", response.scene_revision);
       setDraft((current) => acknowledgeAntennaPortDraft(current, submitted, response.scene_revision));
@@ -147,13 +149,24 @@ export function AntennaPortEditor({ objectId, portId, scene, status, refetch }: 
     <p className="fm-inspector-hint">Edit existing authoring references only. No terminals, source drives or current closure are created. Port identity, schema and normalization are unchanged. Recompute dependent field solutions after a change.</p>
     <FormField label="Current transport" mono value={draft?.currentTransportId ?? ""} disabled={!editable}
       onChange={(event) => update({ currentTransportId: event.currentTarget.value })} />
+    {terminalChoices.length === 0 ? <p className="fm-inspector-hint">No selectable terminal inventory is available for this transport. Existing references are preserved; prepare the terminal observations before choosing replacements.</p> : null}
     {branches.map((branch, index) => <div className="fm-inspector-panel" key={branch.rowKey}>
       <FormField label={`Branch ${index + 1} ID`} mono value={branch.id} disabled={!editable}
         onChange={(event) => updateBranch(branch.rowKey, { id: event.currentTarget.value })} />
-      <FormField label={`Branch ${index + 1} inlet terminal`} mono value={branch.inletTerminalRef} disabled={!editable}
-        onChange={(event) => updateBranch(branch.rowKey, { inletTerminalRef: event.currentTarget.value })} />
-      <FormField label={`Branch ${index + 1} outlet terminal`} mono value={branch.outletTerminalRef} disabled={!editable}
-        onChange={(event) => updateBranch(branch.rowKey, { outletTerminalRef: event.currentTarget.value })} />
+      <FormField label={`Branch ${index + 1} inlet terminal`} type="select" value={branch.inletTerminalRef} disabled={!editable}
+        onChange={(event) => updateBranch(branch.rowKey, { inletTerminalRef: event.currentTarget.value })}>
+        <option value="" disabled>Select an existing terminal</option>
+        {branch.inletTerminalRef && !terminalChoices.some(choice => choice.id === branch.inletTerminalRef)
+          ? <option value={branch.inletTerminalRef} disabled>{branch.inletTerminalRef} · unavailable</option> : null}
+        {terminalChoices.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+      </FormField>
+      <FormField label={`Branch ${index + 1} outlet terminal`} type="select" value={branch.outletTerminalRef} disabled={!editable}
+        onChange={(event) => updateBranch(branch.rowKey, { outletTerminalRef: event.currentTarget.value })}>
+        <option value="" disabled>Select an existing terminal</option>
+        {branch.outletTerminalRef && !terminalChoices.some(choice => choice.id === branch.outletTerminalRef)
+          ? <option value={branch.outletTerminalRef} disabled>{branch.outletTerminalRef} · unavailable</option> : null}
+        {terminalChoices.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+      </FormField>
       <FormField label={`Branch ${index + 1} signed weight`} inputMode="decimal" unit="1" value={branch.signedWeight} disabled={!editable}
         onChange={(event) => updateBranch(branch.rowKey, { signedWeight: event.currentTarget.value })} />
       <Button type="button" disabled={!editable} aria-label={`Remove port branch ${index + 1}`}

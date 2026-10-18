@@ -31,7 +31,9 @@ managed runtime; nie zastępuje go test fixture ani deklaracja capability.
 ## Fail-closed dla środowiska
 
 Job managed FEM jest przypisany wyłącznie do runnera
-`[self-hosted, linux, x64, fem-managed]`. Bez takiego runnera GitHub nie może
+`[self-hosted, linux, x64, fullmag-fem-private-<run_id>]`. Przy
+`workflow_dispatch` używany jest dokładny, zwalidowany `inputs.runner_label`.
+Bez takiego runnera GitHub nie może
 zakończyć contextu wynikiem `success`: pozostaje on oczekujący, a release
 obejmujący FEM ma status `BLOCKED`. Nie wolno dodawać warunku `if:` prowadzącego
 do `skipped` ani zastępować go jobem Ubuntu bez repozytoryjnego managed runtime.

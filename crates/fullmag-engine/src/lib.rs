@@ -1817,7 +1817,13 @@ mod tests {
                 &mut bufs,
                 EvaluationRequest::Full,
                 |_m, _time, budget| {
-                    budgets.push(budget);
+                    budgets.push(budget.map(|budget| {
+                        (
+                            budget.dt_s,
+                            budget.embedded_error_m.to_vec(),
+                            budget.frozen_cells.map(|mask| mask.to_vec()),
+                        )
+                    }));
                     Ok(ExternalStageTerms {
                         additional_field_apm: vec![[0.0, 0.0, 1.0]; 3],
                         direct_torque_per_s: vec![[0.0; 3]; 3],
@@ -1829,10 +1835,14 @@ mod tests {
         assert_eq!(budgets.len(), 3);
         assert_eq!(budgets[0], None);
         assert_eq!(budgets[1], None);
-        let corrected = budgets[2].expect("corrected stage must carry an LTE budget");
-        assert_eq!(corrected.dt_s, 1e-3);
-        assert!(corrected.embedded_lte_m.is_finite());
-        assert!(corrected.embedded_lte_m >= 0.0);
+        let (dt_s, embedded_error_m, frozen_cells) = budgets[2]
+            .as_ref()
+            .expect("corrected stage must carry an LTE budget");
+        assert_eq!(*dt_s, 1e-3);
+        assert_eq!(embedded_error_m.len(), state.magnetization().len());
+        assert!(embedded_error_m.iter().flatten().all(|value| value.is_finite()));
+        assert_eq!(embedded_error_m.as_slice(), &bufs.k[2][..embedded_error_m.len()]);
+        assert_eq!(*frozen_cells, None);
     }
 
     #[test]

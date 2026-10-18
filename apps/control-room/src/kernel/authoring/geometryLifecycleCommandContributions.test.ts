@@ -1917,6 +1917,19 @@ describe("geometry lifecycle command contributions", () => {
 
   it("builds the committed FDM grid through an explicit command", async () => {
     const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    let confirmationRequestId: string | undefined;
+    let submittedEvent: KernelEventMap["mesh:build-submitted"] | undefined;
+    let observedEvent: KernelEventMap["mesh:build-observed"] | undefined;
+    bus.on("mesh:build-confirm-requested", (event) => {
+      confirmationRequestId = event.requestId;
+    });
+    bus.on("mesh:build-submitted", (event) => {
+      submittedEvent = event;
+    });
+    bus.on("mesh:build-observed", (event) => {
+      observedEvent = event;
+    });
     const submit = vi.fn(async () => ({
       accepted: true,
       command_id: "cmd-explicit-fdm-grid",
@@ -1933,6 +1946,7 @@ describe("geometry lifecycle command contributions", () => {
     }));
     const context: CommandContext = {
       api: { commands: { detail, submit } } as never,
+      bus,
       resourceData: {
         ...sessionStatus("fdm"),
         [MODEL_SCENE_PATH]: { revision: 17 },
@@ -1945,8 +1959,19 @@ describe("geometry lifecycle command contributions", () => {
       commandId: "cmd-explicit-fdm-grid",
       status: "completed",
     });
+    expect(confirmationRequestId).toMatch(/^mesh-confirm-/);
+    expect(submittedEvent).toMatchObject({
+      commandId: "cmd-explicit-fdm-grid",
+      requestId: confirmationRequestId,
+    });
+    expect(observedEvent).toMatchObject({
+      commandId: "cmd-explicit-fdm-grid",
+      meshRevision: 18,
+      requestId: confirmationRequestId,
+      status: "completed",
+    });
     expect(submit).toHaveBeenCalledWith({
-      client_intent_id: expect.stringMatching(/^fdm-grid-refresh-/),
+      client_intent_id: confirmationRequestId,
       kind: "fdm_grid_refresh",
       precondition: { scene_revision: 17 },
       reason: "explicit_build_grid",

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fullmag Docker Build"
+  short_description: "Build Fullmag in Docker with persistent volumes"
+  default_prompt: "Use $fullmag-docker-build to build the selected Fullmag checkout in its Compose group with build data confined to Docker volumes."

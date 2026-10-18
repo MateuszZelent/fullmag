@@ -34,9 +34,9 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `FDM.cell` | `three positive floats or `None`` | `None` | $\mathrm{m}$ | Canonical uniform cell size; it also becomes `default_cell` when supplied. | Canonical uniform cell size; it also becomes `default_cell` when supplied. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.cell` |
-| `FDM.default_cell` | `three positive floats or `None`` | `None` | $\mathrm{m}$ | Default cell size when per-magnet grids are present. | Default cell size when per-magnet grids are present. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.default_cell` |
-| `FDM.per_magnet` | `mapping or `None`` | `None` | $1$ | Optional explicit per-magnet FDM grids. | Optional explicit per-magnet FDM grids. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.per_magnet` |
+| `FDM.cell` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | Canonical uniform cell size; it also becomes `default_cell` when supplied. | Canonical uniform cell size; it also becomes `default_cell` when supplied. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.cell` |
+| `FDM.default_cell` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | Default cell size when per-magnet grids are present. | Default cell size when per-magnet grids are present. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.default_cell` |
+| `FDM.per_magnet` | `Mapping[str, Any] \| None` | `None` | $1$ | Optional explicit per-magnet FDM grids. | Optional explicit per-magnet FDM grids. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.per_magnet` |
 | `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | Demagnetization hint. | Demagnetization hint. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.demag` |
 | `FDM.boundary_correction` | `str \| None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device. | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_correction` |
 | `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
@@ -121,4 +121,4 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMes
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Canonical Python API behavior | Ownership test and source-map validator |
+| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | Canonical Python API behavior | Ownership test and source-map validator |

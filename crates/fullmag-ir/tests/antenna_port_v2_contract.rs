@@ -28,6 +28,7 @@ fn antenna_port_mode_serializes_versioned_terminal_pairs() {
             },
         ],
         normalization_current_a: 1.0,
+        normalization: None,
     };
 
     let value = serde_json::to_value(&mode).unwrap();

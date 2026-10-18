@@ -31,6 +31,7 @@ serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
 hdf5 = { version = "0.8", optional = true }
 
 [target.'cfg(unix)'.dependencies]

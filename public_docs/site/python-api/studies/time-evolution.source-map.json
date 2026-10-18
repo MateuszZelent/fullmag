@@ -1,38 +1,55 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
     "path": "public_docs/site/python-api/studies/time-evolution.md"
   },
   "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
+  ],
+  "equations": [
     {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "documented"
+      "id": "eq-time-evolution-ode",
+      "symbols": ["m_i", "H_eff_i", "gamma0", "alpha_i", "tau_direct_i", "t_0", "T", "t"],
+      "sources": ["owner", "study-builder", "fem-cpu-step", "fem-gpu-step"]
     }
   ],
-  "equations": [],
-  "symbols": [],
+  "symbols": [
+    {"id": "m_i", "latex": "\\mathbf{m}_i", "meaning": "Reduced magnetization unit vector at active node/cell $i$", "si_unit": "1"},
+    {"id": "H_eff_i", "latex": "\\mathbf{H}_{\\mathrm{eff},i}", "meaning": "Total effective magnetic field at node/cell $i$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "Reduced gyromagnetic ratio (`gamma`)", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "alpha_i", "latex": "\\alpha_i", "meaning": "Dimensionless Gilbert damping parameter", "si_unit": "1"},
+    {"id": "tau_direct_i", "latex": "\\boldsymbol{\\tau}_{\\mathrm{direct},i}", "meaning": "Direct current-induced spin-torque rate", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "t_0", "latex": "t_0", "meaning": "Stage initial physical time", "si_unit": "\\mathrm{s}"},
+    {"id": "T", "latex": "T", "meaning": "Stage physical duration (`duration`)", "si_unit": "\\mathrm{s}"},
+    {"id": "t", "latex": "t", "meaning": "Physical simulation time", "si_unit": "\\mathrm{s}"}
+  ],
   "sources": [
     {
       "id": "owner",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class TimeEvolution",
-      "responsibility": "Owns dynamics, outputs, frozen-spin constraints, autosave, and lowering."
+      "responsibility": "Owns dynamics, outputs, frozen-spin constraints, autosave, and lowering"
+    },
+    {
+      "id": "study-builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Stage-workflow .stages.add_time(...) and .solver(...) authoring"
+    },
+    {
+      "id": "fem-cpu-step",
+      "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp",
+      "symbol": "context_step_explicit_rk_mfem",
+      "responsibility": "Native FEM CPU explicit RK step execution"
+    },
+    {
+      "id": "fem-gpu-step",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step.cu",
+      "symbol": "gpu_rk_device_resident_step",
+      "responsibility": "Native FEM GPU device-resident explicit RK step execution"
     }
   ],
   "public_api": {

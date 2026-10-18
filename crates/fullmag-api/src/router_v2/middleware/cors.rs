@@ -1,10 +1,9 @@
-use axum::http::HeaderName;
+use axum::http::{HeaderName, HeaderValue};
 use tower_http::cors::{Any, CorsLayer};
 
 /// Canonical CORS policy for the resource-first API surface.
 pub fn cors_layer() -> CorsLayer {
-    CorsLayer::new()
-        .allow_origin(Any)
+    let layer = CorsLayer::new()
         .allow_methods(Any)
         .allow_headers(Any)
         .expose_headers([
@@ -27,5 +26,14 @@ pub fn cors_layer() -> CorsLayer {
             HeaderName::from_static("x-fullmag-mesh-topology-hash"),
             HeaderName::from_static("x-fullmag-field-indexing"),
             HeaderName::from_static("x-fullmag-node-index-count"),
-        ])
+        ]);
+    match std::env::var("FULLMAG_API_CORS_ALLOWED_ORIGIN") {
+        Ok(origin) => layer.allow_origin(
+            origin
+                .parse::<HeaderValue>()
+                .expect("FULLMAG_API_CORS_ALLOWED_ORIGIN must be a valid origin"),
+        ),
+        Err(std::env::VarError::NotPresent) => layer.allow_origin(Any),
+        Err(error) => panic!("reading FULLMAG_API_CORS_ALLOWED_ORIGIN failed: {error}"),
+    }
 }

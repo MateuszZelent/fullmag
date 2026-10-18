@@ -9,7 +9,9 @@ These tests lock down:
 """
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -18,8 +20,10 @@ import fullmag as fm
 from fullmag.meshing.asset_pipeline import (
     SharedDomainBuildReport,
     _build_field_stack,
+    _export_surface_for_gmsh,
     _resolve_effective_shared_domain_targets,
     _resolve_requested_partition_hmaxs,
+    _sanitize_surface_mesh_for_stl_export,
     realize_fem_domain_mesh_asset_from_components_with_report,
     realize_fem_mesh_asset,
 )
@@ -32,8 +36,11 @@ from fullmag.meshing._mesh_targets import (
 from fullmag.meshing.gmsh_bridge import (
     AirboxOptions,
     MeshData,
+    MeshOptions,
     SharedDomainMeshResult,
+    generate_mesh_from_file,
 )
+from fullmag.meshing.surface_assets import _geometry_to_trimesh, _import_trimesh
 from fullmag.model.discretization import MeshOperation, PerObjectMeshRecipe
 
 
@@ -80,7 +87,8 @@ class _FakeSurface:
     def copy(self):
         return self
 
-    def export(self, _path):
+    def export(self, _path, *, file_type):
+        assert file_type == "stl_ascii"
         return None
 
 
@@ -138,6 +146,38 @@ _STUDY_UNIVERSE = {
     "size": [8.0, 8.0, 8.0],
     "center": [0.0, 0.0, 0.0],
 }
+
+_NM_TETRA_STL = """solid shape
+facet normal 0 0 -1
+  outer loop
+    vertex 0 0 0
+    vertex 0 10 0
+    vertex 10 0 0
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0 0 0
+    vertex 10 0 0
+    vertex 0 0 10
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 0 0 0
+    vertex 0 0 10
+    vertex 0 10 0
+  endloop
+endfacet
+facet normal 1 1 1
+  outer loop
+    vertex 10 0 0
+    vertex 0 10 0
+    vertex 0 0 10
+  endloop
+endfacet
+endsolid shape
+"""
 
 
 # ===================================================================
@@ -232,6 +272,54 @@ class BuildReportTests(unittest.TestCase):
         )
         self.assertNotIn("component_aware_import_failed", report.fallbacks_triggered)
         self.assertEqual(region_markers, [{"geometry_name": "shape", "marker": 1}])
+
+    def test_imported_nm_stl_exports_ascii_and_builds_3d_mesh(self):
+        try:
+            import gmsh  # noqa: F401
+        except ImportError as exc:
+            self.skipTest(f"gmsh not available: {exc}")
+
+        with tempfile.TemporaryDirectory(prefix="fullmag-stl-3d-regression-") as tmp_dir:
+            source = Path(tmp_dir) / "shape.stl"
+            source.write_text(_NM_TETRA_STL, encoding="utf-8")
+            geometry = fm.ImportedGeometry(
+                source=str(source),
+                name="shape",
+                units="nm",
+            )
+            surface = _sanitize_surface_mesh_for_stl_export(
+                _geometry_to_trimesh(geometry, _import_trimesh())
+            )
+            generated = Path(tmp_dir) / "shared_domain_surface.stl"
+            _export_surface_for_gmsh(surface, generated)
+
+            self.assertTrue(generated.read_bytes().startswith(b"solid "))
+            mesh = generate_mesh_from_file(
+                generated,
+                hmax=4e-9,
+                order=1,
+                options=MeshOptions(
+                    compute_quality=False,
+                    per_element_quality=False,
+                ),
+                geometry_name="shape",
+            )
+
+        self.assertGreater(mesh.n_nodes, 0)
+        self.assertGreater(mesh.n_elements, 0)
+        nodes = np.asarray(mesh.nodes, dtype=np.float64)
+        np.testing.assert_allclose(
+            nodes.min(axis=0),
+            np.zeros(3, dtype=np.float64),
+            atol=1e-15,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            nodes.max(axis=0),
+            np.full(3, 10e-9, dtype=np.float64),
+            atol=1e-15,
+            rtol=0.0,
+        )
 
     def test_fallback_report_records_size_field_kinds(self):
         left = fm.Box(size=(1.0, 1.0, 1.0), name="left")

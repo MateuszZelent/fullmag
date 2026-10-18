@@ -1,6 +1,7 @@
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
+use std::io::Read;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -772,7 +773,7 @@ fn run(
                             == Some(command_id.as_str())
                         {
                             match render_current_scene(&client, &api_base) {
-                                Ok(script_path) => {
+                                Ok((script_path, publisher_scope)) => {
                                     if current_session_matches(
                                         &client,
                                         &api_base,
@@ -788,6 +789,7 @@ fn run(
                                             &session_id,
                                             &backend,
                                             &script_path,
+                                            &publisher_scope,
                                             grid_refresh_only.then_some(command_id.as_str()),
                                             attached_scope,
                                         ) {
@@ -1127,6 +1129,7 @@ fn pending_compute_command(client: &Client, api_base: &str) -> Option<(String, b
 #[derive(Debug)]
 enum SceneSynchronizationError {
     Rejected(reqwest::StatusCode),
+    IncompletePhysics,
     Unknown(anyhow::Error),
 }
 
@@ -1140,12 +1143,13 @@ impl std::fmt::Display for SceneSynchronizationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rejected(status) => write!(formatter, "model sync returned HTTP {status}"),
+            Self::IncompletePhysics => write!(formatter, "Enable an interaction or material anisotropy before preparing this model for execution"),
             Self::Unknown(error) => write!(formatter, "{error:#}"),
         }
     }
 }
 
-fn render_current_scene(client: &Client, api_base: &str) -> Result<PathBuf, SceneSynchronizationError> {
+fn render_current_scene(client: &Client, api_base: &str) -> Result<(PathBuf, String), SceneSynchronizationError> {
     let response = client
         .post(format!("{api_base}/v2/sessions/current/model/syncs"))
         // The server bounds and waits for its Python helper at 30 seconds.
@@ -1160,8 +1164,24 @@ fn render_current_scene(client: &Client, api_base: &str) -> Result<PathBuf, Scen
                 "model sync returned HTTP {}; helper shutdown is not confirmed", response.status()
             )));
         }
-        return Err(SceneSynchronizationError::Rejected(response.status()));
+        let status = response.status();
+        if status == reqwest::StatusCode::BAD_REQUEST {
+            let mut body = Vec::new();
+            if response.take(4097).read_to_end(&mut body).is_ok() && body.len() <= 4096
+                && serde_json::from_slice::<Value>(&body).ok().is_some_and(|value|
+                    value.get("code").and_then(Value::as_str) == Some("scene_incomplete_physics"))
+            {
+                return Err(SceneSynchronizationError::IncompletePhysics);
+            }
+        }
+        return Err(SceneSynchronizationError::Rejected(status));
     }
+    let scope = response.headers().get(crate::control_room::live_publisher_scope::HEADER_NAME)
+        .ok_or_else(|| SceneSynchronizationError::Unknown(anyhow::anyhow!("model sync did not acknowledge publisher session scope")))?
+        .to_str().map_err(|error| SceneSynchronizationError::Unknown(error.into()))?.to_string();
+    let parsed = crate::control_room::live_publisher_scope::parse_expected_session_scope(&scope)
+        .map_err(|error| SceneSynchronizationError::Unknown(anyhow::Error::msg(error)))?;
+    parsed.validate(&parsed.session_id).map_err(SceneSynchronizationError::Unknown)?;
     let body = response.json::<Value>()
         .map_err(|error| SceneSynchronizationError::Unknown(error.into()))?;
     let path = body
@@ -1169,7 +1189,7 @@ fn render_current_scene(client: &Client, api_base: &str) -> Result<PathBuf, Scen
         .and_then(Value::as_str)
         .filter(|path| !path.trim().is_empty())
         .ok_or_else(|| SceneSynchronizationError::Unknown(anyhow::anyhow!("model sync did not return script_path")))?;
-    Ok(PathBuf::from(path))
+    Ok((PathBuf::from(path), scope))
 }
 
 fn bootstrap_owner_is_current(client: &Client, api_base: &str, owner: &BootstrapOwner) -> bool {
@@ -1195,10 +1215,17 @@ fn spawn_attached_runtime(
     session_id: &str,
     backend: &str,
     script_path: &PathBuf,
+    publisher_scope: &str,
     grid_refresh_command_id: Option<&str>,
     session_scope: &GridSessionScope,
 ) -> anyhow::Result<Child> {
+    let scope = crate::control_room::live_publisher_scope::parse_expected_session_scope(publisher_scope)
+        .map_err(anyhow::Error::msg)?;
+    scope.validate(session_id)?;
     anyhow::ensure!(session_scope.session_id == session_id, "attached runtime session scope mismatch");
+    anyhow::ensure!(scope.session_epoch == session_scope.session_epoch
+        && scope.request_scope_epoch == session_scope.request_scope_epoch,
+        "model sync publisher scope differs from the attached runtime owner");
     let started_at_unix_ms = session_scope.started_at_unix_ms()?;
     let mut command = Command::new(executable);
     command
@@ -1212,6 +1239,7 @@ fn spawn_attached_runtime(
         .arg("double")
         .env("FULLMAG_API_PORT", api_port.to_string())
         .env("FULLMAG_ATTACHED_SESSION_ID", session_id)
+        .env(crate::control_room::live_publisher_scope::ATTACHED_SCOPE_ENV, publisher_scope)
         .env("FULLMAG_ATTACHED_SESSION_STARTED_AT_UNIX_MS", started_at_unix_ms.to_string())
         .env("FULLMAG_ATTACHED_WAIT_FOR_SOLVE", "1")
         .env("FULLMAG_SKIP_CONTROL_ROOM", "1")

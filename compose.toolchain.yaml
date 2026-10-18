@@ -1,0 +1,24 @@
+# Canonical FEM/GPU dependency image. Application source and runtime packages
+# are intentionally absent from this build context's allow-list.
+name: fullmag-toolchain
+
+services:
+  fem-gpu-toolchain:
+    image: ${FULLMAG_TOOLCHAIN_IMAGE:-fullmag/fem-gpu-toolchain:cuda12.6.3}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: docker/fem-gpu/Dockerfile
+      target: fem-gpu-dev
+      args:
+        # Windows Docker Desktop default; operators may override this with a
+        # verified local image identity without changing dependency pins.
+        FULLMAG_CUDA_BASE_IMAGE: "${FULLMAG_CUDA_BASE_IMAGE:-nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1}"
+        FULLMAG_CUDA_BASE_IMAGE_DIGEST: "${FULLMAG_CUDA_BASE_IMAGE_DIGEST:-d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1}"
+        FULLMAG_CUDA_ARCHITECTURES: "${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}"
+        FULLMAG_HYPRE_GPU_ARCHITECTURES: "${FULLMAG_HYPRE_GPU_ARCHITECTURES:-60 70 80 89 90}"
+        FULLMAG_HYPRE_MEMORY_VARIANT: "${FULLMAG_HYPRE_MEMORY_VARIANT:-baseline}"
+    gpus: all
+    profiles: [toolchain]
+    command: ["sleep", "infinity"]

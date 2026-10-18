@@ -24,6 +24,7 @@ from verify_boris_nf_interface import (
     compute_interface_slice,
     read_text_ovf,
     validate_boris_artifact,
+    validate_fixed_m,
 )
 
 
@@ -55,6 +56,41 @@ def _source_manifest_path(build_root: Path) -> Path:
     raise RuntimeError(
         "BORIS source manifest is missing; expected source_manifest.json beside BorisLin"
     )
+
+
+SOURCE_MANIFEST_MAX_BYTES = 1024 * 1024
+
+
+def _read_source_manifest(path: Path) -> dict[str, object]:
+    """Inspect bounded provenance without granting caller JSON build authority."""
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("BORIS source manifest must be a regular nonsymlink file")
+    with path.open("rb") as stream:
+        raw = stream.read(SOURCE_MANIFEST_MAX_BYTES + 1)
+    if not raw or len(raw) > SOURCE_MANIFEST_MAX_BYTES:
+        raise RuntimeError("BORIS source manifest exceeds the 1 MiB bound")
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate manifest key")
+            result[key] = value
+        return result
+    try:
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
+                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise RuntimeError(f"BORIS source manifest is invalid: {error}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("BORIS source manifest must be an object")
+    return value
+
+
+def _require_verified_build(manifest: Path) -> None:
+    source = _read_source_manifest(manifest)
+    if source.get("schema_version") == "fullmag.boris.source.v1":
+        raise RuntimeError("BORIS run requires verified managed build proof; legacy v1 is incomplete")
+    raise RuntimeError("BORIS source manifest has no supported managed build receipt verifier")
 
 
 def _probe_host_binary(binary: Path, device: str) -> dict[str, object]:
@@ -96,7 +132,7 @@ def capture_runtime_identity(
     *,
     runtime_probe: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Capture immutable BORIS source, binary, image, and device identity."""
+    """Observe legacy hashes/device data without asserting verified build precision."""
 
     if device not in {"cpu", "cuda"}:
         raise ValueError("device must be cpu or cuda")
@@ -109,6 +145,7 @@ def capture_runtime_identity(
     if digest_match is None:
         raise RuntimeError("BORIS runtime image must be pinned by digest")
     manifest = _source_manifest_path(build_root)
+    source = _read_source_manifest(manifest)
     probe = dict(runtime_probe) if runtime_probe is not None else _probe_host_binary(binary, device)
     required_probe = ("binary_version", "python_version", "device_detected", "device_residency_evidence")
     missing_probe = [key for key in required_probe if not probe.get(key)]
@@ -116,7 +153,7 @@ def capture_runtime_identity(
         raise RuntimeError(f"managed BORIS runtime probe is incomplete: {', '.join(missing_probe)}")
     identity: dict[str, object] = {
         "schema_version": "fullmag.boris.runtime.v1",
-        "identity_complete": True,
+        "identity_complete": False,
         "source_manifest": str(manifest),
         "source_manifest_sha256": _sha256(manifest),
         "binary": str(binary),
@@ -128,17 +165,26 @@ def capture_runtime_identity(
         "device_detected": str(probe["device_detected"]),
         "compute_capability": probe.get("compute_capability"),
         "device_residency_evidence": str(probe["device_residency_evidence"]),
-        "precision": "double",
+        "precision": None,
+        "source_manifest_schema": source.get("schema_version"),
+        "build_proof_status": "unverified",
+        "build_proof_reason": "trusted_managed_build_receipt_verifier_unavailable",
         "probe_stdout_sha256": str(probe.get("probe_stdout_sha256", "")),
         "probe_stderr_sha256": str(probe.get("probe_stderr_sha256", "")),
     }
     if device == "cuda":
         identity["nvidia_smi_query"] = str(probe.get("nvidia_smi_query", ""))
-    validate_runtime_identity(identity)
     return identity
 
 
-def validate_runtime_identity(identity: Mapping[str, object]) -> None:
+def validate_runtime_identity(identity: Mapping[str, object], *, repo_root: Path | None = None,
+                              artifact_root: Path | None = None) -> list[dict[str, object]]:
+    if identity.get("schema_version") == "fullmag.boris.runtime.v3":
+        from run_managed_boris_nf_v2 import verify_runtime_identity
+        return verify_runtime_identity(identity, repo_root, artifact_root)
+    if identity.get("schema_version") == "fullmag.boris.runtime.v2":
+        from run_managed_boris_nf import verify_runtime_identity
+        return verify_runtime_identity(identity, repo_root, artifact_root)
     required = (
         "schema_version",
         "source_manifest_sha256",
@@ -153,6 +199,9 @@ def validate_runtime_identity(identity: Mapping[str, object]) -> None:
     )
     if identity.get("schema_version") != "fullmag.boris.runtime.v1":
         raise ValueError("BORIS runtime identity schema is unsupported")
+    # Legacy v1 has no trusted build receipt binding, even if caller says true.
+    if identity.get("identity_complete") is True:
+        raise ValueError("BORIS runtime v1 has no verified managed build proof")
     if identity.get("identity_complete") is not True:
         raise ValueError("BORIS runtime identity is incomplete")
     missing = [key for key in required if not identity.get(key)]
@@ -330,8 +379,19 @@ def _mesh_fields(root: Path, prefix: str) -> MeshFields:
     )
 
 
-def _artifact_summary(root: Path, config: NfCaseConfig, identity: Mapping[str, object]) -> dict[str, object]:
+def _artifact_summary(
+    root: Path, config: NfCaseConfig, identity: Mapping[str, object],
+    *, retained_outputs: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
     manifest = scenario_manifest(config)
+    from run_managed_boris_nf import read_json, require_fixed_m_members
+    native_hash = None if retained_outputs is None else {
+        entry["path"]: entry["sha256"] for entry in retained_outputs
+    }["boris_native_samples.json"]
+    native = read_json(root / "boris_native_samples.json", expected_sha256=native_hash)
+    fixed_m_proof = validate_fixed_m(root, manifest, native)
+    if retained_outputs is not None:
+        require_fixed_m_members(fixed_m_proof, retained_outputs)
     normal = _mesh_fields(root, "n")
     ferromagnet = _mesh_fields(root, "f")
     parameters = manifest["parameters"]
@@ -375,8 +435,9 @@ def _artifact_summary(root: Path, config: NfCaseConfig, identity: Mapping[str, o
         "ferromagnet": {name: f"f_{name}.ovf" for name in REQUIRED_FERROMAGNET_FIELDS},
     }
     return {
-        "schema_version": "fullmag.boris_she_nf.v1",
+        "schema_version": "fullmag.boris_she_nf.v2",
         "runtime": dict(identity),
+        "fixed_m_proof": fixed_m_proof,
         "scenario": manifest,
         "fields": field_map,
         "residuals": residuals,
@@ -410,7 +471,7 @@ def run_boris_case(
     binary = build_root / "BorisLin"
     if not binary.is_file():
         raise RuntimeError(f"BorisLin binary is missing: {binary}")
-    _source_manifest_path(build_root)
+    _require_verified_build(_source_manifest_path(build_root))
     if timeout_s < 1:
         raise ValueError("timeout_s must be positive")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -459,12 +520,12 @@ def run_boris_case(
         for prefix, names in (("n", REQUIRED_NORMAL_FIELDS), ("f", REQUIRED_FERROMAGNET_FIELDS))
         for name in names
     ]
-    required_files.append(output_dir / "boris_native_samples.json")
+    required_files.extend(output_dir / name for name in ("f_M_before.ovf", "f_M_after.ovf", "boris_native_samples.json"))
     missing = [str(path.name) for path in required_files if not path.is_file()]
     if missing:
         raise RuntimeError(f"BORIS N/F stage marker was emitted but fields are missing: {', '.join(missing)}")
     native = json.loads((output_dir / "boris_native_samples.json").read_text(encoding="utf-8"))
-    if native.get("stage_complete") is not True or native.get("schema_version") != "fullmag.boris_she_nf.native.v1":
+    if native.get("stage_complete") is not True or native.get("schema_version") != "fullmag.boris_she_nf.native.v2":
         raise RuntimeError("BORIS native samples do not prove stage completion")
     probe = _probe_from_managed_log(completed.stdout, completed.stderr, device)
     if device == "cuda":
@@ -520,16 +581,35 @@ def _resolution_config(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--build-root", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--build-root", type=Path)
+    source.add_argument("--managed-job-id")
+    source.add_argument("--managed-runtime-id")
+    parser.add_argument("--repo-root", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--resolution", choices=("0", "coarse", "medium", "fine"), default="0")
     parser.add_argument("--timeout-s", type=int, default=180)
     parser.add_argument("--transport-tolerance", type=float, default=1.0e-5)
     parser.add_argument("--transport-max-iterations", type=int, default=200)
-    parser.add_argument("--image-digest", default=os.environ.get("FULLMAG_BORIS_IMAGE", DEFAULT_BORIS_IMAGE))
+    parser.add_argument("--image-digest")
     parser.add_argument("--runtime-container", default=os.environ.get("FULLMAG_BORIS_RUNTIME_CONTAINER"))
     args = parser.parse_args()
+    if args.managed_job_id or args.managed_runtime_id:
+        if args.repo_root is None or args.output_dir is not None or args.device != "cpu" or args.runtime_container is not None or args.image_digest is not None:
+            parser.error("managed BORIS requires --repo-root, CPU and resolver-owned outputs; no runtime-container")
+        if args.transport_tolerance != 1e-5 or args.transport_max_iterations != 200 or args.timeout_s != 180:
+            parser.error("managed BORIS permits only fixed scientific defaults")
+        from run_managed_boris_nf import start, observe
+        if args.managed_job_id:
+            if args.resolution not in ("coarse", "medium", "fine"):
+                parser.error("managed BORIS requires explicit coarse/medium/fine resolution")
+            print(start(args.repo_root,args.managed_job_id,args.resolution))
+        else:
+            print(observe(args.repo_root,args.managed_runtime_id))
+        return 0
+    if args.output_dir is None:
+        parser.error("legacy --build-root requires --output-dir; admission still needs trusted proof")
     config = _resolution_config(
         args.resolution,
         args.output_dir,
@@ -541,7 +621,7 @@ def main() -> int:
         args.build_root,
         args.output_dir,
         args.device,
-        image_digest=args.image_digest,
+        image_digest=args.image_digest or os.environ.get("FULLMAG_BORIS_IMAGE", DEFAULT_BORIS_IMAGE),
         timeout_s=args.timeout_s,
         runtime_container=args.runtime_container,
     )

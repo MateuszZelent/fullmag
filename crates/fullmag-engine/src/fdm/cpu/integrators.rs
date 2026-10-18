@@ -1347,7 +1347,7 @@ impl ExchangeLlgProblem {
         F: FnMut(
             &[Vector3],
             f64,
-            Option<crate::fdm::TransportStageErrorBudget>,
+            Option<crate::fdm::TransportStageErrorBudget<'_>>,
         ) -> Result<ExternalStageTerms>,
     {
         let report = self.heun_trial_with_external_stage_terms_and_lte(
@@ -1378,7 +1378,7 @@ impl ExchangeLlgProblem {
         F: FnMut(
             &[Vector3],
             f64,
-            Option<crate::fdm::TransportStageErrorBudget>,
+            Option<crate::fdm::TransportStageErrorBudget<'_>>,
         ) -> Result<ExternalStageTerms>,
     {
         self.ensure_state_matches_grid(state)?;
@@ -1438,26 +1438,23 @@ impl ExchangeLlgProblem {
             evaluation,
             t0 + dt,
         );
-        let embedded_lte_m = bufs.delta[..n]
-            .iter()
-            .zip(&bufs.m_stage[..n])
-            .map(|(corrected, predictor)| {
-                let difference = [
-                    corrected[0] - predictor[0],
-                    corrected[1] - predictor[1],
-                    corrected[2] - predictor[2],
-                ];
-                let value = norm(difference);
-                value * value
-            })
-            .sum::<f64>();
-        let embedded_lte_m = (embedded_lte_m / n.max(1) as f64).sqrt();
+        // k[2] is unused by Heun. Keep the raw candidate difference before
+        // projection: (m0 + dt*(k0+k1)/2) - (m0 + dt*k0).
+        // The synchronous callback borrows this scratch; no accepted state owns it.
+        for i in 0..n {
+            bufs.k[2][i] = [
+                0.5 * dt * (bufs.k[1][i][0] - bufs.k[0][i][0]),
+                0.5 * dt * (bufs.k[1][i][1] - bufs.k[0][i][1]),
+                0.5 * dt * (bufs.k[1][i][2] - bufs.k[0][i][2]),
+            ];
+        }
         let final_terms = external_terms(
             &bufs.delta[..n],
             t0 + dt,
             Some(crate::fdm::TransportStageErrorBudget {
                 dt_s: dt,
-                embedded_lte_m,
+                embedded_error_m: &bufs.k[2][..n],
+                frozen_cells: self.frozen_spins().map(|frozen| frozen.mask()),
             }),
         )?;
         let dynamic_field = final_terms.additional_field_apm.clone();

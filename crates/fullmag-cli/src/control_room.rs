@@ -13,12 +13,23 @@ use crate::live_workspace::LocalLiveWorkspace;
 use crate::terminal_logs::{terminal_logger, TerminalLogSource};
 use crate::types::*;
 
+pub(crate) mod live_publisher_scope;
+use live_publisher_scope::LivePublisherScope;
+
 mod development_active_run_probe;
 mod development_consumer_probe;
 mod development_workspace_probe;
 
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
 pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
+
+// Keep the internal API target on IPv4 on Windows.  `localhost` may resolve
+// to an unrelated IPv6 listener (for example WSL or Docker port forwarding)
+// before the native Fullmag API bound to 127.0.0.1 gets a chance to answer.
+#[cfg(windows)]
+const DEFAULT_API_HOST: &str = "127.0.0.1";
+#[cfg(not(windows))]
+const DEFAULT_API_HOST: &str = LOCALHOST_HTTP_HOST;
 
 static RESOLVED_API_PORT: OnceLock<u16> = OnceLock::new();
 
@@ -46,8 +57,20 @@ pub(crate) fn api_port() -> u16 {
     *RESOLVED_API_PORT.get().expect("API port not yet resolved")
 }
 
+fn api_host_from_configured(configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .unwrap_or(DEFAULT_API_HOST)
+        .to_string()
+}
+
+fn api_host() -> String {
+    api_host_from_configured(std::env::var("FULLMAG_API_HOST").ok().as_deref())
+}
+
 pub(crate) fn api_base_url() -> String {
-    format!("http://localhost:{}", api_port())
+    format!("http://{}:{}", api_host(), api_port())
 }
 
 pub(crate) fn swagger_ui_url() -> String {
@@ -2004,7 +2027,7 @@ pub(crate) fn open_in_tauri(
         .env("FULLMAG_UI_URL", ui_url)
         .env(
             "FULLMAG_API_BASE",
-            format!("http://localhost:{}/", ready.api_port),
+            format!("http://{}:{}/", api_host(), ready.api_port),
         )
         .env("FULLMAG_LAUNCH_INTENT", intent)
         .stdin(Stdio::null())
@@ -2474,8 +2497,9 @@ fn current_live_snapshot_api_client() -> &'static reqwest::blocking::Client {
 pub(crate) fn sync_current_live_snapshot(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
+    scope: &LivePublisherScope,
 ) -> Result<()> {
-    sync_current_live_snapshot_with_owner(session_id, payload, None)
+    sync_current_live_snapshot_with_owner(session_id, payload, None, scope)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -2514,18 +2538,18 @@ fn terminal_snapshot_owner_from_status(status: &serde_json::Value, session_id: &
 }
 
 pub(crate) fn sync_current_live_terminal_snapshot(session_id: &str, payload: &CurrentLiveSnapshotPayload,
-    owner: &TerminalSnapshotOwner) -> Result<()> {
+    owner: &TerminalSnapshotOwner, scope: &LivePublisherScope) -> Result<()> {
     if owner.session_id != session_id { bail!("terminal snapshot owner/session mismatch"); }
-    sync_current_live_snapshot_with_owner(session_id, payload, Some(owner))
+    sync_current_live_snapshot_with_owner(session_id, payload, Some(owner), scope)
 }
 
 fn sync_current_live_snapshot_with_owner(session_id: &str, payload: &CurrentLiveSnapshotPayload,
-    owner: Option<&TerminalSnapshotOwner>) -> Result<()> {
+    owner: Option<&TerminalSnapshotOwner>, scope: &LivePublisherScope) -> Result<()> {
     let mut request = current_live_snapshot_api_client().post(internal_live_api_url("snapshot"));
     if let Some(owner) = owner {
         request = request.header("x-fullmag-terminal-owner", serde_json::to_string(owner)?);
     }
-    request
+    scope.send(session_id, request
         .json(&CurrentLiveSnapshotRequest {
             session_id,
             session: payload.session.as_ref(),
@@ -2547,11 +2571,7 @@ fn sync_current_live_snapshot_with_owner(session_id: &str, payload: &CurrentLive
             solver_profile: payload.solver_profile.as_ref(),
             fem_mesh: payload.fem_mesh.as_ref(),
         })
-        .send()
-        .context("failed to sync current live snapshot")?
-        .error_for_status()
-        .context("current live snapshot endpoint returned error")?;
-    Ok(())
+    )
 }
 
 #[cfg(test)]
@@ -2596,8 +2616,9 @@ mod terminal_snapshot_owner_tests {
 fn sync_current_live_session_frame(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
+    scope: &LivePublisherScope,
 ) -> Result<()> {
-    current_live_api_client()
+    scope.send(session_id, current_live_api_client()
         .post(internal_live_api_url("session"))
         .json(&CurrentLiveSessionFrameRequest {
             session_id,
@@ -2609,18 +2630,15 @@ fn sync_current_live_session_frame(
             simulation_preparation: payload.simulation_preparation.as_ref(),
             run: payload.run.as_ref(),
         })
-        .send()
-        .context("failed to sync current live session frame")?
-        .error_for_status()
-        .context("current live session frame endpoint returned error")?;
-    Ok(())
+    )
 }
 
 fn sync_current_live_runtime_frame(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
+    scope: &LivePublisherScope,
 ) -> Result<()> {
-    current_live_api_client()
+    scope.send(session_id, current_live_api_client()
         .post(internal_live_api_url("runtime"))
         .json(&CurrentLiveRuntimeFrameRequest {
             session_id,
@@ -2630,35 +2648,29 @@ fn sync_current_live_runtime_frame(
             solver_profile: payload.solver_profile.as_ref(),
             fem_mesh: payload.fem_mesh.as_ref(),
         })
-        .send()
-        .context("failed to sync current live runtime frame")?
-        .error_for_status()
-        .context("current live runtime frame endpoint returned error")?;
-    Ok(())
+    )
 }
 
 fn sync_current_live_scalar_frame(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
+    scope: &LivePublisherScope,
 ) -> Result<()> {
-    current_live_api_client()
+    scope.send(session_id, current_live_api_client()
         .post(internal_live_api_url("scalars"))
         .json(&CurrentLiveScalarFrameRequest {
             session_id,
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
         })
-        .send()
-        .context("failed to sync current live scalar frame")?
-        .error_for_status()
-        .context("current live scalar frame endpoint returned error")?;
-    Ok(())
+    )
 }
 
 fn sync_current_live_field_frame(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
+    scope: &LivePublisherScope,
 ) -> Result<()> {
-    current_live_api_client()
+    scope.send(session_id, current_live_api_client()
         .post(internal_live_api_url("fields"))
         .json(&CurrentLiveFieldFrameRequest {
             session_id,
@@ -2668,22 +2680,14 @@ fn sync_current_live_field_frame(
             preview_fields: payload.preview_fields.as_deref(),
             clear_preview_cache: payload.clear_preview_cache,
         })
-        .send()
-        .context("failed to sync current live field frame")?
-        .error_for_status()
-        .context("current live field frame endpoint returned error")?;
-    Ok(())
+    )
 }
 
-fn sync_current_live_heartbeat(session_id: &str) -> Result<()> {
-    current_live_api_client()
+fn sync_current_live_heartbeat(session_id: &str, scope: &LivePublisherScope) -> Result<()> {
+    scope.send(session_id, current_live_api_client()
         .post(internal_live_api_url("heartbeat"))
         .json(&serde_json::json!({ "session_id": session_id }))
-        .send()
-        .context("failed to sync current live heartbeat")?
-        .error_for_status()
-        .context("current live heartbeat endpoint returned error")?;
-    Ok(())
+    )
 }
 
 fn payload_has_current_live_delta(payload: &CurrentLiveSnapshotPayload) -> bool {
@@ -2761,18 +2765,24 @@ where
 pub(crate) fn sync_current_live_delta(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
+    scope: &LivePublisherScope,
 ) -> Result<()> {
+    if !scope.is_bound()? {
+        if payload.session.is_none() {
+            bail!("publisher bootstrap requires a full canonical session snapshot");
+        }
+        return sync_current_live_snapshot(session_id, payload, scope);
+    }
     if !payload_has_current_live_delta(payload) {
-        return sync_current_live_heartbeat(session_id);
+        return sync_current_live_heartbeat(session_id, scope);
     }
     sync_current_live_delta_with(
-        session_id,
-        payload,
-        sync_current_live_snapshot,
-        sync_current_live_scalar_frame,
-        sync_current_live_session_frame,
-        sync_current_live_runtime_frame,
-        sync_current_live_field_frame,
+        session_id, payload,
+        |id, value| sync_current_live_snapshot(id, value, scope),
+        |id, value| sync_current_live_scalar_frame(id, value, scope),
+        |id, value| sync_current_live_session_frame(id, value, scope),
+        |id, value| sync_current_live_runtime_frame(id, value, scope),
+        |id, value| sync_current_live_field_frame(id, value, scope),
     )
 }
 

@@ -55,7 +55,7 @@ pub(crate) struct ProjectRunSubmitRequest {
     pub archive_base64: String,
     /// Versioned `run_intent.v1` object; parsed and validated by the application contract.
     pub run_intent: BTreeMap<String, serde_json::Value>,
-    /// Versioned `study_plan.v2` object with typed steps, references and runner controls.
+    /// Versioned `study_plan.v1/v2/v3/v4`; v4 adds typed inspection operations and captured source.
     pub study_plan: BTreeMap<String, serde_json::Value>,
     /// Immutable study catalog: legacy v1, or v2 with pinned execution profiles and field origins.
     pub study_problem_catalog: BTreeMap<String, serde_json::Value>,
@@ -114,7 +114,12 @@ pub(crate) struct ProjectBatchSummaryResource {
     pub case_count: u64,
     pub max_parallel_cases: Option<u32>,
     pub failure_policy: ProjectBatchFailurePolicy,
+    /// Committed `next_case_index` watermark; a durable child may be visible in
+    /// Cases before this cursor advances after publication.
     pub published_case_count: u64,
+    /// Revision used to fence pause, resume, and cancel-admission commands.
+    pub command_revision: u64,
+    /// State of the committed expansion cursor, which can lag a durable child.
     pub expansion_state: ProjectBatchExpansionState,
 }
 
@@ -132,6 +137,66 @@ pub(crate) enum ProjectBatchExpansionState {
     Expanding,
     Complete,
     Stopped,
+    Paused,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectBatchCommandRequest {
+    pub command_id: String,
+    pub expected_revision: u64,
+    pub action: ProjectBatchCommandAction,
+    pub reason: String,
+    /// Required only when action is `retry`; targets one task in one stable batch case.
+    #[serde(default)]
+    pub retry: Option<ProjectBatchRetryRequest>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectBatchCommandAction {
+    PauseAdmission,
+    ResumeAdmission,
+    CancelAdmission,
+    Retry,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectBatchRetryRequest {
+    pub case_id: String,
+    pub task_id: String,
+    pub retry_id: String,
+    #[schema(minimum = 1)]
+    pub expected_catalog_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectBatchCommandDisposition {
+    Accepted,
+    Replayed,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectBatchCommandResource {
+    pub disposition: ProjectBatchCommandDisposition,
+    pub batch_id: String,
+    pub command_id: String,
+    pub action: ProjectBatchCommandAction,
+    pub revision: u64,
+    pub command_revision: u64,
+    pub expansion_state: ProjectBatchExpansionState,
+    /// Present when the command creates or replays one case task attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry: Option<ProjectBatchRetryResource>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectBatchRetryResource {
+    pub case_id: String,
+    pub task: ProjectRunTaskRetryResource,
 }
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams, ToSchema)]
@@ -160,8 +225,12 @@ pub(crate) struct ProjectBatchAxisSummaryResource {
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProjectBatchCaseState {
+    /// No durable child RunIntent is published for this case yet.
     PendingExpansion,
+    /// The child RunIntent is published, but its task catalog is not present.
     PendingMaterialization,
+    /// The child task catalog is durable; task lifecycle is reported below.
+    Materialized,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -170,6 +239,25 @@ pub(crate) struct ProjectBatchCaseSummaryResource {
     pub planned_run_id: String,
     pub parameter_tuple: BTreeMap<String, serde_json::Value>,
     pub state: ProjectBatchCaseState,
+    /// Present only when the durable child intent matches this batch case.
+    pub published_run: Option<ProjectBatchCasePublishedRunResource>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectBatchCasePublishedRunResource {
+    /// Run identity confirmed by the durable child RunIntent.
+    pub run_id: String,
+    pub catalog_state: ProjectRunCatalogState,
+    pub catalog_revision: Option<u64>,
+    pub tasks: Vec<ProjectBatchCaseTaskSummaryResource>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectBatchCaseTaskSummaryResource {
+    pub task_id: String,
+    pub lifecycle: ProjectRunTaskLifecycle,
+    /// True when a durable pre-claim cancellation request exists for this task.
+    pub cancellation_requested: bool,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -258,7 +346,22 @@ pub(crate) struct ProjectRunTaskResource {
     pub resource_id: Option<String>,
     pub accepted_state_ref: Option<crate::schemas::common::AcceptedStateRefResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false, nullable = false)]
+    pub execution: Option<ProjectRunTaskExecutionResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cancellation_intent: Option<ProjectRunTaskCancellationSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectRunTaskExecutionResource {
+    pub step_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(
+        required = false,
+        nullable = false,
+        value_type = crate::schemas::compute_preview::ExecutionMaterializationSchema
+    )]
+    pub materialization: Option<fullmag_ir::MaterializedExecutionRequestIR>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -301,17 +404,7 @@ pub(crate) enum ProjectRunObservationState {
 
 impl From<FmsTaskCatalogEntry> for ProjectRunTaskResource {
     fn from(task: FmsTaskCatalogEntry) -> Self {
-        let lifecycle = match task.lifecycle {
-            FmsTaskLifecycle::Accepted => ProjectRunTaskLifecycle::Accepted,
-            FmsTaskLifecycle::Queued => ProjectRunTaskLifecycle::Queued,
-            FmsTaskLifecycle::Preparing => ProjectRunTaskLifecycle::Preparing,
-            FmsTaskLifecycle::Running => ProjectRunTaskLifecycle::Running,
-            FmsTaskLifecycle::Stopping => ProjectRunTaskLifecycle::Stopping,
-            FmsTaskLifecycle::Succeeded => ProjectRunTaskLifecycle::Succeeded,
-            FmsTaskLifecycle::Failed => ProjectRunTaskLifecycle::Failed,
-            FmsTaskLifecycle::Cancelled => ProjectRunTaskLifecycle::Cancelled,
-            FmsTaskLifecycle::Interrupted => ProjectRunTaskLifecycle::Interrupted,
-        };
+        let lifecycle = ProjectRunTaskLifecycle::from(task.lifecycle);
         let readiness = match task.readiness {
             FmsTaskReadiness::Ready => ProjectRunTaskReadiness::Ready,
             FmsTaskReadiness::Blocked { reason } => ProjectRunTaskReadiness::Blocked { reason },
@@ -334,7 +427,24 @@ impl From<FmsTaskCatalogEntry> for ProjectRunTaskResource {
             artifact_ids: task.artifact_ids,
             resource_id: task.resource_id,
             accepted_state_ref: None,
+            execution: None,
             cancellation_intent: None,
+        }
+    }
+}
+
+impl From<FmsTaskLifecycle> for ProjectRunTaskLifecycle {
+    fn from(lifecycle: FmsTaskLifecycle) -> Self {
+        match lifecycle {
+            FmsTaskLifecycle::Accepted => ProjectRunTaskLifecycle::Accepted,
+            FmsTaskLifecycle::Queued => ProjectRunTaskLifecycle::Queued,
+            FmsTaskLifecycle::Preparing => ProjectRunTaskLifecycle::Preparing,
+            FmsTaskLifecycle::Running => ProjectRunTaskLifecycle::Running,
+            FmsTaskLifecycle::Stopping => ProjectRunTaskLifecycle::Stopping,
+            FmsTaskLifecycle::Succeeded => ProjectRunTaskLifecycle::Succeeded,
+            FmsTaskLifecycle::Failed => ProjectRunTaskLifecycle::Failed,
+            FmsTaskLifecycle::Cancelled => ProjectRunTaskLifecycle::Cancelled,
+            FmsTaskLifecycle::Interrupted => ProjectRunTaskLifecycle::Interrupted,
         }
     }
 }
@@ -358,6 +468,37 @@ pub(crate) struct ProjectRunTaskCancellationRequest {
     pub cancellation_id: Option<String>,
     #[serde(default)]
     pub expected_catalog_revision: Option<u64>,
+}
+
+/// Revision-fenced request to create a fresh attempt for one terminal task.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectRunTaskRetryRequest {
+    /// Stable idempotency identity for this operator retry request.
+    pub retry_id: String,
+    /// Catalog revision observed by the caller before requesting the retry.
+    pub expected_catalog_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectRunTaskRetryResource {
+    pub disposition: ProjectRunTaskRetryDisposition,
+    pub run_id: String,
+    pub task_id: String,
+    pub retry_id: String,
+    /// Attempt that was terminal when the retry was requested.
+    pub previous_attempt_id: String,
+    pub previous_ownership_epoch: u64,
+    /// Retry ACK reports the durable task state, not solver completion.
+    pub lifecycle: ProjectRunTaskLifecycle,
+    pub catalog_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectRunTaskRetryDisposition {
+    Accepted,
+    Replayed,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

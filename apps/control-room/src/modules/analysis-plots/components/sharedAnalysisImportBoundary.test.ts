@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
-import ts from "@typescript/typescript6";
+import * as ts from "@typescript/typescript6";
 
 const appSourceRoot = resolve(process.cwd(), "src");
 const sharedRoots = [

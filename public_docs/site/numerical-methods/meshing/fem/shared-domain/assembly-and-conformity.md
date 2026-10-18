@@ -67,14 +67,14 @@ The following rows are the exhaustive public-signature contract for this page; e
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `study.universe.mode` | `str | None` | `None` | $1$ | forwarded to `StudyUniverseConfig` | domain mode | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.mode` |
-| `study.universe.size` | `Sequence[float] | None` | `None` | $\mathrm{m}$ | `as_vector3`; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.size` |
-| `study.universe.center` | `Sequence[float] | None` | `None` | $\mathrm{m}$ | `as_vector3` | outer center | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.center` |
-| `study.universe.padding` | `Sequence[float] | None` | `None` | $\mathrm{m}$ | `as_vector3`; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.padding` |
-| `study.universe.mesh.maximum_element_size` | `float | None` | `None` | $\mathrm{m}$ | positive; wins over `hmax` | airbox coarse target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmax` |
-| `study.universe.mesh.minimum_element_size` | `float | None` | `None` | $\mathrm{m}$ | positive and no greater than numeric maximum; wins over `hmin` | airbox lower clamp | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmin` |
-| `study.universe.mesh.maximum_element_growth_rate` | `float | None` | `None` | $1$ | finite positive at most `2.5`; wins over `growth_rate` | airbox growth target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_growth_rate` |
-| `study.universe.mesh.grading` | `str | None` | `None` | $1$ | forwarded without vocabulary validation by this handle | grading request | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_grading` |
+| `study.universe.mode` | `str \| None` | `None` | $1$ | forwarded to `StudyUniverseConfig` | domain mode | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.mode` |
+| `study.universe.size` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | `as_vector3`; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.size` |
+| `study.universe.center` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | `as_vector3` | outer center | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.center` |
+| `study.universe.padding` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | `as_vector3`; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.padding` |
+| `study.universe.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; wins over `hmax` | airbox coarse target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmax` |
+| `study.universe.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive and no greater than numeric maximum; wins over `hmin` | airbox lower clamp | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmin` |
+| `study.universe.mesh.maximum_element_growth_rate` | `float \| None` | `None` | $1$ | finite positive at most `2.5`; wins over `growth_rate` | airbox growth target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_growth_rate` |
+| `study.universe.mesh.grading` | `str \| None` | `None` | $1$ | forwarded without vocabulary validation by this handle | grading request | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_grading` |
 
 ```python
 # %%

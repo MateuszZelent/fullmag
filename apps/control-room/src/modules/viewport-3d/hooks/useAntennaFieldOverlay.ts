@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
+import { encodeAntennaGlyphSegments, scaleAntennaGlyphSegments } from "../model/antennaGlyphPresentation";
+import { antennaSurfaceColorRange, resolveAntennaColorRange } from "@/kernel/visualization/antennaColorRange";
+import { isClosedLoopDisplay } from "@/kernel/resources/antennaClosedLoopInspectionModel";
+import { useClosedLoopAntennaOverlay } from "./useClosedLoopAntennaOverlay";
 import { antennaInspectionDisplayMatchesOwner, useAntennaFieldSolutionPayloadResource, useAntennaFieldSolutionResource, useAntennaStageOutputCatalogResource, useAntennaExternalLeadInspectionResource, useAntennaInspectionDisplayResource, useAntennaInspectionDisplayPayloadResource } from "@/kernel/resources/antennaResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
@@ -16,9 +20,12 @@ export function useAntennaFieldOverlay() {
   const requested = useObjectVisualizationSelector((snapshot) => snapshot.antennaFieldIntent ?? null);
   const owner = useSessionResourceIdentity();
   const selectedObjectId = useSelectionSelector((selection) => selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId);
-  const intent = requested && owner && requested.sessionId === owner.sessionId &&
+  const displayIntent = requested && owner && requested.sessionId === owner.sessionId &&
     requested.sessionEpoch === owner.sessionEpoch && requested.requestScopeEpoch === owner.requestScopeEpoch &&
     requested.sourceObjectId === selectedObjectId && (requested.points || requested.vectors || requested.surface || requested.wireframe) ? requested : null;
+  // Color/depth controls present the immutable carrier without re-decoding its payloads.
+  const carrierKey = displayIntent ? JSON.stringify({ ...displayIntent, colorRange: undefined, vectorsOnTop: undefined, vectorThickness: undefined, glyphLengthScale: undefined }) : null;
+  const intent = useMemo(() => carrierKey ? JSON.parse(carrierKey) as AntennaFieldIntent : null, [carrierKey]);
   const solution = useAntennaFieldSolutionResource(intent?.kind === "basis" ? intent.solutionId : null);
   const catalog = useAntennaStageOutputCatalogResource(intent?.kind === "basis" ? intent.stageId : null);
   const inspection = useAntennaExternalLeadInspectionResource(intent?.kind === "inspection" ? intent.runtimeStageId ?? null : null);
@@ -26,10 +33,11 @@ export function useAntennaFieldOverlay() {
   const inspectionOwnerMatches = Boolean(intent?.kind === "inspection" && inspection.status === "ready" && !inspection.refreshError && raw &&
     antennaInspectionIntentMatchesOwner(intent, raw));
   const display = useAntennaInspectionDisplayResource(inspectionOwnerMatches ? raw : null);
+  const closedOverlay = useClosedLoopAntennaOverlay(intent, inspectionOwnerMatches ? raw : null, display.status === "ready" && !display.refreshError ? display.data : null);
   const inspectionPlan = useMemo(() => {
     const data = inspection.data;
     const metadata = display.data;
-    if (!intent || intent.kind !== "inspection" || !inspectionOwnerMatches || !data || display.status !== "ready" || display.refreshError || !metadata ||
+    if (!intent || intent.kind !== "inspection" || !inspectionOwnerMatches || !data || display.status !== "ready" || display.refreshError || !metadata || isClosedLoopDisplay(metadata) ||
         !antennaInspectionDisplayMatchesOwner(data, metadata)) return null;
     const scalar = intent.quantity === "device_potential";
     const current = intent.quantity === "current_density" ? metadata.device_current : null;
@@ -113,15 +121,33 @@ export function useAntennaFieldOverlay() {
     catch (error) { return { model: null, error: error instanceof Error ? error.message : String(error) }; }
   }, [intent, plan, positions.data, positions.status, field.data, field.status, inspectionPlan, inspectionPositions.data, inspectionPositions.status, inspectionField.data, inspectionField.status, inspectionTopology.data, inspectionTopology.status,
     currentDevicePositions.data, currentDevicePositions.status, currentTracePositions.data, currentTracePositions.status, currentTraceValues.data, currentTraceValues.status, currentCarrier]);
-  const model = result?.model ?? null;
-  const error = result?.error ?? solution.error?.message ?? catalog.error?.message ?? inspection.error?.message ?? display.error?.message ?? positions.error?.message ?? field.error?.message ?? inspectionPositions.error?.message ?? inspectionField.error?.message ?? inspectionTopology.error?.message ?? currentDevicePositions.error?.message ?? currentTracePositions.error?.message ?? currentTraceValues.error?.message;
+  const baseModel = closedOverlay.active ? closedOverlay.model : result?.model ?? null;
+  const lengthScale = displayIntent?.glyphLengthScale ?? 1;
+  const baseSegments = baseModel?.vectorSegments ?? null;
+  const glyphSampleCount = baseModel?.count ?? 0;
+  const glyphs = useMemo(() => {
+    try { return { segments: encodeAntennaGlyphSegments(scaleAntennaGlyphSegments(baseSegments, lengthScale), glyphSampleCount), error: null }; }
+    catch (error) { return { segments: null, error: error instanceof Error ? error.message : String(error) }; }
+  }, [baseSegments, glyphSampleCount, lengthScale]);
+  const presentation = useMemo(() => {
+    if (!baseModel || !displayIntent) return null;
+    if (glyphs.error) return { model: null, error: glyphs.error };
+    try {
+      const range = resolveAntennaColorRange(baseModel, displayIntent.colorRange);
+      if (baseModel.surfaceVectorValues) antennaSurfaceColorRange(range, baseModel.surfaceVectorScale ?? 1);
+      const vectorSegments = glyphs.segments;
+      return { model: { ...baseModel, vectorSegments, intent: displayIntent, key: `${baseModel.key}:segments-7:glyph-length:${lengthScale}` }, error: null };
+    } catch (error) { return { model: null, error: error instanceof Error ? error.message : String(error) }; }
+  }, [baseModel, displayIntent, glyphs, lengthScale]);
+  const model = presentation?.model ?? null;
+  const error = presentation?.error ?? closedOverlay.error ?? result?.error ?? solution.error?.message ?? catalog.error?.message ?? inspection.error?.message ?? display.error?.message ?? positions.error?.message ?? field.error?.message ?? inspectionPositions.error?.message ?? inspectionField.error?.message ?? inspectionTopology.error?.message ?? currentDevicePositions.error?.message ?? currentTracePositions.error?.message ?? currentTraceValues.error?.message;
   const metadataReady = intent?.kind === "inspection" ? inspection.status === "ready" && display.status === "ready" : solution.status === "ready" && catalog.status === "ready";
   const status = useMemo(() => !intent ? null : model ? {
-    intentKey: JSON.stringify(intent), status: "ready" as const, reason: model.surfaceVectorValues ? "Owned SI RT0 J: cell centers and cell-local exterior traces; vector interpolated before magnitude; no nodal average" : model.surfaceTriangles ? "Complete pinned SI device Tet4 carrier and nodal V; exterior surface derived from actual cell connectivity" : "Complete pinned SI sample carrier; no surface interpolation", sampleCount: model.count, minimum: model.minimum, maximum: model.maximum,
+    intentKey: JSON.stringify(displayIntent), status: "ready" as const, reason: model.surfaceVectorValues && intent.quantity.startsWith("magnetic_field") ? "Owned sampling Tet4 H: Cartesian vector interpolated before magnitude; conductor geometry is separate" : model.surfaceVectorValues ? "Owned SI J: cell centers and cell-local exterior traces; vector interpolated before magnitude; no nodal average" : model.surfaceTriangles ? "Complete pinned SI device Tet4 carrier and nodal V; exterior surface derived from actual cell connectivity" : "Complete pinned SI sample carrier; no surface interpolation", sampleCount: model.count, minimum: model.minimum, maximum: model.maximum,
   } : {
-    intentKey: JSON.stringify(intent), status: error || (metadataReady && !plan && !inspectionPlan) ? "unavailable" as const : "loading" as const,
-    reason: error ?? (metadataReady && !plan && !inspectionPlan ? "Incompatible identity, port, layout, units, cardinality or display memory limit. No field was rendered." : "Loading complete, revision-checked sample payloads"),
-  }, [intent, model, error, metadataReady, plan, inspectionPlan]);
+    intentKey: JSON.stringify(displayIntent), status: error || (metadataReady && !plan && !inspectionPlan && !closedOverlay.plan) ? "unavailable" as const : "loading" as const,
+    reason: error ?? (metadataReady && !plan && !inspectionPlan && !closedOverlay.plan ? "Incompatible identity, port, layout, units, cardinality or display memory limit. No field was rendered." : "Loading complete, revision-checked sample payloads"),
+  }, [intent, displayIntent, model, error, metadataReady, plan, inspectionPlan, closedOverlay.plan]);
   useEffect(() => { controller.setAntennaFieldDisplayStatus(status); }, [controller, status]);
   useEffect(() => () => controller.setAntennaFieldDisplayStatus(null), [controller]);
   return model;

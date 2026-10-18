@@ -144,19 +144,25 @@ void manual_env_precedence_matches_runtime_contract() {
     check(!request.auto_requested, "manual FULLMAG thread count is not auto mode");
 }
 
-void fullmag_auto_mode_overrides_manual_omp() {
+void fullmag_auto_mode_prefers_native_resolved_threads() {
     ScopedEnv fullmag("FULLMAG_CPU_THREADS");
     ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
+    ScopedEnv native_resolved("FULLMAG_NATIVE_THREADS_AUTO_RESOLVED");
     ScopedEnv omp("OMP_NUM_THREADS");
 
     fullmag.set("auto");
     resolved.set("5");
+    native_resolved.set("3");
     omp.set("12");
 
-    const auto request = fullmag::fem::requested_cpu_threads();
+    auto request = fullmag::fem::requested_cpu_threads();
     check(request.auto_requested, "FULLMAG_CPU_THREADS=auto enables auto mode");
     check(request.requested_threads >= 1, "auto mode detects at least one CPU thread");
-    check(request.auto_resolved_threads == 5, "auto-resolved env value is preserved");
+    check(request.auto_resolved_threads == 3, "native auto-resolved env value takes precedence");
+
+    native_resolved.unset();
+    request = fullmag::fem::requested_cpu_threads();
+    check(request.auto_resolved_threads == 5, "legacy auto-resolved env remains a fallback");
 }
 
 void auto_thread_cap_scales_by_context_size() {
@@ -309,7 +315,7 @@ void automatic_gpu_host_policy_overrides_external_cpu_auto_resolution() {
 int main() {
     cpu_thread_runtime_is_owned_by_runtime_module();
     manual_env_precedence_matches_runtime_contract();
-    fullmag_auto_mode_overrides_manual_omp();
+    fullmag_auto_mode_prefers_native_resolved_threads();
     auto_thread_cap_scales_by_context_size();
     configure_host_runtime_writes_cpu_context_fields();
     configure_host_runtime_writes_gpu_context_fields();

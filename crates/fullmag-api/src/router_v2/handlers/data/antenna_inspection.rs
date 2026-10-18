@@ -24,6 +24,7 @@ use crate::session::current_artifact_dir;
 use crate::types::{AppState, CurrentLiveRequestContext, SessionStateResponse};
 
 const RECORD_NAME: &str = "antenna_external_lead_stage_output.v1.json";
+const CLOSED_RECORD_NAME: &str = "antenna_closed_loop_stage_output.v2.json";
 const RECORD_LIMIT: usize = 1 << 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -51,12 +52,19 @@ pub struct AntennaInspectionOutputResource {
     pub inspection_ref: AntennaInspectionReferenceResource,
     pub manifest_ref: String,
     pub payload_units: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
     pub reused_existing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaInspectionStageRecordResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_object_id: Option<String>,
     pub schema_version: String,
     pub stage_kind: String,
     pub resolved_action: String,
@@ -185,6 +193,8 @@ pub struct AntennaExternalLeadInspectionResource {
     #[serde(flatten)]
     pub record: AntennaInspectionStageRecordResource,
     pub manifest: Option<AntennaInspectionManifestResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_loop_manifest: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -246,6 +256,30 @@ pub struct AntennaInspectionDisplayDataResource {
     pub magnetic_field: AntennaInspectionPayloadResource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_current: Option<AntennaInspectionCurrentDisplayResource>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum AntennaInspectionDisplayFamilyResource {
+    ExternalLead(AntennaInspectionDisplayResource),
+    ClosedLoop(AntennaClosedLoopInspectionDisplayResource),
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AntennaClosedLoopInspectionDisplayResource {
+    pub schema_version: String,
+    pub resource_id: String,
+    pub session_id: String,
+    pub session_epoch: String,
+    pub request_scope_epoch: String,
+    pub run_id: String,
+    pub runtime_stage_id: String,
+    pub stage_revision: u64,
+    pub record_content_digest: String,
+    pub content_digest: String,
+    pub capabilities: AntennaInspectionDisplayCapabilities,
+    pub normalization: String,
+    pub closed_loop_display: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,6 +381,99 @@ async fn check_owner(state: &Arc<AppState>, expected: &InspectionOwner) -> Resul
     Ok(())
 }
 
+/// One owner-fenced entry into the common data plane; existing inspection guards remain private.
+pub(super) async fn verified_inspection_fields(
+    state: &Arc<AppState>, requested_stage: Option<&str>,
+) -> Result<Option<Arc<super::inspection_field_provider::VerifiedInspectionFields>>, ApiError> {
+    if let Some(fields) = super::accepted_inspection_fields::load(state, requested_stage).await? {
+        return Ok(Some(fields));
+    }
+    let request_context=crate::capture_current_live_request_context(state).await?;
+    let (captured, mesh_revision, topology_revision)={
+        let _transition=state.current_live_session_transition.lock().await;
+        let current=state.current_live_state.read().await;
+        let Some(snapshot)=current.as_ref() else {return Ok(None);};
+        crate::ensure_current_live_request_context(snapshot,&request_context,
+            state.current_live_session_epoch.load(Ordering::Acquire))?;
+        let candidates=snapshot.stage_execution.as_ref().map(|execution| execution.stages.iter()
+            .filter(|stage| requested_stage.is_none_or(|id| stage.stage_id.as_deref()==Some(id)))
+            .filter(|stage| stage.artifact_refs.iter().any(|path| FsPath::new(path).file_name()
+                .is_some_and(|name| name==RECORD_NAME || name==CLOSED_RECORD_NAME)))
+            .collect::<Vec<_>>()).unwrap_or_default();
+        if candidates.is_empty() {return Ok(None);}
+        if candidates.len()!=1 {return Err(ApiError::conflict_with_code("ambiguous_artifact_field_owner",
+            "select one exact runtime stage before reading inspection fields"));}
+        let id=candidates[0].stage_id.as_deref().ok_or_else(|| invalid("inspection runtime stage absent"))?;
+        (capture(snapshot,id,request_context)?,snapshot.mesh_revision,
+            crate::router_v2::handlers::sessions::status::domain_generation_revision(snapshot))
+    };
+    let expected=captured.owner.clone();
+    let observation_state_version=captured.stage_revision;
+    let data_plane=Arc::clone(&state.quantity_data_plane);
+    // Share admission with accepted artifacts; cancelled HTTP requests must not
+    // release the budget while their blocking reader is still decoding payloads.
+    let permit=Arc::clone(&data_plane.accepted_inspection_admission).acquire_owned().await
+        .map_err(|_| ApiError::internal("inspection reader admission closed"))?;
+    let fields=tokio::task::spawn_blocking(move || {
+        let _permit=permit;
+        let bytes=read_registered_record(&captured.owner)?;
+        let record=parse_record(&bytes)?;
+        if record.status!="inspection_only" {return Err(ApiError::conflict_with_code("inspection_has_no_payload",
+            "failed/cancelled inspection cannot materialize fields"));}
+        let key=digest(format!("artifact-samples:{:?}:{}:{}:{}:{}",captured.owner,digest(&bytes),
+            captured.stage_revision,mesh_revision,topology_revision).as_bytes());
+        let mut owner=crate::schemas::fields::ArtifactFieldOwnerBinding {
+            session_id:captured.owner.session_id.clone(),session_epoch:captured.owner.session_epoch.clone(),
+            request_scope_epoch:captured.owner.request_context.request_scope_epoch.clone(),run_id:captured.owner.run_id.clone(),
+            runtime_stage_id:captured.owner.runtime_stage_id.clone(),authored_stage_id:record.stage_id.clone(),
+            module_id:String::new(),object_id:String::new(),output_id:record.output_id.clone(),
+            source_digest:String::new(),content_digest:record.outputs[0].inspection_ref.content_digest.clone(),
+            observation_mesh_revision:mesh_revision,observation_topology_revision:topology_revision,
+            historical_inspection:true,accepted_artifact:None,native_mesh_identity:String::new(),native_topology_identity:String::new(),
+        };
+        let fields=if record.schema_version=="antenna_closed_loop_stage_output.v2" {
+            let loaded=load_closed(&record,&captured.owner.artifact_dir)?;
+            // Validate payload bytes before reusing decoded field views.
+            if let Some(cached)=data_plane.verified_inspection_cache.lock()
+                .map_err(|_| ApiError::internal("inspection cache poisoned"))?.get(&key) {return Ok(cached);}
+            let text=|path:&[&str]| -> Result<String,ApiError> {
+                let mut value=&loaded.metadata;for part in path {value=&value[*part];}
+                value.as_str().filter(|v| nonblank(v)).map(str::to_owned).ok_or_else(|| invalid("verified field owner label absent"))
+            };
+            owner.object_id=text(&["source_object_id"])?;owner.module_id=text(&["current_transport_id"])?;
+            owner.source_digest=text(&["source","accepted_source_state_digest"])?;
+            owner.native_mesh_identity=text(&["resolved_execution","mesh_revision"])?;
+            owner.native_topology_identity=text(&["resolved_execution","topology_revision"])?;
+            super::inspection_field_provider::from_closed(owner,loaded,captured.stage_revision)?
+        } else {
+            let output=&record.outputs[0];
+            let loaded=fullmag_runner::load_published_antenna_external_lead_solution(
+                &captured.owner.artifact_dir,&output.inspection_ref.runner_reference()).map_err(|e| invalid(e.message))?;
+            validate_port(&record,&loaded.manifest)?;
+            // Validate payload bytes before reusing decoded field views.
+            if let Some(cached)=data_plane.verified_inspection_cache.lock()
+                .map_err(|_| ApiError::internal("inspection cache poisoned"))?.get(&key) {return Ok(cached);}
+            owner.object_id=loaded.manifest.source_object_id.clone();owner.module_id=loaded.manifest.current_transport_id.clone();
+            owner.source_digest=loaded.manifest.source_content_sha256.clone();
+            owner.native_mesh_identity=loaded.manifest.input_pins.device_mesh_ownership_sha256.clone();
+            owner.native_topology_identity=loaded.manifest.input_pins.combined_mesh_material_sha256.clone();
+            super::inspection_field_provider::from_external(owner,loaded,captured.stage_revision)?
+        };
+        let fields=Arc::new(fields);
+        data_plane.verified_inspection_cache.lock().map_err(|_| ApiError::internal("inspection cache poisoned"))?
+            .insert(key,Arc::clone(&fields))?;
+        Ok::<_,ApiError>(fields)
+    }).await.map_err(|e| ApiError::internal(format!("inspection field worker: {e}")))??;
+    check_owner(state,&expected).await?;
+    let current=state.current_live_state.read().await;
+    let actual=current.as_ref().ok_or_else(||ApiError::conflict("inspection observation disappeared"))?;
+    if actual.mesh_revision!=mesh_revision || actual.state_version!=observation_state_version
+        || crate::router_v2::handlers::sessions::status::domain_generation_revision(actual)!=topology_revision {
+        return Err(ApiError::conflict_with_code("inspection_observation_changed","live observation changed during immutable artifact read"));
+    }
+    Ok(Some(fields))
+}
+
 fn invalid(message: impl Into<String>) -> ApiError {
     ApiError::unprocessable_with_code("invalid_antenna_inspection", message)
 }
@@ -359,17 +486,34 @@ fn parse_record(bytes: &[u8]) -> Result<AntennaInspectionStageRecordResource, Ap
     if bytes.is_empty() || bytes.len() > RECORD_LIMIT {
         return Err(invalid("inspection record exceeds byte bound"));
     }
-    let record: AntennaInspectionStageRecordResource = serde_json::from_slice(bytes)
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| invalid(format!("invalid inspection JSON: {error}")))?;
+    if value["schema_version"] == "antenna_closed_loop_stage_output.v2" {
+        if let Some(outputs) = value["outputs"].as_array_mut() {
+            for output in outputs {
+                if output.get("inspection_ref").is_some() { return Err(invalid("mixed inspection reference families")); }
+            }
+        }
+        let stage_id = value["stage_id"].clone();
+        let output_id = value["output_id"].clone();
+        if let Some(outputs) = value["outputs"].as_array_mut() {
+            for output in outputs {
+                output["inspection_ref"] = serde_json::json!({"stage_id": stage_id, "output_id": output_id, "content_digest": output["content_digest"]});
+            }
+        }
+    }
+    let record: AntennaInspectionStageRecordResource = serde_json::from_value(value)
         .map_err(|error| invalid(format!("invalid inspection record shape: {error}")))?;
     let manifest_basename = match record.schema_version.as_str() {
         "antenna_external_lead_stage_output.v1" => "manifest.v1.json",
-        "antenna_external_lead_stage_output.v2" => "manifest.v2.json",
+        "antenna_external_lead_stage_output.v2" | "antenna_closed_loop_stage_output.v2" => "manifest.v2.json",
         _ => return Err(invalid("unsupported inspection record schema")),
     };
+    let closed = record.schema_version == "antenna_closed_loop_stage_output.v2";
     if record.stage_kind != "antenna_field_solve"
-        || record.resolved_action != "external_lead_inspection"
+        || record.resolved_action != if closed { "closed_loop_inspection" } else { "external_lead_inspection" }
         || record.qualification != "NOT VERIFIED"
-        || record.field_scope != "external_electrode_truncation"
+        || record.field_scope != if closed { "full_closed_loop.inspection_only.v2" } else { "external_electrode_truncation" }
         || ![&record.stage_id, &record.port_mode_id, &record.output_id]
             .into_iter()
             .all(|s| nonblank(s))
@@ -389,15 +533,17 @@ fn parse_record(bytes: &[u8]) -> Result<AntennaInspectionStageRecordResource, Ap
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                 })
                 .ok_or_else(|| invalid("invalid inspection digest"))?;
-            let expected_manifest = format!(
-                "antenna/external_lead_solutions/{}/{digest}/{manifest_basename}",
-                reference.output_id
-            );
+            let expected_manifest = if closed {
+                format!("antenna/field_solutions/{}/manifest.v2.json", reference.output_id)
+            } else { format!("antenna/external_lead_solutions/{}/{digest}/{manifest_basename}", reference.output_id) };
             let mut expected_units = serde_json::json!({"V": "V", "RT0_coefficients": "A", "H": "A/m", "positions": "m"});
             if record.schema_version == "antenna_external_lead_stage_output.v2" {
                 expected_units["J_charge"] = "A/m^2".into();
             }
-            if output.kind != "antenna_external_lead_inspection"
+            if closed { expected_units = serde_json::json!({"V_electric":"V", "J_charge":"A/m^2", "H_ant":"A/m", "H_ant_per_a":"1/m", "positions":"m"}); }
+            if (closed && (output.content_digest.as_deref() != Some(reference.content_digest.as_str()) || output.source.is_none() || record.source_object_id.is_none()))
+                || (!closed && (output.content_digest.is_some() || output.source.is_some() || record.source_object_id.is_some()))
+                || output.kind != if closed { "antenna_closed_loop_inspection" } else { "antenna_external_lead_inspection" }
                 || reference.stage_id != record.stage_id
                 || reference.output_id != record.output_id
                 || output.manifest_ref != expected_manifest
@@ -409,7 +555,7 @@ fn parse_record(bytes: &[u8]) -> Result<AntennaInspectionStageRecordResource, Ap
             }
         }
         "failed" | "cancelled"
-            if record.schema_version == "antenna_external_lead_stage_output.v1"
+            if matches!(record.schema_version.as_str(), "antenna_external_lead_stage_output.v1" | "antenna_closed_loop_stage_output.v2")
                 && record.outputs.is_empty()
                 && record
                     .diagnostic
@@ -424,7 +570,7 @@ fn read_registered_record(owner: &InspectionOwner) -> Result<Vec<u8>, ApiError> 
     let mut refs = owner.artifact_refs.iter().filter(|reference| {
         FsPath::new(reference)
             .file_name()
-            .is_some_and(|name| name == RECORD_NAME)
+            .is_some_and(|name| name == RECORD_NAME || name == CLOSED_RECORD_NAME)
     });
     let reference = refs.next().ok_or_else(|| {
         ApiError::not_found_with_code(
@@ -457,10 +603,11 @@ fn read_registered_record(owner: &InspectionOwner) -> Result<Vec<u8>, ApiError> 
             "inspection record path contains traversal or alias components",
         ));
     }
+    let closed = relative.file_name().is_some_and(|name| name == CLOSED_RECORD_NAME);
     let expected = PathBuf::from("antenna")
-        .join("external_lead_stage_outputs")
+        .join(if closed { "closed_loop_stage_outputs" } else { "external_lead_stage_outputs" })
         .join(&owner.runtime_stage_id)
-        .join(RECORD_NAME);
+        .join(if closed { CLOSED_RECORD_NAME } else { RECORD_NAME });
     if relative != expected {
         return Err(invalid(
             "inspection record is outside its registered runtime stage namespace",
@@ -489,7 +636,7 @@ fn read_registered_record(owner: &InspectionOwner) -> Result<Vec<u8>, ApiError> 
                 "inspection record descendant aliases or escapes artifact root",
             ));
         }
-        if path.file_name().is_some_and(|name| name == RECORD_NAME) {
+        if path.file_name().is_some_and(|name| name == RECORD_NAME || name == CLOSED_RECORD_NAME) {
             if !metadata.is_file() || metadata.len() > RECORD_LIMIT as u64 {
                 return Err(invalid("inspection record is not a bounded regular file"));
             }
@@ -512,7 +659,22 @@ fn read_registered_record(owner: &InspectionOwner) -> Result<Vec<u8>, ApiError> 
     {
         return Err(invalid("inspection record changed during bounded read"));
     }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+    if (value["schema_version"] == "antenna_closed_loop_stage_output.v2") != closed {
+        return Err(invalid("inspection record generation differs from registered namespace"));
+    }
     Ok(bytes)
+}
+
+fn load_closed(record: &AntennaInspectionStageRecordResource, root: &FsPath)
+    -> Result<fullmag_runner::LoadedAntennaClosedLoopInspection, ApiError> {
+    let output = record.outputs.first().ok_or_else(|| ApiError::conflict_with_code("inspection_has_no_payload", "failed/cancelled inspection has no payload"))?;
+    let loaded = fullmag_runner::load_published_antenna_closed_loop_inspection(root,
+        &output.manifest_ref, &record.stage_id, &record.output_id, &record.port_mode_id,
+        &output.inspection_ref.content_digest).map_err(|e| invalid(e.message))?;
+    if record.source_object_id.as_deref() != loaded.metadata["source_object_id"].as_str()
+        || output.source.as_ref() != loaded.metadata.get("source") { return Err(invalid("closed-loop record source differs from verified native owner")); }
+    Ok(loaded)
 }
 
 fn json_value<T: Serialize>(value: &T) -> Result<Value, ApiError> {
@@ -599,8 +761,8 @@ fn digest(bytes: &[u8]) -> String {
         ("If-None-Match" = Option<String>, Header, description = "Previous strong ETag"),
     ),
     responses(
-        (status = 200, description = "Inspection record and manifest-only metadata; never a drive basis", body = AntennaExternalLeadInspectionResource),
-        (status = 304, description = "Unchanged manifest-only resource"),
+        (status = 200, description = "Inspection record; external-lead manifest metadata or fully verified closed-loop thin metadata; never a drive basis", body = AntennaExternalLeadInspectionResource),
+        (status = 304, description = "Unchanged inspection resource after family validation"),
         (status = 404, description = "No registered inspection result", body = crate::schemas::common::ApiErrorResponse),
         (status = 409, description = "Stale request scope or owner changed during read", body = crate::schemas::common::ApiErrorResponse),
         (status = 422, description = "Invalid inspection record or manifest", body = crate::schemas::common::ApiErrorResponse),
@@ -618,7 +780,9 @@ pub async fn get_antenna_external_lead_inspection(
     let resource = tokio::task::spawn_blocking(move || {
         let bytes = read_registered_record(&snapshot.owner)?;
         let record = parse_record(&bytes)?;
-        let manifest = if let Some(output) = record.outputs.first() {
+        let closed = record.schema_version == "antenna_closed_loop_stage_output.v2";
+        let closed_loop_manifest = if closed && !record.outputs.is_empty() { Some(load_closed(&record, &snapshot.owner.artifact_dir)?.metadata) } else { None };
+        let manifest = if !closed { if let Some(output) = record.outputs.first() {
             let manifest = fullmag_runner::load_published_antenna_external_lead_solution_manifest(
                 &snapshot.owner.artifact_dir,
                 &output.inspection_ref.runner_reference(),
@@ -626,9 +790,7 @@ pub async fn get_antenna_external_lead_inspection(
             .map_err(|e| invalid(e.message))?;
             validate_port(&record, &manifest)?;
             Some(manifest_resource(manifest)?)
-        } else {
-            None
-        };
+        } else { None } } else { None };
         Ok::<_, ApiError>(AntennaExternalLeadInspectionResource {
             resource_id: format!(
                 "data/antenna/stages/{}/external-lead-inspection",
@@ -643,6 +805,7 @@ pub async fn get_antenna_external_lead_inspection(
             record_content_digest: format!("sha256:{}", digest(&bytes)),
             record,
             manifest,
+            closed_loop_manifest,
         })
     })
     .await
@@ -779,7 +942,7 @@ pub(super) fn inspection_display_data(
         ("If-None-Match" = Option<String>, Header, description = "Previous strong ETag")
     ),
     responses(
-        (status = 200, description = "Fully verified immutable display descriptors; no FFT/LLG qualification", body = AntennaInspectionDisplayResource),
+        (status = 200, description = "Fully verified immutable display descriptors; no FFT/LLG qualification", body = AntennaInspectionDisplayFamilyResource),
         (status = 304, description = "Unchanged after integrity validation"),
         (status = 400, description = "Invalid query", body = crate::schemas::common::ApiErrorResponse),
         (status = 404, description = "No registered inspection", body = crate::schemas::common::ApiErrorResponse),
@@ -806,13 +969,29 @@ pub async fn get_antenna_external_lead_inspection_display(
         if output.inspection_ref.content_digest != query.content_digest {
             return Err(ApiError::conflict_with_code("inspection_digest_mismatch", "inspection revision differs from requested digest"));
         }
+        if record.schema_version == "antenna_closed_loop_stage_output.v2" {
+            let loaded = load_closed(&record, &captured.owner.artifact_dir)?;
+            return serde_json::to_value(AntennaInspectionDisplayFamilyResource::ClosedLoop(AntennaClosedLoopInspectionDisplayResource {
+                schema_version: "antenna_inspection_display.closed_loop.v2".into(),
+                resource_id: format!("data/antenna/stages/{}/external-lead-inspection/display", captured.owner.runtime_stage_id),
+                session_id: captured.owner.session_id, session_epoch: captured.owner.session_epoch,
+                request_scope_epoch: captured.owner.request_context.request_scope_epoch,
+                run_id: captured.owner.run_id, runtime_stage_id: captured.owner.runtime_stage_id,
+                stage_revision: captured.stage_revision, record_content_digest: format!("sha256:{}", digest(&record_bytes)),
+                content_digest: output.inspection_ref.content_digest.clone(),
+                capabilities: AntennaInspectionDisplayCapabilities { display: true, current_density: true,
+                    per_ampere_basis: false, source_fft: false, llg_drive: false },
+                normalization: "raw_authored_potential_jump".into(),
+                closed_loop_display: loaded.metadata,
+            })).map_err(|e| ApiError::internal(e.to_string()));
+        }
         let loaded = fullmag_runner::load_published_antenna_external_lead_solution(
             &captured.owner.artifact_dir, &output.inspection_ref.runner_reference(),
         ).map_err(|e| invalid(e.message))?;
         validate_port(&record, &loaded.manifest)?;
         let display = inspection_display_data(&loaded)?;
         let has_current = display.device_current.is_some();
-        Ok::<_, ApiError>(AntennaInspectionDisplayResource {
+        serde_json::to_value(AntennaInspectionDisplayFamilyResource::ExternalLead(AntennaInspectionDisplayResource {
             schema_version: if has_current { "antenna_inspection_display.v2" } else { "antenna_inspection_display.v1" }.into(),
             resource_id: format!("data/antenna/stages/{}/external-lead-inspection/display", captured.owner.runtime_stage_id),
             session_id: captured.owner.session_id,
@@ -838,7 +1017,7 @@ pub async fn get_antenna_external_lead_inspection_display(
             sample_positions: display.sample_positions,
             magnetic_field: display.magnetic_field,
             device_current: display.device_current,
-        })
+        })).map_err(|e| ApiError::internal(e.to_string()))
     }).await.map_err(|e| ApiError::internal(format!("inspection display worker: {e}")))??;
     check_owner(&state, &owner).await?;
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&digest(
@@ -962,7 +1141,16 @@ pub async fn get_antenna_external_lead_inspection_payload(
     let Query(query) = query.map_err(|error| {
         ApiError::bad_request(format!("invalid inspection payload query: {error}"))
     })?;
-    validate_payload_kind(&payload_kind)?;
+    // Closed-loop payload names belong to the closed-loop bundle. Accepted
+    // external-lead resources keep their narrower shared validator.
+    if ![
+        "stable_vertex_ids", "vertex_xyz", "sample_xyz", "conductivity",
+        "v_raw", "v_per_a", "j_center_raw", "j_center_per_a", "j_local_raw", "j_local_per_a",
+        "h_raw", "h_per_a", "cells", "faces", "weak", "prepared_preimage", "charge_preimage",
+        "source_preimage", "certificate", "authoring_receipt", "direct_evidence", "sample_cells",
+    ].contains(&payload_kind.as_str()) {
+        validate_payload_kind(&payload_kind)?;
+    }
     let snapshot = snapshot(&state, &stage_id).await?;
     let owner = snapshot.owner.clone();
     let (etag, bytes) = tokio::task::spawn_blocking(move || {
@@ -979,13 +1167,18 @@ pub async fn get_antenna_external_lead_inspection_payload(
                 "inspection revision differs from requested digest",
             ));
         }
-        let loaded = fullmag_runner::load_published_antenna_external_lead_solution(
-            &snapshot.owner.artifact_dir,
-            &output.inspection_ref.runner_reference(),
-        )
-        .map_err(|e| invalid(e.message))?;
-        validate_port(&record, &loaded.manifest)?;
-        let (descriptor, bytes) = select_payload(loaded, &payload_kind)?;
+        let (payload_sha256, bytes) = if record.schema_version == "antenna_closed_loop_stage_output.v2" {
+            let mut loaded = load_closed(&record, &snapshot.owner.artifact_dir)?;
+            let bytes = loaded.payloads.remove(&payload_kind).ok_or_else(|| ApiError::bad_request("unknown closed-loop inspection payload kind"))?;
+            (digest(&bytes), bytes)
+        } else {
+            let loaded = fullmag_runner::load_published_antenna_external_lead_solution(
+                &snapshot.owner.artifact_dir, &output.inspection_ref.runner_reference(),
+            ).map_err(|e| invalid(e.message))?;
+            validate_port(&record, &loaded.manifest)?;
+            let (descriptor, bytes) = select_payload(loaded, &payload_kind)?;
+            (descriptor.sha256, bytes)
+        };
         let token = serde_json::to_vec(&(
             &snapshot.owner.session_id,
             &snapshot.owner.session_epoch,
@@ -997,7 +1190,7 @@ pub async fn get_antenna_external_lead_inspection_payload(
             &record.output_id,
             &query.content_digest,
             &payload_kind,
-            &descriptor.sha256,
+            &payload_sha256,
         ))
         .map_err(|e| ApiError::internal(e.to_string()))?;
         Ok::<_, ApiError>((

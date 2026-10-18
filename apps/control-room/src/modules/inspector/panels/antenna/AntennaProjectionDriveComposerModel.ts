@@ -1,5 +1,7 @@
 import type { SceneResource } from "@/kernel/api/apiTypes";
 
+import { antennaSolveTargetKey, antennaSolveTargetOptions, type AntennaSolveTarget } from "./AntennaSolveTargetsEditorModel";
+
 import { antennaRunStageIds } from "./SolvedAntennaDriveEditorModel";
 
 function nextId(prefix: string, existing: string[]): string {
@@ -7,6 +9,35 @@ function nextId(prefix: string, existing: string[]): string {
   let index = 1;
   while (taken.has(`${prefix}:${index}`)) index += 1;
   return `${prefix}:${index}`;
+}
+
+export function composeAntennaProjection(scene: SceneResource, stageId: string, target: AntennaSolveTarget) {
+  const matches = scene.antenna_field_solve_stages?.filter((item) => item.id === stageId) ?? [];
+  const stage = matches.length === 1 ? matches[0] : null;
+  if (!stage) throw new Error("Antenna field-solve stage is missing.");
+  const sources = scene.objects?.filter((object) => object.id === stage.source_object_id) ?? [];
+  if (sources.length !== 1 || sources[0].locked) throw new Error("Current unlocked conductor is required.");
+  if ((scene.current_transports ?? []).filter((transport) => transport.name === stage.current_transport_id).length !== 1) {
+    throw new Error("Field-solve stage requires one existing current transport.");
+  }
+  const output = stage.outputs.filter((item) => item.quantity === "H_ant_basis");
+  if (output.length !== 1 || !output[0].id.trim() || stage.outputs.filter((item) => item.id === output[0].id).length !== 1) throw new Error("Field-solve stage must publish exactly one H_ant_basis output.");
+  if (stage.port_mode_ids.length !== 1 || (scene.antenna_port_modes?.filter((port) => port.id === stage.port_mode_ids[0]).length !== 1 ||
+    !scene.antenna_port_modes?.some((port) => port.id === stage.port_mode_ids[0] &&
+      port.source_object_id === stage.source_object_id && port.current_transport_id === stage.current_transport_id))) {
+    throw new Error("Field-solve stage requires one matching antenna port.");
+  }
+  const key = antennaSolveTargetKey(target);
+  if (antennaSolveTargetOptions(scene).filter((option) => option.key === key).length !== 1) {
+    throw new Error("Select an existing, unambiguous projection target.");
+  }
+  const projectionId = nextId(`${stage.id}:projection`, (scene.antenna_target_projections ?? []).flatMap((item) => [item.id, item.output_id?.replace(/:field$/, "") ?? ""]));
+  return {
+    id: projectionId,
+    solution: { kind: "stage_output" as const, stage_id: stage.id, output_id: output[0].id },
+    target,
+    output_id: `${projectionId}:field`,
+  };
 }
 
 export function composeAntennaProjectionDrive(
@@ -17,20 +48,13 @@ export function composeAntennaProjectionDrive(
   peakCurrentText: string,
   frequencyText: string,
 ) {
-  const stage = scene.antenna_field_solve_stages?.find((item) => item.id === stageId);
-  if (!stage) throw new Error("Antenna field-solve stage is missing.");
-  const output = stage.outputs.filter((item) => item.quantity === "H_ant_basis");
-  if (output.length !== 1) throw new Error("Field-solve stage must publish exactly one H_ant_basis output.");
-  if (stage.port_mode_ids.length !== 1 || !scene.antenna_port_modes?.some((port) =>
-    port.id === stage.port_mode_ids[0] && port.source_object_id === stage.source_object_id &&
-    port.current_transport_id === stage.current_transport_id)) {
-    throw new Error("Field-solve stage requires one matching antenna port.");
-  }
-  if (!targetObjectId || targetObjectId === stage.source_object_id ||
-      !scene.objects?.some((object) => object.id === targetObjectId)) {
+  if (!targetObjectId || targetObjectId === scene.antenna_field_solve_stages?.find((item) => item.id === stageId)?.source_object_id) {
     throw new Error("Select an existing target object other than the conductor.");
   }
-  if (!antennaRunStageIds(scene).includes(runStageId)) {
+  const projection = composeAntennaProjection(scene, stageId, { kind: "object", object_id: targetObjectId });
+  const stage = scene.antenna_field_solve_stages?.find((item) => item.id === stageId);
+  if (!stage) throw new Error("Antenna field-solve stage is missing.");
+  if (antennaRunStageIds(scene).filter((id) => id === runStageId).length !== 1) {
     throw new Error("Select an authored Run stage for activation.");
   }
   const peakCurrentA = Number(peakCurrentText);
@@ -41,18 +65,16 @@ export function composeAntennaProjectionDrive(
   if (!frequencyText.trim() || !Number.isFinite(frequencyHz) || frequencyHz <= 0) {
     throw new Error("Frequency must be finite and > 0 Hz.");
   }
-  const projectionId = nextId(`${stage.id}:projection`, scene.antenna_target_projections?.map((item) => item.id) ?? []);
+  const names = new Set(scene.solved_antenna_drives?.map(item => item.name.trim()) ?? []);
+  let nameIndex = 1;
+  while (names.has(`Current drive ${nameIndex}`)) nameIndex += 1;
+  const projectionId = projection.id;
   const driveId = nextId(`${stage.id}:drive`, scene.solved_antenna_drives?.map((item) => item.id) ?? []);
   return {
-    projection: {
-      id: projectionId,
-      solution: { kind: "stage_output" as const, stage_id: stage.id, output_id: output[0].id },
-      target: { kind: "object" as const, object_id: targetObjectId },
-      output_id: `${projectionId}:field`,
-    },
+    projection,
     drive: {
       id: driveId,
-      name: `Antenna drive ${driveId}`,
+      name: `Current drive ${nameIndex}`,
       projection_ref: projectionId,
       port_mode_id: stage.port_mode_ids[0],
       peak_current_a: peakCurrentA,

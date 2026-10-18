@@ -1,4 +1,9 @@
-import type { ReactNode } from "react";
+import { useState } from "react";
+import { antennaResourceOwner } from "@/shared/domain/physics/antennaResourceOwner";
+import { useKernel } from "@/kernel/KernelContext";
+import { Button } from "@/shared/ui/Button";
+import { antennaNavigationLinks } from "@/modules/explorer/public";
+import { antennaNavigationScene } from "./AntennaNavigationScene";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { antennaPortValidationMessages } from "@/shared/domain/physics/antennaPortValidation";
@@ -8,6 +13,8 @@ import {
   useAntennaStageOutputCatalogResource,
   useAntennaSourceSpectrumResource,
 } from "@/kernel/resources/antennaResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -17,15 +24,16 @@ import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { AntennaSourceSpectrumPayloadView } from "./AntennaSourceSpectrumPayloadView";
 import { AntennaFieldBasisPreview } from "./AntennaFieldBasisPreview";
 import { AntennaExternalLeadInspectionPanel } from "./AntennaExternalLeadInspectionPanel";
-import { AntennaProjectionDriveComposer } from "./AntennaProjectionDriveComposer";
-import { AntennaSolveTargetsEditor } from "./AntennaSolveTargetsEditor";
+import { AntennaFieldSolveAuthoring } from "./AntennaFieldSolveAuthoring";
 import { AntennaStudyStageComposer } from "./AntennaStudyStageComposer";
+import { AntennaConductorAuthoring } from "./AntennaConductorAuthoring";
 import { AntennaPortEditor } from "./AntennaPortEditor";
-import { AntennaSpectrumComposer } from "./AntennaSpectrumComposer";
-import { MicrostripGeometryEditor } from "./MicrostripGeometryEditor";
-import { AntennaPlacementEditor } from "./AntennaPlacementEditor";
+import { AntennaResourceEditor } from "./AntennaResourceEditor";
 import { SolvedAntennaDriveEditor } from "./SolvedAntennaDriveEditor";
-import { antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
+import { AntennaRelatedResources } from "./AntennaRelatedResources";
+import { AntennaCompositionReadout } from "./AntennaCompositionReadout";
+import { formatAntennaParameter as numberValue, type AntennaReadoutRow as DetailRow } from "./AntennaReadoutModel";
+import { antennaEquilibriumReferenceIsValid, antennaEquilibriumReferenceValue, antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
 import {
   antennaFieldSolutionIdentityStatus,
   antennaSpectrumIdentityStatus,
@@ -49,13 +57,6 @@ type AntennaDrive = NonNullable<SceneResource["solved_antenna_drives"]>[number];
 type AntennaSpectrumRequest = NonNullable<
   SceneResource["antenna_spectrum_requests"]
 >[number];
-
-interface DetailRow {
-  label: string;
-  value: ReactNode;
-  mono?: boolean;
-  unit?: string;
-}
 
 interface DetailModel {
   badge: string;
@@ -91,7 +92,7 @@ function selectedResourceKind(
   selection: InspectorPanelProps["selection"],
 ): AntennaCompositionKind | null {
   return selection.ref?.type === "scene-object"
-    ? selection.ref.antennaResourceKind ?? null
+    ? selection.ref.antennaResourceKind === "terminals" ? null : selection.ref.antennaResourceKind ?? null
     : null;
 }
 
@@ -103,12 +104,6 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 
 function textValue(value: unknown, fallback = "unavailable"): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
-}
-
-function numberValue(value: unknown, unit = ""): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? `${value.toExponential(4)}${unit ? ` ${unit}` : ""}`
-    : `unavailable${unit ? ` ${unit}` : ""}`;
 }
 
 function executionValue(value: unknown): string {
@@ -158,56 +153,42 @@ function activationValue(activation: AntennaDrive["activation"]): string {
       : "no stages selected";
 }
 
-function conductorDetails(
-  objectId: string | null,
-  scene: SceneResource | null,
-): DetailModel {
-  const object = scene?.objects?.find((candidate) => candidate.id === objectId);
-  const geometry = recordValue(object?.geometry);
-  const isCpw = geometry?.geometry_kind === "CPWAntennaLayout";
-  const params = isCpw || geometry?.geometry_kind === "MicrostripAntennaLayout"
-    ? recordValue(geometry.geometry_params)
-    : null;
-  const stations = Array.isArray(params?.stations) ? params.stations : [];
+function conductorDetails(objectId: string | null, scene: SceneResource | null): DetailModel {
+  const object = scene?.objects?.find(candidate => candidate.id === objectId);
+  const geometry = recordValue(object?.geometry), params = recordValue(geometry?.geometry_params);
+  const partIds = Array.isArray(params?.conductors) ? params.conductors.map(recordValue)
+    .flatMap(part => typeof part?.id === "string" ? [part.id] : []) : [];
+  const loop = recordValue(params?.loop);
+  if (loop?.enabled === true) for (const key of ["inlet_connection_part_id", "outlet_connection_part_id"]) {
+    if (typeof loop[key] === "string") partIds.push(loop[key]);
+  }
+  const parts = [...new Set(partIds)].join(" · ") || "unavailable";
+  const currents = objectId ? (scene?.current_transports ?? []).map(recordValue).filter(current => Array.isArray(current?.domain)
+    && current.domain.some(ref => recordValue(ref)?.object_id === objectId)) : [];
   return {
-    title: "Antenna conductor",
-    badge: "3D geometry",
+    title: "Antenna conductor", badge: object ? currents.length ? `${currents.length} current modules` : "no current transport" : "missing",
     rows: [
       { label: "Object", value: objectId ?? "none", mono: true },
       { label: "Name", value: textValue(object?.name, objectId ?? "unavailable") },
-      { label: "Role", value: textValue(object?.role) },
-      { label: "Geometry", value: textValue(geometry?.geometry_kind ?? geometry?.kind) },
-      ...(params ? [
-        { label: "Length", value: numberValue(params.length_m, "m") },
-        { label: "Thickness", value: numberValue(params.thickness_m, "m") },
-        { label: "Conductivity", value: numberValue(params.conductivity_s_per_m, "S/m") },
-        ...(!isCpw ? [
-          { label: "Return width", value: numberValue(params.return_width_m, "m") },
-          { label: "Return offset", value: numberValue(params.return_offset_m, "m") },
-        ] : []),
-        ...stations.flatMap((entry, index) => {
-          const station = recordValue(entry);
-          if (isCpw) return [
-            { label: `Station ${index + 1}`, value: `s=${numberValue(station?.s)}` },
-            ...[
-              ["Signal width", "signal_width_m"],
-              ["Left gap", "left_gap_m"],
-              ["Right gap", "right_gap_m"],
-              ["Left ground", "left_ground_width_m"],
-              ["Right ground", "right_ground_width_m"],
-            ].map(([label, key]) => ({
-              label: `${index + 1} · ${label}`,
-              value: numberValue(station?.[key], "m"),
-            })),
-          ];
-          return [{
-            label: `Station ${index + 1}`,
-            value: `s=${numberValue(station?.s)}, signal width=${numberValue(station?.signal_width_m, "m")}`,
-          }];
-        }),
-      ] : []),
-      { label: "Material", value: textValue(object?.material_ref, "unassigned") },
-      { label: "Mesh policy", value: object?.object_mesh ? "authored" : "default" },
+      { label: "Layout", value: textValue(geometry?.geometry_kind ?? geometry?.kind) },
+      { label: "Part IDs", value: parts, mono: true },
+      { label: "Layout conductivity", value: numberValue(params?.conductivity_s_per_m, "S/m") },
+      { label: "Object material ref", value: textValue(object?.material_ref, "unassigned") },
+      { label: "Authored mesh policy", value: object ? object.object_mesh ? "authored" : "default" : "unavailable" },
+      ...currents.flatMap(current => {
+        const name = textValue(current?.name);
+        const materials = Array.isArray(current?.materials) ? current.materials.map(recordValue)
+          .filter(assignment => recordValue(assignment?.region)?.object_id === objectId) : [];
+        return [
+          { label: `Transport ${name}`, value: textValue(current?.model), mono: true },
+          ...materials.map((assignment, index) => ({
+            label: `Charge conductivity · ${name} · ${textValue(recordValue(assignment?.region)?.region_id, `whole object ${index + 1}`)}`,
+            value: numberValue(recordValue(assignment?.material)?.sigma_Spm, "S/m"),
+          })),
+          ...(!materials.length ? [{ label: `Charge materials · ${name}`, value: "No explicit charge-material assignment for this object." }] : []),
+        ];
+      }),
+      ...(!currents.length ? [{ label: "Charge transport", value: "No explicit current module is assigned to this object." }] : []),
     ],
   };
 }
@@ -237,7 +218,7 @@ function portDetails(
   }
   const validationMessages = antennaPortValidationMessages(mode, scene);
   return {
-    title: `Antenna port ${mode.id}`,
+    title: "Antenna port",
     badge: `${mode.branches.length} branches${validationMessages.length > 0 ? " · invalid" : ""}`,
     rows: [
       { label: "Validation", value: validationMessages.join("; ") || "valid authoring references" },
@@ -269,7 +250,7 @@ function solutionDetails(
   }
   const validationMessages = antennaStageValidationMessages(stage, scene);
   return {
-    title: `Antenna field solve ${stage.id}`,
+    title: "Antenna field solve",
     badge: validationMessages.length > 0 ? "invalid · result pending" : "configured · result pending",
     rows: [
       { label: "Validation", value: validationMessages.join("; ") || "ready" },
@@ -379,7 +360,7 @@ function projectionDetails(
   }
   const validationMessages = antennaProjectionValidationMessages(projection, scene);
   return {
-    title: `Antenna projection ${projection.id}`,
+    title: "Target projection",
     badge: validationMessages.length > 0 ? "invalid · result pending" : "configured · result pending",
     rows: [
       { label: "Validation", value: validationMessages.join("; ") || "ready" },
@@ -556,11 +537,13 @@ function antennaSpectrumValidationMessages(
     messages.push(`unsupported spectrum component '${request.component}'`);
   }
   if (request.component === "transverse") {
-    if (!request.equilibrium_ref?.trim()) {
+    if (!request.equilibrium_ref) {
       messages.push("transverse spectrum requires equilibrium_ref");
-    } else {
-      messages.push("transverse spectrum is unsupported until equilibrium projection is implemented");
+    } else if (!antennaEquilibriumReferenceIsValid(request.equilibrium_ref)) {
+      messages.push("transverse spectrum requires a valid equilibrium_ref");
     }
+  } else if (request.equilibrium_ref !== null && request.equilibrium_ref !== undefined) {
+    messages.push("equilibrium_ref is only valid for transverse spectrum");
   }
   if (request.mode_basis_ref !== null && request.mode_basis_ref !== undefined) {
     messages.push(request.mode_basis_ref.trim()
@@ -592,7 +575,7 @@ function driveDetails(
       { label: "Projection", value: drive.projection_ref, mono: true },
       { label: "Peak current", value: numberValue(drive.peak_current_a, "A") },
       { label: "Waveform", value: waveformValue(drive.waveform) },
-      { label: "Declared bandwidth", value: antennaWaveformBandwidthValue(drive.bandwidth_declaration) },
+      { label: "Declared bandwidth", value: drive.bandwidth_declaration && Number.isFinite(drive.bandwidth_declaration.f_max_hz) ? numberValue(drive.bandwidth_declaration.f_max_hz, "Hz") : antennaWaveformBandwidthValue(drive.bandwidth_declaration) },
       { label: "Time origin", value: drive.time_origin },
       { label: "Activation", value: activationValue(drive.activation) },
       { label: "Publication", value: "Drive is configured but no qualified target projection is published." },
@@ -622,7 +605,7 @@ function spectrumDetails(
       { label: "Solve stage", value: request.solution_ref.stage_id, mono: true },
       { label: "Transform", value: request.transform },
       { label: "Component", value: request.component },
-      { label: "Equilibrium", value: request.equilibrium_ref || "none", mono: true },
+      { label: "Equilibrium", value: antennaEquilibriumReferenceValue(request.equilibrium_ref), mono: true },
       { label: "Modal basis", value: request.mode_basis_ref || "none", mono: true },
       { label: "Target", value: targetValue(request.target) },
       { label: "Plane", value: `${plane.sample_count_u} × ${plane.sample_count_v}, ${plane.interpolation}` },
@@ -685,6 +668,7 @@ function runtimeBadge(
     case "error":
       return "result error";
     case "identity mismatch":
+    case "configuration mismatch — recompute spectrum":
       return "stale result";
     default:
       return baseBadge;
@@ -740,8 +724,9 @@ function sourceSpectrumRuntimeRows(
 ): DetailRow[] {
   const data = result.data;
   const rows: DetailRow[] = [{ label: "Runtime result", value: verifiedStatus }];
-  if (result.error) {
-    rows.push({ label: "Runtime error", value: result.error.message });
+  const error = result.error ?? result.refreshError;
+  if (error) {
+    rows.push({ label: "Runtime error", value: error.message });
   }
   if (!data || verifiedStatus !== "ready") return rows;
   rows.push(
@@ -749,7 +734,7 @@ function sourceSpectrumRuntimeRows(
     { label: "Content digest", value: data.content_digest, mono: true },
     { label: "Quantity", value: `${data.quantity} / ${data.component}` },
     { label: "Field signature", value: data.field_signature, mono: true },
-    { label: "k-grid", value: `${data.k_u_count} × ${data.k_v_count}` },
+    { label: "Published k-grid", value: `${data.k_u_count} × ${data.k_v_count}` },
     {
       label: "Amplitude samples",
       value: `${data.amplitude_count} · ${data.amplitude_unit}`,
@@ -774,8 +759,9 @@ function stageOutputCatalogRuntimeRows(
   const status = runtimeStatus(stageId, result);
   const data = result.data;
   const rows: DetailRow[] = [{ label: "Stage catalog result", value: status }];
-  if (result.error) {
-    rows.push({ label: "Stage catalog error", value: result.error.message });
+  const error = result.error ?? result.refreshError;
+  if (error) {
+    rows.push({ label: "Stage catalog error", value: error.message });
   }
   if (!data) return rows;
   rows.push(
@@ -833,12 +819,12 @@ function enrichRuntimeModel(
   const rows = [...model.rows];
 
   if (ids.stageId) {
-    rows.push(...stageOutputCatalogRuntimeRows(ids.stageId, stageOutputCatalog));
+    rows.push(...stageOutputCatalogRuntimeRows(ids.stageId, stageOutputCatalog).map(row => ({ ...row, section: "runtime" as const })));
   }
 
   if (kind === "solution") {
     const currentStatus = model.badge.startsWith("invalid") ? "authoring invalid" : fieldStatus;
-    rows.push(...fieldSolutionRuntimeRows(fieldSolution, currentStatus));
+    rows.push(...fieldSolutionRuntimeRows(fieldSolution, currentStatus).map(row => ({ ...row, section: "runtime" as const })));
     return {
       ...model,
       badge: currentStatus === "authoring invalid" ? model.badge : runtimeBadge(model.badge, fieldStatus),
@@ -847,15 +833,16 @@ function enrichRuntimeModel(
   }
   if (kind === "spectrum") {
     const spectrumStatus = antennaSpectrumIdentityStatus(ids, sourceSpectrum, stageOutputCatalog);
-    rows.push(...sourceSpectrumRuntimeRows(sourceSpectrum, spectrumStatus));
+    const currentStatus = model.badge.startsWith("invalid") ? "authoring invalid" : spectrumStatus;
+    rows.push(...sourceSpectrumRuntimeRows(sourceSpectrum, currentStatus).map(row => ({ ...row, section: "runtime" as const })));
     return {
       ...model,
-      badge: runtimeBadge(model.badge, spectrumStatus),
+      badge: currentStatus === "authoring invalid" ? model.badge : runtimeBadge(model.badge, spectrumStatus),
       rows,
     };
   }
   if (kind === "projection" || kind === "drive") {
-    rows.push({ label: "Field solution result", value: fieldStatus });
+    rows.push({ label: "Field solution result", value: fieldStatus, section: "runtime" });
     if (fieldSolution.data && fieldStatus === "ready") {
       rows.push({
         label: "Published field digest",
@@ -875,11 +862,18 @@ export function AntennaCompositionPanel({
   kind,
   selection,
 }: InspectorPanelProps & { kind: AntennaCompositionKind }) {
+  const kernel = useKernel();
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const scope = sessionRequestScopeKey(useSessionResourceIdentity());
   const scene = useSceneResource();
   const objectId = selectedObjectId(selection);
   const resourceId = selectedResourceId(selection);
   const selectedKind = selectedResourceKind(selection) ?? kind;
-  const ids = resolveAntennaRuntimeIds(selectedKind, resourceId, scene.data);
+  const selectionOwned = Boolean(scene.data && objectId &&
+    scene.data.objects?.filter(object => object.id === objectId).length === 1 &&
+    selectedKind === kind && (kind === "conductor" ||
+      resourceId && antennaResourceOwner(scene.data, kind, resourceId) === objectId));
+  const ids = resolveAntennaRuntimeIds(selectedKind, resourceId, selectionOwned ? scene.data : null);
   const fieldSolution = useAntennaFieldSolutionResource(ids.solutionId, {
     enabled:
       kind === "solution" ||
@@ -905,9 +899,45 @@ export function AntennaCompositionPanel({
     sourceSpectrum,
   );
 
+  const conductorLinks = kind === "conductor" && scene.data ? antennaNavigationLinks(scene.data, selection) : [];
+  const navigationAvailable = scene.status === "ready" && Boolean(scope) && scene.sessionScopeKey === scope && !scene.error && !scene.refreshError;
+  function openConductorResource(key: "geometry" | "mesh") {
+    const current = antennaNavigationScene(kernel, scope);
+    const target = current ? antennaNavigationLinks(current, selection).find(link => link.key === key) : null;
+    if (!target?.selection) {
+      setNavigationError("The conductor resource changed or is unavailable. Refresh the Inspector before navigating.");
+      return;
+    }
+    setNavigationError(null);
+    kernel.selection.set(target.selection, "inspector");
+  }
+
+  if (!selectionOwned) return <div className="fm-inspector-panel">
+    <InspectorGroup title="Antenna resource unavailable">
+      {!scene.data && !scene.error ? <p role="status">Loading antenna resource…</p> :
+        <FeedbackBanner kind={scene.error ? "error" : "warning"} message={scene.error?.message ?? "The selected antenna resource or its source binding changed, is missing or is ambiguous. Select the resource again in Explorer."} />}
+    </InspectorGroup>
+  </div>;
+
   return (
-    <div className="fm-inspector-panel">
-      {kind === "conductor" ? <AntennaConductorDetails objectId={objectId} scene={scene.data} /> : <InspectorGroup title={model.title} badge={model.badge}>
+    <div className="fm-inspector-panel" data-inspector-owner={kind === "conductor" ? "object.antenna.conductor" : undefined}>
+      {kind !== "conductor" ? <AntennaRelatedResources key={JSON.stringify(["related", scope, kind, resourceId])} scene={scene.data} selection={selection} scope={scope} available={scene.status === "ready" && scene.sessionScopeKey === scope && Boolean(scope)} /> : null}
+      {kind === "spectrum" ? <InspectorGroup title={model.title} badge={model.badge}>
+        {model.rows.filter(row => ["Validation", "Runtime result", "Runtime error", "Stage catalog error"].includes(row.label)).map(row => <FieldRow key={row.label} label={row.label} value={row.value} />)}
+        <p className="fm-inspector-hint">Spatial spectrum of the antenna source field. Magnetic response and excited modes require separate analysis.</p>
+      </InspectorGroup> : null}
+      {kind === "spectrum" &&
+      ids.spectrumOutputId &&
+      model.badge === "ready" &&
+      antennaSpectrumIdentityStatus(ids, sourceSpectrum, stageOutputCatalog) === "ready" &&
+      sourceSpectrum.data?.payloads ? (
+        <AntennaSourceSpectrumPayloadView
+          outputId={ids.spectrumOutputId}
+          spectrum={sourceSpectrum.data}
+          expectedKGrid={ids.spectrumRequest?.nonuniform_k_grid}
+        />
+      ) : null}
+      {kind === "conductor" ? <AntennaConductorDetails objectId={objectId} scene={scene.data} /> : kind !== "spectrum" ? <AntennaCompositionReadout key={JSON.stringify([scope, kind, resourceId])} title={model.title} badge={model.badge} rows={model.rows} /> : <InspectorGroup title="Configuration and provenance" badge={model.badge} collapsible defaultOpen={false}>
         {model.rows.map((row) => (
           <FieldRow
             key={row.label}
@@ -926,11 +956,19 @@ export function AntennaCompositionPanel({
           />
         ) : null}
       </InspectorGroup>}
-      {kind === "conductor" && objectId ? <MicrostripGeometryEditor objectId={objectId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
-      {kind === "conductor" && objectId ? <AntennaPlacementEditor objectId={objectId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
-      {kind === "port" && objectId && resourceId ? <AntennaPortEditor objectId={objectId} portId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
-      {kind === "solution" && objectId && resourceId ? <AntennaSolveTargetsEditor key={`targets:${objectId}:${resourceId}`} objectId={objectId} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
-      {kind === "solution" && objectId && resourceId ? <AntennaStudyStageComposer objectId={objectId} stageId={resourceId} scene={scene.data} status={scene.status} /> : null}
+      {kind === "conductor" && objectId ? <>
+        <AntennaConductorAuthoring objectId={objectId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} />
+        <p className="fm-inspector-hint">Layout conductivity is an authored geometry value. Charge-material assignments above describe the current model; this view does not certify a solve.</p>
+        {navigationError ? <FeedbackBanner kind="warning" message={navigationError} /> : null}
+        <Button type="button" disabled={!navigationAvailable || !conductorLinks.find(link => link.key === "geometry")?.selection} onClick={() => openConductorResource("geometry")}>Open Geometry</Button>
+        <InspectorGroup title="Conductor mesh" badge="policy and build evidence">
+          <p className="fm-inspector-hint">Configure object sizing and inspect build reports in Mesh. Saving a policy does not build a mesh; antenna field solutions carry their own mesh and source identity.</p>
+          <Button type="button" disabled={!navigationAvailable || !conductorLinks.find(link => link.key === "mesh")?.selection} onClick={() => openConductorResource("mesh")}>Open Mesh Policy</Button>
+        </InspectorGroup>
+      </> : null}
+      {kind === "port" && objectId && resourceId ? <AntennaPortEditor objectId={objectId} portId={resourceId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} /> : null}
+      {kind === "solution" && objectId && resourceId ? <AntennaFieldSolveAuthoring key={`authoring:${objectId}:${resourceId}`} objectId={objectId} stageId={resourceId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} /> : null}
+      {kind === "solution" && objectId && resourceId ? <AntennaStudyStageComposer objectId={objectId} stageId={resourceId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} /> : null}
       {kind === "solution" && ids.stageId ? <AntennaExternalLeadInspectionPanel authoredStageId={ids.stageId} /> : null}
       {kind === "solution" && fieldSolution.data &&
       model.badge === "ready" &&
@@ -940,17 +978,9 @@ export function AntennaCompositionPanel({
           solution={fieldSolution.data}
         />
       ) : null}
-      {kind === "solution" && resourceId ? <AntennaProjectionDriveComposer key={`projection:${resourceId}`} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
-      {kind === "solution" && resourceId ? <AntennaSpectrumComposer key={`spectrum:${resourceId}`} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
-      {kind === "drive" && resourceId ? <SolvedAntennaDriveEditor driveId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
-      {kind === "spectrum" &&
-      ids.spectrumOutputId &&
-      sourceSpectrum.data?.payloads ? (
-        <AntennaSourceSpectrumPayloadView
-          outputId={ids.spectrumOutputId}
-          spectrum={sourceSpectrum.data}
-        />
-      ) : null}
+      {(kind === "port" || kind === "projection" || kind === "spectrum") && resourceId ? <AntennaResourceEditor kind={kind} resourceId={resourceId} removeOnly={kind === "port"} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} /> : null}
+      {kind === "drive" && resourceId ? <SolvedAntennaDriveEditor driveId={resourceId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} /> : null}
+
     </div>
   );
 }

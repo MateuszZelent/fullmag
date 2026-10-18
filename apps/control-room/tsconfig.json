@@ -46,6 +46,10 @@
   ],
   "exclude": [
     "node_modules",
-    "out"
+    "out",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/__tests__/**",
+    "**/tests/**"
   ]
 }

@@ -264,12 +264,11 @@ physical target; lane status must be read from the canonical DMI realization pag
 
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
 
 ## Python/API crosswalk
 
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
-ot applicable here and must be taken from the terminal API page.
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
 
 ## Bibliography and source scope
 
@@ -279,9 +278,9 @@ Use the scientific bibliography and source-code index on the linked terminal pag
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
-| Interfacial DMI API | packages/fullmag-py/src/fullmag/model/energy.py | class InterfacialDMI | coefficient and normal validation | Python |
-| Bulk DMI API | packages/fullmag-py/src/fullmag/model/energy.py | class BulkDMI | coefficient validation and IR | Python |
-| Interfacial FEM residual | backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp | compute_interfacial_dmi_field | FEM field realization | FEM CPU |
-| Bulk FEM residual | backends/fem/cpu/mfem/interactions/dmi_bulk.cpp | compute_bulk_dmi_field | FEM field realization | FEM CPU |
-| GPU DMI projection and energy | backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu | fullmag_cuda_dmi_field_energy | CUDA field/energy path | FEM GPU |
-| FDM layered DMI launch | backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu | launch_multilayer_dmi_field_fp64 | CUDA layered DMI path | FDM GPU |
+| Interfacial DMI API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | [`class InterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | coefficient and normal validation | Python |
+| Bulk DMI API | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | [`class BulkDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | coefficient validation and IR | Python |
+| Interfacial FEM residual | [`backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) | [`compute_interfacial_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp#L29) | FEM field realization | FEM CPU |
+| Bulk FEM residual | [`backends/fem/cpu/mfem/interactions/dmi_bulk.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L27) | [`compute_bulk_dmi_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp#L27) | FEM field realization | FEM CPU |
+| GPU DMI projection and energy | [`backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L448) | [`fullmag_cuda_dmi_field_energy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L448) | CUDA field/energy path | FEM GPU |
+| FDM layered DMI launch | [`backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu#L437) | [`launch_multilayer_dmi_field_fp64`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu#L437) | CUDA layered DMI path | FDM GPU |

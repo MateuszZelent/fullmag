@@ -146,6 +146,7 @@ pub enum DriveActivationIR {
 pub enum StudyKindIR {
     #[default]
     Unknown,
+    FieldOnly,
     AntennaFieldSolve,
     TimeEvolution,
     Relaxation,
@@ -1616,6 +1617,9 @@ pub struct AntennaFieldSolveSelectionIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StudyIR {
+    FieldOnly {
+        sampling: SamplingIR,
+    },
     AntennaFieldSolve {
         sampling: SamplingIR,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1746,6 +1750,7 @@ impl StudyIR {
     /// plans and activation checks.
     pub const fn kind(&self) -> StudyKindIR {
         match self {
+            Self::FieldOnly { .. } => StudyKindIR::FieldOnly,
             Self::AntennaFieldSolve { .. } => StudyKindIR::AntennaFieldSolve,
             Self::TimeEvolution { .. } => StudyKindIR::TimeEvolution,
             Self::Relaxation { .. } => StudyKindIR::Relaxation,
@@ -1768,12 +1773,14 @@ impl StudyIR {
             | StudyIR::FrequencyResponse { dynamics, .. } => Some(dynamics),
             StudyIR::Relaxation { dynamics, .. } => dynamics.as_ref(),
             StudyIR::Hysteresis { .. } => Some(get_default_dynamics()),
+            StudyIR::FieldOnly { .. } => None,
         }
     }
 
     pub fn sampling(&self) -> &SamplingIR {
         match self {
-            StudyIR::AntennaFieldSolve { sampling, .. }
+            StudyIR::FieldOnly { sampling }
+            | StudyIR::AntennaFieldSolve { sampling, .. }
             | StudyIR::TimeEvolution { sampling, .. }
             | StudyIR::Relaxation { sampling, .. }
             | StudyIR::Eigenmodes { sampling, .. }
@@ -1784,7 +1791,8 @@ impl StudyIR {
 
     pub fn sampling_mut(&mut self) -> &mut SamplingIR {
         match self {
-            StudyIR::AntennaFieldSolve { sampling, .. }
+            StudyIR::FieldOnly { sampling }
+            | StudyIR::AntennaFieldSolve { sampling, .. }
             | StudyIR::TimeEvolution { sampling, .. }
             | StudyIR::Relaxation { sampling, .. }
             | StudyIR::Eigenmodes { sampling, .. }
@@ -1795,7 +1803,8 @@ impl StudyIR {
 
     pub fn relaxation(&self) -> Option<RelaxationControlIR> {
         match self {
-            StudyIR::AntennaFieldSolve { .. }
+            StudyIR::FieldOnly { .. }
+            | StudyIR::AntennaFieldSolve { .. }
             | StudyIR::TimeEvolution { .. }
             | StudyIR::Eigenmodes { .. }
             | StudyIR::FrequencyResponse { .. }

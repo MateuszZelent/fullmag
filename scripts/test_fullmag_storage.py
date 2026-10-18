@@ -3,6 +3,7 @@
 import json
 import errno
 import hashlib
+import io
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,20 @@ import fullmag_storage as storage
 
 
 class StorageTests(unittest.TestCase):
+    def test_logged_command_preserves_unicode_log_with_legacy_console(self):
+        payload = "\u2009WARN\u2009 dependencies\n".encode("utf-8")
+        log_path = self.project / "compiler.log"
+        console_bytes = io.BytesIO()
+        console = io.TextIOWrapper(console_bytes, encoding="cp1252", errors="strict")
+        command = [sys.executable, "-B", "-c",
+                   f"import sys; sys.stdout.buffer.write({payload!r}); sys.stdout.buffer.flush()"]
+        with patch.object(sys, "stdout", console):
+            result = storage._run_logged_command(command, self.repo, dict(os.environ), log_path)
+        console.flush()
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(log_path.read_bytes(), payload)
+        self.assertIn(b"\\u2009WARN\\u2009", console_bytes.getvalue())
+
     def setUp(self):
         isolated_env = {key: value for key, value in os.environ.items() if key not in storage.MANAGED_VARIABLES}
         environment = patch.dict(os.environ, isolated_env, clear=True)
@@ -38,8 +53,10 @@ class StorageTests(unittest.TestCase):
 
     def test_storage_uses_canonical_project_root_and_is_stable(self):
         layout = self.resolve()
-        expected_root = (self.repo if os.name == "nt" else self.project) / "storage"
+        expected_root = self.project / "storage"
         self.assertEqual(Path(layout["storage_root"]), expected_root)
+        self.assertEqual(Path(layout["project_root"]), self.project)
+        self.assertEqual(Path(layout["worktrees_root"]), self.project / "worktrees")
         self.assertEqual(layout, self.resolve())
         self.assertFalse(expected_root.exists())
 
@@ -48,12 +65,60 @@ class StorageTests(unittest.TestCase):
         expected_target = "/fullmag-frontend" if os.name == "nt" else layout["frontend_root"]
         self.assertEqual(layout["env"]["FULLMAG_FRONTEND_CONTAINER_ROOT"], expected_target)
 
-    def test_windows_canonical_storage_override_is_allowed(self):
+    def test_windows_checkout_storage_override_is_rejected(self):
         if os.name != "nt":
-            self.skipTest("Windows canonical checkout storage contract")
+            self.skipTest("Windows checkout storage boundary")
         self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.repo / "storage")
-        layout = self.resolve(profile="windows-native")
-        self.assertEqual(Path(layout["storage_root"]), self.repo / "storage")
+        with self.assertRaises(storage.StorageError):
+            self.resolve(profile="windows-native")
+        self.assertFalse((self.repo / "storage").exists())
+
+    def test_registered_main_checkout_storage_is_explicit_and_shared(self):
+        custom = self.repo / "storage"
+        custom.mkdir()
+        (custom / ".fullmag-storage.json").write_text(json.dumps({
+            "schema": storage.SCHEMA, "project_root": str(self.project)}))
+        self.assertEqual(Path(self.resolve()["storage_root"]), self.project / "storage")
+        (self.repo / ".env").write_text(f'FULLMAG_PROJECT_STORAGE_ROOT="{custom}"\n')
+        main = self.resolve()
+        self.assertEqual(Path(main["storage_root"]), custom)
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
+                        "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
+        worktree = self.project / "worktrees" / "task"
+        subprocess.run(["git", "-C", str(self.repo), "worktree", "add", "--quiet", "--detach", str(worktree)], check=True)
+        other = storage.resolve_layout(worktree, profile="test", environ={})
+        self.assertEqual(other["storage_root"], main["storage_root"])
+        self.assertNotEqual(other["build_root"], main["build_root"])
+
+    def test_main_checkout_storage_rejects_foreign_marker(self):
+        custom = self.repo / "storage"
+        custom.mkdir()
+        (custom / ".fullmag-storage.json").write_text(json.dumps({
+            "schema": storage.SCHEMA, "project_root": str(self.project / "foreign")}))
+        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(custom)
+        with self.assertRaises(storage.StorageError):
+            self.resolve()
+
+    def test_registered_other_checkout_descendant_is_rejected(self):
+        for relative in ("other-storage", "nested/storage", "storage/nested"):
+            custom = self.repo / relative
+            custom.mkdir(parents=True, exist_ok=True)
+            (custom / ".fullmag-storage.json").write_text(json.dumps({
+                "schema": storage.SCHEMA, "project_root": str(self.project)}))
+            self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(custom)
+            with self.subTest(path=relative), self.assertRaises(storage.StorageError):
+                self.resolve()
+
+    def test_registered_main_storage_cannot_contain_additional_worktree(self):
+        custom = self.repo / "storage"
+        custom.mkdir()
+        (custom / ".fullmag-storage.json").write_text(json.dumps({
+            "schema": storage.SCHEMA, "project_root": str(self.project)}))
+        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(custom)
+        records = [{"worktree": str(self.repo)}, {"worktree": str(custom / "task")}]
+        with patch.object(storage, "worktree_records", return_value=records):
+            with self.assertRaises(storage.StorageError):
+                self.resolve()
 
     def test_inventory_ignores_non_registration_json_arrays(self):
         layout = self.resolve()
@@ -65,7 +130,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result["worktree_count"], 1)
 
     def test_dotenv_storage_root_and_process_precedence(self):
-        project_root = self.repo if os.name == "nt" else self.project
+        project_root = self.project
         custom = self.project / "configured-storage"
         custom.mkdir()
         (custom / ".fullmag-storage.json").write_text(json.dumps({
@@ -82,6 +147,28 @@ class StorageTests(unittest.TestCase):
         with self.assertRaises(storage.StorageError):
             self.resolve()
 
+    def test_dotenv_rejects_duplicate_managed_keys_and_reparse_points(self):
+        dotenv = self.repo / ".env"
+        dotenv.write_text(
+            "FULLMAG_PROJECT_STORAGE_ROOT=/one\n"
+            "FULLMAG_PROJECT_STORAGE_ROOT=/two\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(storage.StorageError):
+            storage.storage_dotenv(self.repo)
+
+        dotenv.unlink()
+        external = self.project / "external.env"
+        external.write_text("FULLMAG_PROJECT_STORAGE_ROOT=/outside\n", encoding="utf-8")
+        try:
+            dotenv.symlink_to(external)
+        except OSError as error:
+            if os.name == "nt":
+                self.skipTest(f"Host cannot create a symlink: {error}")
+            raise
+        with self.assertRaises(storage.StorageError):
+            storage.storage_dotenv(self.repo)
+
     def test_nested_worktree_uses_common_project_and_isolated_build(self):
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
                         "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
@@ -93,7 +180,7 @@ class StorageTests(unittest.TestCase):
         self.assertNotEqual(main["build_root"], other["build_root"])
 
     def test_worktree_reads_main_dotenv_without_local_copy(self):
-        project_root = self.repo if os.name == "nt" else self.project
+        project_root = self.project
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
                         "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
         worktree = self.project / "worktrees" / "task"

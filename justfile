@@ -23,6 +23,62 @@ help:
 storage-info:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" resolve --repo-root "{{repo_root}}" --format json
 
+# Build the dependency toolchain for direct Compose development, without enrollment.
+docker-dev-toolchain:
+    @{{storage_python}} "{{repo_root}}/scripts/bootstrap_docker_toolchain.py" --repo-root "{{repo_root}}" --direct-development
+
+# Direct two-service development: the persistent backend checks/builds source at every start.
+# The source parameter selects the main checkout or a registered worktree.
+docker-dev source_root="" port="3197" script="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up --port {{quote(port)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if script == "" { "" } else { "--script " + quote(script) }}}
+
+# Controlled recreation of one terminal failed direct-development run.  The
+# receipt and config digest are mandatory; this is not unknown-owner recovery.
+docker-dev-recreate run_receipt previous_config_sha256 source_root="" port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate --direct-development --run-receipt {{quote(run_receipt)}} --previous-config-sha256 {{quote(previous_config_sha256)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} --port {{quote(port)}}
+
+# Explicit operator-only recovery of a consumed worker permit after namespace teardown.
+# The pinned request never retries Solve; unknown outcome and history are retained.
+docker-dev-recover-orphan pins target_container project diagnostics_root resume_before_stop="false":
+    @{{storage_python}} "{{repo_root}}/scripts/recover_docker_orphan.py" --pins {{quote(pins)}} --target-container {{quote(target_container)}} --project {{quote(project)}} --diagnostics-root {{quote(diagnostics_root)}} {{if resume_before_stop == "true" { "--resume-before-stop" } else if resume_before_stop == "false" { "" } else { error("resume_before_stop must be true or false") }}}
+
+# Compatibility start alias: starts both fixed services; use backend restart for iteration.
+docker-dev-build source_root="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" build {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}
+
+# Submit a clean commit to the shared runner using independent source copies.
+docker-all-build commit:
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" submit --commit {{quote(commit)}}
+
+# Assemble a complete offline GPU image from a verified managed release.
+docker-all-image job_id commit:
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" build-image --job-id {{quote(job_id)}} --commit {{quote(commit)}}
+
+docker-all-start assembly_receipt port="3197" source_root="" startup_script="":
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" start --assembly-receipt {{quote(assembly_receipt)}} --port {{quote(port)}}{{if source_root == "" { "" } else { " --source-root " + quote(source_root) }}}{{if startup_script == "" { "" } else { " --startup-script " + quote(startup_script) }}}
+
+# Live source defaults to the Git main checkout; source_root can select a worktree.
+docker-all-dev assembly_receipt port="3197" source_root="" startup_script="":
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" start --assembly-receipt {{quote(assembly_receipt)}} --port {{quote(port)}} --frontend 'dev'{{if source_root == "" { "" } else { " --source-root " + quote(source_root) }}}{{if startup_script == "" { "" } else { " --startup-script " + quote(startup_script) }}}
+
+# Explicit immutable snapshot of the selected checkout; no restart.
+docker-all-dev-backend-build source_root="":
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" submit-development {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}
+
+docker-all-dev-image job_id commit source_digest="" native_snapshot_sha256="" source_root="":
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_docker_runtime.py" --repo-root "{{repo_root}}" build-image --job-id {{quote(job_id)}} --commit {{quote(commit)}} --development {{if (source_digest + native_snapshot_sha256) == "" { "" } else { "--source-digest " + quote(source_digest) + " --native-snapshot-sha256 " + quote(native_snapshot_sha256) }}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}
+
+# Fixed GPU execution and FMS round-trip; never build or restart a runtime.
+docker-all-verify run_receipt:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_docker_all_runtime.py" --repo-root "{{repo_root}}" {{quote(run_receipt)}}
+
+# Bootstrap only the pinned FEM/GPU dependency image on a fresh Windows host.
+# The helper owns storage initialization, the global heavy lock, and its
+# enrolled-runner admission; this route must not run generic compatibility
+# preparation first.
+docker-all-toolchain-bootstrap:
+    @{{storage_python}} "{{justfile_directory()}}/scripts/bootstrap_docker_toolchain.py" --repo-root "{{justfile_directory()}}"
+
 storage-inventory:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" inventory --repo-root "{{repo_root}}" --format json
 
@@ -34,6 +90,10 @@ run-managed-browser job_id commit port="3104":
 run-managed-browser-snapshot job_id commit source_digest native_snapshot_sha256 port="3104":
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --port {{quote(port)}}
 
+# Real workspace on a private tmpfs session; retained launch evidence, no build.
+run-managed-browser-snapshot-ram job_id commit source_digest native_snapshot_sha256 port="3106":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --port {{quote(port)}} --ephemeral
+
 # Approved scientific fixture only: RAM session, retained export, no build.
 run-managed-antenna-ram job_id commit source_digest native_snapshot_sha256:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}}
@@ -41,13 +101,12 @@ run-managed-antenna-ram job_id commit source_digest native_snapshot_sha256:
 observe-managed-antenna-ram run_root:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" observe --run-root {{quote(run_root)}}
 
+# Real API publication/read-back: fixed CPU fixture, loopback-only RAM session.
+run-managed-antenna-http-ram job_id commit source_digest native_snapshot_sha256 fixture="magnetic":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_http_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --fixture {{quote(fixture)}}
 # Same pinned current input, but no magnetic probe physics or LLG scaffold.
 run-managed-antenna-standalone-ram job_id commit source_digest native_snapshot_sha256:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --standalone
-
-# Real API publication/read-back: fixed CPU fixture, loopback-only RAM session.
-run-managed-antenna-http-ram job_id commit source_digest native_snapshot_sha256:
-    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_http_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}}
 
 # Explicit archive round-trip gate in the same disposable RAM ownership boundary.
 run-managed-antenna-cold-http-ram job_id commit source_digest native_snapshot_sha256:
@@ -60,6 +119,17 @@ run-managed-antenna-standalone-cold-http-ram job_id commit source_digest native_
 observe-managed-antenna-http-ram run_root:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_http_ram.py" --repo-root "{{repo_root}}" observe --run-root {{quote(run_root)}}
 
+# No-build public accepted full-3D inspection from a pinned managed capsule.
+verify-api-accepted-closed-loop-runtime request request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/launch_accepted_closed_loop_runtime.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}
+
+# Fixed public FEM transport oracle from an already verified CPU package.
+run-managed-transport-oracles job_id commit source_digest native_snapshot_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_transport_oracles.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}}
+
+observe-managed-transport-oracles run_root:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_transport_oracles.py" --repo-root "{{repo_root}}" observe --run-root {{quote(run_root)}}
+
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 
@@ -70,8 +140,20 @@ runner-image:
 runner-build-image toolchain_image tag="fullmag/local-runner-build:development" cpu_mfem="0" network="none":
     docker --context desktop-linux build --network {{quote(network)}} --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} --build-arg CPU_MFEM_ONLY={{quote(cpu_mfem)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
 
+# Diagnostic legacy producer; use the frozen recipes for deployment evidence.
 runner-coordinator-image:
     docker --context desktop-linux build --network none --pull=false -f scripts/local_runner/Dockerfile.coordinator -t fullmag/build-runner:development scripts
+
+# Explicit network download of only the pinned coordinator base.
+runner-coordinator-base:
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner/coordinator_image.py" provision-base --repo-root {{quote(repo_root)}}
+
+# Freeze an explicit committed coordinator source without changing the operator.
+runner-coordinator-context ref:
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner/coordinator_image.py" prepare-image-context --repo-root {{quote(repo_root)}} --source commit --ref {{quote(ref)}}
+
+runner-coordinator-image-frozen context context_sha256 tag:
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner/coordinator_image.py" build-image --repo-root {{quote(repo_root)}} --context {{quote(context)}} --context-sha256 {{quote(context_sha256)}} --tag {{quote(tag)}}
 
 runner-container-configure image_id:
     {{storage_python}} scripts/local_runner_cli.py container-configure --image-id {{quote(image_id)}}
@@ -125,8 +207,41 @@ runner-once:
     {{storage_python}} scripts/local_runner_cli.py run-once
 
 # Build catalogue: immutable source selection, no user-supplied shell command.
-runner-build mode profile="fem-cpu-release" ref="":
-    {{storage_python}} scripts/local_runner_cli.py submit --operation build --profile {{quote(profile)}} --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
+runner-build mode profile="fem-cpu-release" ref="" untracked_manifest="":
+    {{storage_python}} scripts/local_runner_cli.py submit --operation build --profile {{quote(profile)}} --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}} {{if untracked_manifest == "" { "" } else { "--include-untracked-from " + quote(untracked_manifest) }}}
+
+# Offline external-reference image provisioning; native compilation uses the queue.
+runner-boris-toolchain-context bundle wheel_bundle base_image:
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner/boris_toolchain.py" prepare-image-context --repo-root {{quote(repo_root)}} --bundle {{quote(bundle)}} --wheel-bundle {{quote(wheel_bundle)}} --base-image {{quote(base_image)}}
+
+runner-boris-toolchain-image context tag:
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner/boris_toolchain.py" build-image --repo-root {{quote(repo_root)}} --context {{quote(context)}} --tag {{quote(tag)}}
+
+# Capture clean pinned BORIS sources under resolver-owned storage; no build.
+runner-boris-image-context boris_source toolchain_image toolchain_proof toolchain_context toolchain_container:
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner/boris_cpu.py" prepare-image-context --repo-root {{quote(repo_root)}} --boris-source {{quote(boris_source)}} --toolchain-image {{quote(toolchain_image)}} --toolchain-proof {{quote(toolchain_proof)}} --toolchain-context {{quote(toolchain_context)}} --toolchain-container {{quote(toolchain_container)}}
+
+# This provisions source bytes only; solver compilation uses runner-boris-build.
+runner-boris-image context tag:
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner/boris_cpu.py" build-image --repo-root {{quote(repo_root)}} --context {{quote(context)}} --tag {{quote(tag)}}
+
+# External CPU reference uses the same single heavy-build queue after opt-in.
+runner-boris-build mode ref="":
+    @{{storage_python}} "{{repo_root}}/scripts/local_runner_cli.py" submit --operation build --profile boris-cpu-v1 --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
+
+# Fixed external CPU reference run from a successful receipt; no build/install.
+run-managed-boris-nf job_id resolution:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_boris_nf.py" --repo-root {{quote(repo_root)}} start --job-id {{quote(job_id)}} --resolution {{quote(resolution)}}
+
+observe-managed-boris-nf runtime_id:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_boris_nf.py" --repo-root {{quote(repo_root)}} observe --runtime-id {{quote(runtime_id)}}
+
+# Separate runtime-tools provenance; reuses an immutable successful BORIS build.
+run-managed-boris-nf-v2 job_id resolution:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_boris_nf_v2.py" --repo-root {{quote(repo_root)}} run --job-id {{quote(job_id)}} --resolution {{quote(resolution)}}
+
+observe-managed-boris-nf-v2 runtime_id:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_boris_nf_v2.py" --repo-root {{quote(repo_root)}} observe --runtime-id {{quote(runtime_id)}}
 
 # Consume one completed managed CPU/SLEPc build; this recipe never builds an
 # image or native target and writes only a new run below canonical storage.
@@ -210,14 +325,6 @@ windows-backend-dev web_port="3197":
 verify-windows-development-handoff:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_handoff.py" --repo-root "{{repo_root}}"
 
-# Observe the development resource in an owned empty API; no unit compilation.
-verify-windows-development-backend-api cross_build_bundle="":
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --cross-build-bundle "{{cross_build_bundle}}"
-
-# Explicit frozen native package gate, pinned to the completed manifest digest.
-verify-windows-frozen-development-backend-api build_id:
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --frozen-native-build-id "{{build_id}}"
-
 # Owned HTTP cancellation protocol proof, pinned to a verified native package.
 # Uses fixture-seeded task catalogs; does not qualify Submit, solver, or host release.
 verify-compute-cancellation-api build_id:
@@ -259,17 +366,9 @@ verify-windows-development-active-run-paused-refusal owner_bundle:
 verify-windows-development-start-freeze-race:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --start-freeze-race-only
 
-# Owned native restart with a real nonempty browser workspace and unsaved draft.
-verify-windows-development-workspace-browser owner_bundle:
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --workspace-browser-owner-bundle "{{owner_bundle}}"
-
 # Real candidate helper faults in owned processes; no API or unit compilation.
 verify-windows-candidate-preparation:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --candidate-preparation-only
-
-# Native request transport proof; no unit-test compilation or user-session restart.
-verify-windows-development-restart-transport:
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-transport-only
 
 # Observe actual runtime-free project archives without compiling unit tests.
 verify-windows-project-document:
@@ -278,6 +377,10 @@ verify-windows-project-document:
 # Bind archive and scene-stage proof to one sealed package despite later checkout edits.
 verify-windows-project-document-frozen build_id:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only --frozen-native-build-id "{{build_id}}"
+
+# Real product workspace and project archive lifecycle without a runtime session.
+verify-windows-project-document-browser build_id:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only --frozen-native-build-id "{{build_id}}" --project-document-browser
 
 # Preserve a verified old API package for an owned subsequent restart proof.
 archive-windows-native-build build_id:
@@ -518,38 +621,20 @@ check-control-room-production-source dependency_workspace="":
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route production-source --repo-root "{{repo_root}}" {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
 # Interpreted Node contract checks in isolated managed fixtures; no unit builds.
+verify-control-room-explorer-physics:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route explorer-physics-reporting-check --repo-root "{{repo_root}}"
+
+verify-control-room-typecheck-cli:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route typecheck-cli-check --repo-root "{{repo_root}}"
+
 verify-control-room-openapi-import:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route openapi-import-check --repo-root "{{repo_root}}"
 
 check-control-room-api-hygiene dependency_workspace="":
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}" {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
-verify-control-room-development-restart:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-check --repo-root "{{repo_root}}"
-
 verify-control-room-resource-client-cache:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route resource-client-cache-check --repo-root "{{repo_root}}"
-
-verify-control-room-development-kernel-host:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-kernel-host-check --repo-root "{{repo_root}}"
-
-verify-control-room-development-transport-pause:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-transport-pause-check --repo-root "{{repo_root}}"
-
-verify-control-room-development-run-outcome-handoff:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-run-outcome-handoff-check --repo-root "{{repo_root}}"
-
-lint-control-room-development-run-outcome-handoff:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-run-outcome-handoff-lint --repo-root "{{repo_root}}"
-
-verify-control-room-development-restart-action:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-action-check --repo-root "{{repo_root}}"
-
-lint-control-room-development-restart-action:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-action-lint --repo-root "{{repo_root}}"
-
-verify-control-room-development-backend-build-action:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-backend-build-action-check --repo-root "{{repo_root}}"
 
 # Actual browser interaction on an isolated managed frontend source snapshot.
 # Responses are fixtures; this is neither a backend runtime nor a solver gate.
@@ -560,26 +645,33 @@ verify-pinned-dataset-browser:
 verify-inspector-routing-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3261 --scenario inspector-routing
 
-# Production project controller in an isolated Next browser fixture; no unit builds.
-verify-project-document-handoff-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3251 --scenario project-document-handoff
-
-verify-development-kernel-host-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario development-kernel-host
-
-verify-development-run-outcome-handoff-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario development-run-outcome-handoff
-
-verify-development-restart-action-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3254 --scenario development-restart-action
-
 # Real Study profile component/facade against controlled HTTP; no solver gate.
 verify-study-execution-profile-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3256 --scenario study-execution-profile
 
+# Full current workspace against an explicitly pinned disposable managed API.
+verify-antenna-workspace-browser dependency_workspace="":
+    @{{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3274 --scenario antenna-workspace-authoring{{if dependency_workspace != "" { ' --dependency-workspace "' + dependency_workspace + '"' } else { "" }}}
+
+# Regional source creation through production Inspectors and controlled HTTP.
+verify-antenna-regional-drive-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3272 --scenario antenna-regional-drive
+
+# Production Explorer tree against controlled scene inputs; no solver or unit builds.
+verify-explorer-physics-reporting-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3259 --scenario explorer-physics-reporting
+
+# Production preparation status, Inspector and viewport; controlled preparation, no solver.
+verify-preparation-workspace-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3268 --scenario preparation-workspace
+
 # Production antenna Inspector and resource hooks in an isolated browser fixture.
-verify-antenna-source-spectrum-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3265 --scenario antenna-source-spectrum
+verify-antenna-source-spectrum-browser dependency_workspace="":
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3265 --scenario antenna-source-spectrum {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
+
+# Immutable artifact carriers through production binary transport and WebGL.
+verify-artifact-field-overlay-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3276 --scenario artifact-field-overlay
 
 verify-antenna-visualization-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3262 --scenario antenna-visualization
@@ -591,9 +683,13 @@ verify-antenna-external-lead-inspection-browser:
 verify-antenna-cpw-viewport-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3260 --scenario antenna-cpw-viewport
 
+# Sampling/targets on a confirmed restored model; no solver or unit build.
+verify-antenna-solve-targets-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3256 --scenario antenna-solve-targets
+
 # Production microstrip/CPW draft transactions in an isolated browser fixture.
-verify-antenna-microstrip-stations-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario antenna-microstrip-stations
+verify-antenna-microstrip-stations-browser dependency_workspace="":
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario antenna-microstrip-stations {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
 verify-antenna-drive-editor-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3265 --scenario antenna-drive-editor
@@ -611,12 +707,13 @@ verify-antenna-port-diagnostics-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3263 --scenario antenna-port-diagnostics
 
 # Production existing-port authoring with delayed scoped HTTP acknowledgements.
-verify-antenna-port-editor-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3264 --scenario antenna-port-editor
+verify-antenna-port-editor-browser dependency_workspace="":
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3264 --scenario antenna-port-editor {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
 # Production primitive color preferences and Object/Airbox Inspector stability.
 verify-primitive-color-inspector-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3257 --scenario primitive-color-inspector
+
 # Actual production Inspector actions against controlled staged/live/read-only sessions.
 verify-inspector-actions-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3257 --scenario inspector-actions
@@ -1114,19 +1211,11 @@ verify-boris-nf-interface:
         PYTHONPATH=scripts python3 scripts/verify_boris_nf_interface.py "$run_dir" --output "$run_dir/validation-rerun.json"; \
       done'
 
-verify-boris-fullmag-she-nf:
-    bash -euo pipefail -c '\
-      boris_root="${FULLMAG_BORIS_BUILD_ROOT:-/zfn2/mateuszz/git/fullmag/boris-build/source}"; \
-      fullmag_bin="${FULLMAG_FULLMAG_BINARY:-{{repo_root}}/.fullmag/local/bin/fullmag}"; \
-      report_root="${FULLMAG_BORIS_FULLMAG_SHE_REPORT_ROOT:-/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-boris-she-nf-v1}"; \
-      case "$boris_root" in /zfn2/mateuszz/git/fullmag/*) ;; *) echo "BORIS build root must be below /zfn2/mateuszz/git/fullmag" >&2; exit 2 ;; esac; \
-      case "$report_root" in /zfn2/mateuszz/git/fullmag/*) ;; *) echo "matrix report root must be below /zfn2/mateuszz/git/fullmag" >&2; exit 2 ;; esac; \
-      test -x "$boris_root/BorisLin"; \
-      test -f "$boris_root/source_manifest.json" || test -f "$boris_root/source-manifest.json"; \
-      test -x "$fullmag_bin"; \
-      if [ -e "$report_root/matrix.json" ]; then echo "matrix report already exists: $report_root/matrix.json" >&2; exit 3; fi; \
-      mkdir -p "$report_root"; \
-      PYTHONPATH="packages/fullmag-py/src:scripts${PYTHONPATH:+:$PYTHONPATH}" python3 scripts/run_boris_fullmag_she_nf_matrix.py --boris-build-root "$boris_root" --fullmag "$fullmag_bin" --report-root "$report_root" --device "${FULLMAG_BORIS_DEVICE:-cuda}"'
+# Windows-only: observe managed CPU references; never build or start BORIS.
+# Both Fullmag tolerances reuse each fixed BORIS reference, not a BORIS sweep.
+[windows]
+verify-boris-fullmag-she-nf-windows coarse_runtime medium_runtime fine_runtime fullmag fullmag_sha256 report_root native_sha256="":
+    @PYTHONPATH="{{repo_root}}/packages/fullmag-py/src" {{storage_python}} "{{repo_root}}/scripts/run_boris_fullmag_she_nf_matrix.py" --repo-root {{quote(repo_root)}} --boris-runtime-coarse {{quote(coarse_runtime)}} --boris-runtime-medium {{quote(medium_runtime)}} --boris-runtime-fine {{quote(fine_runtime)}} --fullmag {{quote(fullmag)}} --fullmag-sha256 {{quote(fullmag_sha256)}} --report-root {{quote(report_root)}} {{if native_sha256 == "" { "" } else { "--fullmag-native-sha256 " + quote(native_sha256) }}}
 
 verify-fdm-zhang-li-native-contract:
     docker compose --profile fem-gpu run --rm \

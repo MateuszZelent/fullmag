@@ -510,17 +510,8 @@ void main() {
 }
 `;
 
-const ORIENTATION_SURFACE_FRAGMENT_SHADER = `
-precision highp float;
-
-#include <clipping_planes_pars_fragment>
-
-uniform float fmOpacity;
-uniform float fmShadeStrength;
-varying vec3 vVectorValue;
-varying vec3 vNormalView;
-
-const float FM_PI = 3.141592653589793;
+/** Shared exact direction/HSL colour contract for interpolated vector surfaces. */
+export const VIEWPORT_3D_ORIENTATION_COLOR_GLSL = `const float FM_PI = 3.141592653589793;
 
 float positiveModulo(float value, float modulus) {
   return mod(mod(value, modulus) + modulus, modulus);
@@ -572,6 +563,19 @@ vec3 orientationColor(vec3 vectorValue) {
   float lightness = clamp(normalized.z * 0.5 + 0.5, 0.0, 1.0);
   return orientationHslToRgb(hueRadians, saturation, lightness);
 }
+`;
+
+const ORIENTATION_SURFACE_FRAGMENT_SHADER = `
+precision highp float;
+
+#include <clipping_planes_pars_fragment>
+
+uniform float fmOpacity;
+uniform float fmShadeStrength;
+varying vec3 vVectorValue;
+varying vec3 vNormalView;
+
+${VIEWPORT_3D_ORIENTATION_COLOR_GLSL}
 
 void main() {
   #include <clipping_planes_fragment>

@@ -1,4 +1,5 @@
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { buildAntennaPlaneVector as vector3 } from "./AntennaSamplingPlaneFieldsModel";
 
 export interface AntennaSpectrumDraft {
   targetObjectId: string;
@@ -30,13 +31,25 @@ export const emptyAntennaSpectrumDraft: AntennaSpectrumDraft = {
   outsidePolicy: "error",
 };
 
-function vector3(text: string, label: string): [number, number, number] {
-  const values = text.split(/[ ,;]+/).filter(Boolean).map(Number);
-  if (values.length !== 3 || values.some((value) => !Number.isFinite(value))) {
-    throw new Error(`${label} requires three finite values.`);
-  }
-  return values as [number, number, number];
+export interface AntennaSpectrumLocalDraft {
+  key: string;
+  baseRevision: number;
+  dirty: boolean;
+  values: AntennaSpectrumDraft;
 }
+
+/** Keep later edits while advancing only the acknowledged draft's base. */
+export function acknowledgeAntennaSpectrumDraft(
+  current: AntennaSpectrumLocalDraft | null,
+  submitted: AntennaSpectrumLocalDraft,
+  revision: number,
+): AntennaSpectrumLocalDraft | null {
+  if (!current || current.key !== submitted.key) return current;
+  return { ...current, baseRevision: revision, dirty: current !== submitted };
+}
+
+// Runtime contract: antenna_spectrum.rs::MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT.
+export const MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT = 10_000_000;
 
 function finitePositive(text: string, label: string): number {
   const value = Number(text);
@@ -59,19 +72,29 @@ export function composeAntennaSpectrumRequest(
   stageId: string,
   draft: AntennaSpectrumDraft,
 ) {
-  const stage = scene.antenna_field_solve_stages?.find((item) => item.id === stageId);
+  const stages = scene.antenna_field_solve_stages?.filter((item) => item.id === stageId) ?? [];
+  const stage = stages.length === 1 ? stages[0] : null;
   if (!stage) throw new Error("Antenna field-solve stage is missing.");
+  const sources = scene.objects?.filter((object) => object.id === stage.source_object_id) ?? [];
+  if (sources.length !== 1 || sources[0].locked) throw new Error("Current unlocked source object is required.");
+  if ((scene.current_transports ?? []).filter((transport) => transport.name === stage.current_transport_id).length !== 1) {
+    throw new Error("Spectrum requires one existing current transport.");
+  }
   const outputs = stage.outputs.filter((item) => item.quantity === "H_ant_basis");
-  if (outputs.length !== 1 || stage.port_mode_ids.length !== 1) {
+  if (outputs.length !== 1 || !outputs[0].id.trim() || stage.outputs.filter((output) => output.id === outputs[0].id).length !== 1 || stage.port_mode_ids.length !== 1) {
     throw new Error("Spectrum requires one H_ant_basis output and one port mode.");
   }
-  if (!scene.antenna_port_modes?.some((port) => port.id === stage.port_mode_ids[0] &&
+  if ((scene.antenna_port_modes ?? []).filter((port) => port.id === stage.port_mode_ids[0]).length !== 1 || !scene.antenna_port_modes?.some((port) => port.id === stage.port_mode_ids[0] &&
     port.source_object_id === stage.source_object_id && port.current_transport_id === stage.current_transport_id)) {
     throw new Error("Spectrum port must belong to the selected solve stage.");
   }
-  if (!draft.targetObjectId || !scene.objects?.some((object) => object.id === draft.targetObjectId)) {
+  if (!draft.targetObjectId || (scene.objects ?? []).filter((object) => object.id === draft.targetObjectId).length !== 1) {
     throw new Error("Select an existing target object.");
   }
+  if (!["rectangular", "hann", "hamming", "blackman"].includes(draft.windowKind)) throw new Error("Select a supported FFT window.");
+  if (!["integral_si", "unitary_discrete"].includes(draft.normalization)) throw new Error("Select a supported FFT normalization.");
+  if (!["x", "y", "z", "u", "v", "normal", "vector_power"].includes(draft.component)) throw new Error("Select a supported source FFT component; transverse requires a separate qualified equilibrium binding.");
+  if (!["error", "zero"].includes(draft.outsidePolicy)) throw new Error("Select an explicit outside-domain policy.");
   const origin = vector3(draft.originM, "Plane origin [m]");
   const axisU = vector3(draft.axisU, "Axis u");
   const axisV = vector3(draft.axisV, "Axis v");
@@ -86,7 +109,8 @@ export function composeAntennaSpectrumRequest(
   const countU = sampleCount(draft.samplesU, "Samples u", minimum);
   const countV = sampleCount(draft.samplesV, "Samples v", minimum);
   if (!Number.isSafeInteger(countU * countV)) throw new Error("Sample grid product exceeds safe integer range.");
-  const existing = new Set(scene.antenna_spectrum_requests?.map((item) => item.id) ?? []);
+  if (countU * countV > MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT) throw new Error(`FFT grid exceeds the runtime limit of ${MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT} samples.`);
+  const existing = new Set((scene.antenna_spectrum_requests ?? []).flatMap((item) => [item.id, item.output_id?.replace(/:output$/, "") ?? ""]));
   let index = 1;
   while (existing.has(`${stage.id}:spectrum:${index}`)) index += 1;
   const id = `${stage.id}:spectrum:${index}`;

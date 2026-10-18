@@ -1,14 +1,15 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/shared/ui/Button";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import { startSettings, type RecentView } from "../model/startSettings";
 import type { RecentIndexController } from "../model/useRecentIndex";
+import type { ExecutionAvailability } from "../model/executionAvailability";
 import type { WorkspaceItemsController } from "../model/useWorkspaceItems";
-import type { ComputeProbeState, ScannedLocation } from "../model/types";
+import type { ComputeNodeInventorySummary, ComputeProbeController, ComputeProbeState, ScannedLocation } from "../model/types";
 
 import { ComputeEnvironmentSettings } from "./ComputeEnvironmentSettings";
 import { IndexedLocations } from "./IndexedLocations";
@@ -19,26 +20,47 @@ const VIEW_OPTIONS = [
   { label: "Grid", value: "grid" },
 ] as const satisfies readonly { label: string; value: RecentView }[];
 
+const COMPUTE_SETTINGS_OPTIONS = [
+  { label: "Overview", value: "overview" },
+  { label: "Resources", value: "resources" },
+  { label: "Profiles", value: "profiles" },
+] as const satisfies readonly { label: string; value: ComputeSettingsView }[];
+
+type ComputeSettingsView = "overview" | "resources" | "profiles";
+
 interface SettingsSectionProps {
   readonly recent: RecentIndexController;
   /** The workspace database API; "Indexed locations" is shown when it answers. */
   readonly workspace?: WorkspaceItemsController;
   readonly compute?: ComputeProbeState;
+  readonly nodeInventory?: ComputeNodeInventorySummary;
+  readonly canEditNodePolicy?: boolean;
+  readonly onUpdateNodePolicy?: ComputeProbeController["updateNodePolicy"];
+  readonly canPublishExecutionProfiles?: boolean;
+  readonly onPublishExecutionProfile?: ComputeProbeController["publishExecutionProfile"];
   readonly refreshing?: boolean;
   readonly stale?: boolean;
   readonly computeError?: string | null;
   readonly onRefreshCompute?: () => void;
+  readonly executionAvailability?: ExecutionAvailability;
 }
 
 export function SettingsSection({
   recent,
   workspace,
   compute,
+  nodeInventory,
+  canEditNodePolicy = false,
+  onUpdateNodePolicy,
+  canPublishExecutionProfiles = false,
+  onPublishExecutionProfile,
   refreshing = false,
   stale = false,
   computeError = null,
   onRefreshCompute,
+  executionAvailability,
 }: SettingsSectionProps) {
+  const [computeView, setComputeView] = useState<ComputeSettingsView>("overview");
   const settings = useSyncExternalStore(
     startSettings.subscribe,
     startSettings.getSnapshot,
@@ -56,15 +78,40 @@ export function SettingsSection({
         </div>
       </div>
 
-      <ComputeEnvironmentSettings
-        compute={compute}
-        error={computeError}
-        onRefresh={onRefreshCompute}
-        refreshing={refreshing}
-        stale={stale}
-      />
-
-      <ExecutionProfilesSettings />
+      <section aria-labelledby="fm-start-settings-compute-title" className="fm-start-section">
+        <div className="fm-start-compute-settings__head">
+          <h2 className="fm-start-section__title" id="fm-start-settings-compute-title">
+            Compute
+          </h2>
+        </div>
+        <SegmentedControl
+          aria-label="Compute settings sections"
+          columns={3}
+          onValueChange={setComputeView}
+          options={COMPUTE_SETTINGS_OPTIONS}
+          value={computeView}
+        />
+        <div hidden={computeView === "profiles"}>
+          <ComputeEnvironmentSettings
+            compute={compute}
+            nodeInventory={nodeInventory}
+            canEditNodePolicy={canEditNodePolicy}
+            onUpdateNodePolicy={onUpdateNodePolicy}
+            view={computeView === "resources" ? "resources" : "overview"}
+            error={computeError}
+            onRefresh={onRefreshCompute}
+            refreshing={refreshing}
+            stale={stale}
+          />
+        </div>
+        <div hidden={computeView !== "profiles"}>
+          <ExecutionProfilesSettings
+            canPublishExecutionProfiles={canPublishExecutionProfiles}
+            onPublishExecutionProfile={onPublishExecutionProfile}
+            executionAvailability={executionAvailability}
+          />
+        </div>
+      </section>
 
       <section aria-labelledby="fm-start-set-appearance" className="fm-start-section">
         <h2 className="fm-start-section__title" id="fm-start-set-appearance">

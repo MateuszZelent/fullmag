@@ -40,9 +40,10 @@ pub struct CoupledChargeSpinSolverConfig {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CoupledTransportOuterErrorBudget {
+pub struct CoupledTransportOuterErrorBudget<'a> {
     pub dt_s: f64,
-    pub embedded_lte_m: f64,
+    pub embedded_error_m: &'a [Vector3],
+    pub frozen_cells: Option<&'a [bool]>,
     pub eta_transport: f64,
     pub previous_transport_torque_per_s: Vec<Vector3>,
 }
@@ -342,7 +343,7 @@ impl CoupledChargeSpinProblem {
         &self,
         config: CoupledChargeSpinSolverConfig,
         warm_start: Option<&CoupledChargeSpinWarmStart>,
-        outer_error_budget: &CoupledTransportOuterErrorBudget,
+        outer_error_budget: &CoupledTransportOuterErrorBudget<'_>,
     ) -> Result<CoupledChargeSpinSolution> {
         self.solve_internal(config, warm_start, Some(outer_error_budget))
     }
@@ -351,7 +352,7 @@ impl CoupledChargeSpinProblem {
         &self,
         config: CoupledChargeSpinSolverConfig,
         warm_start: Option<&CoupledChargeSpinWarmStart>,
-        outer_error_budget: Option<&CoupledTransportOuterErrorBudget>,
+        outer_error_budget: Option<&CoupledTransportOuterErrorBudget<'_>>,
     ) -> Result<CoupledChargeSpinSolution> {
         validate_config(config)?;
         self.validate_outer_error_budget(outer_error_budget)?;
@@ -507,12 +508,20 @@ impl CoupledChargeSpinProblem {
         let (transport_torque_delta_l2_per_s, transport_outer_error_ratio) = if let Some(budget) =
             outer_error_budget
         {
-            let delta = self.transport_torque_delta_l2(
+            let (delta, embedded_lte_m) = self.transport_torque_delta_l2(
                 &transport_gilbert_torque_per_s,
                 &budget.previous_transport_torque_per_s,
+                budget.embedded_error_m,
+                budget.frozen_cells,
             );
-            let allowed = budget.eta_transport * budget.embedded_lte_m;
+            if !delta.is_finite() || !embedded_lte_m.is_finite() {
+                return Err(EngineError::new("non-finite M2 outer LTE projected norm"));
+            }
+            let allowed = budget.eta_transport * embedded_lte_m;
             let induced = budget.dt_s * delta;
+            if !allowed.is_finite() || !induced.is_finite() {
+                return Err(EngineError::new("non-finite M2 outer LTE projected budget"));
+            }
             let ratio = if allowed == 0.0 {
                 if induced == 0.0 {
                     0.0
@@ -1056,15 +1065,22 @@ impl CoupledChargeSpinProblem {
 
     fn validate_outer_error_budget(
         &self,
-        budget: Option<&CoupledTransportOuterErrorBudget>,
+        budget: Option<&CoupledTransportOuterErrorBudget<'_>>,
     ) -> Result<()> {
         let Some(budget) = budget else {
             return Ok(());
         };
         if !budget.dt_s.is_finite()
             || budget.dt_s <= 0.0
-            || !budget.embedded_lte_m.is_finite()
-            || budget.embedded_lte_m < 0.0
+            || budget.embedded_error_m.len() != self.grid.cell_count()
+            || budget
+                .embedded_error_m
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            || budget
+                .frozen_cells
+                .is_some_and(|mask| mask.len() != self.grid.cell_count())
             || !budget.eta_transport.is_finite()
             || budget.eta_transport <= 0.0
             || budget.previous_transport_torque_per_s.len() != self.grid.cell_count()
@@ -1086,29 +1102,46 @@ impl CoupledChargeSpinProblem {
         Ok(())
     }
 
-    fn transport_torque_delta_l2(&self, current: &[Vector3], previous: &[Vector3]) -> f64 {
+    fn transport_torque_delta_l2(
+        &self,
+        current: &[Vector3],
+        previous: &[Vector3],
+        embedded_error_m: &[Vector3],
+        frozen_cells: Option<&[bool]>,
+    ) -> (f64, f64) {
         let targets = self
             .torque_targets
             .as_ref()
             .expect("outer error budget validation requires targets");
         let mut weighted_norm_squared = 0.0;
+        let mut weighted_error_squared = 0.0;
         let mut weight = 0.0;
         let cell_volume = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
         for cell in 0..self.grid.cell_count() {
-            if targets.target_cells[cell] {
+            // Physical targets are already validated as active magnetic cells.
+            // Both outer-error norms use this same module-local free support.
+            if targets.target_cells[cell] && !frozen_cells.is_some_and(|mask| mask[cell]) {
                 weighted_norm_squared += cell_volume
                     * (0..3)
                         .map(|component| {
                             (current[cell][component] - previous[cell][component]).powi(2)
                         })
                         .sum::<f64>();
+                weighted_error_squared += cell_volume
+                    * embedded_error_m[cell]
+                        .iter()
+                        .map(|value| value * value)
+                        .sum::<f64>();
                 weight += cell_volume;
             }
         }
         if weight == 0.0 {
-            0.0
+            (0.0, 0.0)
         } else {
-            (weighted_norm_squared / weight).sqrt()
+            (
+                (weighted_norm_squared / weight).sqrt(),
+                (weighted_error_squared / weight).sqrt(),
+            )
         }
     }
 

@@ -1,3 +1,4 @@
+import { normalizeTransportCollection } from "./TransportCollectionFieldsModel";
 import type {
   KnownSceneCurrentTransport,
   KnownSceneSpinTransport,
@@ -34,6 +35,7 @@ export interface CurrentTransportDraft {
   boundaries: string;
   conductivity: string;
   conservativeCurrentView: string;
+  externalLeadPreparation?: string;
   coupling: "one_way" | "bidirectional";
   currentDensity: string;
   domain: string;
@@ -128,8 +130,9 @@ export const TRANSPORT_AUTHORING_DRAFT_INVENTORY = {
       "solverOperatorVersion",
       "solverPhysicalResidualVersion",
       "structuredCurrentClosure",
+      "domain", "materials", "boundaries",
     ],
-    opaque: ["domain", "materials", "boundaries"],
+    opaque: ["externalLeadPreparation"],
   },
   spin_transport: {
     typed: [
@@ -149,8 +152,9 @@ export const TRANSPORT_AUTHORING_DRAFT_INVENTORY = {
       "solverOperatorVersion",
       "solverPhysicalResidualVersion",
       "solverDefaultExternalBoundary",
+      "domain", "materials", "boundaries",
     ],
-    opaque: ["domain", "materials", "interfaces", "boundaries", "reciprocalNonlinear"],
+    opaque: ["interfaces", "reciprocalNonlinear"],
   },
 } as const;
 
@@ -232,6 +236,7 @@ export function currentTransportDraft(
     boundaries: pretty(value?.boundaries ?? []),
     conductivity: value?.conductivity_s_per_m?.toString() ?? "",
     conservativeCurrentView: pretty(value?.conservative_current_view ?? {}),
+    externalLeadPreparation: pretty(value?.external_lead_preparation ?? {}),
     coupling: value?.coupling ?? "one_way",
     currentDensity: pretty(value?.current_density ?? [0, 0, 0]),
     domain: pretty(value?.domain ?? initialDomain),
@@ -458,6 +463,8 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
     name: draft.name,
     coupling: draft.coupling,
   };
+  const externalLeadPreparation = optionalJsonObject(draft.externalLeadPreparation ?? "{}", "External lead preparation");
+  if (externalLeadPreparation) resource.external_lead_preparation = externalLeadPreparation;
   if (model === "prescribed_density") {
     resource.current_density = json<number[]>(draft.currentDensity, "Current density");
     const timeEnvelope = optionalJsonObject(draft.timeEnvelope, "Time envelope");
@@ -471,7 +478,7 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
     return resource;
   }
   resource.domain = json(draft.domain, "Charge domain");
-  resource.materials = json(draft.materials, "Charge materials");
+  resource.materials = json(normalizeTransportCollection(draft.materials, "current_transport", "materials"), "Charge materials");
   if (!Array.isArray(resource.materials)) throw new Error("Charge materials must be a JSON array.");
   if (draft.coupling === "bidirectional") {
     resource.materials.forEach((assignment, index) => {
@@ -492,7 +499,7 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
       }
     });
   }
-  resource.boundaries = json(draft.boundaries, "Charge boundaries");
+  resource.boundaries = json(normalizeTransportCollection(draft.boundaries, "current_transport", "boundaries"), "Charge boundaries");
   const timeEnvelope = optionalJsonObject(draft.timeEnvelope, "Time envelope");
   if (timeEnvelope) resource.time_envelope = timeEnvelope as NonNullable<KnownSceneCurrentTransport["time_envelope"]>;
   resource.gauge = draft.gauge;
@@ -583,7 +590,7 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
   if (requestedDiscretization === "hybrid" || requestedExecutionMode === "hybrid") {
     throw new Error("Transport hybrid execution is not supported by the Python and planner contracts.");
   }
-  const materials = json<SpinMaterialAssignmentDraftValue[]>(draft.materials, "Spin materials");
+  const materials = json<SpinMaterialAssignmentDraftValue[]>(normalizeTransportCollection(draft.materials, "spin_transport", "materials"), "Spin materials");
   if (!Array.isArray(materials)) throw new Error("Spin materials must be a JSON array.");
   materials.forEach(({ material }, index) => {
     const capacitance = material?.spin_capacitance_As_per_V_m3;
@@ -642,7 +649,7 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
     throw new Error("reciprocal_nonlinear is valid only for reciprocal M2 transport.");
   }
   return {
-    boundaries: json(draft.boundaries, "Spin boundaries"),
+    boundaries: json(normalizeTransportCollection(draft.boundaries, "spin_transport", "boundaries"), "Spin boundaries"),
     constitutive_version: draft.constitutiveVersion.trim(),
     current_source_id: draft.currentSourceId,
     domain: json(draft.domain, "Spin domain"),

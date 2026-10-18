@@ -60,6 +60,94 @@ const distDir = resolveControlRoomDistDir({
   requestedDistDir: process.env.FULLMAG_NEXT_DIST_DIR,
 });
 
+// Docker Desktop's Windows source mount pays a metadata round trip for each
+// Watchpack poll. Five seconds bounds that overlap while keeping HMR latency
+// explicit; the launcher may provide a validated per-workspace override.
+export const DOCKER_DEV_WATCH_POLLING_DEFAULT_MS = 5_000;
+const DOCKER_DEV_WATCH_POLLING_MIN_MS = 250;
+const DOCKER_DEV_WATCH_POLLING_MAX_MS = 10_000;
+const DOCKER_DEV_GENERATED_WATCH_PATH =
+  /(?:^|[\\/])(?:node_modules|\.fullmag-frontend|\.next[^\\/]*)(?:[\\/]|$)/;
+const DOCKER_DEV_GENERATED_WATCH_GLOBS = [
+  "**/node_modules/**",
+  "**/.fullmag-frontend/**",
+  "**/.next*/**",
+];
+
+export function isDockerDevGeneratedWatchPath(pathValue: string): boolean {
+  return DOCKER_DEV_GENERATED_WATCH_PATH.test(pathValue);
+}
+
+type DockerDevWatchIgnored = RegExp | string[];
+
+function composeDockerDevIgnored(
+  existingIgnored: unknown,
+): DockerDevWatchIgnored {
+  if (existingIgnored === undefined) {
+    return DOCKER_DEV_GENERATED_WATCH_PATH;
+  }
+  if (existingIgnored instanceof RegExp) {
+    const flags = existingIgnored.flags.replace(/[gy]/g, "");
+    return new RegExp(
+      `(?:${existingIgnored.source})|(?:${DOCKER_DEV_GENERATED_WATCH_PATH.source})`,
+      flags,
+    );
+  }
+  if (typeof existingIgnored === "string") {
+    return [existingIgnored, ...DOCKER_DEV_GENERATED_WATCH_GLOBS];
+  }
+  if (Array.isArray(existingIgnored)) {
+    if (!existingIgnored.every((entry) => typeof entry === "string")) {
+      throw new Error(
+        "Docker development Watchpack ignored matcher arrays must contain only strings",
+      );
+    }
+    return [...existingIgnored, ...DOCKER_DEV_GENERATED_WATCH_GLOBS];
+  }
+  throw new Error(
+    "Docker development Watchpack ignored matcher must use Webpack-supported strings or regular expressions",
+  );
+}
+
+export function resolveDockerDevWatchPollingMs(
+  rawValue =
+    process.env.WATCHPACK_POLLING ?? process.env.FULLMAG_WATCHPACK_POLLING_MS,
+): number {
+  if (rawValue === undefined) {
+    return DOCKER_DEV_WATCH_POLLING_DEFAULT_MS;
+  }
+  const normalized = rawValue.trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(
+      `WATCHPACK_POLLING must be an integer between ${DOCKER_DEV_WATCH_POLLING_MIN_MS} and ${DOCKER_DEV_WATCH_POLLING_MAX_MS} ms; got ${rawValue}`,
+    );
+  }
+  const pollingMs = Number(normalized);
+  if (
+    !Number.isSafeInteger(pollingMs) ||
+    pollingMs < DOCKER_DEV_WATCH_POLLING_MIN_MS ||
+    pollingMs > DOCKER_DEV_WATCH_POLLING_MAX_MS
+  ) {
+    throw new Error(
+      `WATCHPACK_POLLING must be an integer between ${DOCKER_DEV_WATCH_POLLING_MIN_MS} and ${DOCKER_DEV_WATCH_POLLING_MAX_MS} ms; got ${rawValue}`,
+    );
+  }
+  return pollingMs;
+}
+
+export function resolveDockerDevWatchOptions(
+  existingIgnored: unknown,
+  rawPollingMs?: string,
+): {
+  poll: number;
+  ignored: DockerDevWatchIgnored;
+} {
+  return {
+    poll: resolveDockerDevWatchPollingMs(rawPollingMs),
+    ignored: composeDockerDevIgnored(existingIgnored),
+  };
+}
+
 function pathEquals(left: string, right: string): boolean {
   const normalizedLeft = path.normalize(left);
   const normalizedRight = path.normalize(right);
@@ -266,6 +354,15 @@ const nextConfig: NextConfig = {
           ];
         },
       }),
+  webpack(config, { dev }) {
+    if (dev && process.env.FULLMAG_DOCKER_FRONTEND === "dev") {
+      config.watchOptions = {
+        ...config.watchOptions,
+        ...resolveDockerDevWatchOptions(config.watchOptions?.ignored),
+      };
+    }
+    return config;
+  },
   turbopack: {
     root: path.resolve(process.cwd(), "../.."),
   },

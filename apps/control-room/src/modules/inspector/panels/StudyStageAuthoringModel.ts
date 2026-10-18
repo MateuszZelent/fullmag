@@ -33,6 +33,34 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 
+function finiteKRequestFromDraft(draft: StudyFftResponseStageDraft): JsonObject {
+  const text = draft.probeCount ?? "128";
+  const count = Number(text);
+  if (!text.trim() || !Number.isInteger(count) || count < 4 || count > 2048) {
+    throw new Error("Finite-k probe count must be an integer in 4..2048.");
+  }
+  const request: JsonObject = {
+    schema_version: "spin_wave_response.request.v1",
+    analysis: "finite_k",
+    response_component: draft.responseComponent,
+    probe_count: count,
+  };
+  for (const [key, value] of [
+    ["analysis_x_min_m", draft.analysisXMinM],
+    ["analysis_x_max_m", draft.analysisXMaxM],
+  ] as const) {
+    if (value?.trim()) {
+      const bound = Number(value);
+      if (!Number.isFinite(bound)) throw new Error("Finite-k bounds must be finite metres.");
+      request[key] = bound;
+    }
+  }
+  if (typeof request.analysis_x_min_m === "number" && typeof request.analysis_x_max_m === "number" && request.analysis_x_max_m <= request.analysis_x_min_m) {
+    throw new Error("Finite-k upper x bound must exceed the lower bound.");
+  }
+  return request;
+}
+
 const SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES = new Set([
   "include_stop",
   "skip_start",
@@ -155,9 +183,13 @@ export interface StudyAutosaveStageDraft {
 }
 
 export interface StudyFftResponseStageDraft {
+  analysis?: "gamma" | "finite_k" | "unsupported";
+  probeCount?: string;
+  analysisXMinM?: string;
+  analysisXMaxM?: string;
   detrend: "none" | "mean" | "linear";
   enabled: boolean;
-  responseComponent: "my" | "mz";
+  responseComponent: "mx" | "my" | "mz";
   susceptibilityFloorFraction: string;
   window: "hann";
   rawRequest?: JsonObject;
@@ -313,6 +345,10 @@ const DEFAULT_AUTOSAVE: StudyAutosaveStageDraft = {
 };
 
 const DEFAULT_FFT_RESPONSE: StudyFftResponseStageDraft = {
+  analysis: "gamma",
+  probeCount: "128",
+  analysisXMinM: "",
+  analysisXMaxM: "",
   detrend: "linear",
   enabled: true,
   responseComponent: "my",
@@ -841,7 +877,15 @@ export function createStudyStageDraft(
   }
   if (kind === "fft_response") {
     const request = asRecord(record?.request ?? action?.request ?? payload?.request);
+    const supportedFiniteK = request?.analysis === "finite_k" &&
+      (request.schema_version === undefined || request.schema_version === "spin_wave_response.request.v1") &&
+      (request.response_component === undefined || (typeof request.response_component === "string" && ["mx", "my", "mz"].includes(request.response_component))) &&
+      (request.probe_count === undefined || (typeof request.probe_count === "number" && Number.isInteger(request.probe_count) && request.probe_count >= 4 && request.probe_count <= 2048)) &&
+      ["analysis_x_min_m", "analysis_x_max_m"].every((key) => request[key] === undefined || (typeof request[key] === "number" && Number.isFinite(request[key]))) &&
+      !(typeof request.analysis_x_min_m === "number" && typeof request.analysis_x_max_m === "number" && request.analysis_x_max_m <= request.analysis_x_min_m) &&
+      Object.keys(request).every((key) => ["schema_version", "analysis", "response_component", "probe_count", "analysis_x_min_m", "analysis_x_max_m"].includes(key));
     const supportedRequest =
+      supportedFiniteK ||
       request === null ||
       (request.analysis === "gamma" &&
         (request.response_component === undefined ||
@@ -870,6 +914,10 @@ export function createStudyStageDraft(
     return cloneStudyStageDraft({
       ...DEFAULT_FFT_RESPONSE_STAGE_DRAFT,
       fftResponse: {
+        analysis: request?.analysis === "finite_k" ? "finite_k" : request === null || request.analysis === "gamma" ? "gamma" : "unsupported",
+        probeCount: scalarText(request?.probe_count, "128"),
+        analysisXMinM: scalarText(request?.analysis_x_min_m, ""),
+        analysisXMaxM: scalarText(request?.analysis_x_max_m, ""),
         detrend:
           request?.detrend === "none" ||
           request?.detrend === "mean" ||
@@ -880,7 +928,7 @@ export function createStudyStageDraft(
           record?.enabled ?? action?.enabled ?? payload?.enabled,
           true,
         ),
-        responseComponent: request?.response_component === "mz" ? "mz" : "my",
+        responseComponent: request?.analysis === "finite_k" && request.response_component === "mx" ? "mx" : request?.response_component === "mz" ? "mz" : "my",
         susceptibilityFloorFraction: scalarText(
           request?.susceptibility_floor_fraction,
           DEFAULT_FFT_RESPONSE.susceptibilityFloorFraction,
@@ -1323,7 +1371,9 @@ export function studyStageDraftToSceneStage(
     const request = draft.fftResponse.enabled
       ? draft.fftResponse.readOnly && draft.fftResponse.rawRequest
         ? structuredClone(draft.fftResponse.rawRequest)
-        : {
+        : draft.fftResponse.analysis === "finite_k"
+          ? finiteKRequestFromDraft(draft.fftResponse)
+          : {
             analysis: "gamma",
             detrend: draft.fftResponse.detrend,
             response_component: draft.fftResponse.responseComponent,
@@ -1720,7 +1770,14 @@ export function validateStudyStageDraft(
     return issues;
   }
   if (draft.kind === "fft_response") {
-    if (draft.fftResponse.enabled && !draft.fftResponse.readOnly) {
+    if (draft.fftResponse.enabled && !draft.fftResponse.readOnly && draft.fftResponse.analysis === "finite_k") {
+      try {
+        finiteKRequestFromDraft(draft.fftResponse);
+      } catch (error) {
+        issues.push({ message: error instanceof Error ? error.message : "Invalid finite-k request.", severity: "error" });
+      }
+    }
+    if (draft.fftResponse.enabled && !draft.fftResponse.readOnly && draft.fftResponse.analysis !== "finite_k") {
       const floor = Number(draft.fftResponse.susceptibilityFloorFraction);
       if (!Number.isFinite(floor) || floor < 0 || floor >= 1) {
         issues.push({

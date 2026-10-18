@@ -157,7 +157,7 @@ impl DurableWorkerCoordinator {
     pub fn commit_command<F>(
         &mut self,
         command: WorkerCommand,
-        receipt: Option<&PreparationReceipt>,
+        receipt: Option<&dyn crate::closed_loop_preparation::AcceptedPreparationProof>,
         publish: F,
     ) -> Result<WorkerCommandEnvelope, CoordinatorError>
     where
@@ -265,7 +265,7 @@ impl WorkerCoordinator {
     pub fn commit_command<F>(
         &mut self,
         command: WorkerCommand,
-        receipt: Option<&PreparationReceipt>,
+        receipt: Option<&dyn crate::closed_loop_preparation::AcceptedPreparationProof>,
         publish: F,
     ) -> Result<WorkerCommandEnvelope, CoordinatorError>
     where
@@ -482,16 +482,28 @@ impl WorkerCoordinator {
     pub fn prepare(
         &mut self,
         resolved_input: ResolvedTaskInput,
-        receipt: &PreparationReceipt,
+        receipt: &dyn crate::closed_loop_preparation::AcceptedPreparationProof,
     ) -> Result<WorkerCommandEnvelope, CoordinatorError> {
         self.require_lifecycle(TaskLifecycle::Preparing)?;
-        let expected_binding = crate::preparation::PreparationBinding::from_receipt(receipt)?;
+        let expected_binding = receipt.accepted_binding()?;
         if resolved_input.preparation != expected_binding {
             return Err(CoordinatorError::Invalid(
                 "resolved task preparation does not match the accepted preparation receipt".into(),
             ));
         }
-        self.emit(WorkerCommand::Prepare { resolved_input })
+        resolved_input.validate()?;
+        let protocol = if resolved_input.schema_version == crate::execution::CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA {
+            crate::execution::CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA
+        } else if self.protocol_schema=="worker_protocol.v2" { "worker_protocol.v2" } else { WORKER_PROTOCOL_SCHEMA };
+        let previous_protocol=self.protocol_schema.clone();
+        if self.next_command_sequence == 1 {
+            self.protocol_schema = protocol.into();
+        } else if self.protocol_schema != protocol {
+            return Err(CoordinatorError::Invalid("operation cannot change the worker protocol of an existing stream".into()));
+        }
+        let emitted=self.emit(WorkerCommand::Prepare { resolved_input });
+        if emitted.is_err() { self.protocol_schema=previous_protocol; }
+        emitted
     }
 
     pub fn start(&mut self) -> Result<WorkerCommandEnvelope, CoordinatorError> {
@@ -556,6 +568,9 @@ impl WorkerCoordinator {
     ) -> Result<CoordinatorDisposition, CoordinatorError> {
         // Check without publishing dedup state. Keep only a bounded task
         // rollback snapshot, not a copy of the accumulated protocol history.
+        if event.schema_version != self.protocol_schema {
+            return Err(CoordinatorError::Invalid("worker event changed the operation protocol".into()));
+        }
         let disposition = self.ledger.check_event(&event)?;
         if disposition == ProtocolDisposition::Replayed {
             return Ok(CoordinatorDisposition::Replayed);
@@ -1179,4 +1194,14 @@ mod tests {
         assert_eq!(coordinator.task().lifecycle, TaskLifecycle::Failed);
         assert_eq!(coordinator.phase(), CoordinatorPhase::Terminal);
     }
+    #[test]
+    fn mixed_v4_event_refusal_preserves_legacy_coordinator_checkpoint() {
+        let mut coordinator=coordinator();
+        let before=serde_json::to_value(coordinator.checkpoint()).unwrap();
+        let mut incompatible=event(&coordinator,1,"mixed",WorkerEvent::Progress{source_step:1});
+        incompatible.schema_version=crate::execution::CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA.into();
+        assert!(coordinator.accept_event(incompatible).is_err());
+        assert_eq!(serde_json::to_value(coordinator.checkpoint()).unwrap(),before);
+    }
+
 }

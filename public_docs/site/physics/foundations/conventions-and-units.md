@@ -154,6 +154,6 @@ not own conversion policy for an individual interaction.
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence status |
 |---|---|---|---|---|---|
-| LLG units and IR | packages/fullmag-py/src/fullmag/model/dynamics.py | class LLG | validates gamma and serializes dynamics | all authoring lanes | source-backed |
-| study authoring | packages/fullmag-py/src/fullmag/world.py | study | creates the public builder | all authoring lanes | source-backed |
-| canonical container | crates/fullmag-ir/src/lib.rs | ProblemIR | stores normalized problem intent | all lanes | source-backed |
+| LLG units and IR | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | validates gamma and serializes dynamics | all authoring lanes | source-backed |
+| [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | study | creates the public builder | all authoring lanes | source-backed |
+| canonical container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores normalized problem intent | all lanes | source-backed |

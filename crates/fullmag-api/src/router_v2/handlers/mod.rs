@@ -8,6 +8,7 @@ pub mod platform;
 pub mod sessions;
 pub mod shared;
 pub mod simulation;
+pub(crate) mod transport_authoring_policy;
 pub mod visualization;
 pub mod workspace;
 pub mod workspace_archive;

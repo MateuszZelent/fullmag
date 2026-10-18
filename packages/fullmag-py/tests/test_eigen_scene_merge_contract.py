@@ -13,7 +13,7 @@ def test_eigen_capture_preserves_solver_controls_and_separate_floquet_kind():
         "eigen_k_vector": "0, 10000000, 0",
         "eigen_spin_wave_bc": "floquet",
         "eigen_spin_wave_bc_config": {"pair_ids": ["pair-y"]},
-    }, index=0, solver=None))
+    }, index=0, solver=None, magnet_vars={}))
     calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Attribute) and node.func.attr == "eigenmodes_stage"]
     assert len(calls) == 1
@@ -36,14 +36,19 @@ def test_eigen_capture_preserves_solver_controls_and_separate_floquet_kind():
 ])
 def test_invalid_authored_values_are_not_replaced_with_defaults(field, value):
     with pytest.raises(ValueError):
-        _render_scene_stage_bootstrap({"kind": "eigenmodes", field: value}, index=0, solver=None)
+        _render_scene_stage_bootstrap(
+            {"kind": "eigenmodes", field: value},
+            index=0,
+            solver=None,
+            magnet_vars={},
+        )
 
 
 def test_conflicting_k_vector_and_path_are_rejected_before_rendering():
     with pytest.raises(ValueError, match="both eigen_k_path and eigen_k_vector"):
         _render_scene_stage_bootstrap({
             "kind": "eigenmodes", "eigen_k_vector": [0, 1e6, 0], "eigen_k_path": "nonempty",
-        }, index=0, solver=None)
+        }, index=0, solver=None, magnet_vars={})
 
 
 @pytest.mark.parametrize("device", ["cpu", "gpu", "auto"])

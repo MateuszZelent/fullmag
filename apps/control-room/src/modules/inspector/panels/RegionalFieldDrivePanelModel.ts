@@ -141,7 +141,7 @@ export function resolveRegionalFieldDrivePanelModel(
     selection.ref.draft === true;
   if (createRequested) {
     return {
-      drive: createRegionalFieldDriveDraft(resource?.drives ?? []),
+      drive: resource ? createRegionalFieldDriveDraft(resource.drives, selection.ref?.type === "physics-field-drive" ? selection.ref.sourceObjectId : undefined) : null,
       driveId: null,
       mode: "create",
       sceneRevision: resource?.scene_revision ?? null,
@@ -165,6 +165,7 @@ export function resolveRegionalFieldDrivePanelModel(
 
 export function createRegionalFieldDriveDraft(
   existing: readonly RegionalFieldDriveResource[],
+  sourceObjectId?: string,
 ): RegionalFieldDriveResource {
   const ids = new Set(existing.map((drive) => drive.id));
   let id = "field-drive";
@@ -177,11 +178,11 @@ export function createRegionalFieldDriveDraft(
     activation: { kind: "all_time_evolution" },
     amplitude_B_T: 1e-3,
     direction: [0, 1, 0],
-    enabled: true,
+    enabled: sourceObjectId ? false : true,
     id,
     kind: "regional",
-    name: "Global field drive",
-    spatial_profile: { kind: "uniform" },
+    name: sourceObjectId ? `Regional field for ${sourceObjectId}` : "Global field drive",
+    spatial_profile: sourceObjectId ? { kind: "geometry_mask", object_id: sourceObjectId, envelope: { kind: "uniform" } } : { kind: "uniform" },
     target: { kind: "global" },
     time_origin: "stage_local",
     waveform: { kind: "constant" },

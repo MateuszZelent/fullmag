@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object cpw_an
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,12 +54,12 @@ fm.CPWAntenna(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```signal_width/gap/ground_width``` | ```float``` | ```required``` | ```m``` | positive | CPW transverse dimensions | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```dimensions``` |
-| ```thickness``` | ```float``` | ```required``` | ```m``` | positive | conductor thickness | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```thickness``` |
-| ```height_above_magnet``` | ```float``` | ```required``` | ```m``` | non-negative | height over magnet | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```height_above_magnet``` |
-| ```preview_length``` | ```float``` | ```required``` | ```m``` | positive | preview length | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```preview_length``` |
-| ```center_x/center_y``` | ```float``` | ```0.0``` | ```m``` | finite | in-plane position | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```center``` |
-| ```current_distribution``` | ```str``` | ```uniform``` | ```1``` | only uniform currently accepted | current distribution | FEM/FDM CPU/GPU: IR; resolver-specific | ```current_distribution``` |
+| `signal_width/gap/ground_width` | `float` | `required` | `m` | positive | CPW transverse dimensions | FEM/FDM CPU/GPU: IR; preview/resolver-specific | `dimensions` |
+| `thickness` | `float` | `required` | `m` | positive | conductor thickness | FEM/FDM CPU/GPU: IR; preview/resolver-specific | `thickness` |
+| `height_above_magnet` | `float` | `required` | `m` | non-negative | height over magnet | FEM/FDM CPU/GPU: IR; preview/resolver-specific | `height_above_magnet` |
+| `preview_length` | `float` | `required` | `m` | positive | preview length | FEM/FDM CPU/GPU: IR; preview/resolver-specific | `preview_length` |
+| `center_x/center_y` | `float` | `0.0` | `m` | finite | in-plane position | FEM/FDM CPU/GPU: IR; preview/resolver-specific | `center` |
+| `current_distribution` | `str` | `uniform` | `1` | only uniform currently accepted | current distribution | FEM/FDM CPU/GPU: IR; resolver-specific | `current_distribution` |
 
 ### Stage-first example
 

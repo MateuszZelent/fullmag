@@ -168,5 +168,5 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Study-level FEM mesh policy. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Study-level FEM mesh policy. | Source-map validator and focused API tests |
-| Shared-domain assembly defaults. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class SharedMeshAssemblyPolicy` | Shared-domain assembly defaults. | Source-map validator and focused API tests |
+| Study-level FEM mesh policy. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | [`class FEM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | Study-level FEM mesh policy. | Source-map validator and focused API tests |
+| Shared-domain assembly defaults. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L1032) | [`class SharedMeshAssemblyPolicy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L1032) | Shared-domain assembly defaults. | Source-map validator and focused API tests |

@@ -130,10 +130,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Execution lifecycle | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Simulation` | Plan/execute entrypoints | Ownership test |
+| Execution lifecycle | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L122) | [`class Simulation`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L122) | Plan/execute entrypoints | Ownership test |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Plan, IR export, and execution lifecycle. | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Simulation` | Plan, IR export, and execution lifecycle. | Source-map validator and focused API tests |
+| Plan, IR export, and execution lifecycle. | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L122) | [`class Simulation`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L122) | Plan, IR export, and execution lifecycle. | Source-map validator and focused API tests |

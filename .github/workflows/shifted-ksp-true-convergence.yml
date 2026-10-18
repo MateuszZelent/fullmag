@@ -8,6 +8,7 @@ on:
       - backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp
       - backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp
   push:
+    branches: [master, main]
     paths:
       - .github/workflows/shifted-ksp-true-convergence.yml
       - backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp
@@ -17,6 +18,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   petsc-real:

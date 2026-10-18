@@ -190,8 +190,10 @@
 
   position: relative;
   display: grid;
-  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto auto;
-  min-height: var(--fm-control-height-compact);
+  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) fit-content(38%);
+  /* Match EXPLORER_ROW_HEIGHT in ExplorerTreeView virtualization. */
+  height: var(--fm-space-7);
+  min-height: var(--fm-space-7);
   align-items: center;
   gap: var(--fm-space-1);
   border: 1px solid transparent;
@@ -410,10 +412,38 @@
   font-family: var(--fm-font-ui);
 }
 
+/* Labels retain the flexible track; metadata can shrink without widening the tree. */
+.fm-explorer-tree-row__metadata {
+  display: flex;
+  min-width: 0;
+  max-width: 17rem;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-explorer-tree-row__status-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.fm-explorer-tree-row__status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-explorer-node-tooltip {
+  max-width: min(26rem, calc(100vw - var(--fm-space-6)));
+  overflow-wrap: anywhere;
+}
+
 /* ── Status badge: semantic colors ── */
 .fm-explorer-tree-row__status {
   display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
   align-items: center;
+  gap: var(--fm-space-1);
   height: var(--fm-space-5);
   padding: 0 6px;
   border-radius: var(--fm-radius-pill);
@@ -429,8 +459,12 @@
 
 /* Neutral plain badge */
 .fm-explorer-tree-row__badge {
-  display: inline-flex;
-  align-items: center;
+  display: block;
+  min-width: 0;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: calc(var(--fm-space-5) - 2px);
   height: var(--fm-space-5);
   padding: 0 6px;
   border-radius: var(--fm-radius-xs);
@@ -445,7 +479,9 @@
 /* Active field badge */
 .fm-explorer-tree-row__active-field {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
+  gap: var(--fm-space-1);
   height: var(--fm-space-5);
   padding: 0 6px;
   border-radius: var(--fm-radius-pill);
@@ -556,14 +592,35 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
 }
 
-/* The explorer is frequently docked below 360px. Keep long result labels
-   horizontally scrollable instead of letting status badges consume them. */
-@container fm-explorer-panel (max-width: 360px) {
-  .fm-explorer-tree-row {
-    width: max-content;
-    min-width: 100%;
+/* Compact metadata keeps deep object/resource names readable in docked panels.
+   Complete metadata remains in the row's keyboard/mouse tooltip and description. */
+@container fm-explorer-panel (max-width: 480px) {
+  .fm-explorer-tree-row__metadata {
+    max-width: 8rem;
   }
 
+  .fm-explorer-tree-row__status,
+  .fm-explorer-tree-row__active-field {
+    padding-inline: 3px;
+  }
+
+  .fm-explorer-tree-row__status-text,
+  .fm-explorer-tree-row__active-text {
+    display: none;
+  }
+
+  .fm-explorer-tree-row__badge {
+    max-width: 9ch;
+  }
+}
+
+@container fm-explorer-panel (max-width: 319px) {
+  .fm-explorer-tree-row__badge {
+    display: none;
+  }
+}
+
+@container fm-explorer-panel (max-width: 360px) {
   .fm-explorer-toolbar__action {
     width: var(--fm-control-height-compact);
     justify-content: center;

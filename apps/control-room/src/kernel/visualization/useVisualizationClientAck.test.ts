@@ -171,6 +171,7 @@ describe("visualization ACK coordinator contract", () => {
       coordinator.send({
         changeKind: "data",
         resourceKey: `field:${revision}`,
+        dataIdentity: { fieldBufferId: `buffer:${revision}`, fieldRevision: String(revision), resourceKey: `field:${revision}`, sessionId: "session-1", sessionEpoch: "epoch-1", visualizationRevision: revision },
         revision,
         requestScopeEpoch: "api:1",
         sessionId: "session-1",
@@ -195,6 +196,7 @@ describe("visualization ACK coordinator contract", () => {
     sendVisualizationClientAck(api, {
       changeKind: "data",
       resourceKey: "field:m",
+      dataIdentity: { fieldBufferId: "buffer:m:11", fieldRevision: "11", resourceKey: "field:m", sessionId: "session-1", sessionEpoch: "epoch-1", visualizationRevision: 11 },
       revision: 11,
       requestScopeEpoch: "api:1",
       sessionId: "session-1",

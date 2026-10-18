@@ -147,15 +147,19 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
           label="FFT response"
           value={
             workflow.fftResponse
-              ? `ON: ${workflow.fftResponse.responseComponent}, ${workflow.fftResponse.window}, source ${workflow.fftResponse.sourceStageId}`
+              ? workflow.fftResponse.readOnly
+                ? `Read-only imported ${workflow.fftResponse.analysis} analysis; inspect preserved raw request, source ${workflow.fftResponse.sourceStageId}`
+                : `ON: ${workflow.fftResponse.analysis}, ${workflow.fftResponse.responseComponent}, ${workflow.fftResponse.window}, source ${workflow.fftResponse.sourceStageId}`
               : "OFF"
           }
         />
         <SamplingDiagnostics
           durationS={durationS}
-          sampling={workflow.tableAutosave}
+          sampling={workflow.fftResponse?.analysis === "unsupported" ? null : workflow.fftResponse?.analysis === "finite_k"
+            ? workflow.outputs.find((output) => output.quantity === "m" && output.outputKind === "field") ?? null
+            : workflow.tableAutosave}
         />
-        {workflow.fftResponse && !workflow.tableAutosave ? (
+        {workflow.fftResponse?.analysis === "gamma" && !workflow.tableAutosave ? (
           <FeedbackBanner
             kind="warning"
             message="FFT response is ON, but no preceding Table autosave ON stage defines t_sampling. Add or enable that workflow instruction before this Run."

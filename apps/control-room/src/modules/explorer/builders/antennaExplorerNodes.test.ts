@@ -21,7 +21,7 @@ describe("antenna composition explorer nodes", () => {
     const solve = node.children?.find((child) => child.kind === "object.antenna")
       ?.children?.find((child) => child.kind === "object.antenna.solution");
     expect(solve).toMatchObject({
-      badge: "1 outputs · invalid", status: "warning",
+      badge: "1 outputs · 7 issues", status: "validation-blocked",
       contextCommands: ["study.add-antenna-field-solve-stage", "workspace.focus-selection"],
       contextCommandInputs: {
         "study.add-antenna-field-solve-stage": { objectId: "antenna", stageId: "solve-1" },
@@ -54,7 +54,7 @@ describe("antenna composition explorer nodes", () => {
     const port = node.children
       ?.find((child) => child.kind === "object.antenna")
       ?.children?.find((child) => child.kind === "object.antenna.port");
-    expect(port).toMatchObject({ status: "warning", badge: "1 branches · invalid" });
+    expect(port).toMatchObject({ status: "warning", badge: "1 branches · 5 issues" });
   });
 
   it("publishes dedicated typed children with stable resource identities", () => {
@@ -155,6 +155,7 @@ describe("antenna composition explorer nodes", () => {
     const antenna = node.children?.find((child) => child.kind === "object.antenna");
     expect(antenna?.children?.map((child) => child.kind)).toEqual([
       "object.antenna.regional",
+      "object.antenna.terminals",
       "object.antenna.conductor",
       "object.antenna.port",
       "object.antenna.solution",
@@ -164,7 +165,7 @@ describe("antenna composition explorer nodes", () => {
     ]);
 
     const port = antenna?.children?.find((child) => child.kind === "object.antenna.port");
-    expect(port).toMatchObject({ status: "ready", badge: "2 branches · authoring" });
+    expect(port).toMatchObject({ status: "ready", badge: "2 branches · configured" });
     expect(selectionRefFromNode(port!)).toMatchObject({
       type: "scene-object",
       kind: "object.antenna.port",
@@ -174,6 +175,7 @@ describe("antenna composition explorer nodes", () => {
     });
 
     const solve = antenna?.children?.find((child) => child.kind === "object.antenna.solution");
-    expect(solve).toMatchObject({ status: "warning", antennaResourceId: "solve-1" });
+    expect(solve).toMatchObject({ status: "validation-blocked", antennaResourceId: "solve-1" });
+    expect(antenna).toMatchObject({ selectable: true, status: "ready" });
   });
 });

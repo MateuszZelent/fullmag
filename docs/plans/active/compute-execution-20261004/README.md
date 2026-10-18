@@ -149,6 +149,9 @@ odrębna faza, bez fałszywego deklarowania solver fallbacku.
    Obecne reuse APPLICATION.json i cap=1 muszą mieć jawną migrację; samo
    discovery wielu ofert nie zwiększa tego cap. Zmianę spiąć z NodePolicy,
    owner lifecycle i drain, bez resamplingu trwałego budżetu z free RAM.
+8. Wspólny stan aplikacji przypina jeden kanoniczny ledger root na `host_id`;
+   jawne open'y tylko weryfikują ten pin. Brak albo konflikt wpisu blokuje
+   admission i wymaga jawnego uzgodnienia operatora, bez automatycznego merge.
 
 **Odbiór:** dwa store'y, prep i solve nie dostają kolidujących CPU/GPU;
 nie ma double counting RAM; restart ownera i stale epoch nie podwajają
@@ -174,7 +177,9 @@ allocation. Utrata heartbeat pozostawia unknown/quarantine do uzgodnienia.
    Ustalić adapter nested parallelism, zamiast mnożenia N×N wątków.
 4. Wprowadzić affinity i dostępne OS limits: Windows processor groups/CPU sets,
    Linux cgroup/cpuset/quota. Raportować actual enforcement; wymaganego hard
-   limit nie zastępuje advisory lub sama zmienna środowiskowa.
+   limit nie zastępuje advisory lub sama zmienna środowiskowa. Linuxowy adapter
+   używa jawnie skonfigurowanego, już delegowanego `FULLMAG_WORKER_CGROUP_ROOT`;
+   brak CPU controller delegation zamyka host-bound CPU admission.
 5. Potwierdzać requested/resolved/allocated/executed w receipt; release dopiero
    po exit proof. Brak raportu backendu jest `unreported`.
 
@@ -234,6 +239,10 @@ i niezerowy drawing buffer; same testy komponentów nie zamykają tej bramki.
   Batch przypina OutputStorage snapshot przy Submit; istniejący owner
   OutputStorage rezerwuje ścieżki powiązane z case/attempt. Zmiana workspace
   defaults podczas ekspansji nie zmienia policy późniejszych child Runów.
+- Operator retry wskazuje immutable `CaseId` i `TaskId` oraz oczekiwaną rewizję
+  katalogu. Ten sam `command_id`/`retry_id` służy do replay po nieznanym ACK;
+  poprzedni attempt wymaga terminalnego exit receipt i exact zwolnionej lease.
+  Retry jednego case nie zmienia kolejki, prób ani wyników pozostałych cases.
 - UI oferuje resources per case i parallel cases, preview limitującego
   zasobu, kolejkę z filtrem batch i partial results.
 

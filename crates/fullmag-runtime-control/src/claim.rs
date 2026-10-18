@@ -19,6 +19,8 @@ pub fn commit_claimed_task_admission(
     claim: &TaskClaim,
 ) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
     commit_claimed_task_admission_with(store, task, claim, |lease| {
+        let _writer = store.write_transaction()?;
+        crate::study_completion::require_task_dependencies_locked(store, &claim.run_id, claim.task_id.as_str())?;
         store.commit_task_admission(lease).map(Some)
     })?
     .context("local task admission unexpectedly returned no disposition")
@@ -38,8 +40,11 @@ pub fn commit_claimed_task_admission_with_host(
 ) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
     let inputs = capture_admission_inputs(inputs)?;
     commit_claimed_task_admission_with(store, task, claim, |lease| {
+        let lease = attach_host_launch_binding(ledger, lease)?;
         ledger
-            .commit_task_admission(request, store, lease, &inputs)
+            .commit_task_admission_checked(request, store, &lease, &inputs, || {
+                crate::study_completion::require_task_dependencies_locked(store, &claim.run_id, claim.task_id.as_str())
+            })
             .map(Some)
     })?
     .context("host task admission unexpectedly returned no disposition")
@@ -57,8 +62,22 @@ pub fn try_commit_claimed_task_admission_with_host(
 ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
     let inputs = capture_admission_inputs(inputs)?;
     commit_claimed_task_admission_with(store, task, claim, |lease| {
-        ledger.try_commit_task_admission(request, store, lease, &inputs)
+        let lease = attach_host_launch_binding(ledger, lease)?;
+        ledger.try_commit_task_admission_checked(request, store, &lease, &inputs, || {
+            crate::study_completion::require_task_dependencies_locked(store, &claim.run_id, claim.task_id.as_str())
+        })
     })
+}
+
+fn attach_host_launch_binding(
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    lease: &FmsResourceLease,
+) -> Result<FmsResourceLease> {
+    let mut lease = lease.clone();
+    lease.host_launch_binding = Some(crate::retry_store_writer_busy(|| {
+        ledger.worker_launch_binding()
+    })?);
+    Ok(lease)
 }
 
 fn capture_admission_inputs(
@@ -252,6 +271,12 @@ pub(crate) fn claimed_task_resource_compatibility(
                 study_step.step_id
             )
         })?;
+    if matches!(study_step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
+        if claim.lease.kind != ResourceKind::Cpu {
+            return Ok(ClaimedTaskResourceCompatibility::Incompatible("inspection realizes auto only on a CPU resource".into()));
+        }
+        crate::study_inspection::inspection_bundle_budget(claim)?;
+    }
     let compatibility = solver_resource_compatibility(
         &task_request.device,
         &claim.lease.kind,
@@ -433,6 +458,141 @@ mod tests {
             &required,
             &budget(500, 2_000, 8_000, 3_999)
         ));
+    }
+}
+
+#[cfg(test)]
+mod host_binding_tests {
+    use super::attach_host_launch_binding;
+    use chrono::Utc;
+    use fullmag_ir::compute_resources::ComputeParallelismIR;
+    use fullmag_session::compute_node_snapshot::EnforcementStatus;
+    use fullmag_session::host_resource_ledger::{
+        HostReservationIdentity, HostReservationOwner, HostReservationRequest, HostResourceLedger,
+        HostResourceLedgerPolicy, HostRuntimeReadiness, HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2,
+        HOST_RUNTIME_READINESS_SCHEMA_V1,
+    };
+    use fullmag_session::{
+        FmsResolvedInputsSnapshot, FmsResourceBudget, FmsResourceKind, FmsResourceLease,
+        FmsResourceLeaseState, SessionStore, FMS_RESOURCE_LEASE_SCHEMA,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding() {
+        let directory = tempfile::tempdir().unwrap();
+        let gpu_uuid = "GPU-00000000-0000-4000-8000-000000000001";
+        let policy = HostResourceLedgerPolicy {
+            schema_version: HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into(),
+            host_id: "host-1".into(),
+            topology_sha256: "a".repeat(64),
+            revision: 1,
+            owner_epoch: 1,
+            total_budget: FmsResourceBudget {
+                cpu_millis: 1000,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1024,
+            },
+            gpu_vram_bytes_by_uuid: BTreeMap::from([(gpu_uuid.into(), 4096)]),
+            allowed_cpu_ids: BTreeSet::new(),
+        };
+        let readiness = HostRuntimeReadiness {
+            schema_version: HOST_RUNTIME_READINESS_SCHEMA_V1.into(),
+            status: "ready".into(),
+            source_kind: "native_fem_gpu_abi".into(),
+            source_snapshot_sha256: "b".repeat(64),
+            runtime_identity_sha256: "c".repeat(64),
+            capabilities: vec!["fem.gpu".into()],
+            gpu_runtime_compatibility: BTreeMap::from([(gpu_uuid.into(), vec!["fem.gpu".into()])]),
+            gpu_visibility: EnforcementStatus::Supported,
+            inventory_sha256: Some(policy.topology_sha256.clone()),
+            capabilities_sha256: Some("d".repeat(64)),
+        };
+        let ledger = HostResourceLedger::initialize_with_readiness(
+            directory.path().join("host"),
+            policy.clone(),
+            readiness,
+        )
+        .unwrap();
+        let now = Utc::now();
+        let lease = FmsResourceLease {
+            schema_version: FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "compute.cpu".into(),
+            kind: FmsResourceKind::Cpu,
+            budget: FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            },
+            run_id: "run-1".into(),
+            task_id: "task-1".into(),
+            attempt_id: "attempt-1".into(),
+            ownership_epoch: 1,
+            lease_token: "lease-1".into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let generation = ledger.read_runtime_generation_sha256().unwrap();
+        let request = HostReservationRequest {
+            identity: HostReservationIdentity {
+                store_id: HostResourceLedger::store_id(store.root()).unwrap(),
+                run_id: lease.run_id.clone(),
+                task_id: lease.task_id.clone(),
+                resource_id: lease.resource_id.clone(),
+                owner: HostReservationOwner::Solver {
+                    attempt_id: lease.attempt_id.clone(),
+                    ownership_epoch: lease.ownership_epoch,
+                },
+                lease_token: lease.lease_token.clone(),
+            },
+            expected_host_id: policy.host_id.clone(),
+            expected_policy_revision: policy.revision,
+            expected_owner_epoch: policy.owner_epoch,
+            runtime_generation_sha256: Some(generation),
+            expected_compute_node_owner_id: None,
+            expected_compute_node_owner_epoch: None,
+            expected_topology_sha256: policy.topology_sha256.clone(),
+            budget: lease.budget.clone(),
+            exclusive_gpu_uuids: BTreeSet::new(),
+            gpu_vram_bytes_by_uuid: BTreeMap::new(),
+            cpu_ids: BTreeSet::new(),
+            expected_node_policy_revision: 1,
+            scheduling_priority: 0,
+            parallelism: ComputeParallelismIR::SingleProcess,
+        };
+        let inputs = FmsResolvedInputsSnapshot::new(serde_json::json!({})).unwrap();
+        let missing = ledger
+            .try_commit_task_admission(&request, &store, &lease, &inputs)
+            .unwrap_err();
+        assert!(
+            format!("{missing:#}")
+                .contains("host request and durable task claim is missing its host launch binding"),
+            "strict v2 guard must reject an unbound fresh claim: {missing:#}"
+        );
+
+        let bound = attach_host_launch_binding(&ledger, &lease).unwrap();
+        let after_binding = ledger
+            .try_commit_task_admission(&request, &store, &bound, &inputs)
+            .unwrap_err();
+        assert!(
+            format!("{after_binding:#}")
+                .contains("v4 host admission requires a pinned compute-node owner"),
+            "bound claim must pass the host-binding guard before the next v2 fence: {after_binding:#}"
+        );
+        let binding = bound.host_launch_binding.unwrap();
+        assert_eq!(
+            binding.runtime_generation_sha256,
+            Some(ledger.read_runtime_generation_sha256().unwrap())
+        );
+        assert_eq!(binding.ledger_root, directory.path().join("host"));
     }
 }
 

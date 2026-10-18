@@ -9,8 +9,10 @@ import { SettingsSection } from "./SettingsSection";
 
 const roots = vi.hoisted(() => ({ current: null as unknown as WorkspaceRootsController }));
 vi.mock("../model/useWorkspaceRoots", () => ({ useWorkspaceRoots: () => roots.current }));
-// The profile catalogue needs a kernel; it is covered where the kernel is provided.
-vi.mock("./ExecutionProfilesSettings", () => ({ ExecutionProfilesSettings: () => null }));
+// The profile catalogue needs a kernel; this sentinel keeps Settings navigation markup testable.
+vi.mock("./ExecutionProfilesSettings", () => ({
+  ExecutionProfilesSettings: () => <div data-execution-profiles="mock">Profiles panel</div>,
+}));
 
 const workspace = (over: Partial<WorkspaceItemsController> = {}): WorkspaceItemsController => ({
   state: { kind: "ready", list: { items: [], outcome: { state: "ready" }, skipped: 0 } },
@@ -123,6 +125,17 @@ describe("SettingsSection", () => {
     const html = renderToStaticMarkup(<SettingsSection recent={recent} workspace={workspace()} />);
     expect(html).toContain("Indexed locations");
     expect(html).not.toContain("Scanned locations");
+  });
+
+  it("groups compute overview, resources, and profiles in the existing Settings page", () => {
+    const html = renderToStaticMarkup(<SettingsSection recent={recent} />);
+
+    expect(html).toContain('aria-label="Compute settings sections"');
+    expect(html).toContain('data-value="overview"');
+    expect(html).toContain('data-value="resources"');
+    expect(html).toContain('data-value="profiles"');
+    expect(html).toContain('aria-checked="true"');
+    expect(html).toContain('data-execution-profiles="mock"');
   });
 
   it("keeps the desktop's Scanned locations without it", () => {

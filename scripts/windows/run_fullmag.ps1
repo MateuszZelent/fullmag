@@ -589,18 +589,32 @@ function Resolve-NativePublicationPython {
   return $basePython
 }
 
+function Initialize-NativeDevelopmentApiOwner {
+  param(
+    [Parameter(Mandatory = $true)][string]$Generation,
+    [Parameter(Mandatory = $true)][string]$SourceDigest,
+    [Parameter(Mandatory = $true)][string]$Version,
+    [Parameter(Mandatory = $true)][string]$StatusPath
+  )
+  $keys = @("FULLMAG_DEVELOPMENT_BACKEND_GENERATION", "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
+    "FULLMAG_DEVELOPMENT_BACKEND_SOURCE", "FULLMAG_DEVELOPMENT_BACKEND_VERSION")
+  $configured = @($keys | Where-Object { Test-Path -LiteralPath "Env:$_" })
+  if ($configured.Count -eq $keys.Count) { return }
+  if ($configured.Count -ne 0) { throw "Incomplete development API owner configuration" }
+  if ($Generation -cnotmatch '^[0-9a-f]{32}$' -or $SourceDigest -cnotmatch '^[0-9a-f]{64}$' -or
+      $Version -notmatch '^[A-Za-z0-9.+-]{1,128}$' -or -not [System.IO.Path]::IsPathRooted($StatusPath)) {
+    throw "Invalid sealed development API owner identity"
+  }
+  $env:FULLMAG_DEVELOPMENT_BACKEND_GENERATION = $Generation
+  $env:FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE = $StatusPath
+  $env:FULLMAG_DEVELOPMENT_BACKEND_SOURCE = $SourceDigest
+  $env:FULLMAG_DEVELOPMENT_BACKEND_VERSION = $Version
+}
+
 function Publish-NativeWorkspaceRuntime {
   if (-not $env:FULLMAG_NATIVE_RUNTIME_READY_FILE -or
       $env:FULLMAG_NATIVE_RUNTIME_NONCE -notmatch '^[0-9a-f]{32}$') {
     throw "Native workspace runtime requires its managed publication handshake"
-  }
-  foreach ($name in @(
-    "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
-    "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
-    "FULLMAG_DEVELOPMENT_BACKEND_SOURCE",
-    "FULLMAG_DEVELOPMENT_BACKEND_VERSION"
-  )) {
-    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
   }
   $readyPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path $env:FULLMAG_NATIVE_RUNTIME_READY_FILE -Label "native runtime handshake" -Parent $StorageLayout.runtime_root
   $bundleOutput = (& python (Join-Path $PSScriptRoot "runtime_bundle.py") --build-root $BuildRoot --runtime-root $StorageLayout.runtime_root --manifest $ManifestPath --profile $SelectedBackendProfile 2>&1 | Out-String)
@@ -620,17 +634,12 @@ function Publish-NativeWorkspaceRuntime {
   $launchOutput = (& $publicationPython -B (Join-Path $PSScriptRoot "stable_launch.py") --repo-root $RepoRoot --bundle-root ([string]$bundle.bundle_root) --profile $SelectedBackendProfile 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0) { throw "Stable native runtime publication failed: $launchOutput" }
   $launch = $launchOutput | ConvertFrom-Json
-  if ($SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev") {
-    $statusPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path (Join-Path $BuildRoot "backend-watch-status.json") -Label "development backend status" -Parent $BuildRoot
-    $backendSource = [string]$sealedBundle.source.backend_source_sha256
-    $productVersion = [string]$sealedBundle.source.build_version.product_version
-    if ($backendSource -notmatch '^[0-9a-f]{64}$' -or -not $productVersion) {
-      throw "Sealed native runtime is missing its development backend identity"
-    }
-    $env:FULLMAG_DEVELOPMENT_BACKEND_GENERATION = $env:FULLMAG_NATIVE_RUNTIME_NONCE
-    $env:FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE = [string]$statusPath
-    $env:FULLMAG_DEVELOPMENT_BACKEND_SOURCE = $backendSource
-    $env:FULLMAG_DEVELOPMENT_BACKEND_VERSION = $productVersion
+  if ($Frontend -eq "dev" -and $SelectedBackendProfile -eq "dev") {
+    # Bind the cold API owner to the verified bundle; explicit probe pins stay intact.
+    $ownerStatusPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path (Join-Path $BuildRoot "backend-watch-status.json") -Label "development API owner status" -Parent $BuildRoot
+    Initialize-NativeDevelopmentApiOwner -Generation $env:FULLMAG_NATIVE_RUNTIME_NONCE `
+      -SourceDigest ([string]$sealedBundle.source.backend_source_sha256) `
+      -Version ([string]$sealedBundle.source.build_version.product_version) -StatusPath $ownerStatusPath
   }
   Write-JsonAtomic -Path $readyPath -Value ([ordered]@{
     schema = "fullmag.native-runtime-ready.v2"
@@ -1348,6 +1357,24 @@ if ($RunMode -eq "workspace") {
   $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
   $env:FULLMAG_STATE_ROOT = Join-Path $StorageLayout.runtime_root "state"
   $env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev") { Join-Path $RepoRoot "apps\control-room" } else { "" }
+  if ($Frontend -eq "dev" -and $SelectedBackendProfile -eq "dev") {
+    $backendGeneration = [string]$env:FULLMAG_NATIVE_RUNTIME_NONCE
+    $backendSource = [string]$manifest.backend_source_sha256
+    $backendVersion = [string]$manifest.build_version.product_version
+    $backendStatusPath = Join-Path $BuildRoot "backend-watch-status.json"
+    if ($env:FULLMAG_NATIVE_RUNTIME_ACTIVE -ne "1" -or
+        $backendGeneration -notmatch '^[0-9a-f]{32}$' -or
+        $backendSource -notmatch '^[0-9a-f]{64}$' -or
+        [string]::IsNullOrWhiteSpace($backendVersion)) {
+      throw "Managed development workspace has incomplete API owner identity"
+    }
+    $backendStatusPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path $backendStatusPath -Label "development API backend status" -Parent $BuildRoot
+    # Bind backend observations to this exact runtime launch so stale watcher status is ignored.
+    $env:FULLMAG_DEVELOPMENT_BACKEND_GENERATION = $backendGeneration
+    $env:FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE = $backendStatusPath
+    $env:FULLMAG_DEVELOPMENT_BACKEND_SOURCE = $backendSource
+    $env:FULLMAG_DEVELOPMENT_BACKEND_VERSION = $backendVersion
+  }
   $workspaceArguments = @("ui", "--web-port", $WebPort.ToString())
   if ($Frontend -eq "dev") { $workspaceArguments += "--dev" }
   Push-Location $RepoRoot

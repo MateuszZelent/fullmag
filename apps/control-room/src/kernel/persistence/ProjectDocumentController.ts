@@ -9,14 +9,9 @@ import type {
 } from "../api/apiTypes";
 import type { ControlRoomApi } from "../api/ControlRoomApi";
 import {
-  assertProjectDocumentReopenMatches,
-  captureProjectDocumentDevelopmentHandoff,
   cloneBoundedProjectJsonObject,
-  validateProjectDocumentDevelopmentHandoff,
   validateProjectDocumentResource,
-  type CaptureProjectDocumentDevelopmentHandoffOptions,
-  type ProjectDocumentDevelopmentHandoff,
-} from "./ProjectDocumentDevelopmentHandoff";
+} from "./ProjectDocumentValidation";
 import type { RunOutcomePreview, RunOutcomeRecord } from "./runOutcome";
 
 const DEFAULT_PROJECT_NAME = "Untitled project";
@@ -51,7 +46,6 @@ type ProjectDocumentOperation =
   | "create"
   | "open"
   | "save"
-  | "restore"
   | "authoring"
   | "outcome";
 
@@ -141,12 +135,6 @@ export const EMPTY_PROJECT_DOCUMENT_SNAPSHOT: ProjectDocumentSnapshot = {
   hostPath: null,
 };
 
-export interface ProjectDocumentDevelopmentGuard {
-  readonly handoff: ProjectDocumentDevelopmentHandoff;
-  assertCurrent(): void;
-  release(): void;
-}
-
 export interface ProjectAuthoringSessionBinding {
   readonly projectId: string;
   readSceneDocument(): Promise<Record<string, unknown>>;
@@ -157,7 +145,6 @@ export class ProjectDocumentController {
   private authoringSessionBinding: ProjectAuthoringSessionBinding | null = null;
   private snapshot: ProjectDocumentSnapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
   private readonly listeners = new Set<() => void>();
-  private developmentGuard: symbol | null = null;
   private activeOperation: ProjectDocumentOperation | null = null;
   private pendingOutcomes: PendingRunOutcome[] = [];
   private flushingOutcomes = false;
@@ -185,7 +172,6 @@ export class ProjectDocumentController {
   canSave(): boolean {
     const document = this.documentView();
     return (
-      this.developmentGuard === null &&
       document !== null &&
       document.resource.mode.kind === "read_write" &&
       document.resource.archive_base64.length > 0
@@ -213,7 +199,7 @@ export class ProjectDocumentController {
    */
   close(discardChanges = false): boolean {
     const snapshot = this.snapshot;
-    if (this.developmentGuard !== null || this.activeOperation !== null || snapshot.state === "loading") return false;
+    if (this.activeOperation !== null || snapshot.state === "loading") return false;
     if (
       (snapshot.state === "ready" || snapshot.state === "error") &&
       snapshot.resource?.dirty &&
@@ -327,18 +313,8 @@ export class ProjectDocumentController {
     }
   }
 
-  captureDevelopmentHandoff(
-    options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
-  ): ProjectDocumentDevelopmentHandoff {
-    this.assertOperationAvailable();
-    this.assertDevelopmentHandoffIdle();
-    return captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
-  }
-
   /** Reserve this outcome before asynchronous preview work can outlive capture. */
   tryReserveRunOutcome(): (() => void) | null {
-    if (this.developmentGuard !== null) return null;
-
     this.scheduledRunOutcomeCount += 1;
     let released = false;
     return () => {
@@ -349,83 +325,6 @@ export class ProjectDocumentController {
         this.scheduledRunOutcomeCount - 1,
       );
     };
-  }
-
-  /** Freeze this document owner until a confirmed restart outcome releases its guard. */
-  beginDevelopmentHandoff(
-    options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
-  ): ProjectDocumentDevelopmentGuard {
-    this.assertOperationAvailable();
-    this.assertDevelopmentHandoffIdle();
-    const handoff = captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
-    const capturedJson = JSON.stringify(handoff);
-    const original = this.snapshot;
-    const token = Symbol("project-document-development-handoff");
-    this.developmentGuard = token;
-    // The immutable snapshot identity also notifies consumers of command availability.
-    this.snapshot = { ...original };
-    const captured = this.snapshot;
-    try {
-      this.notify();
-    } catch (error) {
-      this.developmentGuard = null;
-      this.snapshot = original;
-      try { this.notify(); } catch { /* The failed guard is not retained. */ }
-      throw error;
-    }
-    let released = false;
-    return {
-      handoff,
-      assertCurrent: () => {
-        this.assertDevelopmentHandoffIdle();
-        if (released || this.developmentGuard !== token || this.snapshot !== captured
-          || JSON.stringify(captureProjectDocumentDevelopmentHandoff(this.snapshot, { carryUnsaved: true })) !== capturedJson) {
-          throw new Error("The captured project document is no longer guarded.");
-        }
-      },
-      release: () => {
-        if (released) return;
-        released = true;
-        if (this.developmentGuard === token) {
-          this.developmentGuard = null;
-          this.snapshot = { ...this.snapshot };
-          this.notify();
-        }
-      },
-    };
-  }
-
-  /**
-   * Restore a captured bytes-only document into a fresh empty controller.
-   * The controller remains empty until the API has reproduced and verified the
-   * captured identity, mode, migration policy, and canonical archive bytes.
-   */
-  async restoreDevelopmentHandoff(value: unknown): Promise<void> {
-    this.assertOperationAvailable();
-    this.assertDevelopmentHandoffIdle();
-    if (this.snapshot.state !== "empty") {
-      throw new Error("Project document handoff restore requires an empty controller.");
-    }
-    const handoff = validateProjectDocumentDevelopmentHandoff(value);
-    if (handoff.snapshot.state === "empty") return;
-
-    this.beginOperation("restore");
-    try {
-      const captured = handoff.snapshot;
-      const reopened = await this.api.persistence.projects.open({
-        archive_base64: captured.resource.archive_base64,
-        display_name: captured.fileName,
-      });
-      const validatedReopen = validateProjectDocumentResource(reopened);
-      assertProjectDocumentReopenMatches(captured.resource, validatedReopen);
-
-      // The API reopen proves the archive is still byte-identical and
-      // compatible. Keep the captured metadata as source provenance; no host
-      // filesystem save or durability claim is made by this operation.
-      this.setReady(captured.resource, captured.fileName, captured.hostPath);
-    } finally {
-      this.finishOperation("restore");
-    }
   }
 
   /**
@@ -657,7 +556,6 @@ export class ProjectDocumentController {
 
     if (
       snapshot.resource.dirty ||
-      this.developmentGuard !== null ||
       this.activeOperation !== null ||
       this.flushingOutcomes
     ) {
@@ -675,7 +573,6 @@ export class ProjectDocumentController {
       while (this.pendingOutcomes.length > 0) {
         const snapshot = this.documentView();
         if (
-          this.developmentGuard !== null ||
           this.activeOperation !== null ||
           !snapshot ||
           snapshot.resource.dirty ||
@@ -764,23 +661,8 @@ export class ProjectDocumentController {
   }
 
   private assertOperationAvailable(): void {
-    if (this.developmentGuard !== null) {
-      throw new Error("The project document is protected during development restart.");
-    }
     if (this.activeOperation !== null || this.snapshot.state === "loading") {
       throw new Error("A project document operation is already in progress.");
-    }
-  }
-
-  private assertDevelopmentHandoffIdle(): void {
-    if (
-      this.scheduledRunOutcomeCount > 0 ||
-      this.pendingOutcomes.length > 0 ||
-      this.flushingOutcomes
-    ) {
-      throw new Error(
-        "A project run outcome is pending or being recorded; wait before development handoff.",
-      );
     }
   }
 
@@ -919,7 +801,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64");
 }
 
-export function base64ToBytes(value: string): Uint8Array {
+export function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   if (typeof atob === "function") {
     const binary = atob(value);
     const bytes = new Uint8Array(binary.length);
@@ -931,7 +813,7 @@ export function base64ToBytes(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, "base64"));
 }
 
-function downloadProjectArchive(bytes: Uint8Array, fileName: string): void {
+function downloadProjectArchive(bytes: Uint8Array<ArrayBuffer>, fileName: string): void {
   if (typeof document === "undefined" || typeof URL === "undefined") {
     throw new Error("Project downloads are unavailable in this environment.");
   }

@@ -1,3 +1,4 @@
+import { webcrypto } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -14,6 +15,24 @@ import type {
   FdmNativeLayerRegionMembershipResource,
   FdmRegionMembershipResource,
 } from "../apiTypes";
+
+describe("sha256HexBytes browser buffer boundary", () => {
+  it("hashes only the selected bytes for ordinary and shared backing buffers", async () => {
+    vi.stubGlobal("crypto", webcrypto);
+    try {
+      for (const buffer of [new ArrayBuffer(5), new SharedArrayBuffer(5)]) {
+        const bytes = new Uint8Array(buffer);
+        bytes.set([0xff, 0x61, 0x62, 0x63, 0xee]);
+        expect(await sha256HexBytes(bytes.subarray(1, 4))).toBe(
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        );
+        expect([...bytes]).toEqual([0xff, 0x61, 0x62, 0x63, 0xee]);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 function makeBuffer(
   version = 1,

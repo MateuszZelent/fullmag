@@ -1518,6 +1518,7 @@ pub(crate) fn resolve_with_registry_for_plan(
 ) -> Result<DispatchEngineResolution, RunError> {
     match registry {
         Some(registry) => match &plan.backend_plan {
+            BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
             BackendPlanIR::Fdm(fdm) => resolve_fdm_engine_with_registry(
                 problem,
                 registry,
@@ -1563,6 +1564,7 @@ pub(crate) fn resolve_with_registry_for_plan(
             }
         },
         None => match &plan.backend_plan {
+            BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
             BackendPlanIR::Fdm(fdm) => {
                 let resolution = resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
                 Ok(DispatchEngineResolution {
@@ -1851,6 +1853,9 @@ pub fn stage_step_time_frame(
     plan: &ExecutionPlanIR,
 ) -> Result<StageStepTimeFrame, RunError> {
     let frame = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => {
+            return Err(crate::field_only_plan_not_executable_as_llg())
+        }
         BackendPlanIR::Fdm(_) => {
             let runtime = crate::resolve_planned_runtime_engine(problem, plan)?;
             fdm_stage_step_time_frame(&runtime.engine_id)?
@@ -2201,14 +2206,7 @@ pub(crate) fn runtime_precision(problem: &ProblemIR) -> &str {
 }
 
 pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
-    match std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref() {
-        Some("cpu") => "cpu".to_string(),
-        Some("cuda") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
-            .unwrap_or("auto")
-            .replace("cuda", "gpu"),
-        Some(other) => other.replace("cuda", "gpu"),
-    }
+    crate::solver_runtime::selection::requested_registry_device_for_fdm(problem)
 }
 
 pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {

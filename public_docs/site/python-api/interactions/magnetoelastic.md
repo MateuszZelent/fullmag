@@ -33,7 +33,7 @@ The physical term or constraint is represented by the canonical IR object magnet
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -53,9 +53,9 @@ fm.Magnetoelastic(magnet, body, law)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```magnet``` | ```str``` | ```required``` | ```1``` | non-empty magnet link | magnetic object link | FEM CPU/GPU: IR; coupled mechanics runtime required | ```magnet``` |
-| ```body``` | ```str``` | ```required``` | ```1``` | non-empty body link | mechanical body link | FEM CPU/GPU: IR; coupled mechanics runtime required | ```body``` |
-| ```law``` | ```str``` | ```required``` | ```1``` | non-empty law link | magnetostriction law link | FEM CPU/GPU: IR; coupled mechanics runtime required | ```law``` |
+| `magnet` | `str` | `required` | `1` | non-empty magnet link | magnetic object link | FEM CPU/GPU: IR; coupled mechanics runtime required | `magnet` |
+| `body` | `str` | `required` | `1` | non-empty body link | mechanical body link | FEM CPU/GPU: IR; coupled mechanics runtime required | `body` |
+| `law` | `str` | `required` | `1` | non-empty law link | magnetostriction law link | FEM CPU/GPU: IR; coupled mechanics runtime required | `law` |
 
 ### Stage-first example
 

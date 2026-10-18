@@ -27,6 +27,7 @@ import { useFemMeshReadinessGuide } from "./useFemMeshReadinessGuide";
 
 export interface FemMeshReadinessGuideCardProps {
   compact?: boolean;
+  onNavigate?: () => void;
   selectedObjectId?: string | null;
   selectedObjectPolicy?: unknown;
   sharedDomainPolicy?: unknown;
@@ -90,6 +91,7 @@ export function FemMeshReadinessGuideCard(
 
 function FemMeshReadinessGuideCardInner({
   compact = false,
+  onNavigate,
   selectedObjectId = null,
   selectedObjectPolicy,
   sharedDomainPolicy,
@@ -113,7 +115,9 @@ function FemMeshReadinessGuideCardInner({
         action.kind === "select-node" ||
         action.kind === "focus-inspector-section"
       ) {
+        kernel.layout?.setPanelVisible?.("right", true);
         kernel.selection?.set?.(action.selection, "inspector");
+        onNavigate?.();
         return;
       }
 
@@ -131,7 +135,7 @@ function FemMeshReadinessGuideCardInner({
         }
       }
     },
-    [kernel, runningCommand, sessionScopeKey],
+    [kernel, onNavigate, runningCommand, sessionScopeKey],
   );
 
   if (!guide) {

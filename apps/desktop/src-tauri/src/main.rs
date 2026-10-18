@@ -36,7 +36,7 @@ fn main() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || script_run::reconcile_at_startup(&handle, &workspace));
             }
-            let (url, sidecar) = if let Some(ref url) = external_url {
+            let (url, sidecar, operator_capability) = if let Some(ref url) = external_url {
                 let api_base = std::env::var("FULLMAG_API_BASE")
                     .unwrap_or_else(|_| "http://localhost:8083".into());
                 app.manage(AppConfig {
@@ -44,19 +44,21 @@ fn main() {
                     ui_url: url.clone(),
                     launch_intent: launch_intent.clone(),
                 });
-                (url.clone(), None)
+                (url.clone(), None, None)
             } else {
                 let sidecar =
                     ApiSidecar::start().map_err(|e| Box::<dyn std::error::Error>::from(e))?;
                 let base = sidecar.base_url();
                 let ui_url = sidecar.ui_url();
+                let operator_capability = sidecar.local_compute_operator_capability();
                 app.manage(AppConfig {
                     api_base: base.clone(),
                     ui_url: ui_url.clone(),
                     launch_intent: launch_intent.clone(),
                 });
-                (ui_url, Some(sidecar))
+                (ui_url, Some(sidecar), Some(operator_capability))
             };
+            app.manage(commands::LocalComputeOperatorCapability(operator_capability));
 
             let parsed_url: url::Url = url.parse().map_err(|error| {
                 Box::<dyn std::error::Error>::from(std::io::Error::new(
@@ -98,6 +100,7 @@ fn main() {
             commands::save_project_archive,
             commands::reveal_in_file_manager,
             commands::get_app_config,
+            commands::local_compute_operator_capability,
             workspace_commands::workspace_list,
             workspace_commands::workspace_pin,
             workspace_commands::workspace_forget,

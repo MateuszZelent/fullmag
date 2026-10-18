@@ -56,8 +56,8 @@ test("production Tailwind sources include app/src and exclude external build cac
     );
   assert.deepEqual(productionDirectives, [
     '@import "tailwindcss" source(none);',
-    '@source "./";',
-    '@source "../src";',
+    '@source "./**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";',
+    '@source "../src/**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";',
   ]);
 
   const fixtureRoot = await mkdtemp(join(tmpdir(), "fullmag-tailwind-sources-"));
@@ -103,6 +103,51 @@ test("production Tailwind sources include app/src and exclude external build cac
       /min-height:\s*777px/,
       "the negative control confirms the external fixture is discoverable without an explicit source boundary",
     );
+
+    for (const className of ["text-emerald-600", "border-4", "underline"]) {
+      assert.equal(hasClassSelector(scopedCssOutput, className), false);
+    }
+
+    const nestedAppTemplate = join(
+      scopedRoot,
+      "apps",
+      "control-room",
+      "app",
+      "nested",
+      "templates",
+      "created.mdx",
+    );
+    const nestedSourceTemplate = join(
+      scopedRoot,
+      "apps",
+      "control-room",
+      "src",
+      "nested",
+      "templates",
+      "Created.tsx",
+    );
+    await mkdir(dirname(nestedAppTemplate), { recursive: true });
+    await mkdir(dirname(nestedSourceTemplate), { recursive: true });
+    await writeFile(
+      nestedAppTemplate,
+      '<main className="text-emerald-600">new app template</main>\n',
+    );
+    await writeFile(
+      nestedSourceTemplate,
+      '<section className="border-4">new source template</section>\n',
+    );
+    await writeFile(
+      join(scopedRoot, "apps", "control-room", "src", "Widget.tsx"),
+      '<button className="flex items-center rounded-lg p-3 underline">edited source</button>\n',
+    );
+
+    const changedCssOutput = await compileFixture(scopedFixture);
+    for (const className of ["text-emerald-600", "border-4", "underline"]) {
+      assert.ok(
+        hasClassSelector(changedCssOutput, className),
+        `newly created or edited source utility ${className} should be emitted`,
+      );
+    }
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -160,15 +205,15 @@ async function createFixture(projectRoot, globalsCss, includeExternalCache) {
     );
   }
 
-  return { cssPath, projectRoot };
+  return {
+    cssPath,
+    processor: postcss([tailwindPostcss({ base: projectRoot })]),
+  };
 }
 
-async function compileFixture({ cssPath, projectRoot }) {
+async function compileFixture({ cssPath, processor }) {
   const input = await readFile(cssPath, "utf8");
-  const result = await postcss([tailwindPostcss({ base: projectRoot })]).process(
-    input,
-    { from: cssPath, map: false },
-  );
+  const result = await processor.process(input, { from: cssPath, map: false });
   return result.css;
 }
 

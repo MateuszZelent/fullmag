@@ -280,7 +280,7 @@ fn declared_execution_profile_must_match_the_explicit_migration_reference() {
 fn flat_antenna_stage_declares_only_its_inspection_artifact() {
     let scene = scene_with_study(serde_json::json!({
         "stages": [
-            {"kind": "antenna_field_solve", "entrypoint_kind": "antenna_field_solve", "stage_id": "antenna-solve"},
+            {"kind": "antenna_field_solve", "entrypoint_kind": "flat_antenna_field_solve", "stage_id": "antenna-solve"},
             {"kind": "relax", "entrypoint_kind": "flat_relax", "stage_id": "magnetic-relax"}
         ]
     }));

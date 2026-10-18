@@ -77,8 +77,12 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
       status: testState.fieldCatalog ? testState.fieldCatalogStatus : "idle",
     };
   },
-  useQuantityCatalogResource: ({ enabled }: { enabled: boolean }) => {
+  useQuantityCatalogResource: ({ enabled = true }: { enabled?: boolean } = {}) => {
     resourceCall("quantity-catalog", enabled);
+    return { data: null, error: null, revision: null, status: "idle" };
+  },
+  useFieldMetaResource: ({ enabled = true }: { enabled?: boolean }) => {
+    resourceCall("field-meta", enabled);
     return { data: null, error: null, revision: null, status: "idle" };
   },
   useSolverStatusResource: ({ enabled }: { enabled: boolean }) => {
@@ -233,6 +237,7 @@ vi.mock("@/kernel/layout/useLayout", () => ({
 }));
 vi.mock("@/modules/viewport-3d/public", () => ({
   manifestRenderableCarriers: () => [],
+  useViewport3DArtifactInspectionPresentation: () => null,
 }));
 vi.mock("../primitives/FieldRow", () => ({
   FieldRow: ({ label, value }: { label: React.ReactNode; value: React.ReactNode }) => (

@@ -3,10 +3,12 @@
 import { Profiler, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
-import { DATA_FIELDS_PATH, DATA_QUANTITIES_PATH, MODEL_GEOMETRY_VALIDATION_PATH, MODEL_SCENE_PATH, SESSION_STATUS_PATH, SESSIONS_PATH, SIMULATION_OBJECT_METRICS_PATH, VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH, ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH, DATA_SCALARS_PATH, SIMULATION_SOLVER_STATUS_PATH, SIMULATION_STAGES_EXECUTION_PATH, DATA_FIELDS_PATH, DATA_QUANTITIES_PATH, MODEL_GEOMETRY_VALIDATION_PATH, MODEL_SCENE_PATH, SESSION_STATUS_PATH, SESSIONS_PATH, SIMULATION_OBJECT_METRICS_PATH, VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type { SceneResource, VisualizationStatePatch, VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { AuthoringHistoryController } from "@/kernel/authoring/AuthoringHistoryController";
+import { ObjectEditSessionController } from "@/kernel/authoring/object-edit/ObjectEditSessionController";
+import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { EventBus } from "@/kernel/events/EventBus";
@@ -16,17 +18,20 @@ import { LayoutController } from "@/kernel/layout/LayoutController";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { CameraRegistryController, DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 import { ObjectVisualizationController, resolveTargetVisualization } from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizationCommandContributions";
 import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
 import { ObjectGeneralPanel } from "@/modules/inspector/panels/ObjectGeneralPanel";
 import { ObjectVisualizationPanel } from "@/modules/inspector/panels/ObjectVisualizationPanel";
+import { FooterTelemetry } from "@/modules/footer/FooterTelemetry";
 import { Button } from "@/shared/ui/Button";
 
 const API_INSTANCE = "55555555-5555-4555-8555-555555555555";
@@ -42,13 +47,15 @@ interface FixtureControl {
   release(): void;
   releaseWrites(): void;
   solid(enabled: boolean): void;
+  telemetry(mode: "empty" | "partial" | "mixed" | "magnetic" | "antenna" | "placeholder" | "zero" | "global"): void;
 }
 declare global { interface Window { __primitiveColorFixture?: FixtureControl; } }
 
 function makeFixture() {
   const calls: Call[] = [], unexpected: string[] = [], pending: (() => void)[] = [];
   const pendingWrites: (() => void)[] = [];
-  const state = { renders: 0, revision: 1, hold: false };
+  const state = { renders: 0, revision: 1, hold: false, telemetryRevision: 1, objectSample: true, objectZero: false, objectGlobal: false };
+  let summary: Record<string, number> = {};
   const scene: SceneResource = { revision: 1, scene_revision: 1, scene: { id: "primitive-fixture", name: "Primitive fixture", authoring_schema: "fixture", source_of_truth: "fixture" }, objects: [{ id: OBJECT_ID, name: "Golden antenna", role: "antenna", geometry: { kind: "Box", size: [1, 1, 1], center: [0, 0, 0] } }] };
   let remote = { revision: 1, overrides: [], camera: DEFAULT_CAMERA_REGISTRY_STATE, layers: { airbox: { visible: true, surface: { visible: true, opacity: 0.2 }, wireframe: { visible: true }, points: { visible: false }, vectors: { visible: false } } } } as unknown as VisualizationStateResource;
   const bus = new EventBus<KernelEventMap>();
@@ -69,7 +76,7 @@ function makeFixture() {
     }
     if (request.method !== "GET") { unexpected.push(`${request.method} ${path}`); throw new Error("Unexpected fixture mutation"); }
     if (path === SESSIONS_PATH) return json({ schema_version: "1.0", sessions: [{ session_id: "primitive-fixture", name: "Primitive fixture", current: true, status: "idle" }] });
-    if (path === SESSION_STATUS_PATH) return json({ session: { session_id: "primitive-fixture", session_epoch: "primitive-fixture@1", request_scope_epoch: `${API_INSTANCE}:1`, name: "Primitive fixture", created_at: "fixture", workspace_root: "fixture" }, domain: { discretization: "fem" }, capabilities: { explicit_topology: false }, resources: { scene_revision: 1, visualization_revision: remote.revision }, lifecycle: { solver: "idle", session_resource: "active", connectivity: "connected", commandability: "writable" } });
+    if (path === SESSION_STATUS_PATH) return json({ session: { session_id: "primitive-fixture", session_epoch: "primitive-fixture@1", request_scope_epoch: `${API_INSTANCE}:1`, name: "Primitive fixture", created_at: "fixture", workspace_root: "fixture" }, domain: { discretization: "fem" }, capabilities: { explicit_topology: false }, energies: summary, metrics: { total_steps: 0 }, solver: { state: "idle" }, run: { run_id: "telemetry-fixture-run", requested_device: "cpu", resolved_device: "cpu", solver_steps: 0, solver_time: 0 }, resources: { scene_revision: scene.revision, scalars_revision: state.telemetryRevision, workspace_revision: state.telemetryRevision, visualization_revision: remote.revision }, lifecycle: { solver: "idle", session_resource: "active", connectivity: "connected", commandability: "writable" } });
     if (request.headers.get("x-fullmag-session-scope") !== scope()) { unexpected.push("unconfirmed scope"); return json({ error: "Unconfirmed fixture scope" }, 409); }
     if (path === MODEL_SCENE_PATH) return json(scene);
     if (path === MODEL_GEOMETRY_VALIDATION_PATH) return json({ revision: 1, issues: [], valid: true });
@@ -77,9 +84,14 @@ function makeFixture() {
       if (state.hold) return new Promise<Response>((resolve) => pending.push(() => resolve(json(remote))));
       return json(remote);
     }
+    if (path === DATA_SCALARS_PATH) return json({ revision: state.telemetryRevision, columns: [], rows: [] });
+    if (path === SIMULATION_SOLVER_STATUS_PATH) return json({ revision: 1, runtime_state: "idle" });
+    if (path === SIMULATION_STAGES_EXECUTION_PATH) return json({ revision: 1, stages: [] });
+    if (path === ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH || path === ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH) return json({ error: "No frequency response in fixture" }, 404);
     if (path === DATA_FIELDS_PATH) return json({ revision: 1, fields: [] });
     if (path === DATA_QUANTITIES_PATH) return json({ revision: 1, quantities: [] });
     const metricsPrefix = SIMULATION_OBJECT_METRICS_PATH.split("{")[0];
+    if (path === SIMULATION_OBJECT_METRICS_PATH.replace("{object_id}", "explicit-magnetic")) return json({ revision: state.telemetryRevision, object_id: "explicit-magnetic", has_solver_sample: state.objectSample, source: state.objectGlobal ? "solver_energy_only" : "solver_per_object", step: 1, time_seconds: 0, magnetization_average: { mx: 0.9, my: 0, mz: 0 }, energies: !state.objectSample ? { total: null, exchange: null, demag: null, zeeman: null, anisotropy: null, dmi: null } : state.objectZero ? { total: 0, exchange: 0, demag: 0, zeeman: 0, anisotropy: 0, dmi: 0 } : { total: null, exchange: 4, demag: null, zeeman: null, anisotropy: null, dmi: null } });
     if (path.startsWith(metricsPrefix)) return json({ error: "No solver sample in controlled fixture" }, 404);
     unexpected.push(`${request.method} ${path}`); throw new Error(`Unexpected fixture request: ${path}`);
   } });
@@ -89,9 +101,30 @@ function makeFixture() {
   const visualizationSync = new VisualizationRegistrySyncController({ api: api.visualization, resourceCacheScope: api.resourceCacheScope, resources });
   const cameraRegistry = new CameraRegistryController({ api: api.visualization, getSessionScopeKey: scope, idleFlushMs: null });
   const layout = new LayoutController(bus); layout.setActiveTab("geometry");
-  const kernel = { api, bus, resources, diagnostics, diagnosticRecorder: new DiagnosticRecorderController({ diagnostics }), commands, visualization, visualizationSync, cameraRegistry, layout, selection: new SelectionController(bus), visualizationDebug: new VisualizationDebugController(), authoringHistory: new AuthoringHistoryController(api, resources) } as unknown as KernelApi;
+  const kernel = { api, bus, resources, analysisFieldOverlay: new AnalysisFieldOverlayController(), objectEditSession: new ObjectEditSessionController<GeometryObjectDraft>(), diagnostics, diagnosticRecorder: new DiagnosticRecorderController({ diagnostics }), commands, visualization, visualizationSync, cameraRegistry, layout, selection: new SelectionController(bus), visualizationDebug: new VisualizationDebugController(), authoringHistory: new AuthoringHistoryController(api, resources) } as unknown as KernelApi;
   const target = { kind: "object" as const, id: OBJECT_ID, label: "Golden antenna" };
+  kernel.selection.set(objectSelection, "fixture");
   const control: FixtureControl = {
+    telemetry: (mode) => {
+      if (mode === "mixed") {
+        scene.objects = [...(scene.objects ?? []), { id: "explicit-magnetic", name: "Explicit magnetic sample", role: "magnet", magnetization_ref: "authored-magnetization", geometry: { kind: "Box", size: [1, 1, 1], center: [2, 0, 0] } }];
+        scene.revision = ++state.telemetryRevision;
+        scene.scene_revision = scene.revision;
+        resources.invalidate(MODEL_SCENE_PATH, scene.revision);
+      }
+      if (mode === "magnetic" || mode === "antenna") {
+        const id = mode === "magnetic" ? "explicit-magnetic" : OBJECT_ID;
+        kernel.selection.set({ ...objectSelection, objectId: id, nodeId: `model:object:${id}`, label: id }, "fixture");
+      }
+      state.objectSample = mode !== "placeholder";
+      state.objectZero = mode === "placeholder" || mode === "zero" || mode === "global";
+      state.objectGlobal = mode === "global";
+      if (state.objectZero) resources.invalidate(SIMULATION_OBJECT_METRICS_PATH.replace("{object_id}", "explicit-magnetic"), state.telemetryRevision + 1);
+      summary = mode === "empty" || state.objectZero ? {} : { demag: 2, zeeman: 0 };
+      state.telemetryRevision++;
+      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, state.telemetryRevision);
+      bus.emit("telemetry:scalar-sample", { revision: state.telemetryRevision, sessionId: "primitive-fixture", runId: "telemetry-fixture-run", step: 0, time: 0, row: mode === "empty" ? {} : { mx: 0.25, my: 0, mz: 0.5, ...(state.objectZero ? {} : { e_total: 0 }) } });
+    },
     read: () => ({ calls: [...calls], renders: state.renders, pending: pending.length, pendingWrites: pendingWrites.length, unexpected: [...unexpected], settings: resolveTargetVisualization({ snapshot: visualization.getSnapshot(), target, visualizationState: remote }).settings, airboxSettings: resolveTargetVisualization({ snapshot: visualization.getSnapshot(), target: { kind: "airbox", id: "airbox", label: "Airbox" }, visualizationState: remote }).settings }),
     invalidate: () => { state.hold = true; remote = { ...remote, revision: ++state.revision }; resources.invalidate(VISUALIZATION_STATE_PATH, state.revision); },
     release: () => { state.hold = false; if (!pending.length) throw new Error("No pending visualization refetch"); for (const release of pending.splice(0)) release(); },
@@ -119,6 +152,7 @@ export default function PrimitiveColorInspectorFixturePage() {
           <div style={{ height: 600 }} aria-hidden="true" />
         </div>
       </div>
+      <section aria-label="Allocated telemetry panel" style={{ height: 680 }}><FooterTelemetry bus={fixture.kernel.bus} /></section>
     </InspectorEditSessionProvider></KernelContext.Provider> : <p role="status">Loading fixture…</p>}
   </main>;
 }

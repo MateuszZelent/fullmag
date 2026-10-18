@@ -981,6 +981,7 @@ let fdmGridRefreshSequence = 0;
 export function runFdmGridRefreshOperation(
   context: CommandContext,
   request: FdmGridRefreshRequest,
+  confirmationRequestId?: string,
 ): Promise<CommandResult> {
   const api = context.api?.commands;
   if (!api) {
@@ -1007,7 +1008,8 @@ export function runFdmGridRefreshOperation(
     });
   }
 
-  const requestId = `fdm-grid-refresh-${Date.now()}-${++fdmGridRefreshSequence}`;
+  const requestId = confirmationRequestId ??
+    `fdm-grid-refresh-${Date.now()}-${++fdmGridRefreshSequence}`;
   const operation: MeshBuildOperation = {
     announced: false,
     baseMeshRevision: currentMeshRevision(context),
@@ -1495,7 +1497,7 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         kind: "fdm_grid_refresh",
         precondition: confirmation.precondition ?? { scene_revision: sceneRevision },
         reason: "explicit_build_grid",
-      });
+      }, confirmation.requestId);
     },
   },
   ...(["microstrip", "cpw"] as const).map((layout): CommandContribution => ({

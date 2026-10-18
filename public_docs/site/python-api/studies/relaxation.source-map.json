@@ -1,44 +1,72 @@
 {
   "document": {
     "path": "public_docs/site/python-api/studies/relaxation.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
   },
   "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
+  ],
+  "equations": [
     {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "documented"
+      "id": "eq-python-relaxation-torque",
+      "symbols": ["tau_i", "m_i", "H_eff_i", "tau_max", "A", "eps_tau"],
+      "sources": ["source-1", "source-2", "runner-conv", "fem-overdamped"]
     },
     {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "documented"
+      "id": "eq-python-relaxation-tolerance-conversion",
+      "symbols": ["eps_tau", "tau_T", "mu_0"],
+      "sources": ["source-2", "source-3"]
     }
   ],
-  "equations": [],
-  "symbols": [],
+  "symbols": [
+    {"id": "m_i", "latex": "\\mathbf{m}_i", "meaning": "Reduced magnetization unit vector at active point $i$", "si_unit": "1"},
+    {"id": "H_eff_i", "latex": "\\mathbf{H}_{\\mathrm{eff},i}", "meaning": "Total effective magnetic field at point $i$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau_i", "latex": "\\boldsymbol{\\tau}_i", "meaning": "Local effective-field torque residual $\\mathbf{m}_i \\times \\mathbf{H}_{\\mathrm{eff},i}$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau_max", "latex": "\\tau_{\\max}", "meaning": "Maximum active-set torque residual norm", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "eps_tau", "latex": "\\varepsilon_{\\tau}", "meaning": "Canonical torque stopping threshold (`torque_tolerance_apm`)", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau_T", "latex": "\\tau_{\\mathrm{T}}", "meaning": "User-facing magnetic induction torque threshold (`tolT`)", "si_unit": "\\mathrm{T}"},
+    {"id": "mu_0", "latex": "\\mu_0", "meaning": "Vacuum permeability ($4\\pi \\times 10^{-7}\\,\\mathrm{N\\,A^{-2}}$)", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "A", "latex": "\\mathcal{A}", "meaning": "Active magnetic cell/node index set ($M_{s,i} > 0$)", "si_unit": "1"}
+  ],
   "sources": [
     {
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class Relaxation",
-      "responsibility": "Relaxation study and algorithm policy lowering."
+      "responsibility": "Relaxation study and algorithm policy lowering"
     },
     {
       "id": "source-2",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class RelaxStop",
-      "responsibility": "Relaxation stop criteria normalization."
+      "responsibility": "Relaxation stop criteria normalization"
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "relax_stage",
+      "responsibility": "Stage-workflow relaxation builder and lowering"
+    },
+    {
+      "id": "runner-conv",
+      "path": "crates/fullmag-runner/src/relaxation/convergence.rs",
+      "symbol": "relaxation_converged",
+      "responsibility": "Accepted-state torque and energy convergence predicate"
+    },
+    {
+      "id": "fem-overdamped",
+      "path": "crates/fullmag-runner/src/fem/relax/llg_overdamped.rs",
+      "symbol": "execute_llg_overdamped",
+      "responsibility": "Native FEM overdamped LLG relaxation execution"
+    },
+    {
+      "id": "fem-tpi",
+      "path": "backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp",
+      "symbol": "run_tangent_plane_implicit_step",
+      "responsibility": "Native FEM CPU/MFEM tangent-plane implicit relaxation step"
     }
   ],
   "public_api": {
@@ -60,7 +88,7 @@
         "si_unit": "1",
         "validation": "One of `llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`, `tangent_plane_implicit`",
         "meaning": "Relaxation algorithm identifier",
-        "backend_support": "See algorithm lanes below; `tangent_plane_implicit` is FEM-only and not yet executable",
+        "backend_support": "FEM/FDM CPU/GPU for `llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`; FEM CPU extended lane for `tangent_plane_implicit`",
         "problem_ir": "`algorithm`"
       },
       {

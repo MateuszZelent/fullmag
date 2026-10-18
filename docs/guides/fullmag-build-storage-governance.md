@@ -97,6 +97,14 @@ po walidacji absolutnej ścieżki, markera storage, containment, junctionów/
 symlinków, właściciela i przeznaczenia projektu. Nie może wskazywać rootu
 dysku, checkoutu, worktree ani płaskiego katalogu legacy.
 
+Wyjątek zgodności dla istniejących instalacji: operator może jawnie wskazać
+`<główny checkout>/storage`, jeżeli katalog ma już poprawny marker tego projektu.
+Wyjątek dotyczy wyłącznie tej dokładnej ścieżki względem głównego checkoutu;
+nie pozwala na inne zagnieżdżone magazyny ani na nakładanie z dodatkowym
+worktree. Nadal obowiązują kontrole symlinków/junctionów, markera i ścieżek
+wyjściowych. Brak jawnej konfiguracji nie uruchamia tego wyjątku, a resolver
+nie tworzy ani nie migruje samodzielnie markera starszej instalacji.
+
 ## Kanoniczny układ danych
 
 Nowe dane Fullmag trafiają wyłącznie pod jeden `storage root` projektu:

@@ -444,6 +444,16 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
             );
         }
     }
+    if study.schema_version==fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4 {
+        let bytes=asset_payloads.get(fullmag_application::SCRIPT_PIPELINE_SOURCE_ASSET_ID).context("v4 Submit requires captured compiler source")?;
+        let source=fullmag_application::validate_accepted_script_pipeline_source(study,catalog,bytes)?;
+        fullmag_application::validate_script_source_assets(&intent.specification,&source,|hash,maximum| {
+            let reference=intent.specification.immutable_assets.iter().find(|asset|asset.content_sha256==hash).context("captured source ref missing")?;
+            let bytes=asset_payloads.get(&reference.asset_id).context("captured source bytes missing")?;
+            if bytes.len() as u64>maximum { bail!("captured source byte bound differs from Submit bytes"); }
+            Ok(bytes.clone())
+        })?;
+    }
     // Every store mutation below (CAS blobs, intent publication, replay
     // verification) must belong to ONE writer lease.  The lease is re-entrant
     // on this thread, but separate short leases let two concurrent identical
@@ -451,7 +461,12 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
     // that neither is accepted.  Holding one lease serializes the whole
     // publication: exactly one submit wins and the other observes either the
     // busy conflict or the committed intent as an idempotent replay.
-    let _publication_lease = store.write_transaction()?;
+    // Runtime publishers and schedulers use the same native descriptor.  Only
+    // acquisition is retryable: once this lease is held, every CAS and intent
+    // mutation below stays inside this one transaction and no post-publication
+    // retry can duplicate or reorder a partially committed submission.
+    let _publication_lease =
+        fullmag_runtime_control::retry_store_writer_busy(|| store.write_transaction())?;
     let definition_object_ref = store.store_blob(definition.raw_definition.raw_bytes())?;
     if definition_object_ref != intent.specification.snapshot.definition_sha256 {
         bail!("stored definition object differs from run snapshot digest");
@@ -670,7 +685,8 @@ pub(crate) fn commit_archived_batch_intent(
             Some(output_storage_snapshot),
         )
     };
-    let _publication_lease = store.write_transaction()?;
+    let _publication_lease =
+        fullmag_runtime_control::retry_store_writer_busy(|| store.write_transaction())?;
     let definition_object_ref = store.store_blob(definition_bytes)?;
     if definition_object_ref != request.template.snapshot.definition_sha256 {
         bail!("stored batch definition differs from template snapshot digest");
@@ -825,7 +841,10 @@ pub(crate) fn expand_pending_batch_children(
         }
         if matches!(
             progress.state,
-            FmsBatchExpansionState::Complete | FmsBatchExpansionState::Stopped
+            FmsBatchExpansionState::Complete
+                | FmsBatchExpansionState::Stopped
+                | FmsBatchExpansionState::Paused
+                | FmsBatchExpansionState::Cancelled
         ) {
             continue;
         }
@@ -874,6 +893,9 @@ pub(crate) fn expand_pending_batch_children(
                     progress.next_case_index,
                     next_sequence,
                 )?;
+                let mut stopped = stopped;
+                stopped.commands = progress.commands.clone();
+                stopped.validate_for_manifest(&intent, &manifest_bytes)?;
                 match store.commit_batch_expansion_progress(progress.sequence, &stopped) {
                     Ok(BatchExpansionProgressCommitDisposition::Accepted)
                     | Ok(BatchExpansionProgressCommitDisposition::Replayed) => {}
@@ -932,6 +954,29 @@ pub(crate) fn expand_pending_batch_children(
                 batch_case_idempotency_key(&intent.batch_id, &case.case_id),
                 materialized.specification,
             );
+            // The same writer lease protects the command gate, durable child
+            // publication, and cursor advance. A command ACK therefore means
+            // no later case can slip through this admission boundary.
+            let _publication = store.write_transaction()?;
+            let latest_progress = store
+                .read_batch_expansion_progress(&intent.batch_id)?
+                .context("accepted batch expansion cursor disappeared before child publication")?;
+            if latest_progress.sequence != progress.sequence
+                || latest_progress.next_case_index != progress.next_case_index
+                || latest_progress.state != progress.state
+            {
+                progress = latest_progress;
+                if matches!(
+                    progress.state,
+                    FmsBatchExpansionState::Complete
+                        | FmsBatchExpansionState::Stopped
+                        | FmsBatchExpansionState::Paused
+                        | FmsBatchExpansionState::Cancelled
+                ) {
+                    break;
+                }
+                continue;
+            }
             let receipt = match commit_validated_run_intent_with_backlog_limit(
                 store,
                 &child_intent,
@@ -963,8 +1008,10 @@ pub(crate) fn expand_pending_batch_children(
                 .sequence
                 .checked_add(1)
                 .context("batch expansion sequence overflow")?;
-            let next_progress =
+            let mut next_progress =
                 FmsBatchExpansionProgress::new(&intent, total_cases, next_index, next_sequence)?;
+            next_progress.commands = progress.commands.clone();
+            next_progress.validate_for_manifest(&intent, &manifest_bytes)?;
             match store.commit_batch_expansion_progress(progress.sequence, &next_progress) {
                 Ok(BatchExpansionProgressCommitDisposition::Accepted)
                 | Ok(BatchExpansionProgressCommitDisposition::Replayed) => {
@@ -1273,7 +1320,9 @@ pub(crate) fn materialize_accepted_run_catalog(
             updated_at: Utc::now(),
             tasks,
         };
-        match store.commit_run_catalog(&materialized) {
+        match fullmag_runtime_control::retry_store_writer_busy(|| {
+            store.commit_run_catalog(&materialized)
+        }) {
             Ok(()) => materialized,
             Err(error) => {
                 if let Some(existing) = store.read_run_catalog(run_id)? {
@@ -1319,7 +1368,9 @@ pub(crate) fn materialize_accepted_run_catalog(
             receipt.plan_fingerprint,
             payload,
         )?;
-        match store.commit_task_preparation_receipt(&durable_receipt)? {
+        match fullmag_runtime_control::retry_store_writer_busy(|| {
+            store.commit_task_preparation_receipt(&durable_receipt)
+        })? {
             PreparationReceiptCommitDisposition::Accepted
             | PreparationReceiptCommitDisposition::Replayed => {}
         }
@@ -1349,13 +1400,22 @@ mod tests {
         PrimitiveStageNode, StudyDiscretizationReference, StudyExecutionProfileReference,
         StudyModelReference, StudyPipelineDocument, StudyPipelineNode, StudyPipelineNodeSource,
         StudyPlanMigrationDefaults, StudyPrimitiveStageKind, StudySolverConfigReference,
-        STUDY_PLAN_SCHEMA_VERSION,
+        STUDY_PLAN_SCHEMA_VERSION_V2,
     };
     use fullmag_ir::ProblemIR;
     use fullmag_plan::lower_study_plan_with_catalog;
     use fullmag_plan::StudyProblemCatalogEntry;
     use fullmag_runtime_control::validate_requested_execution;
     use serde_json::json;
+
+    struct StopOnDrop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            self.0
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
     #[test]
     fn batch_publisher_budget_rotates_fairly_across_parent_batches() {
@@ -1646,7 +1706,7 @@ mod tests {
             ProjectSnapshot::from_envelope(&definition).unwrap(),
             StudyReference {
                 study_id: StudyId::parse("study-main").unwrap(),
-                plan_version: STUDY_PLAN_SCHEMA_VERSION.into(),
+                plan_version: STUDY_PLAN_SCHEMA_VERSION_V2.into(),
                 plan_sha256: study.canonical_sha256().unwrap(),
             },
             fullmag_session::canonical_json_sha256(&catalog_value),
@@ -2116,7 +2176,7 @@ mod tests {
             ProjectSnapshot::from_envelope(&definition).unwrap(),
             StudyReference {
                 study_id: StudyId::parse("study-lease").unwrap(),
-                plan_version: STUDY_PLAN_SCHEMA_VERSION.into(),
+                plan_version: STUDY_PLAN_SCHEMA_VERSION_V2.into(),
                 plan_sha256: study.canonical_sha256().unwrap(),
             },
             fullmag_session::canonical_json_sha256(&catalog_value),
@@ -2146,6 +2206,9 @@ mod tests {
             let rival = SessionStore::open_existing(&root).unwrap();
             let stop = Arc::new(AtomicBool::new(false));
             let rival_stop = stop.clone();
+            let (rival_ready_tx, rival_ready_rx) = std::sync::mpsc::channel();
+            let (rival_go_tx, rival_go_rx) = std::sync::mpsc::channel();
+            let _stop_on_drop = StopOnDrop(Arc::clone(&stop));
             let hammer = std::thread::spawn(move || {
                 // Sweep the rival's first acquisition across the submit so
                 // that it lands in different phases of the publication.
@@ -2154,6 +2217,8 @@ mod tests {
                 while std::time::Instant::now() < offset {
                     std::hint::spin_loop();
                 }
+                let force_initial_contention = attempt == 0;
+                let mut first_acquisition = true;
                 while !rival_stop.load(Ordering::Relaxed) {
                     // Spin instead of sleeping: coarse OS timers would hold the
                     // lease for whole scheduler quanta.
@@ -2165,12 +2230,46 @@ mod tests {
                         }
                     };
                     if let Ok(lease) = rival.write_transaction() {
+                        if force_initial_contention && first_acquisition {
+                            first_acquisition = false;
+                            rival_ready_tx.send(()).unwrap();
+                            let _ = rival_go_rx.recv_timeout(std::time::Duration::from_secs(5));
+                            // Keep the native descriptor held long enough for
+                            // the main thread to verify the typed conflict.
+                            spin(150_000);
+                            drop(lease);
+                            break;
+                        }
                         spin(0);
                         drop(lease);
                     }
                     spin(30000);
                 }
             });
+            if attempt == 0 {
+                rival_ready_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                let probe = SessionStore::open_existing(&root).unwrap();
+                let probe_error = match probe.write_transaction() {
+                    Ok(lease) => {
+                        drop(lease);
+                        None
+                    }
+                    Err(error) => Some(error),
+                };
+                let native_busy = probe_error.as_ref().is_some_and(|error| {
+                    error
+                        .chain()
+                        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                        && format!("{error:#}").contains("conflict=native descriptor")
+                });
+                rival_go_tx.send(()).unwrap();
+                assert!(
+                    native_busy,
+                    "test setup must observe native StoreWriterBusy before accepted commit: {probe_error:?}"
+                );
+            }
             let result = commit_validated_run_intent(
                 &store,
                 &intent,
@@ -2181,6 +2280,12 @@ mod tests {
             );
             stop.store(true, Ordering::Relaxed);
             hammer.join().unwrap();
+            if attempt == 0 {
+                assert!(
+                    result.is_ok(),
+                    "accepted publication must retry an initial writer collision: {result:?}"
+                );
+            }
             match result {
                 Ok(receipt) => {
                     assert_eq!(receipt.disposition, SubmitDisposition::Accepted);

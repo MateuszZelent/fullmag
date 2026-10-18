@@ -28,7 +28,7 @@ interface FixtureControl {
   read(): { calls: Call[]; pending: number; renders: number; scene: SceneResource; canUndo: boolean; invalidations: number; unexpected: string[] };
   release(): void;
   rejectNext(): void;
-  malformedNext(kind?: "amplitude" | "scene_revision"): void;
+  malformedNext(kind?: "amplitude" | "scene_revision" | "scene_id"): void;
   switchSession(name: "A" | "B"): void;
   resetHistory(): void;
   switchDrive(id: "drive-a" | "drive-b"): void;
@@ -39,14 +39,14 @@ declare global { interface Window { __antennaDriveEditorFixture?: FixtureControl
 
 function makeScene(name: string): SceneResource {
   const drive: NonNullable<SceneResource["solved_antenna_drives"]>[number] = { id: driveId, name: "Fixture drive", port_mode_id: "fixture-port", projection_ref: "fixture-projection", time_origin: "stage_local", peak_current_a: 1, waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" }, bandwidth_declaration: null };
-  return { revision: 1, scene_revision: 1, scene: { id: `session-${name}`, name, authoring_schema: "fixture", source_of_truth: "fixture" },
+  return { revision: 1, scene_revision: 1, scene: { id: `restored-model-${name}`, name, authoring_schema: "fixture", source_of_truth: "fixture" },
     objects: [], solved_antenna_drives: [drive, { ...drive, id: "drive-b" }] } as SceneResource;
 }
 
 function makeFixture() {
   let activeDrive = driveId;
   const driveListeners = new Set<() => void>();
-  const state = { name: "A" as "A" | "B", clock: 1, scenes: { A: makeScene("A"), B: makeScene("B") }, renders: 0, reject: false, malformed: null as "amplitude" | "scene_revision" | null };
+  const state = { name: "A" as "A" | "B", clock: 1, scenes: { A: makeScene("A"), B: makeScene("B") }, renders: 0, reject: false, malformed: null as "amplitude" | "scene_revision" | "scene_id" | null };
   const calls: Call[] = [], unexpected: string[] = [], pending: (() => void)[] = [];
   const bus = new EventBus<KernelEventMap>(), resources = new ResourceInvalidationController(bus);
   let invalidations = 0;
@@ -89,6 +89,7 @@ function makeFixture() {
           const acknowledgement = structuredClone(after);
           if (malformed === "amplitude" && acknowledgement.solved_antenna_drives) acknowledgement.solved_antenna_drives[0].peak_current_a = 2;
           if (malformed === "scene_revision") acknowledgement.revision = revision + 1;
+          if (malformed === "scene_id" && acknowledgement.scene) acknowledgement.scene.id = "foreign-model";
           resolve(json({ transaction_kind: "merge_patch", scene_revision: revision, committed_scene: acknowledgement }));
         }));
       }
@@ -116,7 +117,7 @@ function EditorOwner({ control }: { control: FixtureControl }) {
   return <>
     <output data-testid="drive-owner">{scene.data?.scene?.id}</output>
     <output data-testid="drive-dirty">{String(session?.dirty ?? false)}</output>
-    <section data-testid="drive-editor" data-resource-status={scene.status} data-drive-id={activeDrive}><SolvedAntennaDriveEditor driveId={activeDrive} scene={scene.data} status={scene.status} refetch={scene.refetch} /></section>
+    <section data-testid="drive-editor" data-resource-status={scene.status} data-drive-id={activeDrive}><SolvedAntennaDriveEditor driveId={activeDrive} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} /></section>
     <div style={{ height: 550 }} aria-hidden="true" />
   </>;
 }

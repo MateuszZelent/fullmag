@@ -41,8 +41,6 @@ import { SimulationPreparationLog } from "./SimulationPreparationLog";
 import {
   SimulationStartupOverlay,
   SimulationStartupOverlayView,
-  WorkspaceStartupGateView,
-  useSimulationStartupOverlayState,
   type SimulationStartupOverlayState,
 } from "./SimulationStartupOverlay";
 import {
@@ -57,6 +55,7 @@ import {
   TestEvent,
 } from "./simulationPreparationTestDom.test-support";
 import { footerManifest } from "../../modules/footer/manifest";
+import { SlotHost } from "./SlotHost";
 
 vi.mock("@/shared/ui/Dialog", async () => {
   const React = await import("react");
@@ -137,6 +136,45 @@ afterEach(() => {
 });
 
 describe("mounted simulation preparation UI", () => {
+  it("mounts the editable workspace while the first preparation resources are loading", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const pendingStatus = deferred<LiveStatusResource>();
+    const pendingPreparation = deferred<SimulationPreparationResource>();
+    const { kernel } = makeKernel({
+      loadPreparation: () => pendingPreparation.promise,
+      loadStatus: () => pendingStatus.promise,
+    });
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <MountedWorkspace />
+        </KernelContext.Provider>,
+      );
+    });
+
+    const workspace = findElement(
+      container,
+      (element) => element.getAttribute("data-slot-id") === "viewport-main",
+      "initial workspace viewport",
+    );
+    const status = findElement(
+      container,
+      (element) => hasClass(element, "fm-simulation-startup"),
+      "initial preparation status",
+    );
+    expect(container.textContent).toContain("Viewport module");
+    expect(status.getAttribute("data-state")).toBe("connecting");
+    expect(workspace.hasAttribute("inert")).toBe(false);
+    expect(workspace.hasAttribute("aria-hidden")).toBe(false);
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
+
   it("releases a ready restored session with revision zero and a missing preparation route", async () => {
     vi.useFakeTimers();
     const dom = installSimulationPreparationTestDom();
@@ -156,7 +194,7 @@ describe("mounted simulation preparation UI", () => {
     await act(async () => {
       root.render(
         <KernelContext.Provider value={kernel}>
-          <MountedWorkspaceGate />
+          <MountedWorkspace />
         </KernelContext.Provider>,
       );
     });
@@ -169,7 +207,7 @@ describe("mounted simulation preparation UI", () => {
     dom.restore();
   });
 
-  it("keeps the mounted workspace node through a startup re-entry", async () => {
+  it("preserves the editable workspace through pending, reconnecting, and failure states", async () => {
     const dom = installSimulationPreparationTestDom();
     const { kernel } = makeKernel({
       loadPreparation: async () => preparationFixture(),
@@ -186,13 +224,25 @@ describe("mounted simulation preparation UI", () => {
       resource(statusFixture({ solverState: "awaiting_command" })),
       20_000,
     );
-    const blockedState = resolveSimulationPreparationViewModel(
+    const pendingState = resolveSimulationPreparationViewModel(
       resource(preparationFixture()),
       resource(statusFixture()),
       20_000,
     );
+    const reconnectingState = resolveSimulationPreparationViewModel(
+      { ...resource(preparationFixture()), status: "stale" },
+      { ...resource(statusFixture()), status: "stale" },
+      20_000,
+    );
+    const failedState = resolveSimulationPreparationViewModel(
+      resource(failedPreparationFixture()),
+      resource(statusFixture({ solverState: "failed" })),
+      20_000,
+    );
     expect(readyState.isVisible).toBe(false);
-    expect(blockedState.isVisible).toBe(true);
+    expect(pendingState.isVisible).toBe(true);
+    expect(reconnectingState.kind).toBe("stale");
+    expect(failedState.kind).toBe("failed");
 
     const container = dom.document.createElement("div");
     dom.document.body.appendChild(container);
@@ -201,7 +251,7 @@ describe("mounted simulation preparation UI", () => {
     await act(async () => {
       root.render(
         <KernelContext.Provider value={kernel}>
-          <TransitionWorkspaceGate state={readyState} />
+          <TransitionWorkspace state={readyState} />
         </KernelContext.Provider>,
       );
     });
@@ -210,45 +260,47 @@ describe("mounted simulation preparation UI", () => {
       (element) => element.getAttribute("data-workspace-probe") === "mounted",
       "mounted workspace probe",
     );
+    const draft = findElement(
+      mountedProbe,
+      (element) => element.tagName === "INPUT",
+      "workspace draft input",
+    );
+    draft.value = "unsaved inspector draft";
+    draft.focus();
 
-    await act(async () => {
-      root.render(
-        <KernelContext.Provider value={kernel}>
-          <TransitionWorkspaceGate state={blockedState} />
-        </KernelContext.Provider>,
-      );
-    });
-    expect(
-      findElement(
-        container,
-        (element) =>
-          element.getAttribute("data-workspace-probe") === "mounted",
-        "workspace probe after startup re-entry",
-      ),
-    ).toBe(mountedProbe);
-    expect(
-      findElement(
-        container,
-        (element) => hasClass(element, "fm-simulation-startup"),
-        "startup overlay after re-entry",
-      ),
-    ).toBeTruthy();
-
-    await act(async () => {
-      root.render(
-        <KernelContext.Provider value={kernel}>
-          <TransitionWorkspaceGate state={readyState} />
-        </KernelContext.Provider>,
-      );
-    });
-    expect(
-      findElement(
-        container,
-        (element) =>
-          element.getAttribute("data-workspace-probe") === "mounted",
-        "workspace probe after startup recovery",
-      ),
-    ).toBe(mountedProbe);
+    for (const [state, label] of [
+      [pendingState, "pending preparation"],
+      [reconnectingState, "reconnecting preparation"],
+      [failedState, "failed preparation"],
+      [readyState, "ready preparation recovery"],
+    ] as const) {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <TransitionWorkspace state={state} />
+          </KernelContext.Provider>,
+        );
+      });
+      expect(
+        findElement(
+          container,
+          (element) =>
+            element.getAttribute("data-workspace-probe") === "mounted",
+          `${label} workspace probe`,
+        ),
+      ).toBe(mountedProbe);
+      expect(draft.value).toBe("unsaved inspector draft");
+      expect(dom.document.activeElement).toBe(draft);
+      if (state.kind === "failed") {
+        expect(
+          findElement(
+            container,
+            (element) => hasClass(element, "fm-simulation-startup"),
+            "failure status during workspace preservation",
+          ).getAttribute("data-state"),
+        ).toBe("failed");
+      }
+    }
 
     await act(async () => root.unmount());
     dom.restore();
@@ -273,7 +325,7 @@ describe("mounted simulation preparation UI", () => {
     await act(async () => {
       root.render(
         <KernelContext.Provider value={kernel}>
-          <MountedWorkspaceGate />
+          <MountedWorkspace />
         </KernelContext.Provider>,
       );
     });
@@ -284,7 +336,8 @@ describe("mounted simulation preparation UI", () => {
       "The local runtime could not provide simulation preparation status.",
     );
     expect(container.textContent).not.toContain("/private/model.py");
-    expect(container.textContent).not.toContain("Viewport module");
+    expect(container.textContent).toContain("Viewport module");
+    await act(async () => findButton(container, "View failure details").click());
     expect(findButton(container, "Open full diagnostics")).toBeTruthy();
 
     await act(async () => root.unmount());
@@ -379,6 +432,7 @@ describe("mounted simulation preparation UI", () => {
         </KernelContext.Provider>,
       );
     });
+    await act(async () => findButton(container, "View failure details").click());
     expect(findButton(container, "View error details")).toBeTruthy();
 
     await act(async () => {
@@ -404,7 +458,7 @@ describe("mounted simulation preparation UI", () => {
     dom.restore();
   });
 
-  it("auto-opens one precise failure dialog per failure identity and allows manual reopen", async () => {
+  it("opens failure details only after an explicit action and allows manual reopen", async () => {
     const clipboardWrite = vi.fn<(text: string) => Promise<void>>();
     clipboardWrite.mockResolvedValue(undefined);
     const dom = installSimulationPreparationTestDom({
@@ -444,6 +498,11 @@ describe("mounted simulation preparation UI", () => {
     });
     await settleDialog();
 
+    expect(findDialogs(dom.document.body)).toHaveLength(0);
+    expect(container.textContent).toContain("Simulation preparation failed");
+
+    await act(async () => findButton(container, "View failure details").click());
+    await act(async () => findButton(container, "View error details").click());
     const dialogs = findDialogs(dom.document.body);
     expect(dialogs).toHaveLength(1);
     expect(dom.document.body.textContent).toContain(
@@ -552,6 +611,8 @@ describe("mounted simulation preparation UI", () => {
         </KernelContext.Provider>,
       );
     });
+    expect(findDialogs(dom.document.body)).toHaveLength(0);
+    await act(async () => findButton(container, "View error details").click());
     expect(findDialogs(dom.document.body)).toHaveLength(1);
 
     await act(async () => root.unmount());
@@ -588,6 +649,10 @@ describe("mounted simulation preparation UI", () => {
       );
       await Promise.resolve();
     });
+    await settleDialog();
+
+    await act(async () => findButton(container, "View failure details").click());
+    await act(async () => findButton(container, "View error details").click());
     await settleDialog();
 
     const countMessage =
@@ -630,8 +695,11 @@ describe("mounted simulation preparation UI", () => {
       await Promise.resolve();
     });
     await settleDialog();
+    await act(async () => findButton(container, "View failure details").click());
+    await act(async () => findButton(container, "View error details").click());
+    await settleDialog();
     await act(async () => {
-      findButton(dom.document.body, "Copy full diagnostic report").click();
+      findButton(container, "Copy full diagnostic report").click();
       await Promise.resolve();
     });
 
@@ -648,7 +716,7 @@ describe("mounted simulation preparation UI", () => {
     dom.restore();
   });
 
-  it("opens the mounted production diagnostics consumer without unmounting the failure gate", async () => {
+  it("opens the mounted production diagnostics consumer beside the workspace", async () => {
     const dom = installSimulationPreparationTestDom();
     const { kernel } = makeKernel({
       loadPreparation: async () => preparationFixture(),
@@ -666,13 +734,16 @@ describe("mounted simulation preparation UI", () => {
     await act(async () => {
       root.render(
         <KernelContext.Provider value={kernel}>
-          <WorkspaceStartupGateView state={model}>
+          <>
             <div data-slot-id="viewport-main">Viewport module</div>
-          </WorkspaceStartupGateView>
+            <SimulationStartupOverlayView state={model} />
+            <SlotHost slotId="panel-bottom" />
+          </>
         </KernelContext.Provider>,
       );
     });
     expect(container.textContent).not.toContain("Recording");
+    await act(async () => findButton(container, "View failure details").click());
     await act(async () => findButton(container, "Open full diagnostics").click());
     expect(kernel.layout.get().activeBottomPanelTab).toBe("diagnostics");
     await settleMountedModule();
@@ -686,7 +757,7 @@ describe("mounted simulation preparation UI", () => {
         "Bottom diagnostics tabs",
       ),
     ).toBeTruthy();
-    expect(container.textContent).not.toContain("Viewport module");
+    expect(container.textContent).toContain("Viewport module");
 
     await act(async () => root.unmount());
     dom.restore();
@@ -1069,23 +1140,28 @@ function statusFixture(
   } as LiveStatusResource;
 }
 
-function MountedWorkspaceGate() {
+function MountedWorkspace() {
   return (
-    <WorkspaceStartupGateView state={useSimulationStartupOverlayState()}>
+    <>
       <div data-slot-id="viewport-main">Viewport module</div>
-    </WorkspaceStartupGateView>
+      <SimulationStartupOverlay />
+    </>
   );
 }
 
-function TransitionWorkspaceGate({
+function TransitionWorkspace({
   state,
 }: {
   readonly state: SimulationStartupOverlayState;
 }) {
   return (
-    <WorkspaceStartupGateView state={state} preserveMountedWorkspace>
-      <div data-workspace-probe="mounted">Workspace module</div>
-    </WorkspaceStartupGateView>
+    <>
+      <div data-workspace-probe="mounted">
+        <input aria-label="Workspace draft" />
+        Workspace module
+      </div>
+      <SimulationStartupOverlayView state={state} />
+    </>
   );
 }
 

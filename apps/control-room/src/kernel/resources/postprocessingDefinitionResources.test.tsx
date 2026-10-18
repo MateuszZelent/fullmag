@@ -171,13 +171,20 @@ async function waitForSessionAdmission(
     });
   }
 
-  expect(loaders.sessionList.mock.calls).toHaveLength(expectedCalls.sessionList);
-  expect(loaders.sessionStatus.mock.calls).toHaveLength(
-    expectedCalls.sessionStatus,
-  );
-  expect(loaders.definitions.mock.calls).toHaveLength(
-    expectedCalls.definitions,
-  );
+  // One tuple-scoped recovery may reconcile collection/status after a session change.
+  for (const [loader, expected] of [
+    [loaders.sessionList, expectedCalls.sessionList],
+    [loaders.sessionStatus, expectedCalls.sessionStatus],
+  ] as const) {
+    expect(loader.mock.calls.length).toBeGreaterThanOrEqual(expected);
+    expect(loader.mock.calls.length).toBeLessThanOrEqual(expected + 1);
+  }
+  expect(loaders.definitions.mock.calls).toHaveLength(expectedCalls.definitions);
+  const settledCalls = [loaders.sessionList, loaders.sessionStatus, loaders.definitions]
+    .map(loader => loader.mock.calls.length);
+  await act(async () => { await vi.advanceTimersByTimeAsync(6); });
+  expect([loaders.sessionList, loaders.sessionStatus, loaders.definitions]
+    .map(loader => loader.mock.calls.length)).toEqual(settledCalls);
 }
 
 function Probe() {

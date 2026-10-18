@@ -339,6 +339,9 @@ pub(crate) fn resolve_spatial_target(
         SpatialFieldCarrier::FemElements { .. } => Err(ApiError::unprocessable(
             "unsupported_element_order: planar sampling requires P1 nodal values",
         )),
+        SpatialFieldCarrier::ArtifactSamples(_) => Err(ApiError::unprocessable(
+            "artifact inspection samples require their explicit owned geometry; planar projection is not qualified",
+        )),
         SpatialFieldCarrier::ArtifactLinear { .. } => Err(ApiError::unprocessable(
             "unsupported_artifact_carrier: linear artifacts have no exact spatial coordinates",
         )),

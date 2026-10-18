@@ -22,6 +22,26 @@ export function canonicalSavedGeometryJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+export function isSavedOwnedSampleGeometry(value: SavedFieldGeometryResource): boolean {
+  if (value.geometry_schema_version !== "fullmag.owned_sample_field_geometry.v1") return false;
+  const field = value.dataset.descriptor;
+  const role = field.quantity_id === "V_electric" ? ["V", "1", "source_nodes"]
+    : field.quantity_id === "J_charge" ? ["A/m^2", "3", "tet4_cell_local_nodes"]
+    : field.quantity_id === "H_ant" ? ["A/m", "3", "sample_nodes"] : null;
+  if (!role) return false;
+  return value.producer_id === "fullmag.closed-loop-inspection" && value.producer_version === "2"
+    && value.tensor_artifact.accepted_state == null && value.geometry_manifest.accepted_state == null
+    && field.tensor_rank === (role[1] === "1" ? "0" : "1")
+    && field.unit === role[0] && field.normalization === "none" && field.complex_encoding === "real"
+    && field.value_representation === "physical_field" && field.sample_location === "node"
+    && field.harmonic_convention == null && field.modal_semantics == null
+    && field.function_space?.family === "owned_sample_values"
+    && field.function_space.order === "0" && field.function_space.vector_dimension === role[1]
+    && field.function_space.ordering === "by_node"
+    && field.function_space.basis_id === `basis:${role[2]}:${field.layout_digest}`
+    && field.carrier_id === `carrier:${role[2]}:${field.layout_digest}`;
+}
+
 export function validateSavedGeometry(
   value: SavedFieldGeometryResource,
   dataset: MaterializedDatasetResource,
@@ -32,7 +52,7 @@ export function validateSavedGeometry(
     dataset.schema_version !== "fullmag.analysis.materialized_dataset.v1" ||
     dataset.integrity !== "verified" ||
     value.coordinate_unit !== "m" ||
-    value.geometry_schema_version !== "fullmag.fem_p1_field_geometry.v1" ||
+    (value.geometry_schema_version !== "fullmag.fem_p1_field_geometry.v1" && !isSavedOwnedSampleGeometry(value)) ||
     value.geometry_payload.schema_id !== value.geometry_schema_version ||
     value.geometry_manifest.schema_id !== "fullmag.solution_field_geometry.v1" ||
     value.topology_binary_schema !== "fullmag.binary.fem_mesh_topology.v2" ||
@@ -82,7 +102,7 @@ export function validateSavedGeometry(
     canonicalSavedGeometryJson(value.dataset.descriptor) !==
       canonicalSavedGeometryJson(dataset.field.descriptor) ||
     value.layout_digest !== dataset.field.descriptor.layout_digest ||
-    value.topology_fingerprint !== dataset.field.descriptor.topology_id ||
+    (!isSavedOwnedSampleGeometry(value) && value.topology_fingerprint !== dataset.field.descriptor.topology_id) ||
     value.support_fingerprint !== dataset.field.descriptor.active_support.support_fingerprint ||
     value.producer_id !== dataset.field.producer_id ||
     value.producer_version !== dataset.field.producer_version

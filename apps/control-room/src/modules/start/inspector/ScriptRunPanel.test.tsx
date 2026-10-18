@@ -1,5 +1,13 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+  TestEvent,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import {
   parseScriptHandle,
@@ -9,6 +17,10 @@ import {
   type ScriptRunStatus,
 } from "../model/scriptRun";
 import type { ScriptRunController } from "../model/useScriptRun";
+import {
+  unavailableExecutionAvailability,
+  type ExecutionAvailability,
+} from "../model/executionAvailability";
 
 import { ScriptRunPanel } from "./ScriptRunPanel";
 
@@ -49,7 +61,18 @@ const controller = (phase: RunPhase): ScriptRunController => ({
   forgetTrust: vi.fn(async () => null),
 });
 
-const render = (phase: RunPhase) => renderToStaticMarkup(<ScriptRunPanel controller={controller(phase)} />);
+const render = (phase: RunPhase, executionAvailability?: ExecutionAvailability) => renderToStaticMarkup(
+  <ScriptRunPanel controller={controller(phase)} executionAvailability={executionAvailability} />,
+);
+
+const confirmedGpuExecutionAvailability: ExecutionAvailability = {
+  byBackend: Object.fromEntries(
+    Object.entries(unavailableExecutionAvailability.byBackend).map(([backend, availability]) => [backend, {
+      ...availability,
+      gpu: { enabled: true, reason: "" },
+    }]),
+  ) as ExecutionAvailability["byBackend"],
+};
 
 describe("ScriptRunPanel", () => {
   it("renders nothing while idle", () => {
@@ -69,6 +92,59 @@ describe("ScriptRunPanel", () => {
     // Managed results are the default; next to the script needs its own confirmation.
     expect(html).toMatch(/type="radio"[^>]*checked=""[^>]*\/><span>In a Fullmag run folder/);
     expect(html).not.toContain("Write results into a folder beside the script");
+  });
+
+  it("keeps GPU unavailable when the backend has not confirmed a device", () => {
+    const html = render(
+      { kind: "ready", handle, preflight: preflight() },
+      unavailableExecutionAvailability,
+    );
+
+    expect(html).toMatch(/<option[^>]*disabled=""[^>]*value="gpu"/);
+    expect(html).toContain("GPU only (no CPU fallback) (unavailable)");
+    expect(html).toContain("GPU is unavailable");
+  });
+
+  it("blocks a retained GPU intent when the current device proof disappears", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const phase: RunPhase = { kind: "ready", handle, preflight: preflight() };
+    const run = vi.fn(async () => {});
+    const runController = { ...controller(phase), run };
+
+    try {
+      await act(async () => root.render(
+        <ScriptRunPanel
+          controller={runController}
+          executionAvailability={confirmedGpuExecutionAvailability}
+        />,
+      ));
+      const device = findElement(container, (element) => element.tagName === "SELECT", "device selector");
+      device.value = "gpu";
+      await act(async () => device.dispatchEvent(new TestEvent("change", { bubbles: true })));
+      expect(device.value).toBe("gpu");
+
+      await act(async () => root.render(
+        <ScriptRunPanel
+          controller={runController}
+          executionAvailability={unavailableExecutionAvailability}
+        />,
+      ));
+      const retainedDevice = findElement(container, (element) => element.tagName === "SELECT", "device selector");
+      const runButton = findElement(
+        container,
+        (element) => element.tagName === "BUTTON" && element.getAttribute("data-action") === "confirm-run",
+        "run button",
+      );
+      expect(retainedDevice.value).toBe("gpu");
+      expect(runButton.disabled).toBe(true);
+      await act(async () => runButton.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("disables the run button and explains a refusal", () => {

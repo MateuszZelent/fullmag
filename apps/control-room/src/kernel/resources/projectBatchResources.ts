@@ -1,8 +1,11 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import type {
+  ProjectBatchCommandRequest,
+  ProjectBatchCommandResource,
+  ProjectBatchCaseSummaryResource,
   ProjectBatchCasesQuery,
   ProjectBatchCasesResource,
   ProjectBatchListQuery,
@@ -10,11 +13,28 @@ import type {
   ProjectBatchSubmitRequest,
   ProjectBatchSubmitResource,
 } from "../api/apiTypes";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
+import { projectRunResourceKey } from "./projectRunResources";
 import { useResource } from "./useResource";
 
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
+type ProjectBatchCaseTaskLifecycle = NonNullable<
+  ProjectBatchCaseSummaryResource["published_run"]
+>["tasks"][number]["lifecycle"];
+
+const PROJECT_BATCH_CASE_TASK_LIFECYCLES = new Set<ProjectBatchCaseTaskLifecycle>([
+  "accepted",
+  "queued",
+  "preparing",
+  "running",
+  "stopping",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
 
 export function projectBatchesResourcePrefix(projectId: string): string {
   return `project-batches:${encodeURIComponent(projectId)}:`;
@@ -32,7 +52,11 @@ export function projectBatchCasesResourceKey(
   batchId: string,
   query: ProjectBatchCasesQuery = {},
 ): string {
-  return `project-batch-cases:${encodeURIComponent(projectId)}:${encodeURIComponent(batchId)}:limit:${resolvePageLimit(query.limit)}:cursor:${encodeURIComponent(query.cursor ?? "first")}`;
+  return `${projectBatchCasesResourcePrefix(projectId, batchId)}limit:${resolvePageLimit(query.limit)}:cursor:${encodeURIComponent(query.cursor ?? "first")}`;
+}
+
+export function projectBatchCasesResourcePrefix(projectId: string, batchId: string): string {
+  return `project-batch-cases:${encodeURIComponent(projectId)}:${encodeURIComponent(batchId)}:`;
 }
 
 export function validateProjectBatchesEnvelope(
@@ -60,6 +84,7 @@ export function validateProjectBatchesEnvelope(
       !/^[a-f0-9]{64}$/i.test(batch.manifest_sha256) ||
       !isPositiveSafeInteger(batch.case_count) ||
       !isNonNegativeSafeInteger(batch.published_case_count) ||
+      !isNonNegativeSafeInteger(batch.command_revision) ||
       batch.published_case_count > batch.case_count ||
       !isExpansionState(batch.expansion_state) ||
       !isFailurePolicy(batch.failure_policy) ||
@@ -74,7 +99,9 @@ export function validateProjectBatchesEnvelope(
         batch.failure_policy !== "stop_admission" ||
         batch.published_case_count === 0 ||
         batch.published_case_count === batch.case_count
-      ))
+      )) ||
+      (batch.expansion_state === "paused" && batch.published_case_count === batch.case_count) ||
+      (batch.expansion_state === "cancelled" && batch.published_case_count === batch.case_count)
     ) {
       throw new Error("Batch expansion state does not match its published prefix.");
     }
@@ -122,7 +149,8 @@ export function validateProjectBatchCasesEnvelope(
       !isNonEmptyString(item.planned_run_id) ||
       !isRecord(item.parameter_tuple) ||
       !matchesParameterTuple(item.parameter_tuple, axisNames) ||
-      !isBatchCaseState(item.state)
+      !isBatchCaseState(item.state) ||
+      !matchesPublishedRun(item, item.state)
     ) {
       throw new Error("Batch case page contains a malformed or duplicate identity.");
     }
@@ -131,6 +159,43 @@ export function validateProjectBatchCasesEnvelope(
 
   validatePageCursor(data.next_cursor, cursor, data.cases.at(-1)?.case_id);
   return data;
+}
+
+export async function loadAllProjectBatchCases(
+  batchId: string,
+  loadPage: (query: ProjectBatchCasesQuery) => Promise<ProjectBatchCasesResource>,
+): Promise<ProjectBatchCaseSummaryResource[]> {
+  const cases: ProjectBatchCaseSummaryResource[] = [];
+  const caseIds = new Set<string>();
+  const requestedCursors = new Set<string | null>();
+  let cursor: string | null = null;
+
+  while (true) {
+    if (requestedCursors.has(cursor)) {
+      throw new Error("Batch case pagination repeated a cursor.");
+    }
+    requestedCursors.add(cursor);
+    const query = { cursor, limit: MAX_PAGE_LIMIT };
+    const page = validateProjectBatchCasesEnvelope(
+      await loadPage(query),
+      batchId,
+      query,
+    );
+    for (const item of page.cases) {
+      if (caseIds.has(item.case_id)) {
+        throw new Error("Batch case pagination returned a duplicate case.");
+      }
+      caseIds.add(item.case_id);
+      cases.push(item);
+    }
+
+    const nextCursor = page.next_cursor ?? null;
+    if (nextCursor === null) return cases;
+    if (requestedCursors.has(nextCursor)) {
+      throw new Error("Batch case pagination did not advance.");
+    }
+    cursor = nextCursor;
+  }
 }
 
 export function useProjectBatchesResource(
@@ -188,6 +253,17 @@ export function useProjectBatchCasesResource(
   });
 }
 
+export function useLoadAllProjectBatchCases(projectId: string) {
+  const { api } = useKernel();
+  return useCallback(
+    (batchId: string) => loadAllProjectBatchCases(
+      batchId,
+      (query) => api.persistence.projects.listBatchCases(projectId, batchId, query),
+    ),
+    [api, projectId],
+  );
+}
+
 let localInvalidationSequence = 0;
 
 function nextLocalInvalidationRevision(): string {
@@ -205,6 +281,135 @@ export function useSubmitProjectBatch(projectId: string) {
         nextLocalInvalidationRevision(),
       );
       return accepted;
+    },
+    [api, projectId, resources],
+  );
+}
+
+export class ProjectBatchCommandRejectedError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ProjectBatchCommandRejectedError";
+  }
+}
+
+export function useCommandProjectBatch(projectId: string) {
+  const { api, resources } = useKernel();
+  return useCallback(
+    async (
+      batchId: string,
+      request: ProjectBatchCommandRequest,
+    ): Promise<ProjectBatchCommandResource> => {
+      let accepted: ProjectBatchCommandResource;
+      try {
+        accepted = await api.persistence.projects.commandBatch(projectId, batchId, request);
+      } catch (error) {
+        if (error instanceof ControlRoomApiError && error.status >= 400 && error.status < 500) {
+          throw new ProjectBatchCommandRejectedError(error.message, error.status);
+        }
+        throw error;
+      }
+      const revision = nextLocalInvalidationRevision();
+      resources.invalidatePrefix(projectBatchesResourcePrefix(projectId), revision);
+      resources.invalidatePrefix(projectBatchCasesResourcePrefix(projectId, batchId), revision);
+      return accepted;
+    },
+    [api, projectId, resources],
+  );
+}
+
+/**
+ * Retry one task through its immutable parent batch command. Both identities
+ * remain stable across an uncertain ACK so the caller can safely replay.
+ */
+export function useRetryProjectBatchCaseTask(projectId: string) {
+  const { api, resources } = useKernel();
+  const requests = useRef(new Map<string, ProjectBatchCommandRequest>());
+
+  return useCallback(
+    async (
+      batchId: string,
+      caseId: string,
+      runId: string,
+      taskId: string,
+      expectedBatchRevision: number,
+      expectedCatalogRevision: number,
+    ) => {
+      if (!Number.isSafeInteger(expectedBatchRevision) || expectedBatchRevision < 0) {
+        throw new Error("Refresh the batch before retrying this task.");
+      }
+      if (!Number.isSafeInteger(expectedCatalogRevision) || expectedCatalogRevision < 1) {
+        throw new Error("Refresh run details before retrying this task.");
+      }
+
+      const key = JSON.stringify([projectId, batchId, caseId, runId, taskId]);
+      const previous = requests.current.get(key);
+      const previousCatalogRevision = previous?.retry?.expected_catalog_revision;
+      if (
+        previous &&
+        previousCatalogRevision !== undefined &&
+        expectedCatalogRevision > previousCatalogRevision
+      ) {
+        // A newer task catalog proves this request belongs to an older attempt.
+        // Preserve its identity only while the same failed attempt is observed.
+        requests.current.delete(key);
+      }
+      let request = requests.current.get(key);
+      if (!request) {
+        const commandId = globalThis.crypto?.randomUUID?.();
+        const retryId = globalThis.crypto?.randomUUID?.();
+        if (!commandId || !retryId) {
+          throw new Error("This browser cannot create secure retry identities; reload the local application and try again.");
+        }
+        request = {
+          action: "retry",
+          command_id: commandId,
+          expected_revision: expectedBatchRevision,
+          reason: "Batch case task retry from the project inspector",
+          retry: {
+            case_id: caseId,
+            task_id: taskId,
+            retry_id: retryId,
+            expected_catalog_revision: expectedCatalogRevision,
+          },
+        };
+        requests.current.set(key, request);
+      }
+
+      let accepted: ProjectBatchCommandResource;
+      try {
+        accepted = await api.persistence.projects.commandBatch(projectId, batchId, request);
+      } catch (error) {
+        if (error instanceof ControlRoomApiError && error.status >= 400 && error.status < 500) {
+          requests.current.delete(key);
+          throw new ProjectBatchCommandRejectedError(error.message, error.status);
+        }
+        throw error;
+      }
+
+      const task = accepted.retry?.task;
+      const retry = request.retry;
+      if (
+        !task ||
+        !retry ||
+        accepted.action !== "retry" ||
+        accepted.batch_id !== batchId ||
+        accepted.command_id !== request.command_id ||
+        accepted.retry?.case_id !== caseId ||
+        task.run_id !== runId ||
+        task.task_id !== taskId ||
+        task.retry_id !== retry.retry_id
+      ) {
+        throw new Error("The batch retry response did not match the submitted command; replay the same request to reconcile it.");
+      }
+
+      const revision = nextLocalInvalidationRevision();
+      resources.invalidate(projectRunResourceKey(projectId, runId), task.catalog_revision);
+      resources.invalidatePrefix(`project-runs:${encodeURIComponent(projectId)}:`, task.catalog_revision);
+      resources.invalidatePrefix(projectBatchesResourcePrefix(projectId), revision);
+      resources.invalidatePrefix(projectBatchCasesResourcePrefix(projectId, batchId), revision);
+      requests.current.delete(key);
+      return task;
     },
     [api, projectId, resources],
   );
@@ -235,8 +440,13 @@ function validatePageCursor(
 
 function isExpansionState(
   value: unknown,
-): value is "pending" | "expanding" | "complete" | "stopped" {
-  return value === "pending" || value === "expanding" || value === "complete" || value === "stopped";
+): boolean {
+  return value === "pending" ||
+    value === "expanding" ||
+    value === "complete" ||
+    value === "stopped" ||
+    value === "paused" ||
+    value === "cancelled";
 }
 
 function isFailurePolicy(
@@ -247,8 +457,56 @@ function isFailurePolicy(
 
 function isBatchCaseState(
   value: unknown,
-): value is "pending_expansion" | "pending_materialization" {
-  return value === "pending_expansion" || value === "pending_materialization";
+): value is "pending_expansion" | "pending_materialization" | "materialized" {
+  return value === "pending_expansion" ||
+    value === "pending_materialization" ||
+    value === "materialized";
+}
+
+function matchesPublishedRun(
+  item: ProjectBatchCaseSummaryResource,
+  state: ProjectBatchCaseSummaryResource["state"],
+): boolean {
+  const publishedRun = item.published_run ?? null;
+  if (state === "pending_expansion") return publishedRun === null;
+  if (
+    publishedRun === null ||
+    publishedRun.run_id !== item.planned_run_id ||
+    !Array.isArray(publishedRun.tasks)
+  ) {
+    return false;
+  }
+
+  const taskIds = new Set<string>();
+  for (const task of publishedRun.tasks) {
+    if (
+      !isRecord(task) ||
+      !isNonEmptyString(task.task_id) ||
+      taskIds.has(task.task_id) ||
+      !isProjectBatchCaseTaskLifecycle(task.lifecycle) ||
+      typeof task.cancellation_requested !== "boolean"
+    ) {
+      return false;
+    }
+    taskIds.add(task.task_id);
+  }
+
+  if (state === "pending_materialization") {
+    return publishedRun.catalog_state === "pending_materialization" &&
+      publishedRun.catalog_revision == null &&
+      publishedRun.tasks.length === 0;
+  }
+
+  return publishedRun.catalog_state === "materialized" &&
+    isPositiveSafeInteger(publishedRun.catalog_revision);
+}
+
+function isProjectBatchCaseTaskLifecycle(
+  value: unknown,
+): value is ProjectBatchCaseTaskLifecycle {
+  return typeof value === "string" && PROJECT_BATCH_CASE_TASK_LIFECYCLES.has(
+    value as ProjectBatchCaseTaskLifecycle,
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {

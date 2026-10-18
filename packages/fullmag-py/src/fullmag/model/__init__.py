@@ -10,8 +10,11 @@ from .antenna import (
     AntennaNamedOutput,
     AntennaPortBranch,
     AntennaPortMode,
+    AntennaSourceCutRt0,
     AntennaSpectrumKGrid,
     AntennaSpectrumRequest,
+    EquilibriumStageOutputRef,
+    EquilibriumArtifactRef,
     AntennaSpectrumSamplingPlane,
     AntennaTargetProjection,
     CPWAntenna,
@@ -205,7 +208,8 @@ from .structure import (
     RegionMaterialOverride,
     RegionTextureOverride,
 )
-from .study import AntennaFieldSolve, Eigenmodes, FemEigenSolverPolicy, FieldAutosave, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, GammaResponseAnalysis, PeriodicBC, RelaxStop, Relaxation, StageAutosave, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
+from .study import AntennaFieldSolve, FieldOnly, Eigenmodes, FemEigenSolverPolicy, FieldAutosave, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, GammaResponseAnalysis, PeriodicBC, RelaxStop, Relaxation, StageAutosave, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
+from .study import FiniteKResponseAnalysis
 from .eigen import (
     BiasFieldSweep,
     DispersionValidationScenario,
@@ -237,6 +241,7 @@ __all__ = [
     "StageAutosave",
     "TableAutosave",
     "GammaResponseAnalysis",
+    "FiniteKResponseAnalysis",
     "UniaxialAnisotropy",
     "AdaptiveTimestep",
     "AntennaFieldSource",
@@ -407,6 +412,7 @@ __all__ = [
     "KPoint",
     "ModeTracking",
     "ThinFilmDEBVDispersionValidation",
+    "FieldOnly",
     "TimeEvolution",
     "AntennaFieldSolve",
     "Translate",

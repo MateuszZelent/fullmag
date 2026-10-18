@@ -1,3 +1,4 @@
+import { antennaRegionalSources } from "@/shared/domain/physics/antennaRegionalSource";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
@@ -147,27 +148,12 @@ function fieldDrives(scene: SceneResource | null): JsonRecord[] {
   return Array.isArray(drives) ? drives.flatMap((drive) => asRecord(drive) ? [asRecord(drive)!] : []) : [];
 }
 
-function legacySourceForObject(
-  scene: SceneResource | null,
-  objectId: string | null,
-): JsonRecord | null {
-  if (!objectId) return null;
-  return (
-    antennaModules(scene).find(
-      (module) =>
-        asString(module.kind) === "antenna_field_source" &&
-        asString(module.model) === "prescribed_zeeman_mask" &&
-        asString(module.object) === objectId,
-    ) ?? null
-  );
+function legacySourceForObject(scene: SceneResource | null, objectId: string | null): JsonRecord | null {
+  return antennaRegionalSources(scene, objectId).legacy;
 }
 
 function canonicalSourceForObject(scene: SceneResource | null, objectId: string | null): JsonRecord | null {
-  if (!objectId) return null;
-  return fieldDrives(scene).find((drive) => {
-    const profile = asRecord(drive.spatial_profile);
-    return asString(drive.kind) === "regional" && asString(profile?.kind) === "geometry_mask" && asString(profile?.object_id) === objectId;
-  }) ?? null;
+  return antennaRegionalSources(scene, objectId).canonical;
 }
 
 function sourceForObject(scene: SceneResource | null, objectId: string | null): { kind: "canonical" | "legacy"; source: JsonRecord } | null {

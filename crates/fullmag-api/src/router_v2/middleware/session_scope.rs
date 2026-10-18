@@ -138,7 +138,7 @@ fn decode_canonical_component(value: &str) -> Option<String> {
     (encode_uri_component(&decoded) == value).then_some(decoded)
 }
 
-fn encode_uri_component(value: &str) -> String {
+pub(crate) fn encode_uri_component(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.as_bytes() {
         if is_uri_component_unescaped(*byte) {

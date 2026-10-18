@@ -154,10 +154,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCa
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| study defaults | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | order, hmax alias, imported mesh, demag solver policy | signature and IR tests |
-| object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | sizes, algorithms, topology, layers, fields, operations | validation and meshing tests |
-| operation sequence | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class MeshOperation` | ordered mesh operations | serialization tests |
-| typed swept controls | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class SweptMeshControls` | distribution, direction, family, transition, exact layers | validation tests |
+| study defaults | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | [`class FEM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | order, hmax alias, imported mesh, demag solver policy | signature and IR tests |
+| object recipe | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | sizes, algorithms, topology, layers, fields, operations | validation and meshing tests |
+| operation sequence | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L568) | [`class MeshOperation`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L568) | ordered mesh operations | serialization tests |
+| typed swept controls | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L405) | [`class SweptMeshControls`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L405) | distribution, direction, family, transition, exact layers | validation tests |
 
 ```{toctree}
 :maxdepth: 3

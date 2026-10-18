@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import vm from "node:vm";
+const root=new URL("../src/",import.meta.url),cache=new Map();
+function moduleAt(url){if(!cache.has(url.href))cache.set(url.href,new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(url,"utf8")),{identifier:url.href}));return cache.get(url.href);}
+const entry=moduleAt(new URL("modules/inspector/panels/antenna/AntennaSamplingResolutionModel.ts",root));
+await entry.link((name,referrer)=>moduleAt(new URL(`${name}.ts`,referrer.identifier)));await entry.evaluate();
+const resolve=entry.namespace.antennaSamplingResolution;
+let checks=0;const check=(name,run)=>{run();checks++;console.log(`PASS ${name}`);};
+const close=(a,b)=>assert.ok(Math.abs(a-b)<=Math.max(1e-300,Math.abs(b)*1e-14),`${a} != ${b}`);
+const draft={extentUM:"15e-9",extentVM:"4e-9",samplesU:"16",samplesV:"5"};
+check("endpoint-inclusive spacing is L divided by N-1",()=>{const m=resolve(draft);close(m.u.spacingM,1e-9);close(m.v.spacingM,1e-9);assert.equal(m.sampleCount,80);});
+check("even FFT retains negative Nyquist and excludes a duplicate positive bin",()=>{const m=resolve(draft);close(m.u.deltaKRadPerM,Math.PI/(8e-9));close(m.u.minimumKRadPerM,-Math.PI/1e-9);close(m.u.maximumKRadPerM,7*Math.PI/(8e-9));});
+check("odd FFT has symmetric outer bins",()=>{const m=resolve(draft);close(m.v.deltaKRadPerM,2*Math.PI/(5e-9));close(m.v.minimumKRadPerM,-4*Math.PI/(5e-9));close(m.v.maximumKRadPerM,4*Math.PI/(5e-9));});
+check("two-point axis has only DC and negative Nyquist",()=>{const m=resolve({...draft,samplesU:"2",extentUM:"1"});close(m.u.minimumKRadPerM,-Math.PI);assert.equal(m.u.maximumKRadPerM,0);});
+check("budget boundary is computed without allocating a grid",()=>{const m=resolve({...draft,samplesU:"5000",samplesV:"2000"});assert.equal(m.sampleCount,10000000);assert.equal(m.withinBudget,true);assert.ok(!Object.values(m).some(Array.isArray));});
+check("over-budget geometry remains explicit without execution",()=>{const m=resolve({...draft,samplesU:"10000000",samplesV:"8"});assert.equal(m.sampleCount,80000000);assert.equal(m.withinBudget,false);assert.equal(m.limit,10000000);});
+for(const [name,patch] of [["blank extent",{extentUM:""}],["nonfinite extent",{extentUM:"Infinity"}],["negative extent",{extentVM:"-1"}],["fractional count",{samplesU:"2.5"}],["incomplete exponent",{samplesU:"1e-"}],["one-point axis",{samplesV:"1"}],["unsafe product",{samplesU:"4294967295",samplesV:"4294967295"}],["spacing underflow",{extentUM:"5e-324"}],["frequency overflow",{extentUM:"5e-324",samplesU:"2"}],["frequency underflow",{extentUM:"1.7976931348623157e308",samplesU:"3"}]])check(name+" is unavailable rather than a zero measurement",()=>assert.equal(resolve({...draft,...patch}),null));
+check("nonuniform transform never receives fabricated uniform FFT bins",()=>assert.equal(resolve(draft,"nonuniform_spatial_fft"),null));
+check("resolution calculation never mutates authored text",()=>{const before=JSON.stringify(draft);resolve(draft);assert.equal(JSON.stringify(draft),before);});
+console.log(JSON.stringify({state:"passed",checks,scope:"interpreted production sampling geometry; not field coverage, FFT execution or science qualification"}));

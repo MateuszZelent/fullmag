@@ -60,6 +60,16 @@ impl NormalizationHint {
     }
 }
 
+/// Component semantics for a tensor; shape alone does not identify its axes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuantityTensorDescriptor {
+    pub rank: u8,
+    pub shape: Vec<u8>,
+    pub layout: String,
+    pub axes: Vec<String>,
+    pub component_labels: Vec<String>,
+}
+
 /// Full descriptor for a single quantity in the catalog.
 #[derive(Debug, Clone)]
 pub struct QuantitySpec {

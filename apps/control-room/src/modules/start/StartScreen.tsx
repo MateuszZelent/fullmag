@@ -21,6 +21,7 @@ import {
   type ProjectCreator,
 } from "./model/scriptProject";
 import { useAuthorName } from "./model/useAuthorName";
+import { useExecutionAvailability } from "./model/executionAvailability";
 import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
 import { useWorkspaceItemDetail, useWorkspaceItems } from "./model/useWorkspaceItems";
@@ -78,6 +79,13 @@ export function StartScreen({ kernel }: ModuleProps) {
   const [scriptFlowNotice, setScriptFlowNotice] = useState<string | null>(null);
   const computeProbe = useComputeProbe();
   const { compute } = computeProbe;
+  const executionAvailability = useExecutionAvailability({
+    compute,
+    error: computeProbe.error,
+    nodeInventory: computeProbe.nodeInventory,
+    refreshing: computeProbe.refreshing,
+    stale: computeProbe.stale,
+  });
   const authorName = useAuthorName();
   const {
     section,
@@ -91,9 +99,13 @@ export function StartScreen({ kernel }: ModuleProps) {
     startScreenStore.getSnapshot,
     startScreenStore.getServerSnapshot,
   );
-  // Over an open workspace the tiles still create or open; the problem dialog
-  // owns the "replace the current session" confirmation.
-  const canCreateProblem = sessions.state === "no-session" || sessions.state === "ready";
+  // An empty collection is a confirmed no-session. A non-empty collection
+  // requires a matching current-status identity before replacement can be
+  // offered; a ready collection with a failed or mismatched status must stay
+  // fail-closed until the user retries.
+  const canCreateProblem =
+    sessions.state === "no-session" ||
+    (sessions.state === "ready" && sessionIdentity !== null);
 
   const host = useMemo<StartScreenHost>(
     () => ({
@@ -338,6 +350,7 @@ export function StartScreen({ kernel }: ModuleProps) {
     <div className="fm-start" data-section={section}>
       <StartRail
         compute={compute}
+        nodeInventory={computeProbe.nodeInventory}
         computeError={computeProbe.error}
         refreshing={computeProbe.refreshing}
         stale={computeProbe.stale}
@@ -383,10 +396,16 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "settings" ? (
             <SettingsSection
               compute={compute}
+              nodeInventory={computeProbe.nodeInventory}
+              canEditNodePolicy={computeProbe.canEditNodePolicy}
+              onUpdateNodePolicy={computeProbe.updateNodePolicy}
+              canPublishExecutionProfiles={computeProbe.canPublishExecutionProfiles}
+              onPublishExecutionProfile={computeProbe.publishExecutionProfile}
               computeError={computeProbe.error}
               refreshing={computeProbe.refreshing}
               stale={computeProbe.stale}
               onRefreshCompute={computeProbe.refresh}
+              executionAvailability={executionAvailability}
               recent={recent}
               workspace={workspaceApi}
             />
@@ -446,6 +465,7 @@ export function StartScreen({ kernel }: ModuleProps) {
             startScreenStore.setSelectedScript(null);
             void scripts.forget(id);
           },
+          executionAvailability,
         }}
         projectCreator={projectCreator}
         scriptSaver={scriptSaver}

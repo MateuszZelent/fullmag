@@ -51,6 +51,8 @@ run_gate() {
       pnpm --dir apps/control-room run check:api-hygiene
       ;;
     control-room-typecheck-lint-test)
+      node --test apps/control-room/scripts/typecheck-control-room.node-test.mjs
+      pnpm --dir apps/control-room exec node --experimental-vm-modules scripts/check-explorer-physics-reporting.mjs
       pnpm --dir apps/control-room run typecheck
       pnpm --dir apps/control-room run lint
       pnpm --dir apps/control-room run test

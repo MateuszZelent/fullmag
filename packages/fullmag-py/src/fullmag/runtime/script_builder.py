@@ -22,6 +22,7 @@ from fullmag.init.textures import PresetTexture
 from fullmag.init.state_io import infer_magnetization_state_format
 from fullmag.model.antenna import (
     ANTENNA_PORT_MODE_SCHEMA_VERSION,
+    AntennaSourceCutRt0,
     AntennaFieldSource,
     CPWAntenna,
     DriveActivation,
@@ -89,11 +90,14 @@ from fullmag.model.outputs import (
 from fullmag.model.problem import FdmPbc, ParallelExecutionPolicy, Problem
 from fullmag.model.structure import Material, MaterialNodalFieldBinding
 from fullmag.model.study import (
+    AntennaFieldSolve,
     DEFAULT_RELAXATION_MAX_STEPS,
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
     DEFAULT_TABLE_AUTOSAVE_QUANTITIES,
     Eigenmodes,
     FieldAutosave,
+    FieldOnly,
+    FiniteKResponseAnalysis,
     FrequencyResponse,
     Hysteresis,
     RelaxStop,
@@ -910,9 +914,9 @@ def _render_scene_solver_call(source: Mapping[str, object]) -> str | None:
     return f"study.solver({', '.join(args)})" if args else None
 
 
-def _render_scene_stage_autosave_suffix(value: object) -> str:
+def _scene_stage_autosave(value: object) -> StageAutosave | None:
     if value is None:
-        return ""
+        return None
     if not isinstance(value, Mapping):
         raise ValueError("SceneDocument stage autosave must be an object")
     _reject_unrendered_scene_nested_fields(
@@ -964,7 +968,12 @@ def _render_scene_stage_autosave_suffix(value: object) -> str:
         table=table,
         fields=fields,
     )
-    return _render_stage_autosave(policy)
+    return policy
+
+
+def _render_scene_stage_autosave_suffix(value: object) -> str:
+    policy = _scene_stage_autosave(value)
+    return _render_stage_autosave(policy) if policy is not None else ""
 
 
 def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
@@ -1128,6 +1137,9 @@ def _render_scene_document_bootstrap(
                     f"name={_python_literal(name)}, type={_python_literal(role)}, "
                     f"object_id={_python_literal(object_id)})"
                 )
+            mesh = raw_object.get("mesh")
+            if isinstance(mesh, Mapping):
+                lines.extend(_render_object_id_mesh_workflow(object_id, dict(mesh), source_root=Path.cwd()))
             continue
         name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
         object_id = str(raw_object.get("object_id") or raw_object.get("id") or name)
@@ -1203,11 +1215,8 @@ def _render_scene_document_bootstrap(
                     f"{handle}.mesh(cell_size={_python_literal(tuple(raw_grid['cell']))})"
                 )
 
-    if not handles and not any(
-        stage.get("kind") == "antenna_field_solve"
-        for stage in _scene_antenna_stage_sequence(builder)
-    ):
-        raise ValueError("SceneDocument export requires at least one magnetic object.")
+    # Non-magnetic objects remain valid for explicit field-only stages.
+    # Run/Relax validation continues to require magnetic objects on import.
 
     if builder.get("exchange_enabled") is False:
         lines.append("study.disable_exchange()")
@@ -1255,13 +1264,20 @@ def _render_scene_document_bootstrap(
             raise ValueError("antenna_port_modes must contain objects")
         kwargs = dict(mode)
         schema = kwargs.pop("schema_version", None)
-        if schema != ANTENNA_PORT_MODE_SCHEMA_VERSION:
+        if schema not in {ANTENNA_PORT_MODE_SCHEMA_VERSION, "antenna_port_mode.v3"}:
             raise ValueError("unsupported antenna port mode schema_version")
+        normalization = kwargs.pop("normalization", None)
+        normalization_expr = ""
+        if schema == "antenna_port_mode.v3":
+            kwargs["schema_version"] = schema
+            normalization_expr = f", normalization={_render_source_cut_normalization(normalization)}"
+        elif normalization is not None:
+            raise ValueError("antenna port mode v2 cannot use source-cut normalization")
         branches = kwargs.pop("branches", None)
         if not isinstance(branches, list):
             raise ValueError("antenna port mode branches must be a list")
         expression = "[" + ", ".join(f"fm.AntennaPortBranch(**{_py_literal(branch)})" for branch in branches) + "]"
-        lines.append(f"study.add_antenna_port_mode(port_mode=fm.AntennaPortMode(**{_py_literal(kwargs)}, branches={expression}))")
+        lines.append(f"study.add_antenna_port_mode(port_mode=fm.AntennaPortMode(**{_py_literal(kwargs)}, branches={expression}{normalization_expr}))")
 
     authored_stages = []
     raw_stages = builder.get("stages") or []
@@ -2169,32 +2185,57 @@ def _render_scene_stage_bootstrap(
         parts: list[str] = []
         if enabled:
             request = stage.get("request")
+            if request is not None and not isinstance(request, Mapping):
+                raise ValueError("SceneDocument fft_response request must be an object")
             request = request if isinstance(request, Mapping) else {}
-            _reject_unrendered_scene_nested_fields(
-                request,
-                context="fft_response_request",
-                rendered_fields={
-                    "schema_version",
-                    "analysis",
-                    "response_component",
-                    "weighting",
-                    "detrend",
-                    "window",
-                    "susceptibility_floor_fraction",
-                },
-            )
-            if request.get("weighting", "Ms_times_lumped_volume") != "Ms_times_lumped_volume":
-                raise ValueError(
-                    "SceneDocument fft_response weighting is not represented by the public scene DSL"
+            analysis = request.get("analysis", "gamma")
+            if analysis == "finite_k":
+                allowed = {
+                    "schema_version", "analysis", "response_component",
+                    "probe_count", "analysis_x_min_m", "analysis_x_max_m",
+                }
+                _reject_unrendered_scene_nested_fields(
+                    request, context="fft_response_request", rendered_fields=allowed,
                 )
-            parts.append(_python_literal(str(request.get("response_component") or "my")))
-            for key, default in (("detrend", "linear"), ("window", "hann")):
-                value = request.get(key, default)
-                if value != default:
-                    parts.append(f"{key}={_python_literal(value)}")
-            floor = _finite_number(request.get("susceptibility_floor_fraction"))
-            if floor is not None and floor != 1e-6:
-                parts.append(f"susceptibility_floor_fraction={_python_literal(floor)}")
+                if request.get("schema_version", "spin_wave_response.request.v1") != "spin_wave_response.request.v1":
+                    raise ValueError("unsupported finite-k request schema_version")
+                model = FiniteKResponseAnalysis(
+                    **{key: value for key, value in request.items() if key not in {"schema_version", "analysis"}}
+                )
+                args = [
+                    f"{key}={_python_literal(value)}"
+                    for key, value in model.to_runtime_metadata().items()
+                    if key not in {"schema_version", "analysis"}
+                ]
+                parts.append(f"fm.FiniteKResponseAnalysis({', '.join(args)})")
+            elif analysis == "gamma":
+                _reject_unrendered_scene_nested_fields(
+                    request,
+                    context="fft_response_request",
+                    rendered_fields={
+                        "schema_version",
+                        "analysis",
+                        "response_component",
+                        "weighting",
+                        "detrend",
+                        "window",
+                        "susceptibility_floor_fraction",
+                    },
+                )
+                if request.get("weighting", "Ms_times_lumped_volume") != "Ms_times_lumped_volume":
+                    raise ValueError(
+                        "SceneDocument fft_response weighting is not represented by the public scene DSL"
+                    )
+                parts.append(_python_literal(str(request.get("response_component") or "my")))
+                for key, default in (("detrend", "linear"), ("window", "hann")):
+                    value = request.get(key, default)
+                    if value != default:
+                        parts.append(f"{key}={_python_literal(value)}")
+                floor = _finite_number(request.get("susceptibility_floor_fraction"))
+                if floor is not None and floor != 1e-6:
+                    parts.append(f"susceptibility_floor_fraction={_python_literal(floor)}")
+            else:
+                raise ValueError(f"unsupported FFT response analysis '{analysis}'")
         else:
             parts.append("enabled=False")
         if stage_id is not None:
@@ -5349,7 +5390,8 @@ def _render_conservative_current_view_payload(payload: object) -> str:
                 f"{_py_repr(str(cut.get('id') or ''))}, "
                 f"{_py_tuple3(_optional_vec3(cut.get('translation_m')) or (0.0, 0.0, 0.0))}, "
                 f"{_py_number(_number_or_none(cut.get('potential_drop_v')) or 0.0)}, "
-                f"[{', '.join(pair_exprs)}])"
+                f"[{', '.join(pair_exprs)}], "
+                f"closure_operator_version={_py_repr(str(closure.get('operator_version') or 'fem_closed_current_geometry.v1'))})"
             )
         closure_expr = (
             "fm.ConservativeCurrentClosedGeometry("
@@ -5498,7 +5540,8 @@ def _render_current_transport_payload(payload: object, *, surface: str) -> str:
                 "plane=fm.StructuredCutPlane("
                 f"axis={_py_repr(str(plane.get('axis') or ''))}, "
                 f"offset_m={_py_number(_number_or_none(plane.get('offset_m')) or 0.0)}, "
-                f"normal={_py_repr(str(plane.get('normal') or ''))}), "
+                f"normal={_py_repr(str(plane.get('normal') or ''))}, "
+                f"coordinate_frame={_py_repr(str(plane.get('coordinate_frame') or 'world'))}), "
                 "drive=fm.ImpressedPotentialJump("
                 f"drive_id={_py_repr(str(drive.get('drive_id') or ''))}, "
                 "potential_jump_V="
@@ -5507,7 +5550,8 @@ def _render_current_transport_payload(payload: object, *, surface: str) -> str:
         kwargs.append(
             "structured_current_closure=fm.StructuredCurrentClosure("
             f"closure_id={_py_repr(str(structured_closure.get('closure_id') or ''))}, "
-            f"source_cuts=[{', '.join(cut_exprs)}])"
+            f"source_cuts=[{', '.join(cut_exprs)}], "
+            f"schema_version={_py_repr(str(structured_closure.get('schema_version') or 'structured_current_closure.v1'))})"
         )
     return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
 
@@ -5578,6 +5622,14 @@ def _render_field_target_expr(target: FieldTarget) -> str:
     )
 
 
+def _render_source_cut_normalization(value: object) -> str:
+    if not isinstance(value, Mapping) or set(value) != {"kind", "source_cut_ref", "orientation"} or value["kind"] != "source_cut_rt0":
+        raise ValueError("unsupported antenna source-cut normalization payload")
+    normalization = AntennaSourceCutRt0(value["source_cut_ref"], value["orientation"])
+    return (f"fm.AntennaSourceCutRt0(source_cut_ref={_py_repr(normalization.source_cut_ref)}, "
+            f"orientation={_py_repr(normalization.orientation)})")
+
+
 def _render_antenna_port_modes(problem: Problem, *, surface: str) -> list[str]:
     if not problem.antenna_port_modes:
         return []
@@ -5593,13 +5645,16 @@ def _render_antenna_port_modes(problem: Problem, *, surface: str) -> list[str]:
             f"signed_weight={_py_number(branch.signed_weight)})"
             for branch in mode.branches
         )
+        normalization_expr = (f", schema_version={_py_repr(mode.schema_version)}, "
+                              f"normalization={_render_source_cut_normalization(mode.normalization.to_ir())}"
+                              if mode.normalization is not None else "")
         lines.append(
             "study.add_antenna_port_mode(port_mode=fm.AntennaPortMode("
             f"id={_py_repr(mode.id)}, "
             f"source_object_id={_py_repr(mode.source_object_id)}, "
             f"current_transport_id={_py_repr(mode.current_transport_id)}, "
             f"branches=({branches},), "
-            f"normalization_current_a={_py_number(mode.normalization_current_a)}))"
+            f"normalization_current_a={_py_number(mode.normalization_current_a)}{normalization_expr}))"
         )
     return lines
 
@@ -5681,9 +5736,27 @@ def _render_antenna_spectrum_request_expr(request: dict[str, object]) -> str:
             + _py_literal(_normalize_mapping(request["nonuniform_k_grid"]))
             + ")"
         )
-    for field in ("port_mode_id", "equilibrium_ref", "mode_basis_ref"):
+    for field in ("port_mode_id", "mode_basis_ref"):
         if field in request:
             args.append(f"{field}={_py_literal(request[field])}")
+    if "equilibrium_ref" in request:
+        reference = request["equilibrium_ref"]
+        if isinstance(reference, dict):
+            kind = reference.get("kind")
+            if kind == "stage_output":
+                allowed = {"kind", "stage_id", "output_id"}
+                constructor = "EquilibriumStageOutputRef"
+            elif kind == "artifact":
+                allowed = {"kind", "asset_id", "equilibrium_id", "content_digest"}
+                constructor = "EquilibriumArtifactRef"
+            else:
+                raise ValueError("unknown equilibrium reference kind")
+            if set(reference) != allowed:
+                raise ValueError("equilibrium reference has missing or unknown fields")
+            arguments = ", ".join(f"{key}={_py_literal(reference[key])}" for key in reference if key != "kind")
+            args.append(f"equilibrium_ref=fm.{constructor}({arguments})")
+        else:
+            args.append(f"equilibrium_ref={_py_literal(reference)}")
     return f"fm.AntennaSpectrumRequest({', '.join(args)})"
 
 
@@ -7469,6 +7542,9 @@ def _study_geometry_mesh_configs(
     return [
         (magnet.name, _normalize_mapping(_export_geometry_mesh_entry(magnet.name, problem)))
         for magnet in problem.magnets
+    ] + [
+        (geometry.geometry_name, _normalize_mapping(_export_geometry_mesh_entry(geometry.geometry_name, problem)))
+        for geometry in problem.auxiliary_geometries
     ]
 
 
@@ -7478,6 +7554,19 @@ def _mesh_entry_requests_build(mesh_config: Mapping[str, object]) -> bool:
 
 def _mesh_entry_requires_explicit_render(mesh_config: Mapping[str, object]) -> bool:
     return _mesh_mode(mesh_config.get("mode")) == "custom" or _mesh_entry_requests_build(mesh_config)
+
+
+def _render_object_id_mesh_workflow(
+    object_id: str, mesh_config: dict[str, object], *, source_root: Path,
+) -> list[str]:
+    target = f"study.objects.mesh.by_id({_py_repr(object_id)})"
+    call = _render_geometry_mesh_call(target, mesh_config, source_root=source_root)
+    lines = [call] if call is not None else []
+    lines.extend(_render_mesh_size_fields(target, mesh_config))
+    lines.extend(_render_mesh_operations(target, mesh_config))
+    if _mesh_entry_requests_build(mesh_config):
+        lines.append(f"{target}.mesh.build()")
+    return [line.replace(f"{target}.mesh", target) for line in lines]
 
 
 def _render_study_mesh_workflow(
@@ -7501,7 +7590,15 @@ def _render_study_mesh_workflow(
         if not _mesh_entry_requires_explicit_render(mesh_config):
             continue
         target_var = magnet_vars.get(magnet_name)
-        if target_var is None:
+        if magnet_name in problem.auxiliary_geometry_object_ids or target_var is None:
+            object_id = problem.auxiliary_geometry_object_ids.get(magnet_name, magnet_name)
+            geometries_override = overrides.get("geometries")
+            if isinstance(geometries_override, list):
+                for geometry in geometries_override:
+                    if isinstance(geometry, Mapping) and geometry.get("name") == magnet_name:
+                        object_id = str(geometry.get("object_id") or magnet_name)
+                        break
+            lines.extend(_render_object_id_mesh_workflow(object_id, mesh_config, source_root=source_root))
             continue
         mesh_call = _render_geometry_mesh_call(
             target_var,
@@ -8305,20 +8402,42 @@ def _render_stages(
                 call_parts = []
                 if bool(stage.action.get("enabled", True)):
                     request = _normalize_mapping(stage.action.get("request"))
-                    call_parts.append(
-                        _py_repr(str(request.get("response_component") or "my"))
-                    )
-                    detrend = str(request.get("detrend") or "linear")
-                    window = str(request.get("window") or "hann")
-                    floor = float(request.get("susceptibility_floor_fraction", 1e-6))
-                    if detrend != "linear":
-                        call_parts.append(f"detrend={_py_repr(detrend)}")
-                    if window != "hann":
-                        call_parts.append(f"window={_py_repr(window)}")
-                    if floor != 1e-6:
-                        call_parts.append(
-                            f"susceptibility_floor_fraction={_py_number(floor)}"
+                    analysis = request.get("analysis", "gamma")
+                    if analysis == "finite_k":
+                        allowed = {
+                            "schema_version", "analysis", "response_component",
+                            "probe_count", "analysis_x_min_m", "analysis_x_max_m",
+                        }
+                        if set(request) - allowed:
+                            raise ValueError("unsupported finite-k request keys cannot be exported losslessly")
+                        if request.get("schema_version", "spin_wave_response.request.v1") != "spin_wave_response.request.v1":
+                            raise ValueError("unsupported finite-k request schema_version")
+                        model = FiniteKResponseAnalysis(
+                            **{key: value for key, value in request.items() if key not in {"schema_version", "analysis"}}
                         )
+                        args = [
+                            f"{key}={_py_literal(value)}"
+                            for key, value in model.to_runtime_metadata().items()
+                            if key not in {"schema_version", "analysis"}
+                        ]
+                        call_parts.append(f"fm.FiniteKResponseAnalysis({', '.join(args)})")
+                    elif analysis == "gamma":
+                        call_parts.append(
+                            _py_repr(str(request.get("response_component") or "my"))
+                        )
+                        detrend = str(request.get("detrend") or "linear")
+                        window = str(request.get("window") or "hann")
+                        floor = float(request.get("susceptibility_floor_fraction", 1e-6))
+                        if detrend != "linear":
+                            call_parts.append(f"detrend={_py_repr(detrend)}")
+                        if window != "hann":
+                            call_parts.append(f"window={_py_repr(window)}")
+                        if floor != 1e-6:
+                            call_parts.append(
+                                f"susceptibility_floor_fraction={_py_number(floor)}"
+                            )
+                    else:
+                        raise ValueError(f"unsupported FFT response analysis '{analysis}'")
                 else:
                     call_parts.append("enabled=False")
                 if stage.stage_id is not None:
@@ -8336,6 +8455,8 @@ def _render_stages(
             lines.append(
                 f"study.stages.add_hysteresis_sweep({', '.join(_render_hysteresis_stage_args(study))})"
             )
+            continue
+        if isinstance(study, (FieldOnly, AntennaFieldSolve)):
             continue
         stage_dynamics = stage.problem.study.dynamics
         dynamics_signature = (
@@ -8722,8 +8843,9 @@ def _render_stages(
             )
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
-        lines.append(f"{_surface_call(surface, 'clear_outputs')}()")
-        lines.extend(_render_outputs(stage.problem, _magnet_variable_names(stage.problem, overrides=overrides), surface=surface))
+        if not is_study_surface:
+            lines.append(f"{_surface_call(surface, 'clear_outputs')}()")
+            lines.extend(_render_outputs(stage.problem, _magnet_variable_names(stage.problem, overrides=overrides), surface=surface))
         if is_study_surface:
             run_parts: list[str] = []
             if stage.stage_id is not None:
@@ -9514,6 +9636,12 @@ def _render_antenna_layout_expr(
         if isinstance(entry, Mapping)
     }
     if constructor == "fm.MicrostripAntennaLayout":
+        loop = params.get("loop")
+        if isinstance(loop, Mapping) and loop.get("enabled") is True:
+            kwargs.append("closed_loop=True")
+            for key, value in loop.items():
+                if key != "enabled":
+                    kwargs.append(f"{key}={_py_repr(value)}")
         kwargs.extend([
             f"return_width_m={number('return_width_m', 'return_width')}",
             f"return_offset_m={number('return_offset_m', 'return_gap_m')}",
@@ -10344,6 +10472,7 @@ def _export_auxiliary_geometry_entry(
         "geometry_params": geometry_params,
         "bounds_min": list(bounds_min) if bounds_min is not None else None,
         "bounds_max": list(bounds_max) if bounds_max is not None else None,
+        "mesh": _export_geometry_mesh_entry(name, problem),
         "visualization_hint": hint,
     }
 
@@ -10593,13 +10722,13 @@ def _normalize_bounds_pair(
 
 
 def _study_outputs(
-    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | Hysteresis | None,
+    study: FieldOnly | AntennaFieldSolve | TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | Hysteresis | None,
 ) -> Sequence[object]:
     return tuple(study.outputs) if study is not None else ()
 
 
 def _study_table_autosave(
-    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse,
+    study: FieldOnly | AntennaFieldSolve | TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | Hysteresis | None,
 ) -> TableAutosave | None:
     table_autosave = getattr(study, "_table_autosave", None)
     return table_autosave if isinstance(table_autosave, TableAutosave) else None
@@ -10657,9 +10786,16 @@ def _runtime_device_spec(runtime) -> str:
     device = runtime.device_target.value
     if device == "cpu":
         return "cpu"
-    if device in {"cuda", "gpu"}:
+    if device == "cuda":
         index = runtime.device_index if runtime.device_index is not None else 0
         return f"cuda:{index}"
+    if device == "gpu":
+        # SceneDocument and run-intent use the public ``gpu`` token.  An
+        # explicitly indexed RuntimeSelection remains on the legacy CUDA
+        # spelling because that is the only script syntax carrying an ordinal.
+        if runtime.device_index is not None:
+            return f"cuda:{runtime.device_index}"
+        return "gpu"
     return device
 
 

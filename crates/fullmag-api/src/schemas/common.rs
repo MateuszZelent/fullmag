@@ -166,6 +166,8 @@ pub struct FieldPublicationResponseRevisions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct FieldPublicationBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_field_locator: Option<crate::schemas::fields::ArtifactFieldLocatorResource>,
     pub quantity_id: String,
     pub component: String,
     pub scope_kind: String,
@@ -193,6 +195,7 @@ impl FieldPublicationBundle {
     ) -> Self {
         let topology_hash = topology_hash.into();
         let field = FieldPublicationBinding {
+            artifact_field_locator: None,
             quantity_id: quantity_id.into(),
             component: component.into(),
             scope_kind: scope_kind.into(),

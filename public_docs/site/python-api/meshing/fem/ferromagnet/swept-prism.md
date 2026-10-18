@@ -119,11 +119,11 @@ Canonical path: `object.mesh.thin_film(topology="prismatic", ...)`
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `topology` | str | None | None | $1$ | `"prismatic"` | selects the prism mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `order` | str | None | None | $1$ | `1` (P1) | linear order only | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `exact_layers` | bool | None | None | $1$ | `True` in strict (`False` only in extended) | require the exact layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `transition` | str | None | None | $1$ | `"pyramid_to_tetrahedra"` | transition into domain tetrahedra | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
-| `layers` | str | None | None | $1$ | positive integer | prism layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `topology` | `str \| None` | `None` | $1$ | `"prismatic"` | selects the prism mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `order` | `int \| None` | `None` | $1$ | `1` (P1) | linear order only | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `exact_layers` | `bool \| None` | `None` | $1$ | `True` in strict (`False` only in extended) | require the exact layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `transition` | `str \| None` | `None` | $1$ | `"pyramid_to_tetrahedra"` | transition into domain tetrahedra | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `layers` | `int \| None` | `None` | $1$ | positive integer | prism layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 The equivalent advanced recipe (`PerObjectMeshRecipe`) must set consistently:
 `mesh_strategy="swept_prism"`, `through_thickness_elements=layers`,
@@ -223,4 +223,4 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Swept-prism object policy and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Swept-prism object policy and lowering. | Source-map validator and focused API tests |
+| Swept-prism object policy and lowering. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Swept-prism object policy and lowering. | Source-map validator and focused API tests |

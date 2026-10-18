@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object exchan
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,7 +54,7 @@ fm.Exchange()
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```fm.Exchange``` | ```constructor``` | ```no arguments``` | ```1``` | no parameters | nearest-neighbour exchange term | FEM/FDM CPU/GPU: IR; runtime resolver-specific | ```kind``` |
+| `fm.Exchange` | `constructor` | `no arguments` | `1` | no parameters | nearest-neighbour exchange term | FEM/FDM CPU/GPU: IR; runtime resolver-specific | `kind` |
 
 ### Stage-first example
 

@@ -63,6 +63,10 @@ export function PrimitiveObjectLayer({
   useEffect(() => {
     tracker.recordDirtyFrame("primitive-geometry");
     invalidate();
+    return () => {
+      tracker.recordDirtyFrame("primitive-geometry");
+      invalidate();
+    };
   }, [invalidate, primitiveFrameKey, tracker]);
 
   if (!primitiveModel?.objects.length && !primitiveModel?.draftOverlay) return null;

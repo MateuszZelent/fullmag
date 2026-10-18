@@ -1936,24 +1936,20 @@ fn v03_antenna_study_selection_rejects_missing_reference() {
     let mut legacy = ProblemIR::bootstrap_example();
     legacy.study = study;
 
-    let errors = legacy
-        .validate()
-        .expect_err("V03 antenna selection must reference a declared solve and port mode");
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("antenna_field_solve.selection")));
+    let errors = legacy.validate().unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("antenna_field_solve.selection")));
 }
 
 #[test]
-fn v04_typed_study_deserialization_rejects_unsupported_antenna_field_solve() {
-    let mut value = serde_json::to_value(fullmag_ir::ProblemIRV04::bootstrap_example()).unwrap();
-    value["study"] = serde_json::json!({
-        "kind": "antenna_field_solve",
-        "sampling": {"outputs": []}
+fn v04_rejects_antenna_field_solve_as_an_unsupported_study() {
+    let mut document = serde_json::to_value(fullmag_ir::ProblemIRV04::bootstrap_example()).unwrap();
+    document["study"] = serde_json::json!({
+        "kind": "antenna_field_solve", "sampling": {"outputs": []},
+        "selection": {"stage_id": "missing", "port_mode_id": "port"}
     });
 
-    let error = serde_json::from_value::<fullmag_ir::ProblemIRV04>(value)
-        .expect_err("V04 typed wire must reject a study kind it does not model")
+    let error = serde_json::from_value::<fullmag_ir::ProblemIRV04>(document)
+        .unwrap_err()
         .to_string();
     assert!(
         error.contains("/study/kind: unsupported study kind 'antenna_field_solve'"),
@@ -2310,6 +2306,44 @@ fn regional_field_drive_validation_is_fail_closed() {
 }
 
 #[test]
+fn regional_field_drive_activation_can_scope_to_a_disabled_declared_stage() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "study_pipeline".into(),
+        serde_json::json!({
+            "nodes": [{
+                "node_kind": "group",
+                "id": "disabled-group",
+                "enabled": false,
+                "children": [{
+                    "node_kind": "primitive",
+                    "id": "disabled-child"
+                }]
+            }]
+        }),
+    );
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "disabled-stage-drive".into(),
+        name: "Disabled stage drive".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds {
+            stage_ids: vec!["disabled-child".into()],
+        },
+        migration: None,
+    });
+
+    ir.validate()
+        .expect("declared field-drive scopes may reference disabled stages");
+}
+
+#[test]
 fn regional_field_drive_rejects_non_finite_waveform_frequencies() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.field_drives.push(RegionalFieldDriveIR {
@@ -2353,7 +2387,13 @@ fn active_stage_id_controls_minimizer_drive_validation() {
     ir.problem_meta.runtime_metadata.insert(
         "study_pipeline".into(),
         serde_json::json!({"version":"study_pipeline.v1","nodes":[
-            {"id":"relax","enabled":true}, {"id":"excite","enabled":true}
+            {"node_kind":"group","id":"outer","enabled":true,"children":[
+                {"node_kind":"primitive","id":"relax"},
+                {"node_kind":"group","id":"disabled-group","enabled":false,"children":[
+                    {"node_kind":"primitive","id":"disabled-child","enabled":true}
+                ]},
+                {"node_kind":"primitive","id":"excite"}
+            ]}
         ]}),
     );
     ir.problem_meta
@@ -2393,6 +2433,16 @@ fn active_stage_id_controls_minimizer_drive_validation() {
     });
     ir.validate()
         .expect("inactive dynamic drive must not invalidate relaxation stage");
+    ir.problem_meta.runtime_metadata.insert(
+        "active_stage_id".into(),
+        serde_json::json!("disabled-child"),
+    );
+    let errors = ir
+        .validate()
+        .expect_err("active stage must be an effectively enabled stage owner");
+    assert!(errors.iter().any(|error| {
+        error.contains("active_stage_id") && error.contains("disabled-child")
+    }));
     ir.problem_meta
         .runtime_metadata
         .insert("active_stage_id".into(), serde_json::json!("missing"));

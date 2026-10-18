@@ -23,6 +23,7 @@ const INSPECTOR_SCENE_TRACE_LIMIT = 20;
 const INSPECTOR_MODAL_FIELD_ID = "analysis:eigen:sample-0001:mode-0002";
 const INSPECTOR_MODAL_FIELD_ARRAY_PATH =
   "eigen/mode_fields.zarr/sample_0001/mode_0002/vector_xyz_complex";
+const INSPECTOR_MODAL_TOPOLOGY_COORDINATE_SCALE_M = 100e-9;
 const INSPECTOR_MODAL_FIELD_PAYLOAD_PATH =
   `${INSPECTOR_MODAL_FIELD_ARRAY_PATH}/0.0.0`;
 const INSPECTOR_DRIVEN_RESPONSE_FIELD_ID =
@@ -55,6 +56,15 @@ const INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION = 7;
 const INSPECTOR_MODAL_TOPOLOGY_HASH = "0123456789abcdef".repeat(4);
 const INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH =
   `sha256:${INSPECTOR_MODAL_TOPOLOGY_HASH}`;
+const INSPECTOR_FEM_DOMAIN_BOUNDS_MIN = [-500e-9, -500e-9, -500e-9];
+const INSPECTOR_FEM_DOMAIN_BOUNDS_MAX = [500e-9, 500e-9, 500e-9];
+const INSPECTOR_FILM_BOUNDS_MIN = [-100e-9, -40e-9, -2.5e-9];
+const INSPECTOR_FILM_BOUNDS_MAX = [100e-9, 40e-9, 2.5e-9];
+// Keep the semantic orphan part in the same FEM domain, one authored-film
+// extent away from the Film object, without introducing a normalized mesh
+// coordinate system into the SI fixture.
+const INSPECTOR_ORPHAN_BOUNDS_MIN = [100e-9, 40e-9, 2.5e-9];
+const INSPECTOR_ORPHAN_BOUNDS_MAX = [300e-9, 120e-9, 7.5e-9];
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
     "GET /v2/sessions/current/model/regions",
@@ -4009,8 +4019,13 @@ function createInspectorFixture() {
       size: [1e-6, 1e-6, 1e-6],
     },
   };
-  const topologyFixture = inspectorTopologyFixture(scene);
   const requestBudget = createInspectorRequestBudgetState();
+  const topology = inspectorTopologyBuffer();
+  assertInspectorTopologyGeometry(
+    topology,
+    scene.objects[0].geometry.geometry_params.size,
+    scene.universe.size,
+  );
   return {
     fdmBuildGridMode,
     gridCommandBodies: [],
@@ -4018,9 +4033,9 @@ function createInspectorFixture() {
       generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
       mesh_name: "Inspector fixture mesh",
       mesh_parts: [
-        inspectorMeshPart("airbox", "airbox", null, 0, topologyFixture.partBounds.airbox),
-        inspectorMeshPart("film-part", "magnetic", "film", 1, topologyFixture.partBounds.film),
-        inspectorMeshPart("orphan-part", "volume", null, 2, topologyFixture.partBounds.orphan),
+        inspectorMeshPart("airbox", "airbox", null, 0),
+        inspectorMeshPart("film-part", "magnetic", "film", 1),
+        inspectorMeshPart("orphan-part", "volume", null, 2),
       ],
       object_segments: [
         {
@@ -4052,7 +4067,7 @@ function createInspectorFixture() {
     unknownGetPaths: [],
     revision,
     scene,
-    topology: topologyFixture.buffer,
+    topology,
     texturePatchDelayMs: 0,
     geometryPatchDelayMs: 0,
     geometryPatchPending: false,
@@ -4065,13 +4080,18 @@ function createInspectorFixture() {
   };
 }
 
-function inspectorMeshPart(id, role, objectId, ordinal, bounds) {
+function inspectorMeshPart(id, role, objectId, ordinal) {
+  const bounds = id === "airbox"
+    ? { max: INSPECTOR_FEM_DOMAIN_BOUNDS_MAX, min: INSPECTOR_FEM_DOMAIN_BOUNDS_MIN }
+    : id === "film-part"
+      ? { max: INSPECTOR_FILM_BOUNDS_MAX, min: INSPECTOR_FILM_BOUNDS_MIN }
+      : { max: INSPECTOR_ORPHAN_BOUNDS_MAX, min: INSPECTOR_ORPHAN_BOUNDS_MIN };
   return {
     boundary_face_count: 4,
     boundary_face_indices: [0, 1, 2, 3].map((index) => index + ordinal * 4),
     boundary_face_start: ordinal * 4,
-    bounds_max: bounds.max,
-    bounds_min: bounds.min,
+    bounds_max: [...bounds.max],
+    bounds_min: [...bounds.min],
     element_count: 1,
     element_start: ordinal,
     id,
@@ -4192,10 +4212,6 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
-    // No managed development backend is attached to the fixture session.
-    if (path === "/v2/platform/development-backend" && request.method() === "GET") {
-      return fulfillEmpty(route, 204);
-    }
     // The fixture run has no durable observation frames.
     if (path === "/v2/sessions/current/data/observation-frames" && request.method() === "GET") {
       return fulfillJson(route, {
@@ -4212,6 +4228,62 @@ async function installInspectorFixtureApi(page, fixture) {
           session_id: "inspector-routing-smoke",
           status: "active",
         }],
+      });
+    }
+    // Home stays mounted while session bootstrap is loading. These are
+    // read-only startup resources, so keep their fixture responses explicit;
+    // the catch-all below must continue to reject route drift.
+    if (path === "/v2/workspace/settings/telemetry.enabled" && request.method() === "GET") {
+      return fulfillJson(route, {
+        is_default: true,
+        key: "telemetry.enabled",
+        value: false,
+        writable: true,
+      });
+    }
+    if (path === "/v2/workspace/settings/update.available" && request.method() === "GET") {
+      return fulfillJson(route, {
+        is_default: true,
+        key: "update.available",
+        value: null,
+        writable: false,
+      });
+    }
+    if (path === "/v2/workspace/items" && request.method() === "GET") {
+      return fulfillJson(route, { items: [], outcome: { state: "ready" } });
+    }
+    if (path === "/v2/sessions/current/diagnostics/cpu" && request.method() === "GET") {
+      return fulfillJson(route, {
+        logical_cpus: 0,
+        memory_total_mb: 0,
+        memory_used_mb: 0,
+        model_name: null,
+        process_cpu_percent: 0,
+        process_rss_mb: 0,
+        process_threads: 0,
+        reason: "Inspector fixture does not probe host telemetry.",
+        sample_time_unix_ms: 1,
+        status: "unavailable",
+        utilization_cpu_percent: 0,
+      });
+    }
+    if (path === "/v2/sessions/current/diagnostics/gpu" && request.method() === "GET") {
+      return fulfillJson(route, {
+        devices: [],
+        reason: "Inspector fixture does not probe host telemetry.",
+        sample_time_unix_ms: 1,
+        status: "unavailable",
+      });
+    }
+    if (path === "/v2/platform/capabilities" && request.method() === "GET") {
+      return fulfillJson(route, { engines: [], profile_version: "fixture.v1" });
+    }
+    if (path === "/v2/platform/compute/nodes" && request.method() === "GET") {
+      return fulfillJson(route, {
+        nodes: [],
+        schema_version: "compute_nodes.v1",
+        stale_after_seconds: 30,
+        state: "not_probed",
       });
     }
     if (path === "/v2/sessions/current/visualization/mode-compositions/active") {
@@ -4514,8 +4586,8 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/model/planar-monitors") return fulfillJson(route, { count: 0, monitors: [], scene_revision: fixture.revision });
     if (path === "/v2/sessions/current/model/universe") return fulfillJson(route, {
       mesh_dirty: false,
-      object_bounds_max: [16e-9, 8e-9, 2e-9],
-      object_bounds_min: [0, 0, 0],
+      object_bounds_max: INSPECTOR_FILM_BOUNDS_MAX,
+      object_bounds_min: INSPECTOR_FILM_BOUNDS_MIN,
       scene_revision: fixture.revision,
       study_universe_mesh: null,
       universe: null,
@@ -5039,12 +5111,12 @@ function inspectorPreparationResource() {
 function inspectorObjectMetrics() {
   return {
     energies: {
-      anisotropy: 0,
-      demag: 0,
-      dmi: 0,
-      exchange: 0,
-      total: 0,
-      zeeman: 0,
+      anisotropy: null,
+      demag: null,
+      dmi: null,
+      exchange: null,
+      total: null,
+      zeeman: null,
     },
     has_solver_sample: false,
     magnetization_average: { mx: 1, my: 0, mz: 0 },
@@ -5569,43 +5641,33 @@ async function fulfillTopology(route, topology, manifest) {
   });
 }
 
-function inspectorTopologyFixture(scene) {
+function assertInspectorTopologyGeometry(topology, filmSize, universeSize) {
+  const values = Array.from(new Float64Array(topology, 32, 12 * 3));
+  const spans = [0, 1, 2].map((axis) => {
+    const axisValues = values.filter((_, index) => index % 3 === axis);
+    return Math.max(...axisValues) - Math.min(...axisValues);
+  });
+  const largestSpan = Math.max(...spans);
+  const filmLargestAxis = Math.max(...filmSize);
+  const universeLargestAxis = Math.max(...universeSize);
+  assert(
+    values.every((value) => Number.isFinite(value)) &&
+      spans.every((span) => Number.isFinite(span) && span > 0) &&
+      largestSpan <= filmLargestAxis * 2 &&
+      largestSpan <= universeLargestAxis,
+    `The Inspector topology fixture must stay in finite SI scene scale: ${JSON.stringify({
+      filmLargestAxis,
+      largestSpan,
+      spans,
+      universeLargestAxis,
+    })}`,
+  );
+}
+
+function inspectorTopologyBuffer() {
   const nodeCount = 12;
   const elementCount = 3;
   const boundaryFaceCount = 12;
-  const universeSize = scene.universe.size;
-  const universeHalfSize = universeSize.map((size) => size / 2);
-  const universeQuarterSize = universeSize.map((size) => size / 4);
-  const film = scene.objects.find((object) => object.id === "film");
-  assert(film, "The Inspector topology fixture requires the Film object.");
-  const filmHalfSize = film.geometry.geometry_params.size.map((size) => size / 2);
-  const [halfX, halfY, halfZ] = universeHalfSize;
-  const [quarterX, quarterY, quarterZ] = universeQuarterSize;
-  const [filmHalfX, filmHalfY, filmHalfZ] = filmHalfSize;
-  // Retain positive tet4 node ordering while expressing coordinates in scene meters.
-  const nodePositions = [
-    [-halfX, -halfY, -halfZ],
-    [halfX, -halfY, halfZ],
-    [halfX, halfY, -halfZ],
-    [-halfX, halfY, halfZ],
-    [-filmHalfX, -filmHalfY, -filmHalfZ],
-    [filmHalfX, -filmHalfY, -filmHalfZ],
-    [-filmHalfX, filmHalfY, -filmHalfZ],
-    [-filmHalfX, -filmHalfY, filmHalfZ],
-    [quarterX, quarterY, quarterZ],
-    [halfX, quarterY, quarterZ],
-    [quarterX, halfY, quarterZ],
-    [quarterX, quarterY, halfZ],
-  ];
-  const boundsForNodePositions = (positions) => ({
-    max: [0, 1, 2].map((axis) => Math.max(...positions.map((position) => position[axis]))),
-    min: [0, 1, 2].map((axis) => Math.min(...positions.map((position) => position[axis]))),
-  });
-  const partBounds = {
-    airbox: boundsForNodePositions(nodePositions.slice(0, 4)),
-    film: boundsForNodePositions(nodePositions.slice(4, 8)),
-    orphan: boundsForNodePositions(nodePositions.slice(8, 12)),
-  };
   const buffer = new ArrayBuffer(
     32 + nodeCount * 3 * 8 + elementCount * 4 * 4 + boundaryFaceCount * 3 * 4 + elementCount * 4 * 2,
   );
@@ -5619,7 +5681,15 @@ function inspectorTopologyFixture(scene) {
   view.setUint32(20, elementCount, true);
   view.setUint32(24, elementCount, true);
   let offset = 32;
-  new Float64Array(buffer, offset, nodeCount * 3).set(nodePositions.flat());
+  const scale = INSPECTOR_MODAL_TOPOLOGY_COORDINATE_SCALE_M;
+  new Float64Array(buffer, offset, nodeCount * 3).set([
+    // The synthetic topology remains structurally identical, but its node
+    // coordinates are expressed in the scene's SI metre scale.
+    0, 0, 0, scale, 0, 0, 0, scale, 0, 0, 0, scale,
+    -scale, -scale, -scale, 2 * scale, -scale, -scale,
+    -scale, 2 * scale, -scale, -scale, -scale, 2 * scale,
+    0, 0, scale, scale, 0, scale, 0, scale, scale, 0, 0, 2 * scale,
+  ]);
   offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, elementCount * 4).set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
@@ -5632,7 +5702,7 @@ function inspectorTopologyFixture(scene) {
   new Uint32Array(buffer, offset, elementCount).set([1, 0, 2]);
   offset += elementCount * Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, elementCount).set([1, 0, 2]);
-  return { buffer, partBounds };
+  return buffer;
 }
 
 function inspectorFrequencyCapability(status) {
@@ -6117,6 +6187,13 @@ function inspectorFrequencyResponseSweep(
 
 
 async function qualifyFirstRunGuideRouting(page, inspector, screenshotFiles, fixture) {
+  const trigger = page.getByTestId("header-readiness-helper-trigger");
+  await trigger.waitFor({ state: "visible", timeout: 30_000 });
+  assert(
+    !(await page.getByTestId("scratch-authoring-guide").count()),
+    "Readiness helper must not be permanently mounted in the main window before the user opens it.",
+  );
+  await trigger.click();
   const guide = page.getByTestId("scratch-authoring-guide");
   await guide.waitFor({ state: "visible", timeout: 30_000 });
   const material = guide.locator('[data-check-id="material"]');

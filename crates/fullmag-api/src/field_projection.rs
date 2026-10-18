@@ -23,6 +23,10 @@ pub enum ComponentSelection {
     Full,
     /// Return per-point L2 magnitude (scalar, `nComp=1`).
     Magnitude,
+    /// Frobenius norm of an explicitly described flow-major tensor.
+    Frobenius,
+    /// Spatial flow vector for one explicitly selected spin polarization.
+    SpinFlow(usize),
     /// Return per-point squared L2 magnitude (scalar, `nComp=1`).
     MagnitudeSquared,
     /// Return the absolute value of a component by zero-based index.
@@ -67,6 +71,45 @@ pub fn parse_component(input: Option<&str>, n_comp: usize) -> Result<ComponentSe
             other
         ))),
     }
+}
+
+/// Resolve tensor projections from canonical metadata, never from n_comp alone.
+pub fn parse_quantity_component(
+    input: Option<&str>,
+    n_comp: usize,
+    tensor: Option<&fullmag_quantities::QuantityTensorDescriptor>,
+) -> Result<ComponentSelection, ApiError> {
+    let raw = input.unwrap_or("full");
+    let tensor_projection = raw == "frobenius" || raw.starts_with("spin_flow_");
+    if tensor_projection || tensor.is_some() {
+        let descriptor = tensor.ok_or_else(|| {
+            ApiError::bad_request(
+                "invalid_tensor_projection: canonical tensor metadata is required",
+            )
+        })?;
+        if descriptor.rank != 2
+            || descriptor.shape != [3, 3]
+            || descriptor.layout != "flow_major"
+            || descriptor.axes != ["flow", "spin"]
+            || descriptor.component_labels.len() != 9
+            || n_comp != 9
+        {
+            return Err(ApiError::bad_request(
+                "invalid_tensor_projection: unsupported tensor rank, shape, layout, or axes",
+            ));
+        }
+        return match raw {
+            "frobenius" | "magnitude" => Ok(ComponentSelection::Frobenius),
+            "spin_flow_x" => Ok(ComponentSelection::SpinFlow(0)),
+            "spin_flow_y" => Ok(ComponentSelection::SpinFlow(1)),
+            "spin_flow_z" => Ok(ComponentSelection::SpinFlow(2)),
+            "x" | "y" | "z" | "abs_x" | "abs_y" | "abs_z" => Err(ApiError::bad_request(
+                "invalid_tensor_projection: select cN or a spin_flow polarization explicitly",
+            )),
+            _ => parse_component(input, n_comp),
+        };
+    }
+    parse_component(input, n_comp)
 }
 
 fn validate_abs_index(idx: usize, n_comp: usize) -> Result<ComponentSelection, ApiError> {
@@ -126,6 +169,27 @@ pub fn project_values(
             Ok((1, projected))
         }
         ComponentSelection::Magnitude => Ok((1, magnitude(values, n_comp))),
+        ComponentSelection::Frobenius => Ok((
+            1,
+            values
+                .chunks_exact(n_comp)
+                .map(|point| point.iter().fold(0.0_f64, |norm, value| norm.hypot(*value)))
+                .collect(),
+        )),
+        ComponentSelection::SpinFlow(spin) => {
+            if n_comp != 9 || *spin >= 3 {
+                return Err(ApiError::bad_request(
+                    "invalid_tensor_projection: spin flow requires nine components",
+                ));
+            }
+            Ok((
+                3,
+                values
+                    .chunks_exact(9)
+                    .flat_map(|point| [point[*spin], point[3 + *spin], point[6 + *spin]])
+                    .collect(),
+            ))
+        }
         ComponentSelection::MagnitudeSquared => Ok((
             1,
             values
@@ -162,6 +226,8 @@ pub fn component_etag_token(
     let comp_str = match component {
         ComponentSelection::Full => "full".to_string(),
         ComponentSelection::Magnitude => "magnitude".to_string(),
+        ComponentSelection::Frobenius => "frobenius".to_string(),
+        ComponentSelection::SpinFlow(spin) => format!("spin_flow_{}", ["x", "y", "z"][*spin]),
         ComponentSelection::MagnitudeSquared => "magnitude_squared".to_string(),
         ComponentSelection::AbsIndex(i) => format!("abs_c{}", i),
         ComponentSelection::Index(i) => format!("c{}", i),

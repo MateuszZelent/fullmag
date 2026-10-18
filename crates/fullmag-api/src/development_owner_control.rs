@@ -561,7 +561,7 @@ impl PreparedOwnerControl {
         let resource = &observation.resource;
         if !resource.configured
             || resource.state
-                != crate::schemas::development_backend::DevelopmentBackendState::Ready
+                != crate::router_v2::handlers::platform::development_backend::DevelopmentBackendState::Ready
         {
             return None;
         }

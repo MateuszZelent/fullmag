@@ -21,6 +21,7 @@ import {
 } from "@/kernel/api/fieldQueryIdentity";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
+  ArtifactCarrierGeometryQuery,
   BinaryResourceResult,
   FieldCatalogResource,
   FieldVectorResponseMetadata,
@@ -39,6 +40,7 @@ import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/
 import { fieldVectorMinRefetchIntervalMs } from "@/kernel/realtime/communicationPolicy";
 import {
   ResourceCache,
+  type ResourceCacheEntry,
   type ResourceCacheEntryDiagnostics,
 } from "@/kernel/resources/ResourceCache";
 import {
@@ -606,7 +608,7 @@ interface InflightBinaryResource<TData> {
   readonly abortListeners: Map<AbortSignal, () => void>;
   readonly consumerSignals: Set<AbortSignal>;
   readonly controller: AbortController;
-  readonly promise: Promise<TData | null>;
+  readonly promise: Promise<ResourceCacheEntry<TData> | null>;
 }
 
 memoryBudgetRegistry.register("viewport3d.topologyCache", () => {
@@ -979,11 +981,29 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
     signal?: AbortSignal;
   } = {},
 ): Promise<TData | null> {
+  const entry = await loadCachedBinaryResourceEntry(cache, key, request, options);
+  return entry?.data ?? null;
+}
+
+async function loadCachedBinaryResourceEntry<TData, TMetadata = undefined>(
+  cache: ResourceCache<TData, TMetadata>,
+  key: string,
+  request: (
+    etag?: string | null,
+    signal?: AbortSignal,
+  ) => Promise<BinaryResourceResult<TData, TMetadata>>,
+  options: {
+    onFreshAdoption?: () => void;
+    preferCached?: boolean;
+    retainCachedOnNotApplicable?: boolean;
+    signal?: AbortSignal;
+  } = {},
+): Promise<ResourceCacheEntry<TData, TMetadata> | null> {
   const requestSessionIdentityGeneration = viewport3DSessionIdentityGeneration;
   const cached = cache.get(key);
   if (cached && options.preferCached) {
     recordVisualizationDebugPerformanceMetric("cacheHits");
-    return cached.data;
+    return cached;
   }
   if (!cached) {
     recordVisualizationDebugPerformanceMetric("cacheMisses");
@@ -991,7 +1011,7 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
   const inflight = getInflightBinaryResource(cache, key);
   if (inflight) {
     retainInflightBinaryResource(inflight, options.signal);
-    return inflight.promise;
+    return inflight.promise as Promise<ResourceCacheEntry<TData, TMetadata> | null>;
   }
 
   const controller = new AbortController();
@@ -1029,7 +1049,7 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
         cache.get(key);
       }
       recordVisualizationDebugPerformanceMetric("cacheHits");
-      return cached.data;
+      return cached;
     }
 
     if (result.status === "not-applicable") {
@@ -1040,20 +1060,21 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
           cache.get(key);
         }
         recordVisualizationDebugPerformanceMetric("cacheHits");
-        return cached.data;
+        return cached;
       }
       cache.delete(key);
       return null;
     }
 
-    cache.set(key, {
+    const entry = {
       byteLength: result.byteLength,
       data: result.data,
       etag: result.etag,
       metadata: result.responseMetadata,
-    });
+    };
+    cache.set(key, entry);
     options.onFreshAdoption?.();
-    return result.data;
+    return entry;
   })();
 
   const inflightResource: InflightBinaryResource<TData> = {
@@ -1461,6 +1482,26 @@ export function useViewport3DDomainMeta(enabled = true) {
     resolveRevision: resolveDomainMetaRevision,
     resourceKey,
   });
+}
+
+/** One immutable carrier key in the existing bounded, session-cleared topology cache. */
+export function useViewport3DArtifactTopology(query: ArtifactCarrierGeometryQuery | null) {
+  const { api } = useKernel();
+  const sessionIdentity = useViewport3DSessionIdentity();
+  const unscopedKey = useMemo(() => `${DATA_DOMAIN_TOPOLOGY_PATH}?${new URLSearchParams(query ? {
+    carrier_id: query.carrier_id, expected_carrier_revision: query.expected_carrier_revision,
+    ...(query.stage_id ? { stage_id: query.stage_id } : {}),
+  } : {}).toString()}`, [query]);
+  const key = sessionIdentity ? sessionScopedResourceKey(sessionIdentity, unscopedKey) : unscopedKey;
+  const load = useCallback(({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
+    if (!query) return Promise.resolve(null);
+    return loadCachedBinaryResourceEntry(topologyCache, key, (etag, requestSignal) => api.data.domain.topology({
+      etag, sessionScopeKey, signal: requestSignal, maxResponseBytes: 64 * 1024 * 1024,
+    }, query), { signal });
+  }, [api, key, query]);
+  const resource = useResource({ enabled: Boolean(query) && sessionIdentity !== null, load,
+    resolveRevision: entry => entry?.etag ?? null, resourceKey: key, abortStaleInflight: true });
+  return { ...resource, data: resource.data?.data ?? null, responseMetadata: resource.data?.metadata ?? null };
 }
 
 export function useViewport3DDomainTopology(enabled = true) {

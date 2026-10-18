@@ -349,10 +349,12 @@ pub(crate) fn classify_outcome(
 fn requested_json(cli: &ScriptCli) -> Value {
     use clap::ValueEnum;
     let name = |value: Option<String>| value.unwrap_or_else(|| "as_authored".to_string());
-    let device = ["FULLMAG_FDM_EXECUTION", "FULLMAG_FEM_EXECUTION"]
-        .iter()
-        .find_map(|key| std::env::var(key).ok())
-        .filter(|value| !value.trim().is_empty());
+    let device = crate::python_bridge::managed_execution_device(
+        cli.backend,
+        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref(),
+    )
+    .map(str::to_string);
     json!({
         "backend": name(cli.backend.and_then(|v| v.to_possible_value()).map(|v| v.get_name().to_string())),
         "mode": name(cli.mode.and_then(|v| v.to_possible_value()).map(|v| v.get_name().to_string())),

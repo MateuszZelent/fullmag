@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "fullmag-py" / "src"))
 
-from fullmag import FieldAutosave, OutputStorage
+from fullmag import FieldAutosave, OutputStorage, StageAutosave
 from fullmag.runtime.output_storage_lowering import (
     configure_problem_ir_autosave,
     configure_scene_stage_autosaves,
@@ -21,8 +21,8 @@ from fullmag.runtime.scene_document import build_scene_document_from_builder
 from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import (
     _render_output_storage,
+    _render_scene_stage_autosave_suffix,
     _render_stage_autosave,
-    _scene_stage_autosave,
     export_builder_draft,
     render_scene_document_as_script,
 )
@@ -41,9 +41,19 @@ def check_default_field_quantities() -> None:
     ):
         policy = configure_scene_stage_autosaves([stage], storage)[0]["autosave"]
         require(policy["fields"] == [expected.to_ir()], "implicit field is not canonical m")
-        public_policy = _scene_stage_autosave(policy)
+        public_policy = StageAutosave(
+            target=policy["target"],
+            layout=policy["layout"],
+            format=policy["format"],
+            fields=[expected],
+        )
         require(public_policy.to_ir() == policy, "implicit autosave cannot round-trip through the public API")
-        require(f"fm.FieldAutosave({json.dumps('m')}," in _render_stage_autosave(public_policy), "implicit autosave export lost canonical m")
+        rendered_public_policy = _render_stage_autosave(public_policy)
+        require(f"fm.FieldAutosave({json.dumps('m')}," in rendered_public_policy, "implicit autosave export lost canonical m")
+        require(
+            _render_scene_stage_autosave_suffix(policy) == rendered_public_policy,
+            "SceneDocument autosave export differs from the public API",
+        )
         pipeline = configure_study_pipeline_autosaves(
             {"nodes": [{"node_kind": "stage", "stage_kind": stage["kind"], "payload": stage}]},
             storage,
@@ -210,7 +220,7 @@ study.storage()
         OutputStorage(data_format="h5").to_ir(),
     )[0]["autosave"]
     require(time_stage["format"] == "hdf5", "hdf5 stage format mismatch")
-    require(time_stage["fields"][0]["quantity"] == "magnetization", "authored output quantity changed")
+    require(time_stage["fields"][0]["quantity"] == "m", "authored output quantity changed")
     require(time_stage["fields"][0]["every_seconds"] == 0.5, "authored output cadence changed")
 
     time_fallback = configure_scene_stage_autosaves(

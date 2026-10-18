@@ -9,17 +9,17 @@ const context = vm.createContext({ atob, btoa, Uint8Array, TextDecoder, TextEnco
 const intoRealm = vm.runInContext("(value) => JSON.parse(JSON.stringify(value))", context);
 const load = (path, mode = "strip") => new vm.SourceTextModule(
   stripTypeScriptTypes(readFileSync(path, "utf8"), { mode }), { context });
-const handoff = load("src/kernel/persistence/ProjectDocumentDevelopmentHandoff.ts");
+const validation = load("src/kernel/persistence/ProjectDocumentValidation.ts");
 const identity = load("src/kernel/resources/sessionResourceIdentity.ts");
 const projection = load("src/kernel/authoring/sceneDocumentPayload.ts");
-for (const helperModule of [handoff, identity, projection]) {
+for (const helperModule of [validation, identity, projection]) {
   await helperModule.link(() => { throw new Error("Unexpected pure helper import"); });
   await helperModule.evaluate();
 }
 const controllerSource = load("src/kernel/persistence/ProjectDocumentController.ts", "transform");
 await controllerSource.link((specifier) => {
-  assert.equal(specifier, "./ProjectDocumentDevelopmentHandoff");
-  return handoff;
+  assert.equal(specifier, "./ProjectDocumentValidation");
+  return validation;
 });
 await controllerSource.evaluate();
 const bindingSource = load("src/kernel/persistence/ProjectAuthoringSessionBinding.ts");

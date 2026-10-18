@@ -18,21 +18,30 @@ import os
 import fullmag as fm
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
-    AEX,
-    ALPHA,
-    D_ROTATED,
-    KU_X,
-    MS,
     TRACK_SIZE,
     FrozenCase,
+    alpha_from_environment,
     case_from_environment,
+    material_from_environment,
 )
 
 
 CASE: FrozenCase = case_from_environment()
+MATERIAL = material_from_environment()
+RELAX_ALPHA = alpha_from_environment()
 REQUESTED_DEVICE = os.environ.get("FULLMAG_BIMERON_DEVICE", "gpu").strip().lower()
 if REQUESTED_DEVICE not in {"cpu", "gpu"}:
     raise ValueError("FULLMAG_BIMERON_DEVICE must be cpu or gpu")
+RELAX_ALGORITHM = os.environ.get(
+    "FULLMAG_BIMERON_RELAX_ALGORITHM", "llg_overdamped"
+).strip().lower()
+RELAX_ALGORITHM = {"bb": "projected_gradient_bb"}.get(
+    RELAX_ALGORITHM, RELAX_ALGORITHM
+)
+if RELAX_ALGORITHM not in {"llg_overdamped", "projected_gradient_bb"}:
+    raise ValueError(
+        "FULLMAG_BIMERON_RELAX_ALGORITHM must be llg_overdamped or projected_gradient_bb"
+    )
 
 study = fm.study("goebel_2019_bimeron_frozen_size_fdm")
 study.engine("fdm")
@@ -42,10 +51,10 @@ study.cell(*CASE.cell_m)
 study.pbc(x=True, demag="truncated_images")
 
 film = study.geometry(fm.Box(size=TRACK_SIZE, name="film"), name="film")
-film.Ms = MS
-film.Aex = AEX
-film.alpha = ALPHA
-film.Ku1 = KU_X
+film.Ms = MATERIAL.msat_Apm
+film.Aex = MATERIAL.aex_Jpm
+film.alpha = RELAX_ALPHA
+film.Ku1 = MATERIAL.ku_Jpm3
 film.anisU = (1.0, 0.0, 0.0)
 film.m = fm.texture.bimeron(
     radius=CASE.preset_radius_m,
@@ -56,20 +65,34 @@ film.m = fm.texture.bimeron(
     plane="xy",
 )
 
-study.terms.add(fm.RotatedInterfacialDMI(D=D_ROTATED))
+study.terms.add(fm.RotatedInterfacialDMI(D=MATERIAL.d_Jpm2))
 study.demag(realization="auto")
 study.solver(fix_dt=CASE.dt_s, integrator="rk45")
 fm.runtime_metadata(
     "bimeron_frozen_size",
     {
         "schema_version": "bimeron_frozen_size.experiment.v1",
-        "source_scenario": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py",
+        "source_scenario": "tests/standard_problems/bimeron/goebel_2019/frozen_size/scenario_fdm.py",
         "texture_preset": "bimeron",
-        "same_rDMI_parameters": True,
+        "material_parameters_source": "explicit_material_metadata_with_environment_overrides",
+        "relaxation_algorithm": RELAX_ALGORITHM,
+        "alpha": RELAX_ALPHA,
+        "relaxation_tolerance_T": CASE.relax_tol_T,
+        "relaxation_algorithm_status": (
+            "implemented_frozen_spins_path;experiment_qualification_requires_verification"
+            if RELAX_ALGORITHM == "llg_overdamped"
+            else "diagnostic_only;"
+            "projected_gradient_bb_requires_separate_native_receipt_qualification"
+        ),
+        "profile_energy_stage": "constrained_hold",
+        "hold_role": "frozen_stability_check",
+        "track_size_m": list(TRACK_SIZE),
+        "track_size_nm": [value * 1e9 for value in TRACK_SIZE],
         "protocol": CASE.metadata(),
+        "material": MATERIAL.metadata(),
         "measurement": {
-            "R_area": "sqrt(connected_area(mx<0)/pi)",
-            "R_core": "half distance between opposite mz extrema",
+            "R_area": "sqrt(selected_connected_area(background_sign*mx<0)/pi)",
+            "R_core": "half minimum-image distance between texture-local opposite mz extrema",
             "topological_charge": "Berg-Luscher plaquette sum",
             "energy": "E_total and component terms from solver trace",
         },
@@ -102,8 +125,9 @@ def _constraint_for_case() -> fm.FrozenSpins | None:
     elif CASE.protocol == "p3":
         selector = left | right | _disk_selector(0.0, 0.0, CASE.pin_radius_m)
     elif CASE.protocol == "ring":
-        outer_radius = CASE.target_radius_m + CASE.ring_width_m / 2.0
-        inner_radius = CASE.target_radius_m - CASE.ring_width_m / 2.0
+        ring_radius = CASE.target_radius_m + CASE.ring_radius_offset_nm * 1e-9
+        outer_radius = ring_radius + CASE.ring_width_m / 2.0
+        inner_radius = ring_radius - CASE.ring_width_m / 2.0
         if inner_radius <= 0.0:
             raise ValueError("ring width must be smaller than twice target radius")
         outer = _disk_selector(0.0, 0.0, outer_radius)
@@ -146,22 +170,26 @@ study.stages.add_save_state(
     dataset="m",
 )
 
-relax = study.stages.add_relax(
-    stage_id="constrained_relax",
-    algorithm="llg_overdamped",
-    solver="rk45",
-    dt=CASE.dt_s,
-    max_steps=CASE.relax_max_steps,
-    max_physical_time_s=CASE.relax_time_s,
-    tolT=1e-6,
-    constraints=CONSTRAINTS,
-)
+relax_kwargs: dict[str, object] = {
+    "stage_id": "constrained_relax",
+    "algorithm": RELAX_ALGORITHM,
+    "max_steps": CASE.relax_max_steps,
+    "tolT": CASE.relax_tol_T,
+    "constraints": CONSTRAINTS,
+}
+if RELAX_ALGORITHM == "llg_overdamped":
+    relax_kwargs.update(
+        solver="rk45",
+        dt=CASE.dt_s,
+        max_physical_time_s=CASE.relax_time_s,
+    )
+relax = study.stages.add_relax(**relax_kwargs)
 relax.autosave(
     fm.StageAutosave(
         target="constrained",
         layout="separate",
         table=fm.TableAutosave(
-            every_steps=10,
+            every_steps=CASE.table_every_steps,
             quantities=TABLE_QUANTITIES,
             table_id="constrained_relax",
         ),
@@ -208,7 +236,7 @@ if CASE.include_release:
         dt=CASE.dt_s,
         max_steps=CASE.release_max_steps,
         max_physical_time_s=CASE.release_time_s,
-        tolT=1e-6,
+        tolT=CASE.relax_tol_T,
     )
     released.autosave(
         fm.StageAutosave(

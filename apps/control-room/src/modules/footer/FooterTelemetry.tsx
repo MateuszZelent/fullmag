@@ -41,6 +41,7 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
+import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
 
 const INTEGER_FORMAT = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
@@ -104,7 +105,7 @@ export function FooterTelemetry({
   });
   const telemetry = buildFooterTelemetryModel(
     status,
-    objectMetrics.data,
+    objectId && objectMetrics.data?.object_id === objectId ? objectMetrics.data : null,
     solverStatus.data,
     liveSample,
     stageExecution.data,
@@ -378,8 +379,6 @@ export function buildFooterTelemetryModel(
     total: scalarSampleNumber(liveRow, "e_total"),
     zeeman: scalarSampleNumber(liveRow, "e_ext"),
   };
-  const totalEnergy =
-    scalarEnergy.total ?? objectMetrics?.energies.total ?? status?.energies?.total;
   const scalarMagnetization = scalarSampleMagnetization(liveRow);
   // The footer's magnetization is the same global table observable as Analysis.
   // A selected object's metric is intentionally not a fallback: object scope
@@ -397,11 +396,24 @@ export function buildFooterTelemetryModel(
       : "Scalar history resource"
     : null;
   const magnetizationSource = liveSampleSource ?? "No global sample";
-  const energySource = liveSampleSource
-    ? liveSampleSource
-    : objectMetrics
-      ? `Object: ${objectMetrics.object_id}`
-      : "Session summary";
+  const objectEnergySource = objectMetrics?.has_solver_sample === true
+    ? objectMetrics.source === "solver_per_object" ? `Object: ${objectMetrics.object_id}`
+      : objectMetrics.source === "solver_energy_only" || objectMetrics.source === "solver_spatial_object"
+        ? "Session summary (object resource)" : null
+    : null;
+  const energyMetric = (key: keyof typeof scalarEnergy, detail: string, label: string): FooterTelemetryMetric => {
+    const candidates = [
+      [scalarEnergy[key], liveSampleSource],
+      [objectEnergySource ? objectMetrics?.energies?.[key] : null, objectEnergySource],
+      [status?.energies?.[key], "Session summary"],
+    ] as const;
+    const sample = candidates.find(([value]) => typeof value === "number" && Number.isFinite(value));
+    return {
+      detail, icon: <Zap size={14} aria-hidden="true" />, id: `energy-${key}`, label,
+      subdetail: sample?.[1] ?? "No energy sample", unit: "J",
+      value: formatScientific(sample?.[0], "—"),
+    };
+  };
   const timeSource = liveRow
     ? `Scalar rev ${String(scalarSample?.revision ?? "")}`
     : solverStatus
@@ -548,85 +560,12 @@ export function buildFooterTelemetryModel(
         subdetail: magnetizationSource,
         value: formatFixed(magnetizationMagnitude, 6, "—"),
       },
-      {
-        detail: "Total",
-        icon: <Zap size={14} aria-hidden="true" />,
-        id: "energy-total",
-        label: "Energy",
-        subdetail: energySource,
-        unit: "J",
-        value: formatScientific(totalEnergy, "0.000000e+0"),
-      },
-      {
-        detail: "Exchange",
-        icon: <Zap size={14} aria-hidden="true" />,
-        id: "energy-exchange",
-        label: "Exchange",
-        subdetail: energySource,
-        unit: "J",
-        value: formatScientific(
-          scalarEnergy.exchange ??
-            objectMetrics?.energies.exchange ??
-            status?.energies?.exchange,
-          "0.000000e+0",
-        ),
-      },
-      {
-        detail: "Demag",
-        icon: <Zap size={14} aria-hidden="true" />,
-        id: "energy-demag",
-        label: "Demag",
-        subdetail: energySource,
-        unit: "J",
-        value: formatScientific(
-          scalarEnergy.demag ??
-            objectMetrics?.energies.demag ??
-            status?.energies?.demag,
-          "0.000000e+0",
-        ),
-      },
-      {
-        detail: "Zeeman",
-        icon: <Zap size={14} aria-hidden="true" />,
-        id: "energy-zeeman",
-        label: "Zeeman",
-        subdetail: energySource,
-        unit: "J",
-        value: formatScientific(
-          scalarEnergy.zeeman ??
-            objectMetrics?.energies.zeeman ??
-            status?.energies?.zeeman,
-          "0.000000e+0",
-        ),
-      },
-      {
-        detail: "Anisotropy",
-        icon: <Zap size={14} aria-hidden="true" />,
-        id: "energy-anisotropy",
-        label: "Anisotropy",
-        subdetail: energySource,
-        unit: "J",
-        value: formatScientific(
-          scalarEnergy.anisotropy ??
-            objectMetrics?.energies.anisotropy ??
-            status?.energies?.anisotropy,
-          "0.000000e+0",
-        ),
-      },
-      {
-        detail: "DMI",
-        icon: <Zap size={14} aria-hidden="true" />,
-        id: "energy-dmi",
-        label: "DMI",
-        subdetail: energySource,
-        unit: "J",
-        value: formatScientific(
-          scalarEnergy.dmi ??
-            objectMetrics?.energies.dmi ??
-            status?.energies?.dmi,
-          "0.000000e+0",
-        ),
-      },
+      energyMetric("total", "Total", "Energy"),
+      energyMetric("exchange", "Exchange", "Exchange"),
+      energyMetric("demag", "Demag", "Demag"),
+      energyMetric("zeeman", "Zeeman", "Zeeman"),
+      energyMetric("anisotropy", "Anisotropy", "Anisotropy"),
+      energyMetric("dmi", "DMI", "DMI"),
     ] satisfies FooterTelemetryMetric[],
     onlineDetail: status ? "Live session channel" : "Awaiting session",
     onlineTitle: waitingForCompute
@@ -1142,24 +1081,11 @@ export function resolvePrimaryTelemetryObjectId(
   scene: SceneResource | null | undefined,
   selectedObjectId?: string | null,
 ): string | null {
-  const sceneRecord = asRecord(scene);
-  const objects = sceneRecord?.objects;
-  if (!Array.isArray(objects)) return null;
-
-  if (selectedObjectId) {
-    for (const object of objects) {
-      if (asString(asRecord(object)?.id) === selectedObjectId) {
-        return selectedObjectId;
-      }
-    }
-  }
-
-  for (const object of objects) {
-    const objectId = asString(asRecord(object)?.id);
-    if (objectId) return objectId;
-  }
-
-  return null;
+  const objects = scene?.objects ?? [];
+  const selected = objects.find((object) => object.id === selectedObjectId);
+  // An explicitly selected empty model must not borrow another object's metrics.
+  if (selected) return hasEmptyObjectMagneticModel(selected) ? null : selected.id;
+  return objects.find((object) => !hasEmptyObjectMagneticModel(object))?.id ?? null;
 }
 
 function metricGroup(id: string): "runtime" | "solver" | "magnetization" | "energy" {

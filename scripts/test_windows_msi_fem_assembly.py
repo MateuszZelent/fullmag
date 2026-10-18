@@ -256,7 +256,7 @@ def test_native_ci_uses_operator_prefixes_and_explicit_fem_cuda_inputs():
     env=workflow['jobs']['build-windows-msi']['env']
     assert env['FULLMAG_FEM_DEPENDENCY_PREFIX']=='${{ vars.FULLMAG_WINDOWS_FEM_CPU_PREFIX }}'
     assert env['FULLMAG_WINDOWS_FEM_GPU_PREFIX']=='${{ vars.FULLMAG_WINDOWS_FEM_GPU_PREFIX }}'
-    assert 'native/**' in workflow['on']['push']['paths'] and 'backends/**' in workflow['on']['push']['paths']
+    assert set(workflow['on'])=={'workflow_dispatch'}
 
 
 @pytest.mark.parametrize('engine', ['pwsh','powershell'])

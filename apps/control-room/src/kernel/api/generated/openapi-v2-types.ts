@@ -100,6 +100,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_batches"];
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_batches"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/batches/{batch_id}/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_batches_batch_id_cases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/batches/{batch_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_batches_batch_id_commands"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/run-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_run_intent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs": {
         parameters: {
             query?: never;
@@ -124,6 +188,54 @@ export interface paths {
             cookie?: never;
         };
         get: operations["persistence_get_persistence_projects_project_id_runs_run_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}/payloads/{payload_kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id_payloads_payload_kind"];
         put?: never;
         post?: never;
         delete?: never;
@@ -324,6 +436,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_retry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/asyncapi.json": {
         parameters: {
             query?: never;
@@ -349,6 +477,70 @@ export interface paths {
         };
         get: operations["platform_get_platform_capabilities"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/compute/allocations/{allocation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_compute_allocations_allocation_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/compute/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_compute_nodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/compute/nodes/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_compute_nodes_node_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/compute/nodes/{node_id}/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_compute_nodes_node_id_policy"];
+        put: operations["platform_put_platform_compute_nodes_node_id_policy"];
         post?: never;
         delete?: never;
         options?: never;
@@ -388,78 +580,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/platform/development-backend": {
+    "/v2/platform/compute/queue": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["platform_get_platform_development_backend"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/platform/development-backend/build-requests": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["platform_post_platform_development_backend_build_requests"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/platform/development-backend/build-requests/{request_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["platform_get_platform_development_backend_build_requests_request_id"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/platform/development-restart-requests": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["platform_post_platform_development_restart_requests"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/platform/development-restart-requests/{request_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["platform_get_platform_development_restart_requests_request_id"];
+        get: operations["platform_get_platform_compute_queue"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1516,6 +1644,134 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_spin_wave_gamma_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_field_solutions_solution_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}/payloads/{payload_kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_field_solutions_solution_id_payloads_payload_kind"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_source_spectra_output_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/display": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_display"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/payloads/{payload_kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_payloads_payload_kind"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_output_catalog"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4667,234 +4923,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/persistence/projects/{project_id}/batches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["persistence_get_persistence_projects_project_id_batches"];
-        put?: never;
-        post: operations["persistence_post_persistence_projects_project_id_batches"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/persistence/projects/{project_id}/batches/{batch_id}/cases": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["persistence_get_persistence_projects_project_id_batches_batch_id_cases"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/persistence/projects/{project_id}/run-intent": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["persistence_post_persistence_projects_project_id_run_intent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}/payloads/{payload_kind}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id_payloads_payload_kind"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_field_solutions_solution_id"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}/payloads/{payload_kind}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_field_solutions_solution_id_payloads_payload_kind"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/source-spectra/{output_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_source_spectra_output_id"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/display": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_display"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/payloads/{payload_kind}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_payloads_payload_kind"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_output_catalog"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptedAntennaInspectionCatalogResource: {
+            entries: components["schemas"]["AcceptedAntennaInspectionIdentity"][];
+            project_id: string;
+            resource_id: string;
+            run_id: string;
+            schema_version: string;
+            /** @description Publication evidence only; pinned reads separately validate numerical packages. */
+            validation_scope: string;
+        };
+        /** @description The Study step and native antenna stage are deliberately separate identities. */
+        AcceptedAntennaInspectionIdentity: {
+            artifact_id: string;
+            attempt_id: string;
+            case_id: string;
+            manifest_artifact_id: string;
+            manifest_object_ref: string;
+            native_stage_id: string;
+            /** Format: int64 */
+            ownership_epoch: number;
+            package_object_ref: string;
+            run_id: string;
+            study_step_id: string;
+            task_id: string;
+        };
+        AcceptedAntennaInspectionResource: {
+            display: components["schemas"]["AntennaInspectionDisplayDataResource"];
+            manifest: components["schemas"]["AntennaInspectionManifestResource"];
+            output_id: string;
+            owner: components["schemas"]["AcceptedAntennaInspectionIdentity"];
+            port_mode_id: string;
+            project_id: string;
+            resource_id: string;
+            schema_version: string;
+        };
+        /** @description Durable accepted publication identity; epoch remains a lossless decimal string in JSON. */
+        AcceptedInspectionArtifactOwner: {
+            artifact_id: string;
+            attempt_id: string;
+            object_ref: string;
+            ownership_epoch: string;
+            project_id: string;
+            task_id: string;
+        };
         AcceptedObservationFrameRef: {
             domain_generation_id: string;
             observation_frame_id: string;
@@ -5403,6 +5478,528 @@ export interface components {
             /** @description Field of the run's validation intent that bounds the compared |k| [rad/m]. */
             wavevector_limit_source: string;
         };
+        AntennaClosedLoopInspectionDisplayResource: {
+            capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
+            closed_loop_display: unknown;
+            content_digest: string;
+            normalization: string;
+            record_content_digest: string;
+            request_scope_epoch: string;
+            resource_id: string;
+            run_id: string;
+            runtime_stage_id: string;
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            /** Format: int64 */
+            stage_revision: number;
+        };
+        AntennaEquilibriumBindingResource: {
+            acceptance_certificate_sha256: string;
+            asset_id: string;
+            authored_stage_id: string;
+            boundary_signature: string;
+            certified_fields_sha256: string;
+            completion_sha256: string;
+            content_digest: string;
+            equilibrium_content_sha256: string;
+            equilibrium_id: string;
+            indexing_sha256: string;
+            mapping_digest: string;
+            material_signature: string;
+            mesh_generation_id: string;
+            mesh_topology_sha256: string;
+            /** Format: double */
+            norm_floor: number;
+            normalization: string;
+            owning_plan_sha256: string;
+            part_registry_sha256: string;
+            producer_contract: string;
+            projection_version: string;
+            recomputed_certificate_sha256: string;
+            resolved_execution_engine: string;
+            schema_version: string;
+            source_carrier_sha256: string;
+            source_run_id: string;
+            source_solution_ref?: null | components["schemas"]["AntennaFieldSolutionRefResource"];
+            source_stage_id: string;
+            static_demag_sha256: string;
+            static_physics_signature: string;
+            target: components["schemas"]["FieldTargetResource"];
+        };
+        AntennaExternalLeadInspectionResource: components["schemas"]["AntennaInspectionStageRecordResource"] & {
+            closed_loop_manifest?: unknown;
+            manifest?: null | components["schemas"]["AntennaInspectionManifestResource"];
+            record_content_digest: string;
+            request_scope_epoch: string;
+            resource_id: string;
+            run_id: string;
+            runtime_stage_id: string;
+            session_epoch: string;
+            session_id: string;
+            /** Format: int64 */
+            stage_revision: number;
+        };
+        AntennaFieldBasisResource: {
+            current_balance_certificate_digest: string;
+            current_density_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
+            electric_potential_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
+            magnetic_field_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
+            /** Format: double */
+            measured_positive_terminal_current_a: number;
+            /** Format: double */
+            normalization_current_a: number;
+            /** Format: double */
+            normalization_scale: number;
+            oersted_operator_version?: string | null;
+            port_mode_id: string;
+            quadrature_diagnostics: unknown;
+            quadrature_evidence?: null | components["schemas"]["AntennaQuadratureEvidenceRefResource"];
+        };
+        AntennaFieldBinaryRefResource: {
+            layout: string;
+            path: string;
+            scalar_type: string;
+            sha256: string;
+            unit: string;
+            value_count: number;
+        };
+        /** @enum {string} */
+        AntennaFieldModelResource: "quasistatic_conduction_biot_savart3d";
+        AntennaFieldSolutionRefResource: {
+            asset_id: string;
+            content_digest: string;
+            output_id: string;
+            stage_id: string;
+        };
+        AntennaFieldSolutionResource: {
+            asset_id: string;
+            assumptions: string[];
+            bases: components["schemas"]["AntennaFieldBasisResource"][];
+            component: string;
+            conductor_positions: components["schemas"]["AntennaFieldBinaryRefResource"];
+            content_digest: string;
+            current_transport_id: string;
+            gauge_policy: string;
+            geometry_revision: string;
+            material_revision: string;
+            mesh_digest: string;
+            quantity: string;
+            request_scope_epoch: string;
+            requested_execution: unknown;
+            resolved_execution: unknown;
+            resource_id: string;
+            sample_carrier?: null | components["schemas"]["AntennaSampleCarrierResource"];
+            sample_positions: components["schemas"]["AntennaFieldBinaryRefResource"];
+            sample_topology?: null | components["schemas"]["AntennaFieldBinaryRefResource"];
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            signatures: components["schemas"]["AntennaFieldSolutionSignaturesResource"];
+            solution_id: string;
+            solver_policy: unknown;
+            source_object_id: string;
+            stage_id: string;
+            status: string;
+            target_projection_signature?: string | null;
+        };
+        AntennaFieldSolutionSignaturesResource: {
+            current_solution_signature: string;
+            field_solution_signature: string;
+            target_projection_signatures: {
+                [key: string]: string;
+            };
+        };
+        AntennaFieldSolveStageResource: {
+            conductor_mesh_policy: string;
+            conservative_current_view_ref?: string | null;
+            current_transport_id: string;
+            field_sampling_domain: components["schemas"]["FieldTargetResource"];
+            id: string;
+            model: components["schemas"]["AntennaFieldModelResource"];
+            oersted_realization: components["schemas"]["AntennaOerstedRealizationResource"];
+            outputs: components["schemas"]["AntennaNamedOutputResource"][];
+            port_mode_ids: string[];
+            solver_policy: string;
+            source_object_id: string;
+            target_refs: components["schemas"]["FieldTargetResource"][];
+        };
+        AntennaFieldTargetResource: {
+            /** @enum {string} */
+            kind: "global";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+        };
+        AntennaInspectionCurrentDisplayResource: {
+            center_current_density: components["schemas"]["AntennaInspectionPayloadResource"];
+            center_positions: components["schemas"]["AntennaInspectionPayloadResource"];
+            ordered_snapshot: components["schemas"]["AntennaInspectionPayloadResource"];
+            receipt: components["schemas"]["AntennaInspectionCurrentReceiptResource"];
+            trace_current_density: components["schemas"]["AntennaInspectionPayloadResource"];
+            trace_positions: components["schemas"]["AntennaInspectionPayloadResource"];
+        };
+        AntennaInspectionCurrentReceiptResource: {
+            /** Format: int64 */
+            cell_count: number;
+            center_policy: string;
+            coordinate_unit: string;
+            current_density_unit: string;
+            current_evaluator_version: string;
+            normalization: string;
+            operator_version: string;
+            payload: components["schemas"]["AntennaInspectionPayloadResource"];
+            sampling_policy: string;
+            schema_version: string;
+        };
+        AntennaInspectionDisplayCapabilities: {
+            current_density: boolean;
+            display: boolean;
+            llg_drive: boolean;
+            per_ampere_basis: boolean;
+            source_fft: boolean;
+        };
+        /** @description Shared verified display contract, without Live or accepted-run ownership. */
+        AntennaInspectionDisplayDataResource: {
+            capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
+            content_digest: string;
+            /** Format: int64 */
+            device_cell_count: number;
+            device_current?: null | components["schemas"]["AntennaInspectionCurrentDisplayResource"];
+            /** Format: int64 */
+            device_node_count: number;
+            device_positions: components["schemas"]["AntennaInspectionPayloadResource"];
+            device_potential: components["schemas"]["AntennaInspectionPayloadResource"];
+            device_topology: components["schemas"]["AntennaInspectionPayloadResource"];
+            field_scope: string;
+            magnetic_field: components["schemas"]["AntennaInspectionPayloadResource"];
+            normalization: string;
+            qualification: string;
+            sample_positions: components["schemas"]["AntennaInspectionPayloadResource"];
+            sampling_carrier: components["schemas"]["AntennaInspectionSamplingResource"];
+            source_object_id: string;
+            status: string;
+        };
+        AntennaInspectionDisplayFamilyResource: components["schemas"]["AntennaInspectionDisplayResource"] | components["schemas"]["AntennaClosedLoopInspectionDisplayResource"];
+        AntennaInspectionDisplayResource: {
+            capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
+            content_digest: string;
+            /** Format: int64 */
+            device_cell_count: number;
+            device_current?: null | components["schemas"]["AntennaInspectionCurrentDisplayResource"];
+            /** Format: int64 */
+            device_node_count: number;
+            device_positions: components["schemas"]["AntennaInspectionPayloadResource"];
+            device_potential: components["schemas"]["AntennaInspectionPayloadResource"];
+            device_topology: components["schemas"]["AntennaInspectionPayloadResource"];
+            field_scope: string;
+            magnetic_field: components["schemas"]["AntennaInspectionPayloadResource"];
+            normalization: string;
+            qualification: string;
+            record_content_digest: string;
+            request_scope_epoch: string;
+            resource_id: string;
+            run_id: string;
+            runtime_stage_id: string;
+            sample_positions: components["schemas"]["AntennaInspectionPayloadResource"];
+            sampling_carrier: components["schemas"]["AntennaInspectionSamplingResource"];
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            source_object_id: string;
+            /** Format: int64 */
+            stage_revision: number;
+            status: string;
+        };
+        AntennaInspectionManifestResource: {
+            bundle: components["schemas"]["AntennaInspectionPayloadResource"];
+            charge_content_sha256: string;
+            closure_revision: string;
+            content_digest: string;
+            current_display?: null | components["schemas"]["AntennaInspectionCurrentReceiptResource"];
+            current_transport_id: string;
+            device_potential: components["schemas"]["AntennaInspectionPayloadResource"];
+            device_vertex_ids: components["schemas"]["AntennaInspectionPayloadResource"];
+            drive_id: string;
+            field_content_sha256: string;
+            input_pins: unknown;
+            magnetic_field: components["schemas"]["AntennaInspectionPayloadResource"];
+            requested_execution: unknown;
+            resolved_execution: unknown;
+            sample_positions: components["schemas"]["AntennaInspectionPayloadResource"];
+            sampling_carrier: components["schemas"]["AntennaInspectionSamplingResource"];
+            schema_version: string;
+            solver_policy: unknown;
+            source_content_sha256: string;
+            source_object_id: string;
+            validation_scope: string;
+        };
+        AntennaInspectionOutputResource: {
+            content_digest?: string | null;
+            inspection_ref: components["schemas"]["AntennaInspectionReferenceResource"];
+            kind: string;
+            manifest_ref: string;
+            payload_units: {
+                [key: string]: string;
+            };
+            reused_existing?: boolean;
+            source?: unknown;
+        };
+        AntennaInspectionPayloadResource: {
+            /** Format: int64 */
+            byte_count: number;
+            layout: string;
+            path: string;
+            scalar_type: string;
+            sha256: string;
+            unit: string;
+            /** Format: int64 */
+            value_count: number;
+        };
+        AntennaInspectionReferenceResource: {
+            content_digest: string;
+            output_id: string;
+            stage_id: string;
+        };
+        AntennaInspectionSamplingResource: {
+            carrier_kind: string;
+            domain: components["schemas"]["AntennaFieldTargetResource"];
+            location: string;
+            /** Format: int64 */
+            sample_count: number;
+            topology_digest: string;
+        };
+        AntennaInspectionStageRecordResource: {
+            diagnostic?: string | null;
+            field_scope: string;
+            output_id: string;
+            outputs: components["schemas"]["AntennaInspectionOutputResource"][];
+            port_mode_id: string;
+            qualification: string;
+            resolved_action: string;
+            schema_version: string;
+            source_object_id?: string | null;
+            stage_id: string;
+            stage_kind: string;
+            status: string;
+        };
+        AntennaNamedOutputResource: {
+            id: string;
+            quantity: string;
+        };
+        /** @enum {string} */
+        AntennaOerstedRealizationResource: "direct_tetra_quadrature" | "vector_potential_solver";
+        AntennaPortBranchResource: {
+            id: string;
+            inlet_terminal_ref: string;
+            outlet_terminal_ref: string;
+            /** Format: double */
+            signed_weight: number;
+        };
+        AntennaPortModeResource: {
+            branches: components["schemas"]["AntennaPortBranchResource"][];
+            current_transport_id: string;
+            id: string;
+            /** Format: double */
+            normalization_current_a?: number;
+            schema_version: string;
+            source_object_id: string;
+        };
+        AntennaQuadratureEvidenceRefResource: {
+            byte_length: number;
+            path: string;
+            schema_version: string;
+            sha256: string;
+            target_count: number;
+        };
+        /** @enum {string} */
+        AntennaResolvedAssetKindResource: "resolved_asset";
+        AntennaResolvedAssetRefResource: {
+            asset_id: string;
+            content_digest: string;
+            kind: components["schemas"]["AntennaResolvedAssetKindResource"];
+            output_id: string;
+            stage_id: string;
+        };
+        AntennaSampleCarrierResource: {
+            carrier_kind: string;
+            domain: components["schemas"]["AntennaFieldTargetResource"];
+            location: string;
+            topology_digest: string;
+        };
+        AntennaSolutionRefResource: components["schemas"]["AntennaStageOutputRefResource"] | components["schemas"]["AntennaResolvedAssetRefResource"] | components["schemas"]["AntennaFieldSolutionRefResource"];
+        AntennaSourceSpectrumResource: {
+            amplitude_count: number;
+            amplitude_unit: string;
+            /** Format: double */
+            coherent_gain: number;
+            component: string;
+            component_labels: string[];
+            content_digest: string;
+            equilibrium_binding?: null | components["schemas"]["AntennaEquilibriumBindingResource"];
+            /** Format: double */
+            equivalent_noise_bandwidth_bins: number;
+            field_signature: string;
+            k_u_count: number;
+            k_v_count: number;
+            normalization: string;
+            output_id: string;
+            payload: components["schemas"]["AntennaSpectrumPayloadResource"];
+            payloads?: null | components["schemas"]["AntennaSpectrumPayloadsResource"];
+            port_mode_id: string;
+            power_count: number;
+            quantity: string;
+            request_id: string;
+            request_scope_epoch: string;
+            resource_id: string;
+            sampling: components["schemas"]["AntennaSpectrumSamplingResource"];
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            solution_content_digest: string;
+            solution_id: string;
+            source_object_id: string;
+            target_projection_signature?: string | null;
+            wave_vector_unit: string;
+        };
+        AntennaSpectrumKGridResource: {
+            k_u_rad_per_m: number[];
+            k_v_rad_per_m: number[];
+        };
+        /** @enum {string} */
+        AntennaSpectrumNormalizationResource: "integral_si" | "unitary_discrete";
+        /** @enum {string} */
+        AntennaSpectrumOutsidePolicyResource: "error" | "zero";
+        AntennaSpectrumPayloadResource: {
+            content_type: string;
+            format: string;
+            path: string;
+        };
+        AntennaSpectrumPayloadsResource: {
+            amplitudes_re_im: components["schemas"]["AntennaFieldBinaryRefResource"];
+            k_u_rad_per_m: components["schemas"]["AntennaFieldBinaryRefResource"];
+            k_v_rad_per_m: components["schemas"]["AntennaFieldBinaryRefResource"];
+            power: components["schemas"]["AntennaFieldBinaryRefResource"];
+        };
+        AntennaSpectrumRequestResource: {
+            component: string;
+            equilibrium_ref?: null | components["schemas"]["EquilibriumRefResource"];
+            id: string;
+            mode_basis_ref?: string | null;
+            nonuniform_k_grid?: null | components["schemas"]["AntennaSpectrumKGridResource"];
+            normalization: components["schemas"]["AntennaSpectrumNormalizationResource"];
+            output_id: string;
+            port_mode_id?: string | null;
+            sampling_plane: components["schemas"]["AntennaSpectrumSamplingPlaneResource"];
+            solution_ref: components["schemas"]["AntennaSolutionRefResource"];
+            target: components["schemas"]["FieldTargetResource"];
+            transform: components["schemas"]["AntennaSpectrumTransformResource"];
+            window: components["schemas"]["AntennaSpectrumWindowResource"];
+        };
+        AntennaSpectrumSamplingPlaneResource: {
+            axis_u: number[];
+            axis_v: number[];
+            /** Format: double */
+            extent_u_m: number;
+            /** Format: double */
+            extent_v_m: number;
+            interpolation: string;
+            origin_m: number[];
+            outside_policy: components["schemas"]["AntennaSpectrumOutsidePolicyResource"];
+            /** Format: int32 */
+            sample_count_u: number;
+            /** Format: int32 */
+            sample_count_v: number;
+        };
+        AntennaSpectrumSamplingResource: {
+            axis_u: number[];
+            axis_v: number[];
+            /** Format: double */
+            extent_u_m: number;
+            /** Format: double */
+            extent_v_m: number;
+            fourier_origin_uv_m: number[];
+            fourier_phase_convention: string;
+            interpolation: string;
+            mapping_digest: string;
+            origin_m: number[];
+            outside_count: number;
+            outside_policy: string;
+            port_mode_id: string;
+            realization: string;
+            /** Format: int32 */
+            sample_count_u: number;
+            /** Format: int32 */
+            sample_count_v: number;
+            schema_version: string;
+            solution_id: string;
+            source_object_id: string;
+            source_sample_count: number;
+            target: components["schemas"]["AntennaFieldTargetResource"];
+            transform: string;
+            window: string;
+        };
+        /** @enum {string} */
+        AntennaSpectrumTransformResource: "spatial_fft" | "nonuniform_spatial_fft";
+        /** @enum {string} */
+        AntennaSpectrumWindowResource: "rectangular" | "hann" | "hamming" | "blackman";
+        AntennaStageOutputCatalogResource: {
+            content_digest: string;
+            diagnostic?: string | null;
+            outputs: components["schemas"]["AntennaStageOutputResource"][];
+            port_mode_id: string;
+            request_scope_epoch: string;
+            resource_id: string;
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            solution_id?: string | null;
+            stage_id: string;
+            stage_kind: string;
+            /** Format: int64 */
+            stage_revision: number;
+            status: string;
+        };
+        AntennaStageOutputRefResource: {
+            /** @enum {string} */
+            kind: "stage_output";
+            output_id: string;
+            stage_id: string;
+        };
+        AntennaStageOutputResource: {
+            kind: string;
+            manifest_ref: string;
+            output_id: string;
+            quantity_ids: string[];
+            reused_existing: boolean;
+            solution_ref: components["schemas"]["AntennaStageOutputSolutionReferenceResource"];
+        };
+        AntennaStageOutputSolutionReferenceResource: {
+            asset_id: string;
+            content_digest: string;
+            output_id: string;
+            stage_id: string;
+        };
+        AntennaTargetProjectionResource: {
+            id: string;
+            output_id: string;
+            solution: components["schemas"]["AntennaSolutionRefResource"];
+            target: components["schemas"]["FieldTargetResource"];
+        };
+        AntennaWaveformBandwidthDeclarationResource: {
+            /**
+             * Format: double
+             * @description Authored physical upper band for pulse or piecewise-linear waveforms.
+             *     It is not inferred from pulse duration, spacing, or Nyquist frequency.
+             */
+            f_max_hz: number;
+        };
         ApiErrorDiagnosticResponse: {
             code: string;
             message: string;
@@ -5416,10 +6013,52 @@ export interface components {
             request_id?: string | null;
             revision_context?: unknown;
         };
+        ArtifactCarrierGeometryQuery: {
+            carrier_id?: string | null;
+            expected_carrier_revision?: string | null;
+            stage_id?: string | null;
+        };
         ArtifactEntry: {
             kind: string;
             path: string;
             region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
+        };
+        ArtifactFieldLocatorResource: {
+            carrier_digest: string;
+            carrier_id: string;
+            /** @description Canonical decimal u64 string; exact across JavaScript JSON readers. */
+            carrier_revision: string;
+            carrier_scope_id?: string | null;
+            carrier_scope_kind: string;
+            coordinate_frame: string;
+            coordinate_unit: string;
+            indexing: components["schemas"]["ArtifactSampleIndexing"];
+            owner: components["schemas"]["ArtifactFieldOwnerBinding"];
+            /** Format: int64 */
+            sample_count: number;
+            topology_binary_schema: string;
+        };
+        /** @description Provider-owned immutable source identity. Stable native mesh IDs are binary-only. */
+        ArtifactFieldOwnerBinding: {
+            accepted_artifact?: null | components["schemas"]["AcceptedInspectionArtifactOwner"];
+            authored_stage_id: string;
+            content_digest: string;
+            historical_inspection: boolean;
+            module_id: string;
+            native_mesh_identity: string;
+            native_topology_identity: string;
+            object_id: string;
+            /** Format: int64 */
+            observation_mesh_revision: number;
+            /** Format: int64 */
+            observation_topology_revision: number;
+            output_id: string;
+            request_scope_epoch: string;
+            run_id: string;
+            runtime_stage_id: string;
+            session_epoch: string;
+            session_id: string;
+            source_digest: string;
         };
         ArtifactResource: {
             kind: string;
@@ -5427,6 +6066,8 @@ export interface components {
             region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
             stage_autosave?: null | components["schemas"]["StageAutosaveArtifactMetadata"];
         };
+        /** @enum {string} */
+        ArtifactSampleIndexing: "source_nodes" | "sample_nodes" | "point_samples" | "tet4_cell_local_nodes" | "cell_centers";
         Author: {
             affiliation?: string | null;
             email?: string | null;
@@ -5446,15 +6087,15 @@ export interface components {
             base_revision?: number | null;
             /** @enum {string} */
             kind: "replace_scene";
-            scene: Record<string, never>;
+            scene: Record<string, unknown>;
         } | {
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
             kind: "merge_patch";
-            merge_patch: Record<string, never>;
+            merge_patch: Record<string, unknown>;
         } | {
-            asset?: Record<string, never> | null;
+            asset?: Record<string, unknown> | null;
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
@@ -5465,27 +6106,27 @@ export interface components {
         } | {
             /** Format: int64 */
             base_revision?: number | null;
-            geometry: Record<string, never>;
+            geometry: Record<string, unknown>;
             /** @enum {string} */
             kind: "patch_object_geometry";
             object_id: string;
-            transform?: Record<string, never> | null;
+            transform?: Record<string, unknown> | null;
         } | {
             /** Format: int64 */
             base_revision?: number | null;
-            geometry: Record<string, never>;
+            geometry: Record<string, unknown>;
             /** @enum {string} */
             kind: "create_object";
-            magnetization_asset?: Record<string, never> | null;
+            magnetization_asset?: Record<string, unknown> | null;
             magnetization_ref?: string | null;
-            material_asset?: Record<string, never> | null;
+            material_asset?: Record<string, unknown> | null;
             material_ref?: string | null;
             name: string;
             object_id: string;
             region_name?: string | null;
-            study_universe_mesh?: Record<string, never> | null;
-            transform?: Record<string, never> | null;
-            universe?: Record<string, never> | null;
+            study_universe_mesh?: Record<string, unknown> | null;
+            transform?: Record<string, unknown> | null;
+            universe?: Record<string, unknown> | null;
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -5527,14 +6168,14 @@ export interface components {
             /** @enum {string} */
             kind: "commit_object_transform";
             object_id: string;
-            transform: Record<string, never>;
+            transform: Record<string, unknown>;
         } | {
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
             kind: "patch_universe";
             sync_study_universe_mesh?: boolean;
-            universe: Record<string, never>;
+            universe: Record<string, unknown>;
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -5891,6 +6532,155 @@ export interface components {
         CompressionProfile: "speed" | "balanced" | "smallest";
         /** @enum {string} */
         ComputeAdmissionState: "not_evaluated";
+        ComputeAllocationOwner: {
+            attempt_id: string;
+            /** @enum {string} */
+            kind: "solver";
+            /** Format: int64 */
+            ownership_epoch: number;
+        } | {
+            /** @enum {string} */
+            kind: "preparation";
+            preparation_attempt_id: string;
+        };
+        /** @description Read-only detail of one exact host-ledger allocation, without lease tokens. */
+        ComputeAllocationResource: {
+            allocation_id: string;
+            budget: components["schemas"]["ComputeNodePolicyBudget"];
+            /** Format: int64 */
+            compute_node_owner_epoch?: number | null;
+            compute_node_owner_id?: string | null;
+            cpu_ids: number[];
+            exclusive_gpu_uuids: string[];
+            gpu_vram_bytes_by_uuid?: {
+                [key: string]: number;
+            };
+            host_id: string;
+            /** Format: int64 */
+            host_owner_epoch: number;
+            node_id: string;
+            /** Format: int64 */
+            node_policy_revision: number;
+            owner: components["schemas"]["ComputeAllocationOwner"];
+            /** @description Canonical parallelism intent; returned as JSON to preserve its versioned shape. */
+            parallelism: Record<string, unknown>;
+            /** Format: int64 */
+            policy_revision: number;
+            resource_id: string;
+            run_id: string;
+            /** Format: int32 */
+            scheduling_priority: number;
+            schema_version: string;
+            state: components["schemas"]["ComputeAllocationState"];
+            task_id: string;
+            topology_sha256: string;
+        };
+        /** @enum {string} */
+        ComputeAllocationState: "tentative" | "committed" | "quarantined" | "released";
+        ComputeNodeParallelismPattern: {
+            /** @enum {string} */
+            kind: "single_process";
+        } | {
+            /** Format: int32 */
+            gpus_per_rank: number;
+            /** @enum {string} */
+            kind: "distributed";
+            /** Format: int32 */
+            ranks: number;
+            /** Format: int32 */
+            ranks_per_node: number;
+            /** Format: int32 */
+            threads_per_rank: number;
+        };
+        ComputeNodePolicyBudget: {
+            /** Format: int64 */
+            cpu_millis: number;
+            /** Format: int64 */
+            gpu_memory_bytes: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            storage_bytes: number;
+        };
+        /** @description Versioned public projection of the host admission policy. */
+        ComputeNodePolicyDocumentResource: {
+            allowed_cpu_ids: number[];
+            allowed_gpu_uuids: string[];
+            allowed_parallelism_patterns: components["schemas"]["ComputeNodeParallelismPattern"][];
+            draining: boolean;
+            /** Format: int32 */
+            max_parallel_workers: number;
+            priority_order: number[];
+            reserved_budget: components["schemas"]["ComputeNodePolicyBudget"];
+            reserved_gpu_vram_bytes_by_uuid?: {
+                [key: string]: number;
+            };
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+        };
+        /**
+         * @description Read-only host policy snapshot. Mutations require the separate operator
+         *     authorization contract and are intentionally not part of this resource.
+         */
+        ComputeNodePolicyResource: {
+            /** @description Operator-controlled policy document without internal host identity. */
+            policy: components["schemas"]["ComputeNodePolicyDocumentResource"];
+            status: components["schemas"]["ComputeNodePolicyStatusResource"];
+        };
+        ComputeNodePolicyStatusResource: {
+            /** Format: int32 */
+            active_workers: number;
+            blocking_reasons: string[];
+            draining: boolean;
+            over_budget: boolean;
+            /** Format: int64 */
+            revision: number;
+        };
+        ComputeNodePolicyUpdate: {
+            allowed_cpu_ids: number[];
+            allowed_gpu_uuids: string[];
+            allowed_parallelism_patterns: components["schemas"]["ComputeNodeParallelismPattern"][];
+            draining: boolean;
+            /** Format: int32 */
+            max_parallel_workers: number;
+            priority_order: number[];
+            reserved_budget: components["schemas"]["ComputeNodePolicyBudget"];
+            reserved_gpu_vram_bytes_by_uuid?: {
+                [key: string]: number;
+            };
+        };
+        /** @description A public update excludes server-owned host identity and revision. */
+        ComputeNodePolicyUpdateRequest: {
+            policy: components["schemas"]["ComputeNodePolicyUpdate"];
+        };
+        /** @description One host inventory and the freshness of its latest observation. */
+        ComputeNodeResource: {
+            node_id: string;
+            node_policy?: null | components["schemas"]["ComputeNodePolicyResource"];
+            /**
+             * @description Durable snapshot payload. Its versioned shapes are defined by
+             *     `compute_node_snapshot.v1` and `compute_node_snapshot.v2` in the session model.
+             */
+            snapshot: Record<string, unknown>;
+            /** Format: int64 */
+            stale_after_seconds: number;
+            state: components["schemas"]["ComputeNodesState"];
+        };
+        /** @description Read-only compute-node inventory observed from the configured desktop host. */
+        ComputeNodesResource: {
+            /** @description This local provider returns at most its one configured desktop host. */
+            nodes: components["schemas"]["ComputeNodeResource"][];
+            schema_version: string;
+            /**
+             * Format: int64
+             * @description Maximum age, in seconds, before the last sample is considered stale.
+             */
+            stale_after_seconds: number;
+            state: components["schemas"]["ComputeNodesState"];
+        };
+        /** @enum {string} */
+        ComputeNodesState: "not_probed" | "current" | "stale" | "unavailable";
         ComputeParallelismSchema: {
             /** @enum {string} */
             kind: "single_process";
@@ -5949,6 +6739,34 @@ export interface components {
         ComputePreviewStep: {
             execution: components["schemas"]["ExecutionMaterializationSchema"];
             step_id: string;
+        };
+        /** @description One non-terminal accepted run or task projected from the existing durable store. */
+        ComputeQueueItemResource: {
+            accepted_at: string;
+            attempt_id?: string | null;
+            blocking_reason?: string | null;
+            /** @description Stable opaque cursor identity, not an operational capability. */
+            item_id: string;
+            /** Format: int64 */
+            ownership_epoch?: number | null;
+            project_id: string;
+            /** @description Stable scheduler resource name; contains no lease token. */
+            resource_id?: string | null;
+            run_id: string;
+            /** Format: int32 */
+            scheduling_priority: number;
+            state: components["schemas"]["ComputeQueueItemState"];
+            task_id?: string | null;
+        };
+        /** @enum {string} */
+        ComputeQueueItemState: "pending_materialization" | "accepted" | "queued" | "preparing" | "running" | "stopping";
+        /** @description Bounded page of the durable accepted-run scheduler read model. */
+        ComputeQueueResource: {
+            items: components["schemas"]["ComputeQueueItemResource"][];
+            next_cursor?: string | null;
+            /** @description Digest of the observed durable queue rows; cursors are tied to this revision. */
+            revision: string;
+            schema_version: string;
         };
         ComputeResourcePatchSchema: {
             cpu?: components["schemas"]["CpuResourcePatchSchema"];
@@ -6190,83 +7008,6 @@ export interface components {
             /** Format: double */
             position_fraction: number;
         };
-        /** @description Explicit build-only intent. The API derives and pins the managed worktree scope. */
-        DevelopmentBackendBuildRequest: {
-            api_instance_id: string;
-            request_id: string;
-            schema: string;
-        };
-        /** @description Bounded status for one authenticated build-only intent. */
-        DevelopmentBackendBuildRequestResource: {
-            ready_build_id?: string | null;
-            ready_source_sha256?: string | null;
-            request_id: string;
-            schema: string;
-            state: components["schemas"]["DevelopmentBackendBuildRequestState"];
-        };
-        /** @enum {string} */
-        DevelopmentBackendBuildRequestState: "pending" | "building" | "ready" | "failed" | "unknown";
-        /** @enum {string} */
-        DevelopmentBackendReason: "disabled" | "configuration_invalid" | "observation_unavailable" | "observation_invalid" | "observation_stale" | "watcher_stopped" | "build_pending" | "build_failed" | "restart_integration_pending";
-        /** @description Compilation observation only; applying a build requires a separate guarded command. */
-        DevelopmentBackendResource: {
-            /** @description True when this pinned development API can accept an explicit build-only request. */
-            build_available?: boolean;
-            /** @description Owner request currently reflected by the native watcher status frame. */
-            build_request_id?: string | null;
-            configured: boolean;
-            current_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
-            ready_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
-            reason: components["schemas"]["DevelopmentBackendReason"];
-            restart_available: boolean;
-            /** Format: int64 */
-            revision: number;
-            schema_version: string;
-            state: components["schemas"]["DevelopmentBackendState"];
-            workspace_identity?: null | components["schemas"]["DevelopmentBackendWorkspaceIdentity"];
-        };
-        /** @enum {string} */
-        DevelopmentBackendState: "disabled" | "waiting" | "building" | "ready" | "failed" | "superseded" | "stopped" | "unknown";
-        DevelopmentBackendWorkspaceIdentity: {
-            api_instance_id: string;
-            /**
-             * Format: int64
-             * @description Exact transition counter, including when there is no current session.
-             */
-            session_epoch: number;
-            session_id?: string | null;
-        };
-        DevelopmentBuildIdentity: {
-            /** @description Opaque identity: running product version or verified candidate manifest digest. */
-            id: string;
-            source_sha256: string;
-        };
-        /** @description Independent UI owners; the canonical scene is acquired privately by the launcher. */
-        DevelopmentRestartRequest: {
-            editor: unknown;
-            project_document: unknown;
-            request_id: string;
-            schema: string;
-            /** Format: int64 */
-            session_epoch: number;
-            session_id: string | null;
-            workspace: unknown;
-        };
-        DevelopmentRestartResource: {
-            editor?: unknown;
-            new_api_instance_id?: string | null;
-            project_document?: unknown;
-            public_reason?: string | null;
-            request_id: string;
-            schema: string;
-            /** Format: int64 */
-            session_epoch?: number | null;
-            session_id?: string | null;
-            state: components["schemas"]["DevelopmentRestartState"];
-            workspace?: unknown;
-        };
-        /** @enum {string} */
-        DevelopmentRestartState: "pending" | "ready" | "failed" | "unknown";
         DisplayPatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
@@ -6472,6 +7213,19 @@ export interface components {
             /** Format: int64 */
             revision: number;
             total: number;
+        };
+        EquilibriumRefResource: components["schemas"]["EquilibriumReferenceResource"] | string;
+        EquilibriumReferenceResource: {
+            /** @enum {string} */
+            kind: "stage_output";
+            output_id: string;
+            stage_id: string;
+        } | {
+            asset_id: string;
+            content_digest: string;
+            equilibrium_id: string;
+            /** @enum {string} */
+            kind: "artifact";
         };
         /** @enum {string} */
         ExecutionBackendSchema: "auto" | "fdm" | "fem" | "hybrid";
@@ -6882,6 +7636,7 @@ export interface components {
         /** @enum {string} */
         FieldComponent: "x" | "y" | "z" | "magnitude";
         FieldDescriptor: {
+            artifact_field_locator?: null | components["schemas"]["ArtifactFieldLocatorResource"];
             available: boolean;
             /** Format: int32 */
             components: number;
@@ -7001,6 +7756,7 @@ export interface components {
             y_size: number;
         };
         FieldMeta: {
+            artifact_field_locator?: null | components["schemas"]["ArtifactFieldLocatorResource"];
             /** Format: int32 */
             components: number;
             domain_generation_id: string;
@@ -7035,7 +7791,7 @@ export interface components {
             unit: string;
         };
         /** @enum {string} */
-        FieldPayloadState: "current" | "legacy_unverified" | "unmaterialized";
+        FieldPayloadState: "current" | "historical" | "legacy_unverified" | "unmaterialized";
         FieldProjectionMaskDescriptor: {
             available: boolean;
             etag?: string | null;
@@ -7114,6 +7870,7 @@ export interface components {
             value: number;
         };
         FieldPublicationBinding: {
+            artifact_field_locator?: null | components["schemas"]["ArtifactFieldLocatorResource"];
             carrier_fingerprint: string;
             carrier_id: string;
             component: string;
@@ -7365,6 +8122,8 @@ export interface components {
         };
         /** @description Query parameters for the `/fields/{quantity_id}/vector` endpoint. */
         FieldVectorQuery: {
+            /** @description Exact immutable artifact carrier selector. */
+            carrier_id?: string | null;
             /**
              * @description Component to return.
              *
@@ -7570,7 +8329,7 @@ export interface components {
             mesh_generation_id?: string | null;
             mesh_id?: string | null;
             schema_version: string;
-            source_identity: Record<string, never>;
+            source_identity: Record<string, unknown>;
             topology_fingerprint?: string | null;
         };
         FrequencyDomainCapabilityEntryResource: {
@@ -9639,16 +10398,16 @@ export interface components {
         };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
-            active_build?: Record<string, never> | null;
+            active_build?: Record<string, unknown> | null;
             /** @description Resolved target for the current build. Summary-level copies are transitional dashboard projections. */
-            effective_airbox_target?: Record<string, never> | null;
+            effective_airbox_target?: Record<string, unknown> | null;
             /** @description Resolved per-object targets for the current build. Summary-level copies are transitional dashboard projections. */
-            effective_per_object_targets?: Record<string, never> | null;
+            effective_per_object_targets?: Record<string, unknown> | null;
             /** Format: int64 */
             geometry_realization_revision?: number | null;
             last_build_error?: string | null;
             /** @description Current/last build summary for build panels. Latest-success endpoint owns stable successful build references. */
-            last_build_summary?: Record<string, never> | null;
+            last_build_summary?: Record<string, unknown> | null;
             /** @description Build/pipeline state for build panels. */
             mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
             mixed_layer_topology_rejection?: null | components["schemas"]["MeshMixedLayerTopologyRejectionResource"];
@@ -9657,7 +10416,7 @@ export interface components {
             provenance?: null | components["schemas"]["MeshBuildProvenanceResource"];
             published_resources?: null | components["schemas"]["MeshBuildPublishedResourcesResource"];
             /** @description Resolved policy used by the build. This is execution reality, not the authoring draft. */
-            resolved_policy?: Record<string, never> | null;
+            resolved_policy?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
             shared_domain_build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
@@ -9673,23 +10432,23 @@ export interface components {
             minimum_element_size?: number | null;
         };
         MeshBuildCommandRequest: {
-            mesh_options?: Record<string, never> | null;
+            mesh_options?: Record<string, unknown> | null;
             mesh_reason?: string | null;
             mesh_target?: null | components["schemas"]["MeshCommandTarget"];
         };
         MeshBuildDiagnosticsResource: {
             last_build_error?: string | null;
             /** @description Detailed latest build summary for diagnostics and inspectors. */
-            last_build_summary?: Record<string, never> | null;
+            last_build_summary?: Record<string, unknown> | null;
             /** @description Detailed build pipeline state for diagnostics and build panels. */
             mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
             /** @description Detailed mesh-build quality diagnostics. Dashboard quality summaries are transitional projections only. */
-            mesh_quality_summary?: Record<string, never> | null;
+            mesh_quality_summary?: Record<string, unknown> | null;
             /** @description Full mesh statistics report for realized solver mesh diagnostics. */
-            mesh_statistics?: Record<string, never> | null;
+            mesh_statistics?: Record<string, unknown> | null;
         };
         MeshBuildHistoryResource: {
-            history: Record<string, never>[];
+            history: Record<string, unknown>[];
             /** Format: int64 */
             revision: number;
         };
@@ -9707,9 +10466,9 @@ export interface components {
         MeshBuildPolicyDiffResource: {
             effect?: string | null;
             path: string;
-            previous?: Record<string, never> | null;
-            realized?: Record<string, never> | null;
-            requested?: Record<string, never> | null;
+            previous?: Record<string, unknown> | null;
+            realized?: Record<string, unknown> | null;
+            requested?: Record<string, unknown> | null;
             scope: string;
         };
         MeshBuildProvenanceResource: {
@@ -9786,38 +10545,38 @@ export interface components {
             part_id: string;
         };
         MeshInterfaceConfigReplaceRequest: {
-            config?: Record<string, never> | null;
+            config?: Record<string, unknown> | null;
             owner_a?: string | null;
             owner_b?: string | null;
         };
         MeshInterfaceConfigResource: {
-            config?: Record<string, never> | null;
+            config?: Record<string, unknown> | null;
             interface_id: string;
             /** Format: int64 */
             revision: number;
         };
         MeshInterfaceQualityResource: {
             interface_id: string;
-            quality?: Record<string, never> | null;
+            quality?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
         };
         MeshInterfaceReportResource: {
             interface_id: string;
-            report?: Record<string, never> | null;
+            report?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
         };
         MeshLastSuccessfulBuildResource: {
             /** @description Transitional target projection retained for current frontend adapters. */
-            effective_airbox_target?: Record<string, never> | null;
+            effective_airbox_target?: Record<string, unknown> | null;
             /** @description Transitional target projection retained for current frontend adapters. */
-            effective_per_object_targets?: Record<string, never> | null;
+            effective_per_object_targets?: Record<string, unknown> | null;
             /** Format: int64 */
             geometry_realization_revision?: number | null;
             last_build_error?: string | null;
             /** @description Last successful build artifact/reference summary. It must not become a copy of the active build resource. */
-            last_success?: Record<string, never> | null;
+            last_success?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
             /** Format: int64 */
@@ -9927,13 +10686,13 @@ export interface components {
         };
         MeshObjectQualityResource: {
             object_id: string;
-            quality?: Record<string, never> | null;
+            quality?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
         };
         MeshObjectReportResource: {
             object_id: string;
-            report?: Record<string, never> | null;
+            report?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
         };
@@ -9964,7 +10723,7 @@ export interface components {
             object_id: string;
             /** Format: int64 */
             revision: number;
-            size_field?: Record<string, never> | null;
+            size_field?: Record<string, unknown> | null;
         };
         MeshOperationStatusResource: {
             actual_method?: string | null;
@@ -10116,7 +10875,7 @@ export interface components {
             topology_fingerprint?: string | null;
         };
         MeshQualityGatesResource: {
-            gates?: Record<string, never> | null;
+            gates?: Record<string, unknown> | null;
             mixed_certificate: components["schemas"]["MeshMixedCertificateQualityEvidenceResource"];
             /** Format: int64 */
             revision: number;
@@ -10126,7 +10885,7 @@ export interface components {
             /** Format: int64 */
             gmsh_field_id?: number | null;
             kind: string;
-            params?: Record<string, never> | null;
+            params?: Record<string, unknown> | null;
             reason?: string | null;
             source?: string | null;
             status: string;
@@ -10178,7 +10937,7 @@ export interface components {
             topology_fingerprint?: string | null;
         };
         MeshRegionQualityResource: {
-            quality?: Record<string, never> | null;
+            quality?: Record<string, unknown> | null;
             region_id: string;
             /** Format: int64 */
             revision: number;
@@ -10208,7 +10967,7 @@ export interface components {
             shared_domain_config: unknown;
             solver_mesh?: null | components["schemas"]["MeshSolverMeshResource"];
             /** @description Solver-domain universe mesh policy. This endpoint owns mesh semantics, not build diagnostics. */
-            universe_config?: Record<string, never> | null;
+            universe_config?: Record<string, unknown> | null;
         };
         MeshSharedDomainBuildReportResource: {
             /** Format: int32 */
@@ -10233,16 +10992,16 @@ export interface components {
             gmsh_version?: string | null;
             mixed_layer_topology_certificate?: null | components["schemas"]["MeshMixedLayerTopologyCertificateSummaryResource"];
             mixed_topology_provenance?: null | components["schemas"]["MeshMixedTopologyProvenanceResource"];
-            object_region_markers?: Record<string, never>[];
+            object_region_markers?: Record<string, unknown>[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
             orphan_entities?: components["schemas"]["MeshOrphanEntityResource"][];
             /** Format: int32 */
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
-            rejected_element_types?: Record<string, never>[];
+            rejected_element_types?: Record<string, unknown>[];
             requested_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
             resolved_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
-            selector_resolution?: Record<string, never>[];
+            selector_resolution?: Record<string, unknown>[];
             size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
             thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
             /** Format: int32 */
@@ -10250,7 +11009,7 @@ export interface components {
             used_size_field_kinds?: string[];
         };
         MeshSharedDomainConfigReplaceRequest: {
-            config: Record<string, never>;
+            config: Record<string, unknown>;
         };
         MeshSharedDomainConfigResource: {
             config: {
@@ -10374,12 +11133,12 @@ export interface components {
             revision: number;
         };
         MeshUniverseQualityResource: {
-            quality?: Record<string, never> | null;
+            quality?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
         };
         MeshUniverseReportResource: {
-            report?: Record<string, never> | null;
+            report?: Record<string, unknown> | null;
             /** Format: int64 */
             revision: number;
         };
@@ -10547,50 +11306,51 @@ export interface components {
         ObjectCreateRequest: {
             /** Format: int64 */
             base_revision?: number | null;
-            geometry: Record<string, never>;
-            magnetization_asset?: Record<string, never> | null;
+            geometry: Record<string, unknown>;
+            magnetization_asset?: Record<string, unknown> | null;
             magnetization_ref?: string | null;
-            material_asset?: Record<string, never> | null;
+            material_asset?: Record<string, unknown> | null;
             material_ref?: string | null;
             name: string;
             object_id: string;
             region_name?: string | null;
-            study_universe_mesh?: Record<string, never> | null;
-            transform?: Record<string, never> | null;
-            universe?: Record<string, never> | null;
+            study_universe_mesh?: Record<string, unknown> | null;
+            transform?: Record<string, unknown> | null;
+            universe?: Record<string, unknown> | null;
         };
+        /** @description Per-energy availability is explicit: null is missing, while Some(0.0) is an observed zero. */
         ObjectEnergySummary: {
             /** Format: double */
-            anisotropy: number;
+            anisotropy: number | null;
             /** Format: double */
-            demag: number;
+            demag: number | null;
             /** Format: double */
-            dmi: number;
+            dmi: number | null;
             /** Format: double */
-            exchange: number;
+            exchange: number | null;
             /** Format: double */
-            total: number;
+            total: number | null;
             /** Format: double */
-            zeeman: number;
+            zeeman: number | null;
         };
         ObjectGeometryPatchRequest: {
             /** Format: int64 */
             base_revision?: number | null;
-            geometry: Record<string, never>;
-            transform?: Record<string, never> | null;
+            geometry: Record<string, unknown>;
+            transform?: Record<string, unknown> | null;
         };
         ObjectInteractionPatchRequest: {
             /** Format: int64 */
             base_revision?: number | null;
             enabled?: boolean | null;
-            params: Record<string, never>;
+            params: Record<string, unknown>;
             present?: boolean | null;
         };
         ObjectInteractionResource: {
             enabled: boolean;
             interaction_kind: string;
             object_id: string;
-            params: Record<string, never>;
+            params: Record<string, unknown>;
             present: boolean;
             /** Format: int64 */
             scene_revision: number;
@@ -10617,16 +11377,16 @@ export interface components {
             time_seconds: number;
         };
         ObjectPatchRequest: {
-            absorbing_boundary?: Record<string, never> | null;
+            absorbing_boundary?: Record<string, unknown> | null;
             /** Format: int64 */
             base_revision?: number | null;
-            geometry?: Record<string, never> | null;
+            geometry?: Record<string, unknown> | null;
             magnetization_ref?: string | null;
             material_ref?: string | null;
             name?: string | null;
             notes?: string | null;
             region_name?: string | null;
-            transform?: Record<string, never> | null;
+            transform?: Record<string, unknown> | null;
             visible?: boolean | null;
         };
         ObjectRegionCreateRequest: {
@@ -10825,6 +11585,18 @@ export interface components {
             solve_domain: components["schemas"]["SceneRegionRef"][];
             source_path: string;
         };
+        /** @description OpenAPI projection only; serialized ownership uses the canonical IR type. */
+        PhysicsGraphObjectResource: {
+            geometry_id: string;
+            label?: string | null;
+            material_assignment_ids?: string[];
+            name: string;
+            object_id: string;
+            schema_version: string;
+            type: components["schemas"]["PhysicsGraphObjectTypeResource"];
+        };
+        /** @enum {string} */
+        PhysicsGraphObjectTypeResource: "geometry" | "ferromagnet" | "conductor" | "electrode" | "antenna";
         PhysicsGraphPresentationResource: {
             family: string;
             label: string;
@@ -10915,7 +11687,7 @@ export interface components {
             padding_m: number;
         };
         /** @enum {string} */
-        PlanarFieldComponent: "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
+        PlanarFieldComponent: "c0" | "c1" | "c2" | "c3" | "c4" | "c5" | "c6" | "c7" | "c8" | "frobenius" | "spin_flow_x" | "spin_flow_y" | "spin_flow_z" | "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
         PlanarFieldFrameResource: {
             bounds_uv_m: number[];
             normal: number[];
@@ -11435,6 +12207,161 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        ProjectBatchAxisSummaryResource: {
+            canonical_unit: string;
+            name: string;
+        };
+        ProjectBatchCasePublishedRunResource: {
+            /** Format: int64 */
+            catalog_revision?: number | null;
+            catalog_state: components["schemas"]["ProjectRunCatalogState"];
+            /** @description Run identity confirmed by the durable child RunIntent. */
+            run_id: string;
+            tasks: components["schemas"]["ProjectBatchCaseTaskSummaryResource"][];
+        };
+        /** @enum {string} */
+        ProjectBatchCaseState: "pending_expansion" | "pending_materialization" | "materialized";
+        ProjectBatchCaseSummaryResource: {
+            case_id: string;
+            parameter_tuple: {
+                [key: string]: unknown;
+            };
+            planned_run_id: string;
+            published_run?: null | components["schemas"]["ProjectBatchCasePublishedRunResource"];
+            state: components["schemas"]["ProjectBatchCaseState"];
+        };
+        ProjectBatchCaseTaskSummaryResource: {
+            /** @description True when a durable pre-claim cancellation request exists for this task. */
+            cancellation_requested: boolean;
+            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
+            task_id: string;
+        };
+        ProjectBatchCasesQuery: {
+            /** @description Last CaseId returned on the previous page. */
+            cursor?: string | null;
+            /**
+             * Format: int32
+             * @description Page size, from 1 to 100; defaults to 50.
+             */
+            limit?: number | null;
+        };
+        ProjectBatchCasesResource: {
+            /** @description Axis names and canonical units for the parameter tuples in this manifest. */
+            axes: components["schemas"]["ProjectBatchAxisSummaryResource"][];
+            batch_id: string;
+            cases: components["schemas"]["ProjectBatchCaseSummaryResource"][];
+            next_cursor?: string | null;
+        };
+        /** @enum {string} */
+        ProjectBatchCommandAction: "pause_admission" | "resume_admission" | "cancel_admission" | "retry";
+        /** @enum {string} */
+        ProjectBatchCommandDisposition: "accepted" | "replayed";
+        ProjectBatchCommandRequest: {
+            action: components["schemas"]["ProjectBatchCommandAction"];
+            command_id: string;
+            /** Format: int64 */
+            expected_revision: number;
+            reason: string;
+            retry?: null | components["schemas"]["ProjectBatchRetryRequest"];
+        };
+        ProjectBatchCommandResource: {
+            action: components["schemas"]["ProjectBatchCommandAction"];
+            batch_id: string;
+            command_id: string;
+            /** Format: int64 */
+            command_revision: number;
+            disposition: components["schemas"]["ProjectBatchCommandDisposition"];
+            expansion_state: components["schemas"]["ProjectBatchExpansionState"];
+            retry?: null | components["schemas"]["ProjectBatchRetryResource"];
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @enum {string} */
+        ProjectBatchExpansionState: "pending" | "expanding" | "complete" | "stopped" | "paused" | "cancelled";
+        /** @enum {string} */
+        ProjectBatchFailurePolicy: "continue_independent" | "stop_admission";
+        ProjectBatchListQuery: {
+            /** @description Last BatchId returned on the previous page. */
+            cursor?: string | null;
+            /**
+             * Format: int32
+             * @description Page size, from 1 to 100; defaults to 50.
+             */
+            limit?: number | null;
+        };
+        ProjectBatchListResource: {
+            batches: components["schemas"]["ProjectBatchSummaryResource"][];
+            next_cursor?: string | null;
+            project_id: string;
+        };
+        ProjectBatchRetryRequest: {
+            case_id: string;
+            /** Format: int64 */
+            expected_catalog_revision: number;
+            retry_id: string;
+            task_id: string;
+        };
+        ProjectBatchRetryResource: {
+            case_id: string;
+            task: components["schemas"]["ProjectRunTaskRetryResource"];
+        };
+        /**
+         * @description Immutable independent batch submission. The server deserializes
+         *     `batch_request` into the versioned application contract before accepting it.
+         */
+        ProjectBatchSubmitRequest: {
+            /** @description Exact base64-encoded portable project archive accepted for this batch. */
+            archive_base64: string;
+            /** @description Explicit immutable asset ID to path inside `project/assets/`. */
+            asset_paths: {
+                [key: string]: string;
+            };
+            /** @description Versioned `BatchExpansionRequest` object, including template and axes. */
+            batch_request: {
+                [key: string]: unknown;
+            };
+            /** @description Client intent key used to recover an ACK after a timeout. */
+            idempotency_key: string;
+            /** @description Versioned immutable StudyPlan used by the batch template. */
+            study_plan: {
+                [key: string]: unknown;
+            };
+            /** @description Immutable StudyProblemCatalog pinned by the batch template. */
+            study_problem_catalog: {
+                [key: string]: unknown;
+            };
+        };
+        ProjectBatchSubmitResource: {
+            batch_id: string;
+            /** Format: int64 */
+            case_count: number;
+            disposition: components["schemas"]["ProjectRunSubmitDisposition"];
+            /** @description Logical digest stored in the expansion manifest. */
+            manifest_sha256: string;
+        };
+        ProjectBatchSummaryResource: {
+            accepted_at: string;
+            batch_id: string;
+            /** Format: int64 */
+            case_count: number;
+            /**
+             * Format: int64
+             * @description Revision used to fence pause, resume, and cancel-admission commands.
+             */
+            command_revision: number;
+            /** @description State of the committed expansion cursor, which can lag a durable child. */
+            expansion_state: components["schemas"]["ProjectBatchExpansionState"];
+            failure_policy: components["schemas"]["ProjectBatchFailurePolicy"];
+            manifest_sha256: string;
+            /** Format: int32 */
+            max_parallel_cases?: number | null;
+            /**
+             * Format: int64
+             * @description Committed `next_case_index` watermark; a durable child may be visible in
+             *     Cases before this cursor advances after publication.
+             */
+            published_case_count: number;
+        };
         ProjectCreateRequest: {
             /**
              * @description User-facing project name. It is the only authoring input accepted by
@@ -11561,6 +12488,45 @@ export interface components {
         ProjectRunCatalogState: "pending_materialization" | "materialized";
         /** @enum {string} */
         ProjectRunExecutionState: "pending_materialization" | "pending_preparation";
+        ProjectRunIntentRequest: {
+            archive_base64: string;
+            asset_paths: {
+                [key: string]: string;
+            };
+            /**
+             * Format: int64
+             * @description Revision of the exact archived definition observed by the author.
+             */
+            expected_revision: number;
+            /**
+             * @description Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,
+             *     dependencies, scheduling_priority and requested_execution. No defaults
+             *     or identities are inferred from a live session.
+             */
+            run_authoring: {
+                [key: string]: unknown;
+            };
+            study_plan: {
+                [key: string]: unknown;
+            };
+            study_problem_catalog: {
+                [key: string]: unknown;
+            };
+        };
+        ProjectRunIntentResource: {
+            /** Format: int64 */
+            definition_revision: number;
+            payload_fingerprint: string;
+            project_id: string;
+            /**
+             * @description Canonical run_intent.v1 for the existing Submit operation. Submit must
+             *     receive the same archive, Study, catalog and asset bindings. It repeats
+             *     validation and checks published profiles before durable acceptance.
+             */
+            run_intent: {
+                [key: string]: unknown;
+            };
+        };
         ProjectRunListQuery: {
             /** @description Last RunId returned on the previous page. */
             cursor?: string | null;
@@ -11631,7 +12597,7 @@ export interface components {
             run_intent: {
                 [key: string]: unknown;
             };
-            /** @description Versioned `study_plan.v2` object with typed steps, references and runner controls. */
+            /** @description Versioned `study_plan.v1/v2/v3/v4`; v4 adds typed inspection operations and captured source. */
             study_plan: {
                 [key: string]: unknown;
             };
@@ -11662,6 +12628,18 @@ export interface components {
         };
         /** @enum {string} */
         ProjectRunTaskCancellationDisposition: "accepted" | "replayed";
+        ProjectRunTaskCancellationIntentResource: {
+            cancellation_id: string;
+            cancellation_state: components["schemas"]["ProjectRunTaskCancellationState"];
+            /** Format: int64 */
+            catalog_revision: number;
+            disposition: components["schemas"]["ProjectRunTaskCancellationDisposition"];
+            /** Format: int64 */
+            expected_catalog_revision: number;
+            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
+            run_id: string;
+            task_id: string;
+        };
         ProjectRunTaskCancellationRequest: {
             /** @description Supply together with expected_catalog_revision for pre-claim cancellation. */
             cancellation_id?: string | null;
@@ -11671,6 +12649,19 @@ export interface components {
             reason: string;
         };
         ProjectRunTaskCancellationResource: components["schemas"]["ProjectRunTaskStopResource"] | components["schemas"]["ProjectRunTaskCancellationIntentResource"];
+        /** @enum {string} */
+        ProjectRunTaskCancellationState: "requested";
+        ProjectRunTaskCancellationSummary: {
+            cancellation_id: string;
+            created_at: string;
+            /** Format: int64 */
+            expected_catalog_revision: number;
+            reason: string;
+        };
+        ProjectRunTaskExecutionResource: {
+            materialization?: components["schemas"]["ExecutionMaterializationSchema"];
+            step_id: string;
+        };
         /** @enum {string} */
         ProjectRunTaskLifecycle: "accepted" | "queued" | "preparing" | "running" | "stopping" | "succeeded" | "failed" | "cancelled" | "interrupted";
         ProjectRunTaskReadiness: {
@@ -11686,6 +12677,7 @@ export interface components {
             artifact_ids: string[];
             attempt_id?: string | null;
             cancellation_intent?: null | components["schemas"]["ProjectRunTaskCancellationSummary"];
+            execution?: components["schemas"]["ProjectRunTaskExecutionResource"];
             input_fingerprint: string;
             lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
             observation?: null | components["schemas"]["ProjectRunObservationState"];
@@ -11694,6 +12686,41 @@ export interface components {
             readiness: components["schemas"]["ProjectRunTaskReadiness"];
             resolved_input_fingerprint?: string | null;
             resource_id?: string | null;
+            task_id: string;
+        };
+        /** @enum {string} */
+        ProjectRunTaskRetryDisposition: "accepted" | "replayed";
+        /** @description Revision-fenced request to create a fresh attempt for one terminal task. */
+        ProjectRunTaskRetryRequest: {
+            /**
+             * Format: int64
+             * @description Catalog revision observed by the caller before requesting the retry.
+             */
+            expected_catalog_revision: number;
+            /** @description Stable idempotency identity for this operator retry request. */
+            retry_id: string;
+        };
+        ProjectRunTaskRetryResource: {
+            /** Format: int64 */
+            catalog_revision: number;
+            disposition: components["schemas"]["ProjectRunTaskRetryDisposition"];
+            /** @description Retry ACK reports the durable task state, not solver completion. */
+            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
+            /** @description Attempt that was terminal when the retry was requested. */
+            previous_attempt_id: string;
+            /** Format: int64 */
+            previous_ownership_epoch: number;
+            retry_id: string;
+            run_id: string;
+            task_id: string;
+        };
+        ProjectRunTaskStopResource: {
+            /** Format: int64 */
+            catalog_revision: number;
+            command_id: string;
+            disposition: components["schemas"]["ProjectRunTaskCancellationDisposition"];
+            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
+            run_id: string;
             task_id: string;
         };
         ProjectScriptImportResource: {
@@ -11758,6 +12785,7 @@ export interface components {
             supports_history: boolean;
             supports_preview_2d: boolean;
             supports_preview_3d: boolean;
+            tensor?: null | components["schemas"]["QuantityTensorDescriptor"];
             unit: string;
         };
         QuantityCatalogResponse: {
@@ -11774,6 +12802,14 @@ export interface components {
         QuantityRenderCapability: "renderable" | "unsupported_shape" | "unavailable";
         /** @enum {string} */
         QuantityRequestCapability: "field_vector" | "scalar_resource" | "unsupported_shape" | "unavailable";
+        QuantityTensorDescriptor: {
+            axes: string[];
+            component_labels: string[];
+            layout: string;
+            /** Format: int32 */
+            rank: number;
+            shape: number[];
+        };
         QuantityVisualizationPatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
@@ -12665,7 +13701,7 @@ export interface components {
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
         SceneObjectResource: {
-            absorbing_boundary?: Record<string, never> | null;
+            absorbing_boundary?: Record<string, unknown> | null;
             allocated_region_ids?: string[];
             geometry?: {
                 [key: string]: unknown;
@@ -12733,7 +13769,7 @@ export interface components {
             t0: number;
         };
         ScenePatchRequest: {
-            merge_patch: Record<string, never>;
+            merge_patch: Record<string, unknown>;
         };
         ScenePrescribedSotDrive: {
             /** Format: double */
@@ -12817,7 +13853,7 @@ export interface components {
             /** Format: double */
             radius: number;
         } | {
-            expression: Record<string, never>;
+            expression: Record<string, unknown>;
             /** @enum {string} */
             kind: "csg";
         };
@@ -12992,9 +14028,12 @@ export interface components {
         /** @enum {string} */
         SceneStructuredCutAxis: "x" | "y" | "z";
         /** @enum {string} */
+        SceneStructuredCutCoordinateFrame: "world" | "object";
+        /** @enum {string} */
         SceneStructuredCutNormal: "positive_axis" | "negative_axis";
         SceneStructuredCutPlane: {
             axis: components["schemas"]["SceneStructuredCutAxis"];
+            coordinate_frame?: null | components["schemas"]["SceneStructuredCutCoordinateFrame"];
             normal: components["schemas"]["SceneStructuredCutNormal"];
             /** Format: double */
             offset_m: number;
@@ -13838,6 +14877,18 @@ export interface components {
             scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
             solution_set_id: string;
         };
+        SolvedAntennaDriveResource: {
+            activation: components["schemas"]["DriveActivationResource"];
+            bandwidth_declaration?: null | components["schemas"]["AntennaWaveformBandwidthDeclarationResource"];
+            id: string;
+            name: string;
+            /** Format: double */
+            peak_current_a: number;
+            port_mode_id: string;
+            projection_ref: string;
+            time_origin: components["schemas"]["FieldTimeOriginResource"];
+            waveform: components["schemas"]["TimeDependenceResource"];
+        };
         SolverEnergyCurrentResource: {
             /** Format: double */
             anisotropy: number;
@@ -14418,11 +15469,15 @@ export interface components {
         };
         StageExecutionRecordResource: {
             action?: string | null;
+            /** @description Exact authored antenna definition ID, not the study node or runtime ID. */
+            antenna_solve_stage_id?: string | null;
             artifact_refs?: string[];
             checkpoint_ref?: string | null;
             command_id?: string | null;
             /** Format: int64 */
             completed_at_unix_ms?: number | null;
+            /** Format: int64 */
+            completed_step?: number | null;
             converged: boolean;
             /** Format: double */
             current_field_mT?: number | null;
@@ -14473,28 +15528,23 @@ export interface components {
             threshold?: number | null;
             /** Format: double */
             time_to_tolerance_seconds?: number | null;
-            /** @description Exact authored antenna definition ID, not the study node or runtime ID. */
-            antenna_solve_stage_id?: string | null;
-            /** Format: int64 */
-            completed_step?: number | null;
         };
         StageExecutionResource: {
             /** Format: int32 */
             active_stage_index?: number | null;
             active_stage_kind?: string | null;
             completed_stage_indexes: number[];
+            request_scope_epoch: string;
             /** Format: int64 */
             revision: number;
             run_id: string;
             runtime_state: string;
             session_epoch: string;
-            /** @description Identity of the same locked snapshot that owns the stage records. */
             session_id: string;
             stage_statuses: string[];
             stages: components["schemas"]["StageExecutionRecordResource"][];
             /** Format: int32 */
             total_stages: number;
-            request_scope_epoch: string;
         };
         /** @enum {string} */
         StageMetricKind: "max_torque_apm" | "total_energy_plateau_range_j" | "relaxation_time_s" | "steps" | "numerical_stagnation";
@@ -14588,14 +15638,14 @@ export interface components {
             /** @enum {string} */
             kind: "close";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {
-            mesh_options?: Record<string, never> | null;
+            mesh_options?: Record<string, unknown> | null;
             mesh_reason?: string | null;
             mesh_target?: null | components["schemas"]["MeshCommandTarget"];
         } & {
             /** @enum {string} */
             kind: "mesh_build";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {
-            mesh_options?: Record<string, never> | null;
+            mesh_options?: Record<string, unknown> | null;
         } & {
             /** @enum {string} */
             kind: "fdm_grid_refresh";
@@ -14762,7 +15812,7 @@ export interface components {
             qualification_validator_schema?: string | null;
             runtime_source_inputs_sha256?: string | null;
             timestep_policy: string;
-            validated_scope?: Record<string, never> | null;
+            validated_scope?: Record<string, unknown> | null;
             validation_state: components["schemas"]["TimestepValidationStateResource"];
         };
         /** @enum {string} */
@@ -15070,7 +16120,7 @@ export interface components {
             /** Format: int64 */
             base_revision?: number | null;
             sync_study_universe_mesh?: boolean;
-            universe: Record<string, never>;
+            universe: Record<string, unknown>;
         };
         UniverseResource: {
             mesh_dirty: boolean;
@@ -15078,8 +16128,8 @@ export interface components {
             object_bounds_min?: number[] | null;
             /** Format: int64 */
             scene_revision: number;
-            study_universe_mesh: Record<string, never> | null;
-            universe: Record<string, never> | null;
+            study_universe_mesh: Record<string, unknown> | null;
+            universe: Record<string, unknown> | null;
         };
         UnsupportedAuthoringRecord: {
             [key: string]: unknown;
@@ -15231,6 +16281,8 @@ export interface components {
             surface_opacity: number;
             surface_projection_mode: components["schemas"]["SurfaceFieldProjectionMode"];
             surface_visible: boolean;
+            /** @description Explicit flow-major tensor projection; absent for scalar/vector fields. */
+            tensor_projection?: string | null;
             /** Format: double */
             vector_alpha: number;
             /** Format: int32 */
@@ -15413,6 +16465,7 @@ export interface components {
             surface_color_source?: null | components["schemas"]["SurfaceColorSource"];
             surface_mono_color?: string | null;
             surface_projection_mode?: null | components["schemas"]["SurfaceFieldProjectionMode"];
+            tensor_projection?: string | null;
             /** Format: double */
             vector_alpha?: number | null;
             /** Format: int32 */
@@ -15443,7 +16496,7 @@ export interface components {
             /** @description `desktop`, `cli`, `python` or `web`. */
             actor: string;
             at: string;
-            detail: Record<string, never>;
+            detail: Record<string, unknown>;
             /** @description Row id as a decimal string. */
             id: string;
             /** @description `open`, `save`, `run`, `create`, `import`, `pin`, `unpin`, `forget` or `edit`. */
@@ -15465,7 +16518,7 @@ export interface components {
             kind: components["schemas"]["WorkspaceItemKind"];
             last_used_at: string;
             /** @description Per-kind facts written by Fullmag front ends; unknown keys are kept. */
-            meta: Record<string, never>;
+            meta: Record<string, unknown>;
             modified_at?: string | null;
             name: string;
             /** @description Absolute path as the person would type it (no `\\?\` prefix). */
@@ -15594,7 +16647,7 @@ export interface components {
             /** @description `telemetry.enabled` or `update.available`. */
             key: string;
             /** @description The stored value, or the default (`false` / `null`) when unset. */
-            value: Record<string, never>;
+            value: Record<string, unknown>;
             /**
              * @description The API accepts `PUT` for the key. `update.available` is written by an
              *     updater, never by the renderer.
@@ -15602,7 +16655,7 @@ export interface components {
             writable: boolean;
         };
         WorkspaceSettingRequest: {
-            value: Record<string, never>;
+            value: Record<string, unknown>;
         };
         WorkspaceStageLayout: {
             bottom_dock?: string | null;
@@ -15616,693 +16669,6 @@ export interface components {
         ZhangLiFormulaVersion: "zhang_li.fullmag.v1" | "zhang_li.mumax3.v1" | "zhang_li.legacy_fullmag.v0";
         /** @enum {string} */
         ZhangLiOperatorVersion: "zl_central_reference_v1" | "zl_mumax3_central_v1";
-        AcceptedAntennaInspectionCatalogResource: {
-            entries: components["schemas"]["AcceptedAntennaInspectionIdentity"][];
-            project_id: string;
-            resource_id: string;
-            run_id: string;
-            schema_version: string;
-            /** @description Publication evidence only; pinned reads separately validate numerical packages. */
-            validation_scope: string;
-        };
-        /** @description The Study step and native antenna stage are deliberately separate identities. */
-        AcceptedAntennaInspectionIdentity: {
-            artifact_id: string;
-            attempt_id: string;
-            case_id: string;
-            manifest_artifact_id: string;
-            manifest_object_ref: string;
-            native_stage_id: string;
-            /** Format: int64 */
-            ownership_epoch: number;
-            package_object_ref: string;
-            run_id: string;
-            study_step_id: string;
-            task_id: string;
-        };
-        AcceptedAntennaInspectionResource: {
-            display: components["schemas"]["AntennaInspectionDisplayDataResource"];
-            manifest: components["schemas"]["AntennaInspectionManifestResource"];
-            output_id: string;
-            owner: components["schemas"]["AcceptedAntennaInspectionIdentity"];
-            port_mode_id: string;
-            project_id: string;
-            resource_id: string;
-            schema_version: string;
-        };
-        AntennaExternalLeadInspectionResource: components["schemas"]["AntennaInspectionStageRecordResource"] & {
-            manifest?: null | components["schemas"]["AntennaInspectionManifestResource"];
-            record_content_digest: string;
-            request_scope_epoch: string;
-            resource_id: string;
-            run_id: string;
-            runtime_stage_id: string;
-            session_epoch: string;
-            session_id: string;
-            /** Format: int64 */
-            stage_revision: number;
-        };
-        AntennaFieldBasisResource: {
-            current_balance_certificate_digest: string;
-            current_density_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
-            electric_potential_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
-            magnetic_field_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
-            /** Format: double */
-            measured_positive_terminal_current_a: number;
-            /** Format: double */
-            normalization_current_a: number;
-            /** Format: double */
-            normalization_scale: number;
-            oersted_operator_version?: string | null;
-            port_mode_id: string;
-            quadrature_diagnostics: unknown;
-            quadrature_evidence?: null | components["schemas"]["AntennaQuadratureEvidenceRefResource"];
-        };
-        AntennaFieldBinaryRefResource: {
-            layout: string;
-            path: string;
-            scalar_type: string;
-            sha256: string;
-            unit: string;
-            value_count: number;
-        };
-        /** @enum {string} */
-        AntennaFieldModelResource: "quasistatic_conduction_biot_savart3d";
-        AntennaFieldSolutionRefResource: {
-            asset_id: string;
-            content_digest: string;
-            output_id: string;
-            stage_id: string;
-        };
-        AntennaFieldSolutionResource: {
-            asset_id: string;
-            assumptions: string[];
-            bases: components["schemas"]["AntennaFieldBasisResource"][];
-            component: string;
-            conductor_positions: components["schemas"]["AntennaFieldBinaryRefResource"];
-            content_digest: string;
-            current_transport_id: string;
-            gauge_policy: string;
-            geometry_revision: string;
-            material_revision: string;
-            mesh_digest: string;
-            quantity: string;
-            request_scope_epoch: string;
-            requested_execution: unknown;
-            resolved_execution: unknown;
-            resource_id: string;
-            sample_carrier?: null | components["schemas"]["AntennaSampleCarrierResource"];
-            sample_positions: components["schemas"]["AntennaFieldBinaryRefResource"];
-            sample_topology?: null | components["schemas"]["AntennaFieldBinaryRefResource"];
-            schema_version: string;
-            session_epoch: string;
-            session_id: string;
-            signatures: components["schemas"]["AntennaFieldSolutionSignaturesResource"];
-            solution_id: string;
-            solver_policy: unknown;
-            source_object_id: string;
-            stage_id: string;
-            status: string;
-            target_projection_signature?: string | null;
-        };
-        AntennaFieldSolutionSignaturesResource: {
-            current_solution_signature: string;
-            field_solution_signature: string;
-            target_projection_signatures: {
-                [key: string]: string;
-            };
-        };
-        AntennaFieldSolveStageResource: {
-            conductor_mesh_policy: string;
-            conservative_current_view_ref?: string | null;
-            current_transport_id: string;
-            field_sampling_domain: components["schemas"]["FieldTargetResource"];
-            id: string;
-            model: components["schemas"]["AntennaFieldModelResource"];
-            oersted_realization: components["schemas"]["AntennaOerstedRealizationResource"];
-            outputs: components["schemas"]["AntennaNamedOutputResource"][];
-            port_mode_ids: string[];
-            solver_policy: string;
-            source_object_id: string;
-            target_refs: components["schemas"]["FieldTargetResource"][];
-        };
-        AntennaFieldTargetResource: {
-            /** @enum {string} */
-            kind: "global";
-        } | {
-            /** @enum {string} */
-            kind: "object";
-            object_id: string;
-        } | {
-            /** @enum {string} */
-            kind: "region";
-            object_id: string;
-            region_id: string;
-        };
-        AntennaInspectionCurrentDisplayResource: {
-            center_current_density: components["schemas"]["AntennaInspectionPayloadResource"];
-            center_positions: components["schemas"]["AntennaInspectionPayloadResource"];
-            ordered_snapshot: components["schemas"]["AntennaInspectionPayloadResource"];
-            receipt: components["schemas"]["AntennaInspectionCurrentReceiptResource"];
-            trace_current_density: components["schemas"]["AntennaInspectionPayloadResource"];
-            trace_positions: components["schemas"]["AntennaInspectionPayloadResource"];
-        };
-        AntennaInspectionCurrentReceiptResource: {
-            /** Format: int64 */
-            cell_count: number;
-            center_policy: string;
-            coordinate_unit: string;
-            current_density_unit: string;
-            current_evaluator_version: string;
-            normalization: string;
-            operator_version: string;
-            payload: components["schemas"]["AntennaInspectionPayloadResource"];
-            sampling_policy: string;
-            schema_version: string;
-        };
-        AntennaInspectionDisplayCapabilities: {
-            current_density: boolean;
-            display: boolean;
-            llg_drive: boolean;
-            per_ampere_basis: boolean;
-            source_fft: boolean;
-        };
-        /** @description Shared verified display contract, without Live or accepted-run ownership. */
-        AntennaInspectionDisplayDataResource: {
-            capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
-            content_digest: string;
-            /** Format: int64 */
-            device_cell_count: number;
-            device_current?: null | components["schemas"]["AntennaInspectionCurrentDisplayResource"];
-            /** Format: int64 */
-            device_node_count: number;
-            device_positions: components["schemas"]["AntennaInspectionPayloadResource"];
-            device_potential: components["schemas"]["AntennaInspectionPayloadResource"];
-            device_topology: components["schemas"]["AntennaInspectionPayloadResource"];
-            field_scope: string;
-            magnetic_field: components["schemas"]["AntennaInspectionPayloadResource"];
-            normalization: string;
-            qualification: string;
-            sample_positions: components["schemas"]["AntennaInspectionPayloadResource"];
-            sampling_carrier: components["schemas"]["AntennaInspectionSamplingResource"];
-            source_object_id: string;
-            status: string;
-        };
-        AntennaInspectionDisplayResource: {
-            capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
-            content_digest: string;
-            /** Format: int64 */
-            device_cell_count: number;
-            device_current?: null | components["schemas"]["AntennaInspectionCurrentDisplayResource"];
-            /** Format: int64 */
-            device_node_count: number;
-            device_positions: components["schemas"]["AntennaInspectionPayloadResource"];
-            device_potential: components["schemas"]["AntennaInspectionPayloadResource"];
-            device_topology: components["schemas"]["AntennaInspectionPayloadResource"];
-            field_scope: string;
-            magnetic_field: components["schemas"]["AntennaInspectionPayloadResource"];
-            normalization: string;
-            qualification: string;
-            record_content_digest: string;
-            request_scope_epoch: string;
-            resource_id: string;
-            run_id: string;
-            runtime_stage_id: string;
-            sample_positions: components["schemas"]["AntennaInspectionPayloadResource"];
-            sampling_carrier: components["schemas"]["AntennaInspectionSamplingResource"];
-            schema_version: string;
-            session_epoch: string;
-            session_id: string;
-            source_object_id: string;
-            /** Format: int64 */
-            stage_revision: number;
-            status: string;
-        };
-        AntennaInspectionManifestResource: {
-            bundle: components["schemas"]["AntennaInspectionPayloadResource"];
-            charge_content_sha256: string;
-            closure_revision: string;
-            content_digest: string;
-            current_display?: null | components["schemas"]["AntennaInspectionCurrentReceiptResource"];
-            current_transport_id: string;
-            device_potential: components["schemas"]["AntennaInspectionPayloadResource"];
-            device_vertex_ids: components["schemas"]["AntennaInspectionPayloadResource"];
-            drive_id: string;
-            field_content_sha256: string;
-            input_pins: unknown;
-            magnetic_field: components["schemas"]["AntennaInspectionPayloadResource"];
-            requested_execution: unknown;
-            resolved_execution: unknown;
-            sample_positions: components["schemas"]["AntennaInspectionPayloadResource"];
-            sampling_carrier: components["schemas"]["AntennaInspectionSamplingResource"];
-            schema_version: string;
-            solver_policy: unknown;
-            source_content_sha256: string;
-            source_object_id: string;
-            validation_scope: string;
-        };
-        AntennaInspectionOutputResource: {
-            inspection_ref: components["schemas"]["AntennaInspectionReferenceResource"];
-            kind: string;
-            manifest_ref: string;
-            payload_units: {
-                [key: string]: string;
-            };
-            reused_existing: boolean;
-        };
-        AntennaInspectionPayloadResource: {
-            /** Format: int64 */
-            byte_count: number;
-            layout: string;
-            path: string;
-            scalar_type: string;
-            sha256: string;
-            unit: string;
-            /** Format: int64 */
-            value_count: number;
-        };
-        AntennaInspectionReferenceResource: {
-            content_digest: string;
-            output_id: string;
-            stage_id: string;
-        };
-        AntennaInspectionSamplingResource: {
-            carrier_kind: string;
-            domain: components["schemas"]["AntennaFieldTargetResource"];
-            location: string;
-            /** Format: int64 */
-            sample_count: number;
-            topology_digest: string;
-        };
-        AntennaInspectionStageRecordResource: {
-            diagnostic?: string | null;
-            field_scope: string;
-            output_id: string;
-            outputs: components["schemas"]["AntennaInspectionOutputResource"][];
-            port_mode_id: string;
-            qualification: string;
-            resolved_action: string;
-            schema_version: string;
-            stage_id: string;
-            stage_kind: string;
-            status: string;
-        };
-        AntennaNamedOutputResource: {
-            id: string;
-            quantity: string;
-        };
-        /** @enum {string} */
-        AntennaOerstedRealizationResource: "direct_tetra_quadrature" | "vector_potential_solver";
-        AntennaPortBranchResource: {
-            id: string;
-            inlet_terminal_ref: string;
-            outlet_terminal_ref: string;
-            /** Format: double */
-            signed_weight: number;
-        };
-        AntennaPortModeResource: {
-            branches: components["schemas"]["AntennaPortBranchResource"][];
-            current_transport_id: string;
-            id: string;
-            /** Format: double */
-            normalization_current_a?: number;
-            schema_version: string;
-            source_object_id: string;
-        };
-        AntennaQuadratureEvidenceRefResource: {
-            byte_length: number;
-            path: string;
-            schema_version: string;
-            sha256: string;
-            target_count: number;
-        };
-        /** @enum {string} */
-        AntennaResolvedAssetKindResource: "resolved_asset";
-        AntennaResolvedAssetRefResource: {
-            asset_id: string;
-            content_digest: string;
-            kind: components["schemas"]["AntennaResolvedAssetKindResource"];
-            output_id: string;
-            stage_id: string;
-        };
-        AntennaSampleCarrierResource: {
-            carrier_kind: string;
-            domain: components["schemas"]["AntennaFieldTargetResource"];
-            location: string;
-            topology_digest: string;
-        };
-        AntennaSolutionRefResource: components["schemas"]["AntennaStageOutputRefResource"] | components["schemas"]["AntennaResolvedAssetRefResource"] | components["schemas"]["AntennaFieldSolutionRefResource"];
-        AntennaSourceSpectrumResource: {
-            amplitude_count: number;
-            amplitude_unit: string;
-            /** Format: double */
-            coherent_gain: number;
-            component: string;
-            component_labels: string[];
-            content_digest: string;
-            /** Format: double */
-            equivalent_noise_bandwidth_bins: number;
-            field_signature: string;
-            k_u_count: number;
-            k_v_count: number;
-            normalization: string;
-            output_id: string;
-            payload: components["schemas"]["AntennaSpectrumPayloadResource"];
-            payloads?: null | components["schemas"]["AntennaSpectrumPayloadsResource"];
-            port_mode_id: string;
-            power_count: number;
-            quantity: string;
-            request_id: string;
-            request_scope_epoch: string;
-            resource_id: string;
-            sampling: components["schemas"]["AntennaSpectrumSamplingResource"];
-            schema_version: string;
-            session_epoch: string;
-            session_id: string;
-            solution_content_digest: string;
-            solution_id: string;
-            source_object_id: string;
-            target_projection_signature?: string | null;
-            wave_vector_unit: string;
-        };
-        AntennaSpectrumKGridResource: {
-            k_u_rad_per_m: number[];
-            k_v_rad_per_m: number[];
-        };
-        /** @enum {string} */
-        AntennaSpectrumNormalizationResource: "integral_si" | "unitary_discrete";
-        /** @enum {string} */
-        AntennaSpectrumOutsidePolicyResource: "error" | "zero";
-        AntennaSpectrumPayloadResource: {
-            content_type: string;
-            format: string;
-            path: string;
-        };
-        AntennaSpectrumPayloadsResource: {
-            amplitudes_re_im: components["schemas"]["AntennaFieldBinaryRefResource"];
-            k_u_rad_per_m: components["schemas"]["AntennaFieldBinaryRefResource"];
-            k_v_rad_per_m: components["schemas"]["AntennaFieldBinaryRefResource"];
-            power: components["schemas"]["AntennaFieldBinaryRefResource"];
-        };
-        AntennaSpectrumRequestResource: {
-            component: string;
-            equilibrium_ref?: string | null;
-            id: string;
-            mode_basis_ref?: string | null;
-            nonuniform_k_grid?: null | components["schemas"]["AntennaSpectrumKGridResource"];
-            normalization: components["schemas"]["AntennaSpectrumNormalizationResource"];
-            output_id: string;
-            port_mode_id?: string | null;
-            sampling_plane: components["schemas"]["AntennaSpectrumSamplingPlaneResource"];
-            solution_ref: components["schemas"]["AntennaSolutionRefResource"];
-            target: components["schemas"]["FieldTargetResource"];
-            transform: components["schemas"]["AntennaSpectrumTransformResource"];
-            window: components["schemas"]["AntennaSpectrumWindowResource"];
-        };
-        AntennaSpectrumSamplingPlaneResource: {
-            axis_u: number[];
-            axis_v: number[];
-            /** Format: double */
-            extent_u_m: number;
-            /** Format: double */
-            extent_v_m: number;
-            interpolation: string;
-            origin_m: number[];
-            outside_policy: components["schemas"]["AntennaSpectrumOutsidePolicyResource"];
-            /** Format: int32 */
-            sample_count_u: number;
-            /** Format: int32 */
-            sample_count_v: number;
-        };
-        AntennaSpectrumSamplingResource: {
-            axis_u: number[];
-            axis_v: number[];
-            /** Format: double */
-            extent_u_m: number;
-            /** Format: double */
-            extent_v_m: number;
-            fourier_origin_uv_m: number[];
-            fourier_phase_convention: string;
-            interpolation: string;
-            mapping_digest: string;
-            origin_m: number[];
-            outside_count: number;
-            outside_policy: string;
-            port_mode_id: string;
-            realization: string;
-            /** Format: int32 */
-            sample_count_u: number;
-            /** Format: int32 */
-            sample_count_v: number;
-            schema_version: string;
-            solution_id: string;
-            source_object_id: string;
-            source_sample_count: number;
-            target: components["schemas"]["AntennaFieldTargetResource"];
-        };
-        /** @enum {string} */
-        AntennaSpectrumTransformResource: "spatial_fft" | "nonuniform_spatial_fft";
-        /** @enum {string} */
-        AntennaSpectrumWindowResource: "rectangular" | "hann" | "hamming" | "blackman";
-        AntennaStageOutputCatalogResource: {
-            content_digest: string;
-            diagnostic?: string | null;
-            outputs: components["schemas"]["AntennaStageOutputResource"][];
-            port_mode_id: string;
-            request_scope_epoch: string;
-            resource_id: string;
-            schema_version: string;
-            session_epoch: string;
-            session_id: string;
-            solution_id?: string | null;
-            stage_id: string;
-            stage_kind: string;
-            /** Format: int64 */
-            stage_revision: number;
-            status: string;
-        };
-        AntennaStageOutputRefResource: {
-            /** @enum {string} */
-            kind: "stage_output";
-            output_id: string;
-            stage_id: string;
-        };
-        AntennaStageOutputResource: {
-            kind: string;
-            manifest_ref: string;
-            output_id: string;
-            quantity_ids: string[];
-            reused_existing: boolean;
-            solution_ref: components["schemas"]["AntennaStageOutputSolutionReferenceResource"];
-        };
-        AntennaStageOutputSolutionReferenceResource: {
-            asset_id: string;
-            content_digest: string;
-            output_id: string;
-            stage_id: string;
-        };
-        AntennaTargetProjectionResource: {
-            id: string;
-            output_id: string;
-            solution: components["schemas"]["AntennaSolutionRefResource"];
-            target: components["schemas"]["FieldTargetResource"];
-        };
-        AntennaWaveformBandwidthDeclarationResource: {
-            /**
-             * Format: double
-             * @description Authored physical upper band for pulse or piecewise-linear waveforms.
-             *     It is not inferred from pulse duration, spacing, or Nyquist frequency.
-             */
-            f_max_hz: number;
-        };
-        /** @description OpenAPI projection only; serialized ownership uses the canonical IR type. */
-        PhysicsGraphObjectResource: {
-            geometry_id: string;
-            label?: string | null;
-            material_assignment_ids?: string[];
-            name: string;
-            object_id: string;
-            schema_version: string;
-            type: components["schemas"]["PhysicsGraphObjectTypeResource"];
-        };
-        /** @enum {string} */
-        PhysicsGraphObjectTypeResource: "geometry" | "ferromagnet" | "conductor" | "electrode" | "antenna";
-        ProjectBatchAxisSummaryResource: {
-            canonical_unit: string;
-            name: string;
-        };
-        /** @enum {string} */
-        ProjectBatchCaseState: "pending_expansion" | "pending_materialization";
-        ProjectBatchCaseSummaryResource: {
-            case_id: string;
-            parameter_tuple: {
-                [key: string]: unknown;
-            };
-            planned_run_id: string;
-            state: components["schemas"]["ProjectBatchCaseState"];
-        };
-        ProjectBatchCasesQuery: {
-            /** @description Last CaseId returned on the previous page. */
-            cursor?: string | null;
-            /**
-             * Format: int32
-             * @description Page size, from 1 to 100; defaults to 50.
-             */
-            limit?: number | null;
-        };
-        ProjectBatchCasesResource: {
-            /** @description Axis names and canonical units for the parameter tuples in this manifest. */
-            axes: components["schemas"]["ProjectBatchAxisSummaryResource"][];
-            batch_id: string;
-            cases: components["schemas"]["ProjectBatchCaseSummaryResource"][];
-            next_cursor?: string | null;
-        };
-        /** @enum {string} */
-        ProjectBatchExpansionState: "pending" | "expanding" | "complete" | "stopped";
-        /** @enum {string} */
-        ProjectBatchFailurePolicy: "continue_independent" | "stop_admission";
-        ProjectBatchListQuery: {
-            /** @description Last BatchId returned on the previous page. */
-            cursor?: string | null;
-            /**
-             * Format: int32
-             * @description Page size, from 1 to 100; defaults to 50.
-             */
-            limit?: number | null;
-        };
-        ProjectBatchListResource: {
-            batches: components["schemas"]["ProjectBatchSummaryResource"][];
-            next_cursor?: string | null;
-            project_id: string;
-        };
-        /**
-         * @description Immutable independent batch submission. The server deserializes
-         *     `batch_request` into the versioned application contract before accepting it.
-         */
-        ProjectBatchSubmitRequest: {
-            /** @description Exact base64-encoded portable project archive accepted for this batch. */
-            archive_base64: string;
-            /** @description Explicit immutable asset ID to path inside `project/assets/`. */
-            asset_paths: {
-                [key: string]: string;
-            };
-            /** @description Versioned `BatchExpansionRequest` object, including template and axes. */
-            batch_request: {
-                [key: string]: unknown;
-            };
-            /** @description Client intent key used to recover an ACK after a timeout. */
-            idempotency_key: string;
-            /** @description Versioned immutable StudyPlan used by the batch template. */
-            study_plan: {
-                [key: string]: unknown;
-            };
-            /** @description Immutable StudyProblemCatalog pinned by the batch template. */
-            study_problem_catalog: {
-                [key: string]: unknown;
-            };
-        };
-        ProjectBatchSubmitResource: {
-            batch_id: string;
-            /** Format: int64 */
-            case_count: number;
-            disposition: components["schemas"]["ProjectRunSubmitDisposition"];
-            /** @description Logical digest stored in the expansion manifest. */
-            manifest_sha256: string;
-        };
-        ProjectBatchSummaryResource: {
-            accepted_at: string;
-            batch_id: string;
-            /** Format: int64 */
-            case_count: number;
-            expansion_state: components["schemas"]["ProjectBatchExpansionState"];
-            failure_policy: components["schemas"]["ProjectBatchFailurePolicy"];
-            manifest_sha256: string;
-            /** Format: int32 */
-            max_parallel_cases?: number | null;
-            /** Format: int64 */
-            published_case_count: number;
-        };
-        ProjectRunIntentRequest: {
-            archive_base64: string;
-            asset_paths: {
-                [key: string]: string;
-            };
-            /**
-             * Format: int64
-             * @description Revision of the exact archived definition observed by the author.
-             */
-            expected_revision: number;
-            /**
-             * @description Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,
-             *     dependencies, scheduling_priority and requested_execution. No defaults
-             *     or identities are inferred from a live session.
-             */
-            run_authoring: {
-                [key: string]: unknown;
-            };
-            study_plan: {
-                [key: string]: unknown;
-            };
-            study_problem_catalog: {
-                [key: string]: unknown;
-            };
-        };
-        ProjectRunIntentResource: {
-            /** Format: int64 */
-            definition_revision: number;
-            payload_fingerprint: string;
-            project_id: string;
-            /**
-             * @description Canonical run_intent.v1 for the existing Submit operation. Submit must
-             *     receive the same archive, Study, catalog and asset bindings. It repeats
-             *     validation and checks published profiles before durable acceptance.
-             */
-            run_intent: {
-                [key: string]: unknown;
-            };
-        };
-        ProjectRunTaskCancellationIntentResource: {
-            cancellation_id: string;
-            cancellation_state: components["schemas"]["ProjectRunTaskCancellationState"];
-            /** Format: int64 */
-            catalog_revision: number;
-            disposition: components["schemas"]["ProjectRunTaskCancellationDisposition"];
-            /** Format: int64 */
-            expected_catalog_revision: number;
-            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
-            run_id: string;
-            task_id: string;
-        };
-        /** @enum {string} */
-        ProjectRunTaskCancellationState: "requested";
-        ProjectRunTaskCancellationSummary: {
-            cancellation_id: string;
-            created_at: string;
-            /** Format: int64 */
-            expected_catalog_revision: number;
-            reason: string;
-        };
-        ProjectRunTaskStopResource: {
-            /** Format: int64 */
-            catalog_revision: number;
-            command_id: string;
-            disposition: components["schemas"]["ProjectRunTaskCancellationDisposition"];
-            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
-            run_id: string;
-            task_id: string;
-        };
-        SolvedAntennaDriveResource: {
-            activation: components["schemas"]["DriveActivationResource"];
-            bandwidth_declaration?: null | components["schemas"]["AntennaWaveformBandwidthDeclarationResource"];
-            id: string;
-            name: string;
-            /** Format: double */
-            peak_current_a: number;
-            port_mode_id: string;
-            projection_ref: string;
-            time_origin: components["schemas"]["FieldTimeOriginResource"];
-            waveform: components["schemas"]["TimeDependenceResource"];
-        };
     };
     responses: never;
     parameters: {
@@ -16516,6 +16882,256 @@ export interface operations {
             };
         };
     };
+    persistence_get_persistence_projects_project_id_batches: {
+        parameters: {
+            query?: {
+                /** @description Page size, from 1 to 100; defaults to 50. */
+                limit?: number | null;
+                /** @description Last BatchId returned on the previous page. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Page of durable batch parents for one project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchListResource"];
+                };
+            };
+            /** @description Invalid page size or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_project_id_batches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectBatchSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical batch submit replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchSubmitResource"];
+                };
+            };
+            /** @description Durable immutable batch parent accepted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchSubmitResource"];
+                };
+            };
+            /** @description Invalid immutable batch inputs */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project identity, batch identity or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_batches_batch_id_cases: {
+        parameters: {
+            query?: {
+                /** @description Page size, from 1 to 100; defaults to 50. */
+                limit?: number | null;
+                /** @description Last CaseId returned on the previous page. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Durable batch identity */
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Page of manifest cases with verified published child run and task catalog lifecycle */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchCasesResource"];
+                };
+            };
+            /** @description Invalid page size or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted batch is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Batch belongs to another project */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Durable manifest, child run, or task catalog is incomplete or inconsistent */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_project_id_batches_batch_id_commands: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Durable batch identity */
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectBatchCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical batch command replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchCommandResource"];
+                };
+            };
+            /** @description Durable batch admission command accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBatchCommandResource"];
+                };
+            };
+            /** @description Invalid batch command */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted batch is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project scope, command revision, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Durable batch state is inconsistent */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_project_id_run_intent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Exact archived project identity */
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectRunIntentRequest"];
+            };
+        };
+        responses: {
+            /** @description Prepared immutable identity; not accepted or admitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunIntentResource"];
+                };
+            };
+            /** @description Invalid archive or compiled authoring inputs */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project identity or revision conflict; read-only archive */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     persistence_get_persistence_projects_project_id_runs: {
         parameters: {
             query?: {
@@ -16640,6 +17256,233 @@ export interface operations {
             };
             /** @description Run belongs to another project */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Previous strong ETag */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable run identity */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current published inspection identities; no field packages are decoded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptedAntennaInspectionCatalogResource"];
+                };
+            };
+            /** @description Unchanged after accepted publication checks */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted run or catalogs are missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project/run mismatch or catalogs changed during read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid accepted state or publication metadata */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id: {
+        parameters: {
+            query: {
+                /** @description Required current successful task attempt */
+                attempt_id: string;
+                /** @description Required current task ownership epoch */
+                ownership_epoch: number;
+                /** @description Required package CAS SHA-256 from the published artifact catalog */
+                package_object_ref: string;
+            };
+            header?: {
+                /** @description Previous strong ETag */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable run identity */
+                run_id: string;
+                /** @description Exact accepted Study step ID, not the native stage ID */
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fully verified accepted inspection metadata and display descriptors, no numerical arrays */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptedAntennaInspectionResource"];
+                };
+            };
+            /** @description Unchanged after current-attempt and full integrity checks */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity or query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected step has no published inspection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project/run mismatch or stale publication identity */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid accepted state, package or storage failure */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id_payloads_payload_kind: {
+        parameters: {
+            query: {
+                /** @description Required current successful task attempt */
+                attempt_id: string;
+                /** @description Required current task ownership epoch */
+                ownership_epoch: number;
+                /** @description Required package CAS SHA-256 from the published artifact catalog */
+                package_object_ref: string;
+            };
+            header?: {
+                /** @description Previous strong ETag */
+                "If-None-Match"?: string | null;
+                /** @description One byte range */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable run identity */
+                run_id: string;
+                /** @description Exact accepted Study step ID, not the native stage ID */
+                step_id: string;
+                /** @description Same verified V/J/H and geometry payload kinds as the Live inspection API */
+                payload_kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified accepted antenna payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Verified payload byte range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unchanged after current-attempt and full integrity checks */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, query or payload kind */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected step has no published inspection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project/run mismatch or stale publication identity */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid byte range */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid accepted state, package or storage failure */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17373,6 +18216,67 @@ export interface operations {
             };
         };
     };
+    persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_retry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable child run identity */
+                run_id: string;
+                /** @description Exact durable task identity */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectRunTaskRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical retry request replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunTaskRetryResource"];
+                };
+            };
+            /** @description A fresh attempt was durably queued after terminal reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunTaskRetryResource"];
+                };
+            };
+            /** @description Invalid retry identity or catalog revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted run intent is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Task is not retryable, the catalog changed, terminal proof or its exact lease release is missing, or a lease is still active */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     platform_get_platform_asyncapi_json: {
         parameters: {
             query?: never;
@@ -17410,6 +18314,253 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RuntimeCapabilityMatrix"];
                 };
+            };
+            /** @description Invalid runtime package root configuration */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_compute_allocations_allocation_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable opaque allocation identity */
+                allocation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only allocation detail without operational tokens */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeAllocationResource"];
+                };
+            };
+            /** @description The allocation is unchanged for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The allocation is not present in the configured local host ledger */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configured local host ledger could not be safely read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_compute_nodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest read-only local compute-node snapshot and its freshness */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeNodesResource"];
+                };
+            };
+            /** @description Compute-node snapshot is unchanged for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Configured host inventory could not be safely observed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_compute_nodes_node_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable compute-node identity */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest read-only compute-node snapshot and its freshness */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeNodeResource"];
+                };
+            };
+            /** @description Compute-node snapshot is unchanged for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The requested compute node is not currently observable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Configured host inventory could not be safely observed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_compute_nodes_node_id_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable compute-node identity */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current operator policy and live admission status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeNodePolicyResource"];
+                };
+            };
+            /** @description The requested compute node is not configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configured host policy could not be safely read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_put_platform_compute_nodes_node_id_policy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag returned by GET for the policy revision being edited */
+                "If-Match": string;
+                /** @description Bearer capability issued by the local Fullmag desktop application */
+                Authorization: string;
+            };
+            path: {
+                /** @description Stable compute-node identity */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComputeNodePolicyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Policy saved; existing allocations remain unchanged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeNodePolicyResource"];
+                };
+            };
+            /** @description Policy values are invalid for the configured host */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A local desktop-operator capability is required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The requested compute node is not configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The policy changed while it was being edited */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description If-Match does not identify the current policy revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configured host policy could not be safely updated */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -17516,7 +18667,10 @@ export interface operations {
     platform_post_platform_compute_profiles: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Bearer capability issued by the local Fullmag desktop application */
+                Authorization: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -17551,6 +18705,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description A local desktop-operator capability is required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Revision, intent, version or catalogue capacity conflict */
             409: {
                 headers: {
@@ -17567,174 +18728,52 @@ export interface operations {
             };
         };
     };
-    platform_get_platform_development_backend: {
+    platform_get_platform_compute_queue: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Opaque continuation cursor returned by the previous page. */
+                cursor?: string;
+                /** @description Default 50, maximum 100. */
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only native development compilation status */
+            /** @description Bounded read model of the existing durable run scheduler */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DevelopmentBackendResource"];
+                    "application/json": components["schemas"]["ComputeQueueResource"];
                 };
             };
-            /** @description Development backend status has not changed */
+            /** @description The requested compute queue page is unchanged */
             304: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-        };
-    };
-    platform_post_platform_development_backend_build_requests: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Bearer token generated before submission */
-                Authorization: string;
-                /** @description Exact launcher UI origin */
-                Origin: string;
-                /** @description Current API instance pin */
-                "x-fullmag-api-instance": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DevelopmentBackendBuildRequest"];
-            };
-        };
-        responses: {
-            /** @description Build-only intent durably queued */
-            202: {
+            /** @description Invalid page size or cursor */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["DevelopmentBackendBuildRequestResource"];
-                };
+                content?: never;
             };
-            /** @description Build coordinator unavailable or request conflicts */
+            /** @description The queue changed while paging; refresh from the first page */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-        };
-    };
-    platform_get_platform_development_backend_build_requests_request_id: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Bearer status token */
-                Authorization: string;
-                /** @description Exact launcher UI origin when sent */
-                Origin: string;
-                /** @description Exact launcher UI origin echo for same-origin GET */
-                "x-fullmag-ui-origin": string;
-                /** @description Current API instance pin */
-                "x-fullmag-api-instance": string;
-            };
-            path: {
-                /** @description Opaque build request identity */
-                request_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Token-bound build request state */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DevelopmentBackendBuildRequestResource"];
-                };
-            };
-            /** @description Request unavailable */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    platform_post_platform_development_restart_requests: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Bearer token generated before submission */
-                Authorization: string;
-                /** @description Exact launcher UI origin */
-                Origin: string;
-                /** @description Current API instance pin */
-                "x-fullmag-api-instance": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DevelopmentRestartRequest"];
-            };
-        };
-        responses: {
-            /** @description Restart intent durably queued; no process restart is implied */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DevelopmentRestartResource"];
-                };
-            };
-            /** @description Restart coordinator unavailable or request conflicts */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    platform_get_platform_development_restart_requests_request_id: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Bearer status token; omit stale API instance header */
-                Authorization: string;
-            };
-            path: {
-                /** @description Opaque restart request identity */
-                request_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Token-bound restart status and confirmed restore payload */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DevelopmentRestartResource"];
-                };
-            };
-            /** @description Request unavailable */
-            404: {
+            /** @description Managed accepted-run storage is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19902,6 +20941,588 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_antenna_field_solutions_solution_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Published antenna field solution id */
+                solution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published antenna field solution metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaFieldSolutionResource"];
+                };
+            };
+            /** @description Field solution metadata not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field solution artifact not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale current-session request scope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_field_solutions_solution_id_payloads_payload_kind: {
+        parameters: {
+            query?: {
+                /** @description Required for per-port V, J, or H payloads */
+                port_mode_id?: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+                /** @description Strong ETag from a previous binary payload response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Published antenna field solution id */
+                solution_id: string;
+                /** @description conductor_positions, sample_positions, sample_topology, electric_potential_per_ampere, current_density_per_ampere, or magnetic_field_per_ampere */
+                payload_kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified binary antenna field payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial verified binary antenna field payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Binary payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported payload or invalid port selector */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Field solution or payload not found; missing payload uses code missing_payload */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale current-session request scope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Requested binary payload range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_source_spectra_output_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Published antenna source spectrum output id */
+                output_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published antenna source spectrum metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaSourceSpectrumResource"];
+                };
+            };
+            /** @description Source spectrum metadata not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source spectrum artifact or payload not found; missing payloads use code missing_payload */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale current-session request scope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Source spectrum sampling topology is unsupported; code unsupported_topology */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+                /** @description Strong ETag from a previous binary payload response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Published antenna source spectrum output id */
+                output_id: string;
+                /** @description Binary payload name: k_u_rad_per_m, k_v_rad_per_m, amplitudes_re_im, or power */
+                payload_kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary antenna source-spectrum payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial binary antenna source-spectrum payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Binary payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source-spectrum payload not found; code missing_payload */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale current-session request scope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Requested binary payload range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source spectrum sampling topology is unsupported; code unsupported_topology */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+                /** @description Previous strong ETag */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description Exact runtime stage ID, not the authored antenna stage ID */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Inspection record; external-lead manifest metadata or fully verified closed-loop thin metadata; never a drive basis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaExternalLeadInspectionResource"];
+                };
+            };
+            /** @description Unchanged inspection resource after family validation */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No registered inspection result */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale request scope or owner changed during read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Invalid inspection record or manifest */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Filesystem or worker failure */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_display: {
+        parameters: {
+            query: {
+                /** @description Required immutable inspection content digest */
+                content_digest: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+                /** @description Previous strong ETag */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description Exact runtime stage ID */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fully verified immutable display descriptors; no FFT/LLG qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaInspectionDisplayFamilyResource"];
+                };
+            };
+            /** @description Unchanged after integrity validation */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description No registered inspection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale owner, content digest or failed/cancelled result */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Invalid bundle or device ownership */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Worker failure */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_payloads_payload_kind: {
+        parameters: {
+            query: {
+                /** @description Required sha256: digest from inspection_ref, not the stage record digest */
+                content_digest: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+                /** @description Previous strong ETag */
+                "If-None-Match"?: string | null;
+                /** @description One byte range */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Exact runtime stage ID */
+                stage_id: string;
+                /** @description bundle, sample_positions, magnetic_field, device_vertex_ids, device_potential, device_positions, device_topology; v2 additionally current_center_positions, current_center_density, current_trace_positions, current_trace_density, current_snapshot */
+                payload_kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fully verified inspection binary payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Verified payload byte range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unchanged, after full integrity validation */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid payload kind or query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description No registered result */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale request scope, owner changed, terminal result or digest mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Invalid byte range */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid manifest or binary payload */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Filesystem or worker failure */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_stages_stage_id_output_catalog: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+                /** @description Strong ETag from a previous catalog response */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description Antenna field-solve stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published antenna stage output catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaStageOutputCatalogResource"];
+                };
+            };
+            /** @description Antenna stage output catalog not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Antenna stage output catalog not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale request scope or antenna stage output catalog identity conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_artifacts: {
         parameters: {
             query?: never;
@@ -20280,7 +21901,11 @@ export interface operations {
     };
     data_get_sessions_current_data_domain_topology: {
         parameters: {
-            query?: never;
+            query?: {
+                carrier_id?: string | null;
+                stage_id?: string | null;
+                expected_carrier_revision?: string | null;
+            };
             header?: {
                 /** @description Strong ETag from a previous domain topology response */
                 "If-None-Match"?: string | null;
@@ -20553,7 +22178,9 @@ export interface operations {
     };
     data_get_sessions_current_data_fields: {
         parameters: {
-            query?: never;
+            query?: {
+                stage_id?: string | null;
+            };
             header?: {
                 /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
                 "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
@@ -20584,6 +22211,14 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_availability: {
         parameters: {
             query?: {
+                /** @description Exact runtime stage that owns the immutable inspection. */
+                stage_id?: string | null;
+                /** @description Exact immutable carrier selected from field metadata. */
+                carrier_id?: string | null;
+                /** @description Optional inspection view: full or explicit J_charge cell_centers. */
+                view?: string | null;
+                /** @description Canonical nonzero decimal u64 precondition for the immutable carrier. */
+                expected_carrier_revision?: string | null;
                 /** @description Stable canonical frontend target identity. Airbox always uses `airbox`. */
                 target_id?: string | null;
                 /** @description Field carrier scope. Defaults to the complete domain carrier. */
@@ -20631,11 +22266,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Ambiguous owner, immutable carrier mismatch, or changed observation */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     data_get_sessions_current_data_fields_quantity_id_meta: {
         parameters: {
             query?: {
+                carrier_id?: string | null;
+                view?: string | null;
+                expected_carrier_revision?: string | null;
                 /** @description Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`). */
                 component?: string | null;
                 /** @description Optional FEM or FDM scope used for statistics. */
@@ -22664,6 +24309,8 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_samples_vector: {
         parameters: {
             query?: {
+                /** @description Exact immutable artifact carrier selector. */
+                carrier_id?: string | null;
                 /**
                  * @description Component to return.
                  *
@@ -22771,16 +24418,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary FMVP field vector. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload. */
+            /** @description Binary FMVP field vector. Immutable artifact inspections use separate FMVP v6 metadata with lossless u64 sample identities, source ownership and carrier revision/digest; this does not change the generic v5 full-quantity-ID layout. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload. */
             200: {
                 headers: {
                     /** @description Committed analysis artifact generation identity; present only when the served field member is verified */
                     "x-fullmag-artifact-generation-id"?: string;
+                    /** @description Bare lowercase SHA256 artifact carrier digest; present for FMVP v6 */
+                    "x-fullmag-carrier-digest"?: string;
+                    /** @description Immutable artifact carrier ID; present for FMVP v6 */
+                    "x-fullmag-carrier-id"?: string;
+                    /** @description Lossless decimal u64 artifact carrier revision; present for FMVP v6 */
+                    "x-fullmag-carrier-revision"?: string;
                     /** @description Resolved component projection */
                     "x-fullmag-component"?: string;
                     /** @description Domain generation identity */
                     "x-fullmag-domain-generation-id"?: string;
-                    /** @description FMVP encoding and version */
+                    /** @description FMVP encoding and version, including FMVP;version=6 for immutable artifact inspections */
                     "x-fullmag-encoding"?: string;
                     /** @description Optional FMVP v3/v5 field indexing */
                     "x-fullmag-field-indexing"?: string;
@@ -23255,7 +24908,9 @@ export interface operations {
     };
     data_get_sessions_current_data_quantities: {
         parameters: {
-            query?: never;
+            query?: {
+                stage_id?: string | null;
+            };
             header?: {
                 /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
                 "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
@@ -28082,6 +29737,13 @@ export interface operations {
                     "application/json": components["schemas"]["ScriptSyncResponse"];
                 };
             };
+            /** @description Scene physics is incomplete; no canonical source was written */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description No active workspace */
             404: {
                 headers: {
@@ -30553,992 +32215,6 @@ export interface operations {
                 content?: never;
             };
             /** @description The database is read-only (newer schema) */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    persistence_get_persistence_projects_project_id_batches: {
-        parameters: {
-            query?: {
-                /** @description Page size, from 1 to 100; defaults to 50. */
-                limit?: number | null;
-                /** @description Last BatchId returned on the previous page. */
-                cursor?: string | null;
-            };
-            header?: never;
-            path: {
-                /** @description Pinned project identity */
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Page of durable batch parents for one project */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectBatchListResource"];
-                };
-            };
-            /** @description Invalid page size or cursor */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    persistence_post_persistence_projects_project_id_batches: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Pinned project identity */
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProjectBatchSubmitRequest"];
-            };
-        };
-        responses: {
-            /** @description Identical batch submit replayed */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectBatchSubmitResource"];
-                };
-            };
-            /** @description Durable immutable batch parent accepted */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectBatchSubmitResource"];
-                };
-            };
-            /** @description Invalid immutable batch inputs */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Project identity, batch identity or idempotency conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    persistence_get_persistence_projects_project_id_batches_batch_id_cases: {
-        parameters: {
-            query?: {
-                /** @description Page size, from 1 to 100; defaults to 50. */
-                limit?: number | null;
-                /** @description Last CaseId returned on the previous page. */
-                cursor?: string | null;
-            };
-            header?: never;
-            path: {
-                /** @description Pinned project identity */
-                project_id: string;
-                /** @description Durable batch identity */
-                batch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Page of planned cases from the immutable expansion manifest */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectBatchCasesResource"];
-                };
-            };
-            /** @description Invalid page size or cursor */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Accepted batch is missing */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Batch belongs to another project */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    persistence_post_persistence_projects_project_id_run_intent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Exact archived project identity */
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProjectRunIntentRequest"];
-            };
-        };
-        responses: {
-            /** @description Prepared immutable identity; not accepted or admitted */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectRunIntentResource"];
-                };
-            };
-            /** @description Invalid archive or compiled authoring inputs */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Project identity or revision conflict; read-only archive */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Previous strong ETag */
-                "If-None-Match"?: string | null;
-            };
-            path: {
-                /** @description Pinned project identity */
-                project_id: string;
-                /** @description Accepted durable run identity */
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current published inspection identities; no field packages are decoded */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AcceptedAntennaInspectionCatalogResource"];
-                };
-            };
-            /** @description Unchanged after accepted publication checks */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid identity */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Accepted run or catalogs are missing */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Project/run mismatch or catalogs changed during read */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid accepted state or publication metadata */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id: {
-        parameters: {
-            query: {
-                /** @description Required current successful task attempt */
-                attempt_id: string;
-                /** @description Required current task ownership epoch */
-                ownership_epoch: number;
-                /** @description Required package CAS SHA-256 from the published artifact catalog */
-                package_object_ref: string;
-            };
-            header?: {
-                /** @description Previous strong ETag */
-                "If-None-Match"?: string | null;
-            };
-            path: {
-                /** @description Pinned project identity */
-                project_id: string;
-                /** @description Accepted durable run identity */
-                run_id: string;
-                /** @description Exact accepted Study step ID, not the native stage ID */
-                step_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Fully verified accepted inspection metadata and display descriptors, no numerical arrays */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AcceptedAntennaInspectionResource"];
-                };
-            };
-            /** @description Unchanged after current-attempt and full integrity checks */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid identity or query */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Selected step has no published inspection */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Project/run mismatch or stale publication identity */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid accepted state, package or storage failure */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id_payloads_payload_kind: {
-        parameters: {
-            query: {
-                /** @description Required current successful task attempt */
-                attempt_id: string;
-                /** @description Required current task ownership epoch */
-                ownership_epoch: number;
-                /** @description Required package CAS SHA-256 from the published artifact catalog */
-                package_object_ref: string;
-            };
-            header?: {
-                /** @description Previous strong ETag */
-                "If-None-Match"?: string | null;
-                /** @description One byte range */
-                Range?: string | null;
-            };
-            path: {
-                /** @description Pinned project identity */
-                project_id: string;
-                /** @description Accepted durable run identity */
-                run_id: string;
-                /** @description Exact accepted Study step ID, not the native stage ID */
-                step_id: string;
-                /** @description Same verified V/J/H and geometry payload kinds as the Live inspection API */
-                payload_kind: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Verified accepted antenna payload */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Verified payload byte range */
-            206: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Unchanged after current-attempt and full integrity checks */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid identity, query or payload kind */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Selected step has no published inspection */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Project/run mismatch or stale publication identity */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid byte range */
-            416: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid accepted state, package or storage failure */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_field_solutions_solution_id: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-            };
-            path: {
-                /** @description Published antenna field solution id */
-                solution_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Published antenna field solution metadata */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AntennaFieldSolutionResource"];
-                };
-            };
-            /** @description Field solution metadata not modified for the supplied ETag */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Field solution artifact not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Stale current-session request scope */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_field_solutions_solution_id_payloads_payload_kind: {
-        parameters: {
-            query?: {
-                /** @description Required for per-port V, J, or H payloads */
-                port_mode_id?: string;
-            };
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-                /** @description Strong ETag from a previous binary payload response */
-                "If-None-Match"?: string | null;
-                /** @description Optional single byte range */
-                Range?: string | null;
-            };
-            path: {
-                /** @description Published antenna field solution id */
-                solution_id: string;
-                /** @description conductor_positions, sample_positions, sample_topology, electric_potential_per_ampere, current_density_per_ampere, or magnetic_field_per_ampere */
-                payload_kind: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Verified binary antenna field payload */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Partial verified binary antenna field payload */
-            206: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Binary payload not modified for the supplied ETag */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Unsupported payload or invalid port selector */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Field solution or payload not found; missing payload uses code missing_payload */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Stale current-session request scope */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Requested binary payload range is not satisfiable */
-            416: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_source_spectra_output_id: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-            };
-            path: {
-                /** @description Published antenna source spectrum output id */
-                output_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Published antenna source spectrum metadata */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AntennaSourceSpectrumResource"];
-                };
-            };
-            /** @description Source spectrum metadata not modified for the supplied ETag */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Source spectrum artifact or payload not found; missing payloads use code missing_payload */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Stale current-session request scope */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Source spectrum sampling topology is unsupported; code unsupported_topology */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-                /** @description Strong ETag from a previous binary payload response */
-                "If-None-Match"?: string | null;
-                /** @description Optional single byte range */
-                Range?: string | null;
-            };
-            path: {
-                /** @description Published antenna source spectrum output id */
-                output_id: string;
-                /** @description Binary payload name: k_u_rad_per_m, k_v_rad_per_m, amplitudes_re_im, or power */
-                payload_kind: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Binary antenna source-spectrum payload */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Partial binary antenna source-spectrum payload */
-            206: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Binary payload not modified for the supplied ETag */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Source-spectrum payload not found; code missing_payload */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Stale current-session request scope */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Requested binary payload range is not satisfiable */
-            416: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Source spectrum sampling topology is unsupported; code unsupported_topology */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-                /** @description Previous strong ETag */
-                "If-None-Match"?: string | null;
-            };
-            path: {
-                /** @description Exact runtime stage ID, not the authored antenna stage ID */
-                stage_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Inspection record and manifest-only metadata; never a drive basis */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AntennaExternalLeadInspectionResource"];
-                };
-            };
-            /** @description Unchanged manifest-only resource */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No registered inspection result */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Stale request scope or owner changed during read */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Invalid inspection record or manifest */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Filesystem or worker failure */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_display: {
-        parameters: {
-            query: {
-                /** @description Required immutable inspection content digest */
-                content_digest: string;
-            };
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-                /** @description Previous strong ETag */
-                "If-None-Match"?: string | null;
-            };
-            path: {
-                /** @description Exact runtime stage ID */
-                stage_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Fully verified immutable display descriptors; no FFT/LLG qualification */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AntennaInspectionDisplayResource"];
-                };
-            };
-            /** @description Unchanged after integrity validation */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid query */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description No registered inspection */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Stale owner, content digest or failed/cancelled result */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Invalid bundle or device ownership */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Worker failure */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_payloads_payload_kind: {
-        parameters: {
-            query: {
-                /** @description Required sha256: digest from inspection_ref, not the stage record digest */
-                content_digest: string;
-            };
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-                /** @description Previous strong ETag */
-                "If-None-Match"?: string | null;
-                /** @description One byte range */
-                Range?: string | null;
-            };
-            path: {
-                /** @description Exact runtime stage ID */
-                stage_id: string;
-                /** @description bundle, sample_positions, magnetic_field, device_vertex_ids, device_potential, device_positions, device_topology; v2 additionally current_center_positions, current_center_density, current_trace_positions, current_trace_density, current_snapshot */
-                payload_kind: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Fully verified inspection binary payload */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Verified payload byte range */
-            206: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": unknown;
-                };
-            };
-            /** @description Unchanged, after full integrity validation */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid payload kind or query */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description No registered result */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Stale request scope, owner changed, terminal result or digest mismatch */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Invalid byte range */
-            416: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid manifest or binary payload */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-            /** @description Filesystem or worker failure */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorResponse"];
-                };
-            };
-        };
-    };
-    data_get_sessions_current_data_antenna_stages_stage_id_output_catalog: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
-                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
-                /** @description Strong ETag from a previous catalog response */
-                "If-None-Match"?: string | null;
-            };
-            path: {
-                /** @description Antenna field-solve stage identifier */
-                stage_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Published antenna stage output catalog */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AntennaStageOutputCatalogResource"];
-                };
-            };
-            /** @description Antenna stage output catalog not modified for the supplied ETag */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Antenna stage output catalog not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Stale request scope or antenna stage output catalog identity conflict */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -238,6 +238,11 @@ readonly VARIANTS_ROOT STAGING_ROOT
 : "${FULLMAG_HYPRE_MEMORY_VARIANT:=baseline}"
 : "${FULLMAG_FEM_RUNTIME_VARIANT:=hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}}"
 : "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
+if ! [[ "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}" =~ ^[1-9][0-9]*\.[0-9]$ ]]; then
+  echo "[export_fem_gpu_runtime] expected compute capability must have major.minor form" >&2
+  exit 2
+fi
+readonly FULLMAG_FEM_REQUIRED_NATIVE_CUBIN="sm_${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY/./}"
 : "${FULLMAG_ENABLE_NVTX:=0}"
 # Runtime export must never delete older generations implicitly.  Cleanup is a
 # separate, explicit maintenance action; callers that have completed its
@@ -1316,8 +1321,8 @@ python3 scripts/validate_managed_fem_runtime_bundle.py \
   --require-git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
   --require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
   --require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}" \
-  --require-native-cubin fullmag_fem=sm_89 \
-  --require-native-cubin hypre=sm_89 \
+  --require-native-cubin "fullmag_fem=${FULLMAG_FEM_REQUIRED_NATIVE_CUBIN}" \
+  --require-native-cubin "hypre=${FULLMAG_FEM_REQUIRED_NATIVE_CUBIN}" \
   --require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"
 
 cat > "${STAGING_ROOT}/README.md" <<EOF
@@ -1376,8 +1381,8 @@ publish_runtime_bundle() {
     --require-git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
     --require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
     --require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}" \
-    --require-native-cubin fullmag_fem=sm_89 \
-    --require-native-cubin hypre=sm_89 \
+    --require-native-cubin "fullmag_fem=${FULLMAG_FEM_REQUIRED_NATIVE_CUBIN}" \
+    --require-native-cubin "hypre=${FULLMAG_FEM_REQUIRED_NATIVE_CUBIN}" \
     --require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"
   if [ -e "${variant_root}" ]; then
     python3 scripts/validate_managed_fem_runtime_bundle.py \

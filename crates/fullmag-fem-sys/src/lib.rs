@@ -24,6 +24,8 @@ pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_CHARGE_SNAPSHOT_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_CLOSED_LOOP_SOURCE_SNAPSHOT_ABI_VERSION: u32 = 2;
+pub const FULLMAG_FEM_CLOSED_LOOP_SOURCE_SNAPSHOT_MAX_CELLS: usize = 1048576;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_MAX_TARGETS: u64 = 1_000_000;
@@ -1163,6 +1165,54 @@ pub struct fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 {
     pub source_view_identity_digest: [c_char; 65],
     pub error_message: [c_char; 256],
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_paired_charge_weak_reaction_v2 {
+    pub minus_vertex_id: u64,
+    pub plus_vertex_id: u64,
+    pub minus_reaction_a: f64,
+    pub plus_reaction_a: f64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_closed_loop_current_cell_v2 {
+    pub source_element_index: u64,
+    pub vertex_ids: [u64; 4],
+    pub vertex_xyz_m: [f64; 12],
+    pub center_xyz_m: [f64; 3],
+    pub vertex_current_xyz_apm2: [f64; 12],
+    pub center_current_xyz_apm2: [f64; 3],
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_closed_loop_source_snapshot_result_v2 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub cells: *mut fullmag_fem_closed_loop_current_cell_v2,
+    pub cells_capacity: u64,
+    pub cells_len: u64,
+    pub source_current_a: f64,
+    pub source_absolute_flux_a: f64,
+    pub charge_relative_residual: f64,
+    pub potential_jump_v: f64,
+    pub gauge_mean_v: f64,
+    pub max_paired_weak_flux_mismatch_a: f64,
+    pub source_view_identity_digest: [c_char; 65],
+    pub periodic_operator_version: [c_char; 96],
+    pub closure_operator_version: [c_char; 96],
+    pub error_message: [c_char; 256],
+    pub paired_weak_reactions: *mut fullmag_fem_paired_charge_weak_reaction_v2,
+    pub paired_weak_reactions_capacity: u64,
+    pub paired_weak_reactions_len: u64,
+    pub weak_reaction_ledger_version: [c_char; 96],
+}
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_paired_charge_weak_reaction_v2>() == 32);
+    assert!(std::mem::size_of::<fullmag_fem_closed_loop_current_cell_v2>() == 280);
+    assert!(std::mem::size_of::<fullmag_fem_closed_loop_source_snapshot_result_v2>() == 728);
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -3346,6 +3396,19 @@ extern "C" {
         result: *mut fullmag_fem_steady_transport_rt0_oersted_result_v1,
         charge_snapshot: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1,
         quadrature_snapshot: *mut fullmag_fem_direct_oersted_snapshot_result_v1,
+    ) -> i32;
+    pub fn fullmag_fem_solve_steady_transport_rt0_with_source_snapshot_v2(
+        request: *const fullmag_fem_steady_transport_rt0_request_v1,
+        result: *mut fullmag_fem_steady_transport_rt0_result_v1,
+        charge_snapshot: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1,
+        source_snapshot: *mut fullmag_fem_closed_loop_source_snapshot_result_v2,
+    ) -> i32;
+    pub fn fullmag_fem_solve_steady_transport_rt0_oersted_with_source_snapshot_v2(
+        request: *const fullmag_fem_steady_transport_rt0_oersted_request_v1,
+        result: *mut fullmag_fem_steady_transport_rt0_oersted_result_v1,
+        charge_snapshot: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1,
+        quadrature_snapshot: *mut fullmag_fem_direct_oersted_snapshot_result_v1,
+        source_snapshot: *mut fullmag_fem_closed_loop_source_snapshot_result_v2,
     ) -> i32;
     pub fn fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
         request: *const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1,
@@ -6966,4 +7029,120 @@ mod tests {
             *mut fullmag_fem_gpu_performance_snapshot_v1,
         ) -> i32 = fullmag_fem_backend_gpu_performance_snapshot_v1;
     }
+}
+
+pub const FULLMAG_FEM_PREPARED_CLOSED_LOOP_ABI_VERSION: u32 = 2;
+pub const FULLMAG_FEM_PREPARED_CLOSED_LOOP_CERTIFICATE_MAX_BYTES: usize = 128 << 20;
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_prepared_closed_loop_binding_v2 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub source_revision: *const c_char,
+    pub object_id: *const c_char,
+    pub geometry_id: *const c_char,
+    pub source_module_id: *const c_char,
+    pub mesh_revision: *const c_char,
+    pub topology_revision: *const c_char,
+    pub mesh_digest: *const c_char,
+    pub authored_input_digest: *const c_char,
+    pub materials_digest: *const c_char,
+    pub envelope_revision: *const c_char,
+    pub envelope_digest: *const c_char,
+    pub expected_prepared_execution_digest: *const c_char,
+    pub stage_identity: u64,
+    pub evaluation_time_s: f64,
+    pub evaluated_envelope_multiplier: f64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_prepared_closed_loop_material_part_v2 {
+    pub part_id: *const c_char,
+    pub material_assignment_index: u32,
+    pub reserved: u32,
+    pub element_ordinals: *const u64,
+    pub element_count: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_prepared_closed_loop_observation_face_v2 {
+    pub face_vertex_ids: [u64; 3],
+    pub part_cell_ordinal: u64,
+    pub bridge_cell_ordinal: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_prepared_closed_loop_observation_v2 {
+    pub id: *const c_char,
+    pub part_id: *const c_char,
+    pub selector: *const c_char,
+    pub normal_convention: *const c_char,
+    pub faces: *const fullmag_fem_prepared_closed_loop_observation_face_v2,
+    pub face_count: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_prepared_closed_loop_request_v2 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub base: fullmag_fem_charge_transport_request_v1,
+    pub binding: fullmag_fem_prepared_closed_loop_binding_v2,
+    pub stable_vertex_identities: fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1,
+    pub boundary_faces: *const fullmag_fem_steady_transport_rt0_boundary_face_v1,
+    pub boundary_face_count: u64,
+    pub closed_geometry: *const fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1,
+    pub material_assignment_count: u64,
+    pub material_parts: *const fullmag_fem_prepared_closed_loop_material_part_v2,
+    pub material_part_count: u64,
+    pub observations: *const fullmag_fem_prepared_closed_loop_observation_v2,
+    pub observation_count: u64,
+    pub algebraic_relative_tolerance: f64,
+    pub physical_relative_gate: f64,
+    pub physical_absolute_gate_a: f64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_prepared_closed_loop_oersted_request_v2 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub rt0: fullmag_fem_prepared_closed_loop_request_v2,
+    pub target_points_xyz: *const f64,
+    pub target_points_xyz_len: u64,
+    pub base_quadrature_order: i32,
+    pub maximum_subdivision_depth: i32,
+    pub absolute_tolerance_apm: f64,
+    pub relative_tolerance: f64,
+    pub maximum_source_target_pairs: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 {
+    pub source: fullmag_fem_closed_loop_source_snapshot_result_v2,
+    pub prepared_execution_digest: [c_char; 65],
+    pub accepted_charge_field_digest: [c_char; 65],
+    pub accepted_source_state_digest: [c_char; 65],
+    pub digest_encoding_version: [c_char; 96],
+    pub prepared_digest_version: [c_char; 96],
+    pub accepted_charge_digest_version: [c_char; 96],
+    pub accepted_source_digest_version: [c_char; 96],
+    pub canonical_balance_certificate_bytes: *mut u8,
+    pub canonical_balance_certificate_capacity: u64,
+    pub canonical_balance_certificate_len: u64,
+}
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_prepared_closed_loop_binding_v2>() == 136);
+    assert!(std::mem::size_of::<fullmag_fem_prepared_closed_loop_material_part_v2>() == 32);
+    assert!(std::mem::size_of::<fullmag_fem_prepared_closed_loop_observation_face_v2>() == 40);
+    assert!(std::mem::size_of::<fullmag_fem_prepared_closed_loop_observation_v2>() == 48);
+    assert!(std::mem::size_of::<fullmag_fem_prepared_closed_loop_request_v2>() == 608);
+    assert!(std::mem::size_of::<fullmag_fem_prepared_closed_loop_oersted_request_v2>() == 672);
+    assert!(std::mem::size_of::<fullmag_fem_prepared_closed_loop_source_snapshot_result_v2>() == 1336);
+    assert!(std::mem::offset_of!(fullmag_fem_prepared_closed_loop_source_snapshot_result_v2, canonical_balance_certificate_bytes) == 1312);
+};
+extern "C" {
+    pub fn fullmag_fem_solve_prepared_closed_loop_rt0_v2(request: *const fullmag_fem_prepared_closed_loop_request_v2, result: *mut fullmag_fem_steady_transport_rt0_result_v1, charge: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1, source: *mut fullmag_fem_prepared_closed_loop_source_snapshot_result_v2) -> i32;
+    pub fn fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(request: *const fullmag_fem_prepared_closed_loop_oersted_request_v2, result: *mut fullmag_fem_steady_transport_rt0_oersted_result_v1, charge: *mut fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1, quadrature: *mut fullmag_fem_direct_oersted_snapshot_result_v1, source: *mut fullmag_fem_prepared_closed_loop_source_snapshot_result_v2) -> i32;
 }

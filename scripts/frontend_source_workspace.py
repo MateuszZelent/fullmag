@@ -38,6 +38,10 @@ ROOT_DEPENDENCY_INPUTS = (
 CONTROL_ROOM_PACKAGE = Path("apps") / "control-room" / "package.json"
 OPTIONAL_DEPENDENCY_INPUTS = (Path(".npmrc"),)
 STAGE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+SNAPSHOT_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+FILESYSTEM_SOURCE_SELECTION = "filesystem-current-selected-inputs"
+FROZEN_SOURCE_SELECTION = "verified-frozen-snapshot-selected-inputs"
+BUILD_SOURCE_SNAPSHOT_FIELDS = frozenset({"record_path", "inventory_sha256", "source_root"})
 REPARSE_POINT_ATTRIBUTE = 0x400
 
 
@@ -188,6 +192,62 @@ def _check_manifest_path(
         )
 
 
+def _verified_frozen_source_root(
+    manifest: dict[str, Any],
+    repo: Path,
+    build_root: Path,
+) -> Path:
+    reference = manifest.get("build_source_snapshot")
+    if not isinstance(reference, dict) or set(reference) != BUILD_SOURCE_SNAPSHOT_FIELDS:
+        raise SourceWorkspaceError(
+            "Frozen source manifest must contain the complete build source snapshot pin"
+        )
+
+    raw_record_path = reference.get("record_path")
+    raw_source_root = reference.get("source_root")
+    inventory_sha256 = reference.get("inventory_sha256")
+    if (
+        not isinstance(raw_record_path, str)
+        or not Path(raw_record_path).is_absolute()
+        or not isinstance(raw_source_root, str)
+        or not Path(raw_source_root).is_absolute()
+        or not isinstance(inventory_sha256, str)
+        or not SNAPSHOT_SHA256_RE.fullmatch(inventory_sha256)
+    ):
+        raise SourceWorkspaceError("Frozen source manifest has an invalid build source snapshot pin")
+
+    try:
+        record_path = fullmag_storage.validate_path(
+            raw_record_path, build_root, "frozen build source snapshot record"
+        )
+    except (OSError, RuntimeError, fullmag_storage.StorageError) as error:
+        raise SourceWorkspaceError(str(error)) from error
+
+    try:
+        from windows.build_snapshot import verify_snapshot
+
+        snapshot = verify_snapshot(record_path, build_root, force_verify=True)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise SourceWorkspaceError(f"Frozen build source snapshot failed verification: {error}") from error
+
+    if snapshot.get("origin_repo_root") != str(repo):
+        raise SourceWorkspaceError("Frozen build source snapshot belongs to a different checkout")
+    if snapshot.get("origin_worktree_id") != fullmag_storage.identifier(repo):
+        raise SourceWorkspaceError("Frozen build source snapshot worktree identity does not match the checkout")
+    if (
+        reference["record_path"] != snapshot.get("record_path")
+        or reference["source_root"] != snapshot.get("source_root")
+        or reference["inventory_sha256"] != snapshot.get("inventory_sha256")
+    ):
+        raise SourceWorkspaceError("Frozen source manifest snapshot pin differs from its verified record")
+    if manifest.get("source_root") != snapshot.get("source_root"):
+        raise SourceWorkspaceError("Frozen source manifest root differs from its verified snapshot")
+    if manifest.get("build_root") != str(build_root):
+        raise SourceWorkspaceError("Frozen source manifest build root is not the canonical profile root")
+
+    return Path(snapshot["source_root"])
+
+
 def _read_dependency_manifest(
     repo: Path,
     build_root: Path,
@@ -232,7 +292,25 @@ def _read_dependency_manifest(
         raise SourceWorkspaceError("Native frontend source manifest has an invalid staging mode")
 
     expected_app = expected_workspace / "apps" / "control-room"
-    _check_manifest_path(manifest, "source_root", repo, repo)
+    source_selection = manifest.get("source_selection")
+    if source_selection == FILESYSTEM_SOURCE_SELECTION:
+        if "build_source_snapshot" in manifest:
+            raise SourceWorkspaceError(
+                "Filesystem source manifest must not include a frozen source snapshot pin"
+            )
+        expected_source_root = repo
+        source_containment_root = repo
+    elif source_selection == FROZEN_SOURCE_SELECTION:
+        expected_source_root = _verified_frozen_source_root(manifest, repo, build_root)
+        source_containment_root = build_root
+    else:
+        raise SourceWorkspaceError("Native frontend source manifest has an unsupported source selection")
+    _check_manifest_path(
+        manifest,
+        "source_root",
+        expected_source_root,
+        source_containment_root,
+    )
     _check_manifest_path(manifest, "build_root", build_root, build_root)
     _check_manifest_path(manifest, "stage_root", expected_stage_root, build_root)
     _check_manifest_path(manifest, "workspace_root", expected_workspace, build_root)
@@ -248,9 +326,17 @@ def _read_dependency_manifest(
     )
 
 
-def _dependency_input_paths(repo: Path) -> list[Path]:
+def _dependency_input_paths(
+    repo: Path, *, patch_relatives: tuple[Path, ...] | None = None
+) -> list[Path]:
     paths = [repo / relative for relative in ROOT_DEPENDENCY_INPUTS]
     paths.append(repo / CONTROL_ROOM_PACKAGE)
+    if patch_relatives is None:
+        try:
+            patch_relatives = stage_workspace_frontend.patch_file_relatives(repo)
+        except (OSError, RuntimeError, ValueError, stage_workspace_frontend.StageError) as error:
+            raise SourceWorkspaceError(f"Cannot enumerate dependency patch inputs: {error}") from error
+    paths.extend(repo / relative for relative in patch_relatives)
     lock_importers = stage_workspace_frontend._parse_lock_importers(repo / "pnpm-lock.yaml")
     try:
         app_manifests = stage_workspace_frontend._direct_app_package_manifests(repo, lock_importers)
@@ -267,8 +353,30 @@ def _dependency_input_paths(repo: Path) -> list[Path]:
 
 
 def _compare_dependency_inputs(repo: Path, workspace: Path) -> dict[str, str | None]:
+    try:
+        source_patch_relatives = stage_workspace_frontend.patch_file_relatives(repo)
+        installed_patch_relatives = stage_workspace_frontend.patch_file_relatives(workspace)
+    except (OSError, RuntimeError, ValueError, stage_workspace_frontend.StageError) as error:
+        raise SourceWorkspaceError(f"Cannot enumerate dependency patch inputs: {error}") from error
+    source_patch_set = set(source_patch_relatives)
+    installed_patch_set = set(installed_patch_relatives)
+    if source_patch_set != installed_patch_set:
+        missing = sorted(source_patch_set - installed_patch_set, key=lambda path: path.as_posix())
+        extra = sorted(installed_patch_set - source_patch_set, key=lambda path: path.as_posix())
+
+        def describe(paths: list[Path]) -> str:
+            values = [path.as_posix() for path in paths[:8]]
+            if len(paths) > 8:
+                values.append(f"(+{len(paths) - 8} more)")
+            return ", ".join(values) or "<none>"
+
+        raise SourceWorkspaceError(
+            "Dependency patch inventory differs between checkout and native workspace: "
+            f"missing={describe(missing)} extra={describe(extra)}"
+        )
+
     hashes: dict[str, str | None] = {}
-    for source_path in _dependency_input_paths(repo):
+    for source_path in _dependency_input_paths(repo, patch_relatives=source_patch_relatives):
         relative = source_path.relative_to(repo)
         installed_path = workspace / relative
         optional = relative in OPTIONAL_DEPENDENCY_INPUTS

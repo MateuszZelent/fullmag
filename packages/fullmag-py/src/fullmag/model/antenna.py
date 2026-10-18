@@ -92,12 +92,28 @@ class AntennaPortBranch:
 
 
 @dataclass(frozen=True, slots=True)
+class AntennaSourceCutRt0:
+    source_cut_ref: str
+    orientation: str = "minus_outward"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_cut_ref", require_non_empty(self.source_cut_ref, "source_cut_ref"))
+        if self.orientation != "minus_outward":
+            raise ValueError("source-cut RT0 normalization requires minus_outward orientation")
+
+    def to_ir(self) -> dict[str, str]:
+        return {"kind": "source_cut_rt0", "source_cut_ref": self.source_cut_ref, "orientation": self.orientation}
+
+
+@dataclass(frozen=True, slots=True)
 class AntennaPortMode:
     id: str
     source_object_id: str
     current_transport_id: str
     branches: tuple[AntennaPortBranch, ...]
     normalization_current_a: float = 1.0
+    schema_version: str = ANTENNA_PORT_MODE_SCHEMA_VERSION
+    normalization: AntennaSourceCutRt0 | None = None
 
     def __init__(
         self,
@@ -107,7 +123,18 @@ class AntennaPortMode:
         current_transport_id: str,
         branches: Sequence[AntennaPortBranch],
         normalization_current_a: float = 1.0,
+        schema_version: str = ANTENNA_PORT_MODE_SCHEMA_VERSION,
+        normalization: AntennaSourceCutRt0 | None = None,
     ) -> None:
+        if schema_version not in {ANTENNA_PORT_MODE_SCHEMA_VERSION, "antenna_port_mode.v3"}:
+            raise ValueError("unsupported antenna port mode schema_version")
+        if schema_version == "antenna_port_mode.v3":
+            if not isinstance(normalization, AntennaSourceCutRt0):
+                raise ValueError("antenna port mode v3 requires typed source-cut RT0 normalization")
+        elif normalization is not None:
+            raise ValueError("antenna port mode v2 cannot use source-cut normalization")
+        object.__setattr__(self, "schema_version", schema_version)
+        object.__setattr__(self, "normalization", normalization)
         object.__setattr__(self, "id", require_non_empty(id, "antenna_port_mode.id"))
         object.__setattr__(
             self,
@@ -152,7 +179,8 @@ class AntennaPortMode:
 
     def to_ir(self) -> dict[str, object]:
         return {
-            "schema_version": ANTENNA_PORT_MODE_SCHEMA_VERSION,
+            "schema_version": self.schema_version,
+            **({"normalization": self.normalization.to_ir()} if self.normalization is not None else {}),
             "id": self.id,
             "source_object_id": self.source_object_id,
             "current_transport_id": self.current_transport_id,
@@ -553,6 +581,47 @@ class AntennaSpectrumKGrid:
 
 
 @dataclass(frozen=True, slots=True)
+class EquilibriumStageOutputRef:
+    """Symbolic reference to a declared accepted Relax output."""
+
+    stage_id: str
+    output_id: str = "accepted_equilibrium"
+
+    def __post_init__(self) -> None:
+        for name in ("stage_id", "output_id"):
+            object.__setattr__(self, name, require_non_empty(getattr(self, name), name))
+
+    def to_ir(self) -> dict[str, str]:
+        return {"kind": "stage_output", "stage_id": self.stage_id, "output_id": self.output_id}
+
+
+@dataclass(frozen=True, slots=True)
+class EquilibriumArtifactRef:
+    """Pinned immutable accepted equilibrium in the canonical artifact store."""
+
+    asset_id: str
+    equilibrium_id: str
+    content_digest: str
+
+    def __post_init__(self) -> None:
+        for name in ("asset_id", "equilibrium_id", "content_digest"):
+            object.__setattr__(self, name, require_non_empty(getattr(self, name), name))
+        if len(self.asset_id) != 64 or any(c not in "0123456789abcdef" for c in self.asset_id):
+            raise ValueError("asset_id requires 64 lowercase hexadecimal digits")
+        prefix, separator, digest = self.equilibrium_id.partition(":")
+        if not separator or prefix not in {"antenna_accepted_equilibrium.v1", "equilibrium_artifact.v7"}:
+            raise ValueError("equilibrium_id requires a canonical accepted equilibrium identity")
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise ValueError("equilibrium_id requires 64 lowercase hexadecimal digits")
+        if not self.content_digest.startswith("sha256:") or len(self.content_digest) != 71 or any(c not in "0123456789abcdef" for c in self.content_digest[7:]):
+            raise ValueError("content_digest requires sha256 and 64 lowercase hexadecimal digits")
+
+    def to_ir(self) -> dict[str, str]:
+        return {"kind": "artifact", "asset_id": self.asset_id,
+                "equilibrium_id": self.equilibrium_id, "content_digest": self.content_digest}
+
+
+@dataclass(frozen=True, slots=True)
 class AntennaSpectrumRequest:
     id: str
     solution_ref: AntennaStageOutputRef | AntennaFieldSolutionRef
@@ -565,7 +634,7 @@ class AntennaSpectrumRequest:
     output_id: str
     port_mode_id: str | None = None
     nonuniform_k_grid: AntennaSpectrumKGrid | None = None
-    equilibrium_ref: str | None = None
+    equilibrium_ref: EquilibriumStageOutputRef | EquilibriumArtifactRef | str | None = None
     mode_basis_ref: str | None = None
 
     def __post_init__(self) -> None:
@@ -616,12 +685,16 @@ class AntennaSpectrumRequest:
             raise ValueError("transverse spectrum requires equilibrium_ref")
         if self.component != "transverse" and self.equilibrium_ref is not None:
             raise ValueError("equilibrium_ref is only valid for component='transverse'")
+        if self.equilibrium_ref is not None and not isinstance(self.equilibrium_ref, (str, EquilibriumStageOutputRef, EquilibriumArtifactRef)):
+            raise TypeError("equilibrium_ref must be a typed equilibrium reference or immutable identity")
         for name in ("equilibrium_ref", "mode_basis_ref"):
             value = getattr(self, name)
-            if value is not None:
+            if value is not None and isinstance(value, str):
                 object.__setattr__(self, name, require_non_empty(value, f"antenna_spectrum.{name}"))
-        if self.component == "transverse":
-            raise ValueError("transverse spectrum is unsupported until certified equilibrium loading and projection exist")
+        if isinstance(self.equilibrium_ref, str):
+            prefix, separator, digest = self.equilibrium_ref.partition(":")
+            if not separator or prefix not in {"antenna_accepted_equilibrium.v1", "equilibrium_artifact.v7"} or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise ValueError("equilibrium_ref requires a canonical immutable equilibrium identity")
         if self.mode_basis_ref is not None:
             raise ValueError("mode_basis_ref is unsupported until modal analysis is implemented")
         object.__setattr__(self, "window", window)
@@ -647,7 +720,7 @@ class AntennaSpectrumRequest:
         if self.nonuniform_k_grid is not None:
             payload["nonuniform_k_grid"] = self.nonuniform_k_grid.to_ir()
         if self.equilibrium_ref is not None:
-            payload["equilibrium_ref"] = self.equilibrium_ref
+            payload["equilibrium_ref"] = (self.equilibrium_ref.to_ir() if isinstance(self.equilibrium_ref, (EquilibriumStageOutputRef, EquilibriumArtifactRef)) else self.equilibrium_ref)
         if self.mode_basis_ref is not None:
             payload["mode_basis_ref"] = self.mode_basis_ref
         return payload

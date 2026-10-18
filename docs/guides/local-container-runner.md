@@ -112,6 +112,19 @@ Snapshot obejmuje pliki śledzone i usunięcia. Nowe wejścia trzeba jawnie wska
 python scripts/local_runner_cli.py --worktree <absolutny-worktree> submit --operation build --profile fem-cpu-release --source snapshot --include-untracked <plik-wzgledny>
 ```
 
+Dłuższy jawny wybór można przekazać istniejącej recepcie jako manifest UTF-8 JSON:
+
+```text
+just runner-build snapshot fem-cpu-release "" <absolutny-manifest-json>
+```
+
+Manifest jest tablicą unikalnych, niepustych ścieżek względem checkoutu, np.
+`["crates/fullmag-runtime-control/src/study_completion.rs", "packages/fullmag-py/src/fullmag/runtime/transport_identity.py"]`.
+Klient czyta go raz (do 64 KiB i 1024 wpisów); dotychczasowy mechanizm capture
+sprawdza ścieżki, politykę wyłączeń, zawartość i wyścigi. Manifest nie wybiera
+obrazu, komendy ani mountów. Tryb commit odrzuca ten argument. Domyślne
+wywołanie bez manifestu nadal obejmuje wyłącznie dotychczasowy wybór.
+
 Wstrzymaj edycje wszystkich agentów na czas capture. Zmiana podczas kopiowania
 odrzuca zgłoszenie. Po utworzeniu kapsuły można dalej edytować branch; build
 otrzymuje kopię, a nie późniejszy stan ścieżki. SHA kapsuły i natywna tożsamość
@@ -144,6 +157,332 @@ aktywnego joba; wymienia wyłącznie własny, dokładnie sprawdzony kontener, be
 usuwania storage. Samo `configure` nie podmienia istniejącej instalacji.
 Zdrowie API i stan wykonawcy są oddzielne: sprawdzaj `accepting_jobs`,
 `worker_alive`, błąd oraz stan kolejki, nie tylko Docker `running`.
+
+### Zewnętrzna referencja BORIS CPU — profil źródłowy
+
+`boris-cpu-v1` jest osobnym profilem buildu zewnętrznej referencji, a nie
+backendem Fullmaga. Implementacja źródłowa nie aktywuje go w operatorowym
+katalogu. Istniejące profile i ich receipt zachowują dotychczasowy kontrakt.
+
+Zamrożone bundle zależności przygotowują offline toolchain przez:
+
+```text
+just runner-boris-toolchain-context <bundle-deb> <bundle-wheel> sha256:<base-image-id>
+just runner-boris-toolchain-image <zwrócony-context> fullmag/boris-toolchain:<prywatny-tag>
+```
+
+Producent `scripts/local_runner/boris_toolchain.py` wybiera 17 bibliotekowych
+pakietów APT z locka, sprawdza domknięcie zależności i bazowe inventory, odmawia
+usunięć/upgrade i używa wyłącznie lokalnego cache archiwów. Dziesięć przypiętych
+wheels jest rozpakowywanych bez pip do `/opt/fullmag-boris-python`;
+NumPy 2.2.6 z `/usr/local/lib/python3.10/dist-packages` zachowuje wersję i hash.
+Matplotlib 3.8.4 używa wheels upstream budowanych przeciw NumPy 2;
+rzeczywisty import i Agg stanowią bramkę preflight. Dockerfile.boris-toolchain
+używa lokalnego frontendu, sieci none i finalnego USER 65532:65532.
+Helper sprawdza lokalny alias niezmiennej bazy przed i po buildzie oraz
+prefiks RootFS layers; terminalny receipt wiąże source/context, lock i wheel
+manifest. Konteksty i dowody pozostają w storage D.
+
+Build przez `just` zakończył się 2026-10-11 obrazem
+`sha256:dd3441d07c3aa19fe1e4a206c2926b42c89899a59bbc517eb890bd99657b079e`.
+Receipt `windows-native/boris-image-8ea0710662644c49820179099d46fd90/terminal-receipt.json`
+ma status SUCCEEDED_IMAGE_ONLY. Osobny
+`reviews/boris-toolchain-final-image-v3/results/runtime-preflight.json`
+potwierdza import dziesięciu prywatnych modułów, niezmieniony NumPy, ścieżki
+FFTW3/X11/TBB, Python embedding flags i Agg PNG jako UID 65532, readonly,
+bez sieci, z limitem 2 CPU/1 GiB/128 pids. Jest to
+TOOLCHAIN_ONLY_NOT_SOLVER_QUALIFIED. Nie aktywowano profilu operatora;
+kolejka i istniejące profile pozostają zachowane. Kontrakt i granice dowodu:
+[nota 0970](../physics/0970-spin-hall-drift-diffusion-transport.md#boris-offline-toolchain-provisioning).
+
+Przypięty source-image wymaga rzeczywistego zachowanego preflight kontenera:
+
+```text
+just runner-boris-image-context <checkout-BORIS> sha256:<toolchain-image-id> <runtime-preflight.json> <toolchain-context> <pełny-container-id>
+just runner-boris-image <zwrócony-source-context> fullmag/boris-cpu:<prywatny-tag>
+```
+
+Receptura przekazuje dodatkowo `--repo-root`; CLI `prepare-image-context`
+wymaga wszystkich sześciu flag. JSON musi odpowiadać rzeczywistemu outputowi
+bind mountu `/proof` terminalnego UID65532 readonly/network-none kontenera,
+z dokładną komendą preflight i exit 0. Helper odtwarza frozen dependency/wheel
+admission oraz wiąże context/lock/manifest, image i pełny container ID.
+Sam image ID lub caller JSON nie dowodzi preflight.
+
+`boris_cpu.py::prepare_context` wymaga czystego checkoutu
+`048503d2ca6475e91b073eb1762ecf9d3634c3e1` pod storage D. Git clean-filter
+identities dopuszczają deklarowaną politykę CRLF; manifest przypina dokładne
+checkout bytes i SHA256 każdego pliku. Kontekst zachowuje źródła, helper,
+Dockerfile i toolchain proof/inspect/context/container. Producent odmawia
+drift, symlinków i nieoczekiwanych plików. Build jest offline, finalny
+USER 65532:65532, z walidacją źródeł w obrazie; nie kompiluje BORIS.
+
+Rzeczywisty build przez `just` ma exit 0 i image
+`sha256:545279e00703d60dcaf33d455461ba90e0dea7ec5647e96392bbc9246c21b6a6`.
+Receipt i osobny `root-source-readback.json` są pod
+`windows-native/boris-source-image-b5ffb0df863d47f5b76ff5e2d4af4e2c/`.
+Niezależny readback UID65532, readonly/network-none, bez bind mountów,
+1 CPU/512 MiB/32 pids, exit 0, sprawdził `verify_source`: 1133 plików,
+26427761 bajtów, source-tree SHA256
+`0d0d924321c6b0d664f3e862a7a73d7c31a1c4c14d2a7f973b6238e2a58161a6`,
+NumPy 2.2.6 i Matplotlib 3.8.4. SUCCEEDED_SOURCE_IMAGE_ONLY oraz
+SOURCE_AND_TOOLCHAIN_ONLY_NOT_SOLVER_QUALIFIED nie oznaczają solver build PASS.
+Dziewiętnaście interpretowanych regresji producenta PASS obejmuje actual
+Git CRLF clean-filter capture; kompilacja, ABI i solver nie zostały wykonane.
+
+Po opisanym provisioningu/readback oraz odrębnym jawnym opt-in operatora
+`just runner-boris-build commit <pełny-SHA-Fullmaga>` zgłasza build do tej samej
+kolejki. Konfiguracja koordynatora wymaga `--enable-boris-cpu`; profil workera
+musi wskazywać niezmienny obraz z przypiętymi źródłami. Aktualizacja operatora
+wymaga zabezpieczenia kontenerowej blokady claim oraz potwierdzonego zatrzymania
+dokładnie atestowanego koordynatora. Sama pauza i blokada hosta Windows nie
+wykluczają równoczesnego claim po stronie Linux. Nie zmieniaj konfiguracji
+ani obrazu w trakcie cudzego buildu; rzeczywista procedura przejścia pozostaje
+**NOT VERIFIED**.
+
+Worker stosuje stały overlay CPU, kompiluje źródła C++ i sprawdza zależności
+ELF. Receipt wiąże obraz, kapsułę Fullmaga, oryginalne źródła, overlay i binarium.
+Sukces kompilacji nie dowodzi precyzji wykonania ani poprawności adaptera.
+Provisioning toolchaina i jego preflight mają powyższy ograniczony dowód PASS.
+Terminalny build BORIS/witness ABI, admission rzeczywistego runtime
+i nowe porównanie naukowe pozostają **NOT VERIFIED**.
+
+Źródłowa ścieżka `just run-managed-boris-nf <job-id> coarse|medium|fine`
+wymaga terminalnego udanego buildu tego samego worktree i aktora, czterech
+trusted dokumentów, zgodnej kapsuły, przypiętych źródeł BORIS i dowodu ABI.
+Uruchamia jeden stały scenariusz N/F w kontenerze CPU z wyłączoną siecią,
+read-only wejściem, ograniczonym eksportem i obowiązkowym rzeczywistym exit 0.
+`just observe-managed-boris-nf <runtime-id>` ponawia cały łańcuch i kontrolę
+zachowanego kontenera oraz payloadów; nie uruchamia nowego solve.
+Publiczny verifier v2 wymaga jawnego kontekstu repozytorium i kanonicznego
+artefaktu. Pole `identity_complete` w przekazanym JSON samo nie daje admission.
+
+Kontrole interpretowane ścieżki runtime po poprawce publikacji: 56 testów i 45 podprzypadków PASS;
+parser oraz validator noty 0970 PASS. Są to dowody źródeł, bez uruchomienia
+BORIS, producenta ABI lub nowego benchmarku. Rzeczywista kwalifikacja nadal
+wymaga terminalnego buildu BORIS i wykonania porównań.
+
+### BORIS: osobne narzędzia runtime V2
+
+`just run-managed-boris-nf-v2 <job-id> coarse|medium|fine` jest oddzielnym,
+synchronicznym konsumentem udanego buildu `boris-cpu-v1`. Nie kompiluje C++,
+nie buduje obrazu, nie instaluje wheels i nie zmienia profili ani stanu kolejki.
+Przed uruchomieniem operator musi ustanowić okno idle/paused bez aktywnych
+jobów, retencji lub innych kontenerów obliczeniowych. Recepta sprawdza to
+przed dispatch, podczas oczekiwania i przed terminalną publikacją; sama nie
+wywołuje pause, resume ani zatrzymania obcych kontenerów.
+
+`run_managed_boris_nf_v2.py::resolve_native_build` niezależnie wiąże managed
+job, aktora/worktree, cztery trusted pliki, pełną niezmienną kapsułę oraz
+`validate_build_receipt` (binarka, upstream, flagi, CPU ABI, obraz i native
+source identity). Nie porównuje nowych narzędzi hosta ze starymi narzędziami
+w kapsule. Nowy manifest `fullmag.boris.runtime-tools.v1` wiąże osobno pełny
+zestaw importowanych narzędzi hosta, w tym publiczny consumer tożsamości;
+`solver_capsule_attribution=false` jawnie rozdziela ich pochodzenie.
+Nie ma fallbacku po odmowie starego guarda `source_hashes`.
+
+Worker nadal jest niezmienionym `_worker` z kapsuły starego buildu pod
+`/source/scripts/run_managed_boris_nf.py`; wejście/scenariusz i jego bramki
+native/ABI/raw output pozostają obowiązkowe. Specyfikacja V2 udostępnia prywatne wheels przez `PYTHONPATH`:
+`/source/scripts:/opt/fullmag-boris/source:/opt/fullmag-boris-python`.
+Ostatni katalog udostępnia prywatne wheels z istniejącego obrazu; pominięcie
+go w V1 zasłaniało zainstalowany Matplotlib. Nie dodaje się pakietów ani
+nie zmienia bibliotek dynamicznych binarki.
+
+Dodatkowa jawna zależność `fullmag.boris.embedded-wrapper-support.v1` wiąże
+`EmbeddedPythonWrapper.py` z original_source dokładnego native buildu.
+Plik pochodzi wyłącznie z jego `execution/boris-cpu-source`, ma przypięty
+upstream/SHA/rozmiar i jest ponownie sprawdzany przed startem, po run oraz
+przez observer. Producent native85 pominął go w paczce siedmiu OUTPUTS;
+nie dopisuje się pliku do starej paczki ani nie zmienia jej receipt/binarki.
+Spec montuje siedem istniejących OUTPUTS osobno RO i wrapper jako osobny
+plik RO pod `/boris/EmbeddedPythonWrapper.py`, bez parent bind `/boris`.
+
+Wrapper upstream nie ma `StdoutCatcher.flush()`, mimo `print(..., flush=True)`
+w stałym scenariuszu. Adapter `fullmag.boris.stdout-flush-noop.v1` dodaje
+wyłącznie pustą metodę flush, zachowując wszystkie pozostałe oryginalne bajty
+CRLF. Dla przypiętej ścieżki GRAPHICS=0 write przechodzi synchronicznie przez
+BPython do `std::cout << text << std::endl`, więc dodatkowego bufora do opróżnienia
+nie ma. Receipt zachowuje osobno oryginalny i wynikowy SHA/rozmiar oraz SHA
+wstawionych bajtów; wynik nie udaje exact original_source. Nie monkeypatchuje
+się scenariusza ani sys.stdout. Worker/scenariusz i wszystkie native/fixed-M/
+headless gates są niezmienione. Runtime identity wiąże runtime_support_sha256.
+Attestation kontenera ma jawny `fullmag.boris.container-attestation.v1`: wszystkie
+pola Id/Image/Config/HostConfig/Mounts/State pozostają związane, a lista Mounts
+jest sortowana kanonicznie, ponieważ Docker zwraca ją w kolejności iteracji mapy.
+Zmiana kolejności nie zmienia znaczenia; zmiana źródła, celu lub RW nadal zmienia
+hash. Dawnych receiptów z hashem niesortowanej listy nie przepisuje się.
+Historyczne failed receipty pozostają bez zmian; nowy tools manifest dotyczy
+wyłącznie nowego run i nie jest fallbackiem po ich odmowie.
+
+Receipt nowej trasy ma `fullmag.boris.managed_run.v2`, a publiczna tożsamość
+`fullmag.boris.runtime.v3` (runtime.v2 jest już zajęte przez starą trasę).
+Wszystkie stare receipty i stary guard pozostają niezmienne. Zmieniony host
+nadal może być odrzucony przez V1; nie wolno przenosić takiego runtime do V2
+przez zmianę JSON. Nowy run musi otrzymać nowe ID i własne tools/input/export.
+Nowy observer rekonstruuje wyłącznie spec V2, ponawia native/tool/container
+bindings, sprawdza surowe wyjścia i niezależnie przelicza summary.
+
+`runtime_package_use` obejmuje cały run aż do terminalnej publikacji.
+Przed dispatch nowy katalog jest rejestrowany przez istniejący mechanizm
+reference roots. Receipt zawiera rozpoznawalne `runtime_job_id`; ponieważ
+nowy schema nie jest jeszcze dopuszczony do automatycznej retencji, istniejący
+planner odmawia usuwania przy takim nieznanym consumerze. Nie rozszerza się
+allowlisty retencji i nie usuwa tej ochrony automatycznie po wieku lub błędzie.
+Po błędzie zatrzymywany może być tylko dokładny własny ID ponownie atestowany
+wobec spec. Błąd atestacji/stop pozostawia zasoby i wymaga przeglądu recovery.
+
+`just observe-managed-boris-nf-v2 <runtime-id>` wyłącznie ponawia weryfikację
+już opublikowanego terminalnego sukcesu; nie uruchamia solve i nie naprawia
+nieukończonej publikacji. Przerwany/nieznany stan zachowuje dane do przeglądu.
+Publiczny `validate_runtime_identity` jawnie kieruje runtime.v3 do nowego
+verifiera; stare wersje zachowują dotychczasowe ścieżki i odmowy.
+
+Kod i interpretowane regresje nie są dowodem rzeczywistego przebiegu N/F.
+Wymagane pozostają rzeczywisty import z poprawionym środowiskiem, wykonanie
+solwera, terminalny wynik, niezależne obserwowanie i porównanie naukowe.
+Status kwalifikacji fizyki pozostaje `NOT VERIFIED`/diagnostic.
+
+### Zatrzymanie atestowanego koordynatora pod blokadą Linux
+
+`container-quiesce` obsługuje przejście dokładnie wskazanego koordynatora do
+stanu `exited`, zachowując pauzę i kolejkę. Najpierw wymaga zakończonego drain:
+API potwierdza pauzę, brak aktywnych zadań i zakończony worker; dodatkowo helper
+sprawdza wszystkie kontenery oraz SQLite tylko do odczytu. Nie czeka na cudzy
+build i nie zatrzymuje workerów. Aktywne lub niepewne zadanie powoduje odmowę.
+
+```text
+python -B scripts/local_runner_cli.py --worktree <checkout> container-quiesce --expected-container-id <pełne-ID> --expected-image-id sha256:<pełne-ID-obrazu> --expected-public-sha256 <hash-publicznego-pliku> --expected-catalog-sha256 <hash-katalogu> --reviewed-source-sha256 <ścieżka=hash>
+```
+
+Powtórz ostatni argument dokładnie dla siedmiu przejrzanych źródeł starego
+obrazu: `fullmag_storage.py`, `local_runner/build_executor.py`,
+`local_runner/coordinator.py`, `local_runner/container_main.py`,
+`local_runner/service.py`, `local_runner/queue.py` i
+`local_runner/container_api.py`. Hashe dotyczą bajtów w starym obrazie;
+bieżący checkout nie stanowi ich dowodu. Duplikaty, brak pliku, obcy hash,
+niezgodna inkarnacja i zmiana konfiguracji są odrzucane przed stop.
+
+Helper `scripts/local_runner/coordinator_lifecycle.py::quiesce_and_stop`
+uzyskuje rzeczywistą blokadę Linux wewnątrz atestowanego kontenera i ponawia
+kontrole pod tą blokadą. Atomowy publiczny receipt poprzedza ARM i żądanie
+stop; zapisuje dokładną tożsamość, nonce/PID blokady i hashe bez tokenu ani
+prywatnych bajtów konfiguracji. Dopiero potwierdzone `exited` oraz zniszczenie
+procesu blokady pozwalają uznać zatrzymanie za wykonane. Helper nie zastępuje
+obrazu i nie aktywuje profilu BORIS.
+
+Niepewny ARM albo stop pozostawia stan wymagający jawnego recovery dokładnie
+tego kontenera. Po ARM proces blokady nie zwalnia jej po EOF ani według wieku.
+Nie zabijaj samego procesu blokady ani nie wznawiaj niepotwierdzonego
+koordynatora. Ponownie sprawdź atestację oraz brak aktywnych zadań, doprowadź
+do potwierdzonego wyjścia tego koordynatora i zachowaj pauzę. Zmiana konfiguracji
+lub kolejki po wyjściu wymaga przeglądu przed restartem.
+
+Dowody: 26 niezależnych interpretowanych regresji helpera PASS. Prywatna
+rzeczywista próba na zamrożonym obrazie potwierdziła HELD, odmowę konkurencyjnego
+Linux `flock` i zwolnienie przed ARM. Odrębny prywatny probe potwierdził
+rzeczywiste ARM/disconnect: receipt
+`root-armed-exec-probe-7bb51aaafca648b78e6f3f5a361ddeef/receipt.json`, SHA256
+`d24aaf1fc5e6e7c9b571f24cd83f359ce036eab9b0a6bef6bc0b9a7811072b29`.
+To dowód prywatnego fence; lifecycle zainstalowanego operatora nadal jest
+**NOT VERIFIED**.
+
+### Jawna wymiana zatrzymanego koordynatora
+
+`container-replace` nadal wymaga działającego starego API. Po udanym quiesce
+stosuj osobny `container-replace-exited`; helper wymaga receiptu quiesce v2
+z prywatnym ograniczonym snapshotem trzech konfiguracji. Snapshot powstaje przed
+ARM; publiczny receipt zawiera wyłącznie jego ścieżkę/hash. Token pozostaje prywatny.
+Zmiany profilu między stop a wymianą mogą obejmować tylko zadeklarowane dodanie lub
+usunięcie BORIS; pozostałe profile FEM, token, port i storage są porównywane z kopią.
+
+```text
+python -B scripts/local_runner_cli.py --worktree <checkout> container-replace-exited --quiesce-receipt <receipt-v2> --quiesce-receipt-sha256 <SHA> --expected-container-id <old-full-ID> --expected-image-id sha256:<old-image-ID> --expected-container-sha256 <current-public-SHA> --expected-build-config-sha256 <current-catalog-SHA> --image-id sha256:<new-image-ID> --image-build-receipt <managed-image-receipt> --image-build-receipt-sha256 <SHA> --profile-delta unchanged
+```
+
+Dla `enable-boris-cpu` lub `disable-boris-cpu` podaj też
+`--expected-boris-entry-sha256`. Zmianę profilu przygotowuje wcześniejsza konfiguracja
+offline; sama wymiana zmienia wyłącznie image_id pliku publicznego. Sprawdza rzeczywisty
+obraz, RootFS/Entrypoint i źródłowy readback readonly/network-none jako UID 65532.
+Nowy frozen obraz musi zawierać guard runtime; starsze obrazy nie spełniają kontraktu.
+
+Oddzielny prywatny `index/local-runner-exited-replacement/pending.json` poprzedza
+rm/public-write/create/start. Pod istniejącym Linux coordinator.lock blokuje claim;
+API odmawia resume (`resumed=false`, bez usunięcia pauzy) oraz przyjmowania zadań.
+Strażnik blokuje też zwykłe hostowe start/configure/replace i transakcje profilu.
+Uszkodzony pending również blokuje; startup ani upływ czasu go nie usuwają.
+Diagnostyka pozostaje dostępna. Kolejka jest odczytywana, porównywana w całości i
+pozostaje niezmieniona; helper nie zatrzymuje workerów ani nie odtwarza SQLite.
+
+Fazy trwałe: PREPARED, REMOVE_REQUESTED, OLD_REMOVED, PUBLIC_UPDATE_REQUESTED,
+PUBLIC_UPDATED, CREATE_REQUESTED, CREATED, START_REQUESTED, STARTED_PAUSED,
+SUCCEEDED_PAUSED. Terminalny receipt powstaje przed usunięciem pending, które jest
+ostatnim commit point. Sukces pozostawia nowego koordynatora w pauzie.
+
+```text
+python -B scripts/local_runner_cli.py --worktree <checkout> container-recover-exited-replacement --transaction-id <ID>
+```
+
+Recovery kontynuuje wyłącznie do przodu. Utracony wynik create wymaga dodatkowego
+`--expected-new-container-id <pełne-ID>` i pełnej atestacji; sama nazwa nie dowodzi
+własności. Zmiana konfiguracji, pauzy, kolejki lub obcy kontener zatrzymuje recovery
+z zachowaniem pending. Nie ma automatycznego resume, rollbacku DB ani restartu starego
+obrazu. Powrót do starego obrazu wymaga osobnego kontrolowanego przejścia.
+Regresje interpretowane nie kwalifikują aktualizacji operatora: rzeczywista wymiana,
+nowy runtime guard i lifecycle zainstalowanego runnera pozostają **NOT VERIFIED**.
+
+### Wyłączenie profilu BORIS i odzyskiwanie transakcji offline
+
+`container-disable-boris-cpu` usuwa wyłącznie aktywację `boris-cpu-v1`
+z pary konfiguracji publicznej/prywatnej oraz z katalogu obrazów. Wymaga
+istniejącego, dokładnie atestowanego koordynatora w stanie `exited`, pełnego
+odczytu kolejki bez aktywnych zadań i bez oczekujących zadań BORIS oraz braku
+aktywnych workerów Fullmaga. Oczekujące zadania FEM pozostają w kolejce.
+Polecenie nie zatrzymuje, nie zastępuje ani nie uruchamia kontenera.
+
+```text
+python -B scripts/local_runner_cli.py --worktree <checkout> container-disable-boris-cpu --expected-container-sha256 <sha256-publicznego-pliku> --expected-build-config-sha256 <sha256-katalogu> --expected-boris-entry-sha256 <sha256-wpisu-BORIS>
+```
+
+Wszystkie trzy argumenty są pełnymi hashami SHA-256. Pierwszy oznacza hash
+surowych bajtów `index/local-runner-container.json`, drugi hash surowych bajtów
+`index/local-runner-build-config.json`, a trzeci hash kanonicznego wpisu
+`profiles["boris-cpu-v1"]`, obliczany przez
+`scripts/local_runner/boris_transition.py::entry_sha`. Hash wpisu używa JSON
+z posortowanymi kluczami, separatorami `,` i `:` oraz bez NaN. Nazwa pierwszego
+argumentu nie oznacza identyfikatora kontenera Docker. Nie przekazuj tokenu
+ani pliku prywatnego w argumentach lub logach.
+
+Przed zapisem powstaje prywatny journal
+`index/local-runner-boris-transition/pending.json` z dokładnymi bajtami
+przed/po i tożsamością transakcji oraz kontenera. Zawiera dane prywatnej
+konfiguracji: na Windows katalog otrzymuje ACL bieżącego użytkownika i SYSTEM,
+a na POSIX prawa 0700. Nie publikuj journala. Każdy zapis jest sprawdzany;
+wyjątek powoduje próbę cofnięcia wyłącznie własnych zmian. Przerwana lub
+niedająca się cofnąć transakcja pozostawia `pending.json`, który blokuje
+konfigurację, start, zastąpienie kontenera oraz wybór profilu buildu.
+
+```text
+python -B scripts/local_runner_cli.py --worktree <checkout> container-recover-boris-profile --transaction-id <dokładne-32-znakowe-ID> --direction before
+python -B scripts/local_runner_cli.py --worktree <checkout> container-recover-boris-profile --transaction-id <dokładne-32-znakowe-ID> --direction after
+```
+
+Wybierz jeden kierunek: `before` odtwarza stan sprzed usunięcia, `after`
+domyka usunięcie. Recovery wymaga tej samej zatrzymanej inkarnacji kontenera,
+zgodnego operatora, ważnego journala i bieżących bajtów należących do tej
+transakcji. Obca zmiana blokuje recovery i pozostaje nietknięta. Token,
+obraz koordynatora, port, inne profile i kolejka zadań są zachowywane;
+SQLite nie jest odtwarzane z kopii. Receipt powstaje przed usunięciem pending.
+Synchronizacja plików nie stanowi dowodu odporności Windows na utratę zasilania.
+
+Dowód źródłowy: 14 interpretowanych regresji transakcji i recovery PASS,
+w tym przerwanie po każdym z trzech zapisów w obu kierunkach, obce zmiany,
+niezgodna inkarnacja, aktywne zadania/workery i blokowanie konsumentów pending.
+Rzeczywiste wyłączenie/odzyskanie konfiguracji operatora i przejście starego
+koordynatora na nowy obraz pozostają **NOT VERIFIED**. Próba na prywatnym
+pliku wykazała, że Windows `msvcrt.locking` oraz kontenerowe Linux `flock`
+nie wykluczają się na tym hoście; nie używaj blokady Windows jako dowodu
+zatrzymania kontenerowego claim. Te polecenia obsługują dopiero stan offline.
 
 ## Dane, zakończenie i retencja
 
@@ -388,6 +727,20 @@ właściwego kontenera nie wymaga usuwania danych. Osobny browser smoke musi
 potwierdzić działanie UI; zdrowe `/healthz` nie jest kwalifikacją solvera,
 fizyki ani wydania.
 
+Tryb sesji tymczasowej: `just run-managed-browser-snapshot-ram <pełny-job-id> <pełny-commit> <source-digest> <native-snapshot-sha256> 3106` stosuje te same walidatory pakietu i źródeł, ale umieszcza `/state` w prywatnym tmpfs o limicie 1 GiB. Hostowy bind stanu nie jest wtedy montowany; źródła i pakiet pozostają tylko do odczytu. Launcher sprawdza obecność zadeklarowanego tmpfs i jego rzeczywisty typ. Domyślny tryb z bindem pozostaje bez zmian. Port 3197 jest odrzucany, ponieważ należy do instancji użytkownika.
+
+Receipt oznacza ten wariant jako `session_storage: disposable_tmpfs` i `durable_session_storage_qualified: false`. Dokumenty uruchomienia pozostają w storage, ale dane sesji znikają po zatrzymaniu kontenera. Tryb służy sprawdzaniu własnego workspace/API; nie kwalifikuje trwałego zapisu ani cold-load po restarcie kontenera. Sam start nie potwierdza działania UI ani fizyki.
+
+Sesja RAM nie spełnia istniejącego wyjątku koordynatora pozwalającego na build przy działającym managed browser z hostowym bindem stanu. Przed kolejnym buildem należy zakończyć wyłącznie tę własną sesję, sprawdzając container ID i projekt Compose z receipt; nie zmieniać współdzielonego koordynatora ani cudzych kontenerów. Weryfikacja startu tego wariantu z rzeczywistym pakietem pozostaje **NOT VERIFIED** do czasu zachowania udanego receipt uruchomienia.
+
+### Bieżący frontend z przypiętym API RAM
+
+`just verify-antenna-workspace-browser` uruchamia niezmienną kopię bieżącego frontendu na porcie 3274. Wymaga `FULLMAG_MANAGED_BROWSER_RECEIPT` wskazującego udany receipt własnego `run-managed-browser-snapshot-ram` oraz jawnego `FULLMAG_MANAGED_BROWSER_RECEIPT_SHA256`. Zależności frontendu podlegają istniejącej walidacji własności; dla przypiętego etapu instalacji trzeba przekazać również `FULLMAG_BROWSER_DEPENDENCY_BINDING` i `FULLMAG_BROWSER_DEPENDENCY_BINDING_SHA256`. Recepta niczego nie instaluje ani nie buduje solvera.
+
+Guard ponownie sprawdza pakiet, kapsułę źródeł, obraz, dokładny kontener, projekt Compose, loopback, mounty, limity i tmpfs. Pierwsza sesja musi być pusta; smoke używa `replace_current: false`. HTTP i WebSocket kierowane są do tej API, a każde żądanie jest przypięte identyfikatorem jej procesu. Po przebiegu następuje ponowna atestacja. Bieżący frontend oraz pakiet API mają osobno zapisane tożsamości źródeł; pakietowany statyczny UI nie jest dowodem dla nowszych zmian frontendu.
+
+Scenariusz korzysta z prawdziwego workspace, klienta API i Inspectora, bez podmieniania odpowiedzi: tworzy mikrostrip, zapisuje pełny obwód z oboma mostkami i źródłem napięcia, dodaje referencję do Study oraz osobno otwiera jej Inspector. Sprawdza również WebGL i zakres żądań. Nie wykonuje Prepare/Start ani solve; nie kwalifikuje V/J/H, fizyki lub trwałości danych. Runner kończy wyłącznie własny Next i przeglądarkę. Kontener API pozostaje zasobem jego właściciela, który po zachowaniu dowodów kończy dokładnie ten kontener przed następnym buildem.
+
 ### Eksport OpenAPI z dokładnego snapshotu
 
 `just export-runner-openapi <job-id> <pełny-commit>` pozostaje trasą dla
@@ -507,6 +860,39 @@ bundle i porównać V/H z niezależnym wzorcem. Receipt zachowuje
 Kontener i eksport są zachowane także po błędzie; observer nie startuje
 nowego solve ani nie usuwa zasobów. Utrata RAM po zakończeniu kontenera jest
 zamierzona; eksport nie dowodzi odporności sesji na utratę zasilania.
+
+### Zamrożony obraz koordynatora
+
+`just runner-coordinator-base` pobiera wyłącznie bazę przypiętą digestem w
+`Dockerfile.coordinator`. Jest to jawna operacja sieciowa; zapisuje log i terminalny
+receipt przez resolver. Fizyczny dysk danych Dockera musi być zgodny z polityką
+storage hosta. Przygotowanie i build obrazu pozostają offline.
+
+`just runner-coordinator-context <pełny-SHA-commita>` zamraża dokładne wejścia
+COPY z jawnego commita. Wynik podaje prywatny kontekst oraz SHA256 `context.json`.
+`just runner-coordinator-image-frozen <kontekst> <SHA256-context.json> <tag>`
+wymaga taga `fullmag/build-runner:*`, sprawdza niezmienność kontekstu i lokalnej
+bazy, buduje bez sieci i pull, a następnie odczytuje rzeczywiste pliki z obrazu.
+Dodatkowy COPY manifestu istnieje tylko w wygenerowanym Dockerfile kontekstu.
+
+Helper `scripts/local_runner/coordinator_image.py` używa bounded logs, blokady
+kontekstu i terminalnego receiptu. Regresje interpretowane w
+`scripts/test_coordinator_image.py` nie stanowią dowodu buildu obrazu.
+Receptury nie uruchamiają Application, nie zmieniają operatora, profili ani kolejki
+oraz nie kompilują solvera. `SUCCEEDED_IMAGE_ONLY` oznacza wyłącznie zweryfikowany
+obraz; aktywacja i wycofanie wymagają odrębnych kontroli istniejącego runnera.
+Historyczne `runner-coordinator-image` pozostaje receptą diagnostyczną.
+
+Dowód z 11.10.2026: 24 regresje interpretowane PASS; rzeczywiste receptury
+pobrania bazy, capture commita `96a648d828c6ea152d2dd294cf3407a193ad714f`
+i offline build/readback zakończyły się exit 0. Obraz
+`sha256:d60a214fba8d4b146d9ab09315d5c018e38c7c0a10d30a35369796a5361b723e`
+przeszedł osobny import jako UID 65532, readonly, bez sieci i mountów:
+Python 3.11.15, wszystkie siedem profili katalogu, BORIS domyślnie wyłączony.
+Receipt importu ma SHA256
+`26fa456a074670742a1edd9dc6aaa99f5a37251922879b11cb20151f88713089`.
+To dowód producenta i importów dla wskazanego commita; nie obejmuje późniejszej
+transakcji wycofania profilu ani wdrożenia tego obrazu w działającym runnerze.
 
 ### Pozostałe ograniczenia
 
@@ -663,3 +1049,49 @@ zachowania zgodności źródeł i pakietu; nie wolno nadpisywać działających 
 nowszą albo starszą kopią bez sprawdzenia diffu. GHA wykonuje regresję SQLite,
 testy Node oraz lokalną fixture przeglądarki serwującą `ui_dist`. Fixture nie
 zgłasza prawdziwych buildów ani nie usuwa danych.
+
+### Uzgodnienie desired z już działającą listą profili
+
+`container-reconcile-desired-profiles` jest osobną operacją operatora, wymagającą
+przeglądu przed wykonaniem. Nie aktywuje profilu w procesie i nie rozszerza jego
+uprawnień: ustawia tylko `allowed_profiles` public/secret na dokładny zbiór z
+uwierzytelnionego health atestowanej inkarnacji. Każda nazwa musi należeć do
+`container_client.CATALOG_PROFILES`; obecne desired musi być podzbiorem observed.
+Kolejność zapisu to `ALLOWED_PROFILES`, potem pozostałe nazwy sorted. Nie ma
+wbudowanej listy sześciu profili ani flagi włączającej dodatkowe profile SLEPc.
+
+Przed operacją wymagane są completed pause/drain, trwały marker pauzy, pusty
+aktywny slot/lease, brak innych workerów i pending transakcji. Nie wykonuj jej
+podczas buildu. Przygotuj do przeglądu pełne ID kontenera/obrazu, instance_id z
+health, SHA256 surowych bajtów public config/katalogu oraz observed SHA256:
+`sha256(json.dumps(sorted(observed), separators=(',', ':')).encode('utf-8'))`.
+Odczyty muszą dotyczyć tej samej atestowanej instancji. Nigdy nie publikuj tokenu
+ani zawartości secret; token nie jest argumentem CLI.
+
+```text
+python -B scripts/local_runner_cli.py --worktree <checkout> container-reconcile-desired-profiles --expected-container-id <full-ID> --expected-image-id sha256:<image-ID> --expected-public-sha256 <public-SHA> --expected-catalog-sha256 <catalog-SHA> --expected-observed-sha256 <observed-SHA> --expected-instance-id <health-instance-ID>
+```
+
+Operacja dwa razy sprawdza atestację, completed drain, znany zbiór observed,
+instance_id i niezmienioną kolejkę/inwentarz oraz CAS wszystkich trzech plików.
+Katalog pozostaje identyczny bajtowo; token, port, obraz i pozostałe pola są
+zachowane. Pod istniejącymi lockami zapisuje prywatny journal
+`fullmag.runner.desired-profile-reconcile.v1` w tym samym pending miejscu co
+transakcje BORIS. Journal zawiera sekret i podlega istniejącej ochronie ACL;
+nie publikuj go. Wynik zawiera tylko ID transakcji i hashe public/catalog.
+
+Awaria między zapisami secret/public pozostawia pending, który blokuje zwykłe
+load/start/configure i wykonawców. Przy zwykłym wyjątku operacja próbuje rollback;
+gdy rollback też zawiedzie, pending pozostaje. Istniejący jawny recovery rozpoznaje
+nowy schema i pozwala **wyłącznie `before`**, z exact ID transakcji/kontenera,
+trwałą pauzą, brakiem aktywnych lub niepewnych lease i ochroną przed obcą zmianą plików:
+
+```text
+python -B scripts/local_runner_cli.py --worktree <checkout> container-recover-boris-profile --transaction-id <exact-ID> --direction before
+```
+
+Historyczna nazwa komendy recovery jest współdzielona; `after` dla reconciliation
+jest odrzucane. Recovery starego schema nadal dopuszcza wyłącznie swoją deltę
+usunięcia BORIS. Nie edytuj pending ani pary config ręcznie. Uzgodnienie desired
+nie zastępuje quiesce/frozen-image upgrade, nie osłabia `replace_exited::_delta`
+i nie jest dowodem kwalifikacji buildu ani fizyki.

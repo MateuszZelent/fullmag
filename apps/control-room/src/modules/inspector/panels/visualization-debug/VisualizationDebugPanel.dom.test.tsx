@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { QuantityCatalogResource } from "@/kernel/api/apiTypes";
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { EventBus } from "@/kernel/events/EventBus";
@@ -347,17 +349,19 @@ describe("VisualizationDebugPanel mounted interaction", () => {
 
     await act(async () => {
       root.render(
-        <VisualizationDebugPanelView
-          createActions={() => ({
-            copyLog: async () => undefined,
-            copyResourceKey: async () => undefined,
-            copySnapshot: async () => undefined,
-            dispose: () => undefined,
-            exportJson: () => undefined,
-            rawJson: () => "{}",
-          })}
-          model={model}
-        />,
+        <KernelContext.Provider value={makeKernel()}>
+          <VisualizationDebugPanelView
+            createActions={() => ({
+              copyLog: async () => undefined,
+              copyResourceKey: async () => undefined,
+              copySnapshot: async () => undefined,
+              dispose: () => undefined,
+              exportJson: () => undefined,
+              rawJson: () => "{}",
+            })}
+            model={model}
+          />
+        </KernelContext.Provider>,
       );
     });
 
@@ -418,7 +422,36 @@ function makeKernel(): KernelApi {
   const realtimeConnectionSnapshot = { disrupted: false, status: "idle" } as const;
   return {
     api: {
+      resourceCacheScope: randomUUID(),
       data: {
+        quantities: {
+          catalog: async (): Promise<QuantityCatalogResource> => ({
+            schema_version: "2.0.0",
+            quantities: ["m", "h_demag"].map((id) => ({
+              capability_state: "available",
+              description: "Synthetic lifecycle fixture field",
+              domain: "magnetic",
+              id,
+              interactive_preview: false,
+              label: id === "m" ? "Magnetization" : "Demagnetizing field",
+              location: "node",
+              materializable: false,
+              materialization_state: "materialized",
+              n_comp: 3,
+              normalization_hint: "none",
+              publication_state: "interactive",
+              renderable: true,
+              requestable: true,
+              shape: "vector",
+              solver_capability: "available",
+              supports_export: true,
+              supports_history: true,
+              supports_preview_2d: false,
+              supports_preview_3d: true,
+              unit: "A/m",
+            })),
+          }),
+        },
         fields: {
           availability: async () => ({
             carrier_id: "fixture:object:magnet",

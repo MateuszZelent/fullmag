@@ -1,28 +1,38 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
+  "document": {
+    "path": "public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md",
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+  },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "The public algorithm is present, but native executed-device qualification is lane-specific."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "tangent_plane_implicit has no GPU implementation; forced GPU execution fails closed (frozen_spins_fem_gpu_tpi_unqualified)."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."}
   ],
   "equations": [
-    {"id": "eq-tangent-projector", "symbols": ["P", "I", "mu"], "sources": ["relaxation-contract"]},
-    {"id": "eq-tangent-field", "symbols": ["Hperp", "P", "H_eff"], "sources": ["relaxation-contract"]}
+    {"id": "eq-tangent-projector", "symbols": ["P", "I", "mu"], "sources": ["relaxation-contract", "fem-tpi-step"]},
+    {"id": "eq-tangent-field", "symbols": ["Hperp", "P", "H_eff", "mu"], "sources": ["relaxation-contract", "fem-tpi-step"]},
+    {"id": "eq-tangent-implicit-system", "symbols": ["M_perp", "tau", "K_ex_perp", "w", "r_perp", "H_eff", "mu"], "sources": ["fem-tpi-step"]}
   ],
   "symbols": [
     {"id": "mu", "latex": "\\mu_i", "meaning": "normalized magnetization at point i", "si_unit": "1"},
     {"id": "P", "latex": "P_i", "meaning": "tangent-space projector", "si_unit": "1"},
     {"id": "I", "latex": "I", "meaning": "three-dimensional identity tensor", "si_unit": "1"},
     {"id": "H_eff", "latex": "H_{\\mathrm{eff},i}", "meaning": "effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "Hperp", "latex": "H_i^{\\perp}", "meaning": "projected effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"}
+    {"id": "Hperp", "latex": "H_i^{\\perp}", "meaning": "projected effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "M_perp", "latex": "M_{\\perp}", "meaning": "tangent-space lumped/consistent mass operator", "si_unit": "\\mathrm{J}"},
+    {"id": "K_ex_perp", "latex": "K_{\\mathrm{ex},\\perp}", "meaning": "tangent-space projected exchange stiffness operator", "si_unit": "\\mathrm{J\\,s^{-1}}"},
+    {"id": "w", "latex": "w", "meaning": "two-component tangent-frame increment coordinates", "si_unit": "1"},
+    {"id": "r_perp", "latex": "r_{\\perp}", "meaning": "tangent-projected energy-gradient residual", "si_unit": "\\mathrm{J}"},
+    {"id": "tau", "latex": "\\tau", "meaning": "implicit tangent-plane trial step size", "si_unit": "1"}
   ],
   "sources": [
-    {"id": "relaxation-contract", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public relaxation algorithm validation and IR lowering."},
-    {"id": "relax-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Ordered stage capture and validation."}
+    {"id": "relaxation-contract", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public relaxation algorithm validation and IR lowering"},
+    {"id": "relax-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Ordered stage capture and validation"},
+    {"id": "fem-tpi-step", "path": "backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp", "symbol": "run_tangent_plane_implicit_step", "responsibility": "Native FEM CPU/MFEM tangent-plane implicit linear solve, retraction, and Armijo gate"}
   ],
   "public_api": {"parameters": [
-    {"python": "Relaxation.algorithm", "type": "str", "default": "llg_overdamped", "si_unit": "1", "validation": "supported identifier; unknown names rejected", "meaning": "relaxation algorithm request", "backend_support": "FEM contract; FDM rejects", "problem_ir": "study.relaxation.algorithm"},
+    {"python": "Relaxation.algorithm", "type": "str", "default": "llg_overdamped", "si_unit": "1", "validation": "supported identifier; unknown names rejected", "meaning": "relaxation algorithm request", "backend_support": "FEM CPU extended lane for `tangent_plane_implicit`; FDM/GPU rejected", "problem_ir": "study.relaxation.algorithm"},
     {"python": "RelaxStop.torque_tolerance_apm", "type": "float | None", "default": "0.7957747154594767", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "positive when set", "meaning": "torque stopping threshold", "backend_support": "FEM/FDM relaxation stop contract", "problem_ir": "study.relaxation.stop.torque_tolerance_apm"},
     {"python": "RelaxStop.max_steps", "type": "int | None", "default": "50000", "si_unit": "1", "validation": "positive integer when set", "meaning": "iteration limit", "backend_support": "FEM/FDM relaxation stop contract", "problem_ir": "study.relaxation.stop.max_steps"}
   ]}

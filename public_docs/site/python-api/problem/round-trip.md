@@ -37,10 +37,11 @@ without changing requested intent. Validation failures happen at authoring or pl
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `Problem.to_ir.requested_backend` | `BackendTarget | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested solver-family intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.requested_backend` |
-| `Problem.to_ir.execution_mode` | `ExecutionMode | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested execution-mode intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_mode` |
-| `Problem.to_ir.execution_precision` | `ExecutionPrecision | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested precision intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_precision` |
+| `Problem.to_ir.requested_backend` | `BackendTarget \| None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested solver-family intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.requested_backend` |
+| `Problem.to_ir.execution_mode` | `ExecutionMode \| None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested execution-mode intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_mode` |
+| `Problem.to_ir.execution_precision` | `ExecutionPrecision \| None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested precision intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_precision` |
 | `RuntimeSelection.resolved(...)` | method | required | $1$ | Backend/mode/precision values are normalized against the selection. | Resolved runtime descriptor. | FEM/FDM CPU/GPU; capability checks remain authoritative. | `backend_policy` |
+
 | Python | Meaning |
 |---|---|
 | `Problem.to_ir(requested_backend=..., execution_mode=..., execution_precision=...)` | Canonical lowering with explicit runtime intent |
@@ -140,5 +141,5 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInsp
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Canonical problem lowering entrypoint. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Canonical problem lowering entrypoint. | Source-map validator and focused API tests |
-| Requested runtime descriptor normalization. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Requested runtime descriptor normalization. | Source-map validator and focused API tests |
+| Canonical problem lowering entrypoint. | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | Canonical problem lowering entrypoint. | Source-map validator and focused API tests |
+| Requested runtime descriptor normalization. | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Requested runtime descriptor normalization. | Source-map validator and focused API tests |

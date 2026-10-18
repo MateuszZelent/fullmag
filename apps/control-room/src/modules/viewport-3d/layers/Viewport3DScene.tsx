@@ -135,6 +135,8 @@ import {
 } from "./FdmCuboidLayer";
 import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
+import { ArtifactFieldLayer } from "./ArtifactFieldLayer";
+import type { ArtifactFieldOverlayModel } from "../model/artifactFieldOverlayModel";
 import { AntennaFieldLayer } from "./AntennaFieldLayer";
 import type { AntennaFieldOverlayModel } from "../model/antennaFieldOverlayModel";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
@@ -162,7 +164,11 @@ import {
 } from "../viewport3dVisualProfile";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { clampNumber, sameTuple3 } from "../viewport3dMath";
-import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
+import {
+  cancelViewport3DCameraGesture,
+  createViewport3DCameraGestureRef,
+  viewport3DCameraGestureEpoch,
+} from "./viewport3DCameraGesture";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
 import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
@@ -177,6 +183,7 @@ import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
 interface Viewport3DSceneProps {
+  artifactFieldOverlay?: ArtifactFieldOverlayModel | null;
   antennaFieldOverlay?: AntennaFieldOverlayModel | null;
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   sessionIdentity?: SessionResourceIdentity | null;
@@ -1658,6 +1665,7 @@ function Viewport3DInteractionAndHudStack({
       />
       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
         <OrientationHudLayer
+          cameraGestureRef={cameraGestureRef}
           colors={colors}
           hslReferenceVisible={hslReferenceVisible}
           onCameraChange={onCameraChange}
@@ -1735,6 +1743,7 @@ function useViewport3DRenderAdoptionFrame({
 }
 
 export function Viewport3DScene({
+  artifactFieldOverlay,
   antennaFieldOverlay,
   adoptionRegistry,
   sessionIdentity,
@@ -1845,6 +1854,13 @@ export function Viewport3DScene({
     clip: Viewport3DCameraClip;
   } | null>(null);
   const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
+  useEffect(() => () => {
+    const epoch = viewport3DCameraGestureEpoch(cameraGestureRef);
+    // Cancel rather than dispose: StrictMode can replay effects with this ref.
+    if (cancelViewport3DCameraGesture(cameraGestureRef, epoch)) {
+      onCameraInteractionEnd?.(epoch);
+    }
+  }, [cameraGestureRef, onCameraInteractionEnd]);
   const [moveGestureActive, setMoveGestureActive] = useState(false);
   const handleMoveGestureActiveChange = useCallback((active: boolean) => {
     onMoveGestureActiveChange?.(active);
@@ -2022,6 +2038,7 @@ export function Viewport3DScene({
 
   return (
     <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
+      <ArtifactFieldLayer adoptionRegistry={adoptionRegistry} model={artifactFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <AntennaFieldLayer model={antennaFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />

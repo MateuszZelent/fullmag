@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
-import type { SceneSpinTransport, TransportValidationRequest, TransportValidationResponse } from "@/kernel/api/apiTypes";
+import type { SceneResource, SceneSpinTransport, TransportValidationRequest, TransportValidationResponse } from "@/kernel/api/apiTypes";
 import {
   authoringWriteOptions,
   captureAuthoringMutationFence,
@@ -16,6 +16,8 @@ import {
   invalidateSpinAuthoringResources,
   useSpinInterfacesResource,
   useSpinTransportsResource,
+  useSpinAuthoringGeometryResource,
+  useSpinInterfaceMeshEvidenceResource,
 } from "@/kernel/resources/spinAuthoringResources";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import {
@@ -23,6 +25,7 @@ import {
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { getTransportAuthoringCapability } from "@/shared/domain/physics/transportAuthoringCapabilities";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -31,142 +34,17 @@ import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
 import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
-
-interface InterfaceDraft {
-  absorption: string;
-  ferromagnetObject: string;
-  ferromagnetRegion: string;
-  formulaVersion: string;
-  gDown: string;
-  gI: string;
-  gR: string;
-  gN: string;
-  gF: string;
-  gLattice: string;
-  gUp: string;
-  id: string;
-  kind: "transparent" | "mixing_conductance";
-  normalObject: string;
-  normalRegion: string;
-  normalToFerromagnet: string;
-  normalAToB: string;
-  sideAObject: string;
-  sideARegion: string;
-  sideBObject: string;
-  sideBRegion: string;
-}
-
-const DEFAULT_INTERFACE: InterfaceDraft = {
-  absorption: "transverse_absorption.fullmag.v1",
-  ferromagnetObject: "",
-  ferromagnetRegion: "",
-  formulaVersion: "magnetoelectronic.fullmag.v2",
-  gDown: "0",
-  gI: "0",
-  gR: "0",
-  gN: "",
-  gF: "",
-  gLattice: "",
-  gUp: "0",
-  id: "interface",
-  kind: "transparent",
-  normalObject: "",
-  normalRegion: "",
-  normalToFerromagnet: "1, 0, 0",
-  normalAToB: "1, 0, 0",
-  sideAObject: "",
-  sideARegion: "",
-  sideBObject: "",
-  sideBRegion: "",
-};
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function text(value: unknown): string { return typeof value === "string" ? value : value === undefined || value === null ? "" : String(value); }
-function vectorText(value: unknown): string { return Array.isArray(value) ? value.join(", ") : ""; }
-function finite(value: string, label: string): number { const parsed = Number(value); if (!Number.isFinite(parsed)) throw new Error(`${label} must be finite.`); return parsed; }
-function vector(value: string, label: string): number[] { const parsed = value.split(/[\s,]+/).filter(Boolean).map(Number); if (parsed.length !== 3 || parsed.some((entry) => !Number.isFinite(entry))) throw new Error(`${label} requires three finite components.`); return parsed; }
-
-function region(value: unknown) {
-  const item = record(value);
-  return { object: text(item?.object_id), region: text(item?.region_id) };
-}
-
-function interfaceDraft(value: unknown): InterfaceDraft {
-  const item = record(value);
-  if (!item || (item.kind !== "transparent" && item.kind !== "mixing_conductance")) return DEFAULT_INTERFACE;
-  const sideA = region(item.side_a);
-  const sideB = region(item.side_b);
-  const normal = region(item.normal_side);
-  const ferromagnet = region(item.ferromagnet_side);
-  return {
-    absorption: text(item.absorption),
-    ferromagnetObject: ferromagnet.object,
-    ferromagnetRegion: ferromagnet.region,
-    formulaVersion: text(item.formula_version),
-    gDown: text(item.g_down_Spm2),
-    gI: text(item.g_i_Spm2),
-    gR: text(item.g_r_Spm2),
-    gN: text(record(item.spin_memory_loss)?.g_n_Spm2),
-    gF: text(record(item.spin_memory_loss)?.g_f_Spm2),
-    gLattice: text(record(item.spin_memory_loss)?.g_lattice_Spm2),
-    gUp: text(item.g_up_Spm2),
-    id: text(item.id),
-    kind: item.kind,
-    normalObject: normal.object,
-    normalRegion: normal.region,
-    normalToFerromagnet: vectorText(item.normal_to_ferromagnet),
-    normalAToB: vectorText(item.normal_a_to_b),
-    sideAObject: sideA.object,
-    sideARegion: sideA.region,
-    sideBObject: sideB.object,
-    sideBRegion: sideB.region,
-  };
-}
-
-function regionRef(objectId: string, regionId: string) {
-  if (!objectId.trim()) throw new Error("Region object id is required.");
-  return { object_id: objectId, ...(regionId.trim() ? { region_id: regionId } : {}) };
-}
-
-function buildInterface(draft: InterfaceDraft): unknown {
-  if (!draft.id.trim()) throw new Error("Interface id is required.");
-  return draft.kind === "transparent" ? {
-    id: draft.id,
-    kind: draft.kind,
-    side_a: regionRef(draft.sideAObject, draft.sideARegion),
-    side_b: regionRef(draft.sideBObject, draft.sideBRegion),
-    normal_a_to_b: vector(draft.normalAToB, "Interface orientation"),
-  } : {
-    id: draft.id,
-    kind: draft.kind,
-    normal_side: regionRef(draft.normalObject, draft.normalRegion),
-    ferromagnet_side: regionRef(draft.ferromagnetObject, draft.ferromagnetRegion),
-    normal_to_ferromagnet: vector(draft.normalToFerromagnet, "Interface orientation"),
-    g_up_Spm2: finite(draft.gUp, "g_up"),
-    g_down_Spm2: finite(draft.gDown, "g_down"),
-    g_r_Spm2: finite(draft.gR, "g_r"),
-    g_i_Spm2: finite(draft.gI, "g_i"),
-    formula_version: draft.formulaVersion,
-    absorption: draft.absorption,
-    ...(draft.gN.trim() || draft.gF.trim() || draft.gLattice.trim() ? {
-      spin_memory_loss: {
-        g_n_Spm2: finite(draft.gN, "g_n"),
-        g_f_Spm2: finite(draft.gF, "g_f"),
-        g_lattice_Spm2: finite(draft.gLattice, "g_lattice"),
-        formula_version: "sml_reservoir.fullmag.v2",
-      },
-    } : {}),
-  };
-}
+import { buildInterface, interfaceDraft, record, region, reconcileInterfaceDraft, type InterfaceDraft } from "./SpinInterfaceInspectorModel";
+import { transportScopeOptions } from "./TransportCollectionFieldsModel";
+import { verifySpinInterfaceMeshOrientation } from "./SpinInterfaceMeshEvidenceModel";
+import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 
 export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const { api, commands, resources } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const projected = useSpinInterfacesResource();
+  const geometry = useSpinAuthoringGeometryResource();
   const transports = useSpinTransportsResource();
   const interfaceRef = selection.ref?.type === "spin-interface" ? selection.ref : null;
   const ref = interfaceRef &&
@@ -175,7 +53,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     : null;
   const [localOwnerId, setLocalOwnerId] = useState("");
   const [localInterfaceId, setLocalInterfaceId] = useState("");
-  const ownerId = ref?.spinInterfaceOwnerId ?? localOwnerId;
+  const ownerId = interfaceRef?.spinInterfaceOwnerId ?? localOwnerId;
   const selected = useMemo(() => {
     const items = projected.data?.items ?? [];
     if (ref?.spinInterfaceIndex !== undefined) return items[ref.spinInterfaceIndex] ?? null;
@@ -192,25 +70,52 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     projected.data?.items,
     ref,
   ]);
-  const baseDraft = interfaceDraft(selected?.interface);
-  const draftKey = `${sessionScopeKey ?? "no-session"}:${ownerId}:${selected?.interface_id ?? "new"}:${JSON.stringify(baseDraft)}`;
-  const [draftState, setDraftState] = useState({ key: draftKey, value: baseDraft });
-  const draft = draftState.key === draftKey ? draftState.value : baseDraft;
+  const initialDraft = interfaceDraft(selected?.interface);
+  const addressedId = ref?.spinInterfaceId ?? (ref?.spinInterfaceIndex !== undefined ? `index:${ref.spinInterfaceIndex}` : localInterfaceId || selected?.interface_id || null);
+  const draftKey = JSON.stringify([sessionScopeKey, ownerId, addressedId ?? "new"]);
+  const [draftState, setDraftState] = useState<{ key: string; value: InterfaceDraft; baseline: InterfaceDraft; ackRevision: number | null }>({ key: draftKey, value: initialDraft, baseline: initialDraft, ackRevision: null });
+  const serverDraft = !selected && draftState.key === draftKey ? draftState.baseline : initialDraft;
+  const targetUnavailable = Boolean(addressedId && !selected && projected.status === "ready" && (draftState.key !== draftKey || draftState.ackRevision === null || (projected.data?.scene_revision ?? -1) >= draftState.ackRevision));
+  const baseDraft = draftState.key === draftKey && draftState.ackRevision !== null && (projected.data?.scene_revision ?? -1) < draftState.ackRevision ? draftState.baseline : serverDraft;
+  const resolved = draftState.key === draftKey ? reconcileInterfaceDraft(baseDraft, draftState.value, draftState.baseline) : { draft: baseDraft, conflicts: [] };
+  const draft = resolved.draft;
+  const activeDraftKey = useRef(draftKey);
+  useLayoutEffect(() => { activeDraftKey.current = draftKey; }, [draftKey]);
+  const sideA = draft.kind === "transparent" ? { objectId: draft.sideAObject, regionId: draft.sideARegion } : { objectId: draft.normalObject, regionId: draft.normalRegion };
+  const sideB = draft.kind === "transparent" ? { objectId: draft.sideBObject, regionId: draft.sideBRegion } : { objectId: draft.ferromagnetObject, regionId: draft.ferromagnetRegion };
+  const meshEvidence = useSpinInterfaceMeshEvidenceResource(sideA, sideB);
+  const meshMessage = useMemo(() => {
+  let meshMessage = "Mesh adjacency/orientation NOT VERIFIED. Select two explicit regions and build their shared tet4 mesh.";
+  try {
+    if (meshEvidence.data && meshEvidence.status === "ready") {
+      if (meshEvidence.data.sideA.owner_object_id !== sideA.objectId || meshEvidence.data.sideA.region_id !== sideA.regionId || meshEvidence.data.sideB.owner_object_id !== sideB.objectId || meshEvidence.data.sideB.region_id !== sideB.regionId) throw new Error("Mesh evidence belongs to different interface sides.");
+      const normal = (draft.kind === "transparent" ? draft.normalAToB : draft.normalToFerromagnet).split(/[\s,]+/).filter(Boolean).map(Number);
+      const proof = verifySpinInterfaceMeshOrientation(meshEvidence.data, normal);
+      meshMessage = `Mesh verified: ${proof.sharedFacetCount} adjacent tet4 facets, area=${proof.interfaceAreaM2.toExponential(4)} m²; authored normal agrees with side A → B.`;
+    } else if (meshEvidence.error) meshMessage = `Mesh adjacency/orientation NOT VERIFIED: ${meshEvidence.error.message}`;
+  } catch (error) { meshMessage = `Mesh adjacency/orientation NOT VERIFIED: ${error instanceof Error ? error.message : String(error)}`; }
+  return meshMessage;
+  }, [meshEvidence.data, meshEvidence.error, meshEvidence.status, draft.kind, draft.normalAToB, draft.normalToFerromagnet, sideA.objectId, sideA.regionId, sideB.objectId, sideB.regionId]);
   const [pendingOperation, setPendingOperation] = useState<{
     id: number;
     sessionScopeKey: string;
+    draftKey: string;
   } | null>(null);
   const nextPendingOperationId = useRef(0);
-  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
-  const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
-  const validationKey = `${sessionScopeKey ?? "no-session"}:${draftKey}:${transports.data?.scene_revision ?? "none"}`;
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey && pendingOperation.draftKey === draftKey;
+  const [feedbackState, setFeedbackState] = useState<{ key: string; kind: "error" | "success"; message: string } | null>(null);
+  const feedback = feedbackState?.key === draftKey ? feedbackState : null;
+  const setFeedback = (value: { kind: "error" | "success"; message: string } | null) => setFeedbackState(value ? { ...value, key: draftKey } : null);
+  const validationKey = `${draftKey}:${transports.data?.scene_revision ?? "none"}:${JSON.stringify(draft)}`;
   const [validationState, setValidationState] = useState<{ key: string; response: TransportValidationResponse | null }>({ key: "", response: null });
   const validation = validationState.key === validationKey ? validationState.response : null;
   const readOnly = selected ? !selected.known : false;
-  const capability = useSessionStatusSelector((status) => status.data?.capabilities.transport_authoring?.m1_one_way_steady ?? null);
+  const capabilities = useSessionStatusSelector((status) => status.data?.capabilities.transport_authoring ?? null);
+  const owner = (transports.data?.items ?? []).find((item) => record(item)?.id === ownerId) ?? null;
+  const capability = getTransportAuthoringCapability("spin_transport", owner, geometry.data, capabilities);
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
   const valid = Boolean(
-    !readOnly &&
+    !readOnly && !targetUnavailable && resolved.conflicts.length === 0 &&
       ownerId &&
       transports.status === "ready" &&
       capability?.authoring_allowed &&
@@ -246,7 +151,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   );
 
   useEffect(() => {
-    if (!sessionScopeKey || readOnly || !ownerId || transports.data?.scene_revision === undefined) return;
+    if (!sessionScopeKey || readOnly || targetUnavailable || !ownerId || transports.data?.scene_revision === undefined) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       try {
@@ -254,16 +159,16 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
           sessionScopeKey,
           signal: controller.signal,
         }).then((response) => {
-          if (!controller.signal.aborted && isCurrentSession()) {
+          if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey) {
             setValidationState({ key: validationKey, response });
           }
         }).catch(() => {
-          if (!controller.signal.aborted && isCurrentSession()) {
+          if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey) {
             setValidationState({ key: validationKey, response: null });
           }
         });
       } catch {
-        if (!controller.signal.aborted && isCurrentSession()) {
+        if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey) {
           setValidationState({ key: validationKey, response: null });
         }
       }
@@ -271,7 +176,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     return () => { window.clearTimeout(timer); controller.abort(); };
   // Serialized draft is the validation dependency by design.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, commands, draft, ownerId, readOnly, selected?.interface_id, sessionScopeKey, transports.data?.scene_revision, validationKey]);
+  }, [api, commands, ownerId, readOnly, selected?.interface_id, sessionScopeKey, targetUnavailable, transports.data?.scene_revision, validationKey]);
 
   function ownerWith(nextInterface: unknown | null): SceneSpinTransport {
     const owner = (transports.data?.items ?? []).find((item) => record(item)?.id === ownerId);
@@ -293,17 +198,19 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   }
 
   async function run(action: "save" | "delete"): Promise<boolean> {
-    if (!sessionScopeKey) return false;
+    if (!sessionScopeKey || pending || resolved.conflicts.length > 0 || !valid) return false;
+    const submittedDraft = draft;
+    const submittedRevision = transports.data?.scene_revision;
     const mutationContext = captureMutationContext();
     const operationId = ++nextPendingOperationId.current;
-    setPendingOperation({ id: operationId, sessionScopeKey });
+    setPendingOperation({ id: operationId, sessionScopeKey, draftKey });
     setFeedback(null);
     try {
       if (!capability?.authoring_allowed) throw new Error(capability?.reason ?? "Authoring capability is unavailable.");
       const nextInterface = action === "delete" ? null : buildInterface(draft);
       if (nextInterface) {
         const checked = await api.model.validateTransport(validationRequest(), { sessionScopeKey });
-        if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+        if (mutationContext.isCurrentSessionScope?.() !== true || activeDraftKey.current !== draftKey) return false;
         setValidationState({ key: validationKey, response: checked });
         if (!checked.semantic.valid || !checked.execution.authoring_allowed) throw new Error(checked.semantic.issues[0]?.message ?? checked.execution.reason ?? "Interface is not authoring-ready.");
       } else if (validation?.execution.authoring_allowed !== true) throw new Error("Latest clone-only validation does not permit mutation.");
@@ -314,6 +221,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
             `Delete spin interface ${selected?.interface_id ?? "new"}`,
             async ({ baseRevision }) => {
               const revision = baseRevision ?? transports.data!.scene_revision;
+              if (revision !== submittedRevision) throw new Error("Scene revision changed before interface commit. Refresh and rebase.");
               await validateOwner(resource, revision, mutationContext.sessionScopeKey!);
               if (mutationContext.isCurrentSessionScope?.() !== true) {
                 throw new Error("Authoring mutation belongs to an obsolete session.");
@@ -331,6 +239,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
             `${selected ? "Replace" : "Create"} spin interface ${selected?.interface_id ?? "new"}`,
             async ({ baseRevision }) => {
               const revision = baseRevision ?? transports.data!.scene_revision;
+              if (revision !== submittedRevision) throw new Error("Scene revision changed before interface commit. Refresh and rebase.");
               await validateOwner(resource, revision, mutationContext.sessionScopeKey!);
               if (mutationContext.isCurrentSessionScope?.() !== true) {
                 throw new Error("Authoring mutation belongs to an obsolete session.");
@@ -343,15 +252,38 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
               }, requestOptions);
             },
           );
-      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      if (mutationContext.isCurrentSessionScope?.() !== true || activeDraftKey.current !== draftKey) return false;
+      const acknowledgedOwner = record(commit.resource);
+      const acknowledgedInterfaces = acknowledgedOwner?.interfaces;
+      const acknowledgedInterface = Array.isArray(acknowledgedInterfaces) ? acknowledgedInterfaces.find((entry) => record(entry)?.id === submittedDraft.id) : null;
+      if (!Number.isSafeInteger(commit.scene_revision) || commit.scene_revision <= (submittedRevision ?? -1) ||
+          commit.committed_scene?.revision !== commit.scene_revision || acknowledgedOwner?.id !== ownerId ||
+          !Array.isArray(acknowledgedInterfaces) || (action === "save"
+            ? !acknowledgedInterface || JSON.stringify(buildInterface(interfaceDraft(acknowledgedInterface))) !== JSON.stringify(buildInterface(submittedDraft))
+            : acknowledgedInterfaces.some((entry) => record(entry)?.id === selected?.interface_id))) {
+        projected.refetch(); transports.refetch();
+        throw new Error("Interface ACK omitted or changed the submitted owner/interface. Refresh before retrying.");
+      }
+      publishCommittedSceneResource(resources, commit.committed_scene, commit.scene_revision, undefined, false, sessionScopeKey, api.resourceCacheScope);
+      const acknowledgedKey = action === "save" && !selected ? JSON.stringify([sessionScopeKey, ownerId, submittedDraft.id]) : draftKey;
+      if (action === "save") setDraftState((current) => {
+        if (current.key !== draftKey) return current;
+        const committedOwner = record(commit.resource);
+        const committedInterface = (committedOwner?.interfaces as unknown[] | undefined)?.find((entry) => record(entry)?.id === submittedDraft.id);
+        if (!committedInterface) return current;
+        const acknowledged = interfaceDraft(committedInterface);
+        const next = reconcileInterfaceDraft(acknowledged, current.value, submittedDraft).draft;
+        return { key: acknowledgedKey, value: next, baseline: acknowledged, ackRevision: commit.scene_revision };
+      });
+      if (action === "save" && !selected) setLocalInterfaceId(submittedDraft.id);
       invalidateSpinAuthoringResources(resources, commit, [
         SPIN_TRANSPORTS_RESOURCE_KEY,
         SPIN_INTERFACES_RESOURCE_KEY,
       ]);
-      setFeedback({ kind: "success", message: action === "delete" ? "Interface deleted through its owning spin transport." : "Interface committed through its owning spin transport." });
+      setFeedbackState({ key: acknowledgedKey, kind: "success", message: action === "delete" ? "Interface deleted through its owning spin transport." : "Interface committed through its owning spin transport." });
       return true;
     } catch (error) {
-      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      if (mutationContext.isCurrentSessionScope?.() !== true || activeDraftKey.current !== draftKey) return false;
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
@@ -360,7 +292,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   }
 
   function resetDraft(): void {
-    setDraftState({ key: draftKey, value: baseDraft });
+    setDraftState({ key: draftKey, value: baseDraft, baseline: baseDraft, ackRevision: null });
     setFeedback(null);
   }
 
@@ -375,7 +307,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     { historyMode: "mutation-owned" },
   );
 
-  const patch = (value: Partial<InterfaceDraft>) => setDraftState({ key: draftKey, value: { ...draft, ...value } });
+  const patch = (value: Partial<InterfaceDraft>) => setDraftState({ key: draftKey, value: { ...draft, ...value }, baseline: draftState.key === draftKey ? draftState.baseline : baseDraft, ackRevision: draftState.key === draftKey ? draftState.ackRevision : null });
   const selectedRecord = record(selected?.interface);
   const selectedSideA = region(selectedRecord?.side_a);
   const selectedSideB = region(selectedRecord?.side_b);
@@ -400,29 +332,40 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   });
   return <PhysicsInspectorOverview model={overviewModel} primary={<div className="fm-inspector-panel"><InspectorGroup title="HM/FM interface">
     {!ref ? <><FormField label="Owning spin transport" type="select" value={ownerId} onChange={(event) => { setLocalOwnerId(event.target.value); setLocalInterfaceId(""); }}><option value="">Select owner</option>{(transports.data?.items ?? []).map((item, index) => { const id = record(item)?.id; return typeof id === "string" ? <option key={`${id}:${index}`} value={id}>{id}</option> : null; })}</FormField><FormField label="Interface" type="select" value={localInterfaceId} onChange={(event) => setLocalInterfaceId(event.target.value)}><option value="">New interface</option>{(projected.data?.items ?? []).filter((item) => item.owner_spin_transport_id === ownerId).map((item, index) => <option key={`${item.interface_id}:${index}`} value={item.interface_id ?? ""}>{item.interface_id ?? `Unknown ${index + 1}`}</option>)}</FormField></> : null}
-    {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown interface payload is preserved losslessly and read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected.interface, null, 2)} /></> : <InterfaceFields draft={draft} patch={patch} />}
+    {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown interface payload is preserved losslessly and read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected.interface, null, 2)} /></> : <InterfaceFields scene={geometry.data} identityReadOnly={Boolean(addressedId) || pending} draft={draft} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Owner: {ownerId || "not selected"}</div><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
+    {targetUnavailable ? <FeedbackBanner kind="error" message="Selected interface no longer exists. Its last draft is retained; refresh or select a different interface." /> : null}
+    {resolved.conflicts.length ? <FeedbackBanner kind="error" message={`Conflicting fields: ${resolved.conflicts.join(", ")}. Refresh and review before rebase.`} /> : null}
+    <FeedbackBanner kind={meshMessage.startsWith("Mesh verified:") ? "success" : "warning"} message={meshMessage} />
+    <Button type="button" onClick={() => { projected.refetch(); transports.refetch(); meshEvidence.refetch(); }}>Refresh interface and mesh evidence</Button>
+    {resolved.conflicts.length ? <Button type="button" disabled={pending} onClick={() => setDraftState({ key: draftKey, value: draft, baseline: baseDraft, ackRevision: null })}>Rebase interface draft explicitly</Button> : null}
     {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-    {!readOnly ? <Button disabled={pending || !sessionScopeKey || !ownerId || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void run("save")}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
-    {selected && !readOnly ? <Button variant="danger" disabled={pending || !sessionScopeKey || !capability?.authoring_allowed || validation?.execution.authoring_allowed !== true} onClick={() => void run("delete")}>Delete</Button> : null}
+    {!readOnly ? <Button disabled={pending || !valid} onClick={() => void run("save")}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
+    {selected && !readOnly ? <Button variant="danger" disabled={pending || !valid} onClick={() => void run("delete")}>Delete</Button> : null}
   </InspectorGroup></div>} />;
 }
 
-function InterfaceFields({ draft, patch }: { draft: InterfaceDraft; patch: (value: Partial<InterfaceDraft>) => void }) {
+function InterfaceFields({ draft, scene, identityReadOnly, patch }: { scene: SceneResource | null; identityReadOnly: boolean; draft: InterfaceDraft; patch: (value: Partial<InterfaceDraft>) => void }) {
   const field = (key: keyof InterfaceDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
+  const scope = (label: string, objectKey: keyof InterfaceDraft, regionKey: keyof InterfaceDraft) => <FormField label={label} type="select" value={JSON.stringify([draft[objectKey], draft[regionKey]])} onChange={(event) => { const [objectId, regionId] = JSON.parse(event.currentTarget.value); patch({ [objectKey]: objectId, [regionKey]: regionId }); }}>
+    <option value={'["",""]'}>Select object or authored region</option>
+    {transportScopeOptions(scene).map((option) => <option key={`${option.objectId}:${option.regionId}`} value={JSON.stringify([option.objectId, option.regionId])}>{option.label}</option>)}
+  </FormField>;
   return <>
-    <FormField label="Interface id" value={draft.id} onChange={field("id")} />
+    <FormField label="Interface id" readOnly={identityReadOnly} value={draft.id} onChange={field("id")} />
     <FormField label="Interface model" type="select" value={draft.kind} onChange={field("kind")}><option value="transparent">Transparent</option><option value="mixing_conductance">Mixing conductance</option></FormField>
     {draft.kind === "transparent" ? <>
-      <FormField label="Source object" value={draft.sideAObject} onChange={field("sideAObject")} /><FormField label="Source region" value={draft.sideARegion} onChange={field("sideARegion")} />
-      <FormField label="Target object" value={draft.sideBObject} onChange={field("sideBObject")} /><FormField label="Target region" value={draft.sideBRegion} onChange={field("sideBRegion")} />
+      {scope("Source scope", "sideAObject", "sideARegion")}
+      {scope("Target scope", "sideBObject", "sideBRegion")}
       <FormField label="Source-to-target orientation" value={draft.normalAToB} onChange={field("normalAToB")} />
     </> : <>
-      <FormField label="Normal-metal object" value={draft.normalObject} onChange={field("normalObject")} /><FormField label="Normal-metal region" value={draft.normalRegion} onChange={field("normalRegion")} />
-      <FormField label="Ferromagnet object" value={draft.ferromagnetObject} onChange={field("ferromagnetObject")} /><FormField label="Ferromagnet region" value={draft.ferromagnetRegion} onChange={field("ferromagnetRegion")} />
+      {scope("Normal-metal scope", "normalObject", "normalRegion")}
+      {scope("Ferromagnet scope", "ferromagnetObject", "ferromagnetRegion")}
       <FormField label="Normal-to-ferromagnet orientation" value={draft.normalToFerromagnet} onChange={field("normalToFerromagnet")} />
       <FormField label="g_up" unit="S/m²" value={draft.gUp} onChange={field("gUp")} /><FormField label="g_down" unit="S/m²" value={draft.gDown} onChange={field("gDown")} />
       <FormField label="g_r" unit="S/m²" value={draft.gR} onChange={field("gR")} /><FormField label="g_i" unit="S/m²" value={draft.gI} onChange={field("gI")} />
+      <FormField label="Legacy SML conductance" unit="S/m²" value={draft.gSml} onChange={field("gSml")} />
+      <FormField label="SML formula version" value={draft.smlFormulaVersion} onChange={field("smlFormulaVersion")} />
       <FormField label="SML g_n" unit="S/m²" value={draft.gN} onChange={field("gN")} /><FormField label="SML g_f" unit="S/m²" value={draft.gF} onChange={field("gF")} /><FormField label="SML g_lattice" unit="S/m²" value={draft.gLattice} onChange={field("gLattice")} />
       <FormField label="Formula version" value={draft.formulaVersion} onChange={field("formulaVersion")} /><FormField label="Absorption model" value={draft.absorption} onChange={field("absorption")} />
     </>}

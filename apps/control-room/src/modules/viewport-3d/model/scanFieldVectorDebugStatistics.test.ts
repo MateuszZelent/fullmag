@@ -20,20 +20,31 @@ describe("selectFieldVectorDebugSampleIndices", () => {
 
 describe("field vector debug statistics", () => {
   it("bounds components, samples node indices and preserves non-finite evidence", () => {
-    const values = new Float64Array(18);
+    const values = new Float64Array(20);
     values[0] = Number.NaN;
     values[1] = Number.POSITIVE_INFINITY;
-    values[9] = 3;
+    values[10] = 3;
     const result = buildFieldVectorDebugSamples({
-      nComp: 9,
+      nComp: 10,
       nodeIndices: new Uint32Array([41, 99]),
       pointCount: 2,
       values,
     });
-    expect(result.samples[0]).toMatchObject({ componentValues: [null, null, 0, 0, 0, 0, 0, 0], magnitude: null, nodeIndex: 41, pointIndex: 0 });
+    expect(result.samples[0]).toMatchObject({ componentValues: [null, null, 0, 0, 0, 0, 0, 0, 0], magnitude: null, nodeIndex: 41, pointIndex: 0 });
     expect(result.samples[1]).toMatchObject({ nodeIndex: 99, pointIndex: 1 });
     expect(result.issues).toContainEqual(expect.objectContaining({ code: "component-display-cap" }));
     expect(Object.isFrozen(result.samples)).toBe(true);
+  });
+
+  it("keeps all nine tensor components without reporting truncation", () => {
+    const result = buildFieldVectorDebugSamples({
+      nComp: 9,
+      pointCount: 1,
+      values: new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    });
+    expect(result.samples[0].componentValues).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(result.samples[0].magnitude).toBeCloseTo(Math.sqrt(285));
+    expect(result.issues).toEqual([]);
   });
 
   it("normalizes invalid readonly-array node indices to null in the object model", () => {

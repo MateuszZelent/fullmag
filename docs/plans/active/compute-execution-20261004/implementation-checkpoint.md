@@ -1,6 +1,6 @@
 # Checkpoint implementacji Compute execution
 
-Zlecenie: cały zakres E0–E7, bez redukcji celu. Aktualizacja: 2026-10-13.
+Zlecenie: cały zakres E0–E7, bez redukcji celu. Aktualizacja: 2026-10-16.
 Checkout: `C:/git/fullmag/fullmag`, branch `master`, zgodnie z jawnym
 poleceniem użytkownika; bez nowego worktree. Baza pierwszego etapu:
 `e012c8c46c6d5c62fcd2fde45009b1a59eaf971b`.
@@ -20,12 +20,12 @@ odczytowego Compute environment pozostaje zachowana.
 | Etap | Stan | Pozostała bramka |
 |---|---|---|
 | E0 | Potwierdzono bazę, reuse schedulera, wersje RunSpec v1/v2 i StudyPlan v1/v2; ADR 0052 przyjęty zleceniem | Śledzenie kolejnych migracji i tożsamości źródeł |
-| E1 | W toku: typed ComputeResources i profile materialization per Study/step, Python/SceneDocument/script round-trip zasobów oraz Preview/Settings plumbing | CLI/env compatibility, durable Submit provenance i runtime |
-| E2 | W toku: host ledger, typed service policy, host-aware admission/recovery, pre-spawn cancellation oraz walidowany `ComputeNodeSnapshot` z osobnymi rewizjami inventory/capabilities | Host sampling, trwałe rewizje, owner/boot publication, read-only API, freshness w admission i runtime proof |
-| E3 | W toku: exact host lease/UUID binding i GPU visibility checks | CPU/native pools, affinity/NUMA enforcement, measured receipts i execution proof |
-| E4 | W toku: profile drafts, compute preview, Jobs/Cancel, statusy solverów i `stale` po 30 s na Home/Settings, podsumowanie polityki batcha | Generated OpenAPI/types, pełne resource mutation APIs/facade, Settings/Study/Jobs coverage i browser proof na bieżącym backendzie |
-| E5 | W toku: typed case bindings/materialization, trwały `FmsBatchIntent` i sequence-fenced cursor, parent Submit/List/Cases, OutputStorage snapshot, fair publisher child RunIntent, `max_parallel_cases`, `failure_policy`/`stopped` i Inspector z lifecycle oraz odkrywaniem SolutionSetów | Batch retry/cancel, pełne przeglądanie artefaktów wyników i runtime/browser proof pozostają otwarte |
-| E6 | Oczekuje | Remote providers, CAS transfers, cluster allocation i reconnect |
+| E1 | W toku: typed ComputeResources i profile materialization per Study/step, Python/SceneDocument/script round-trip zasobów, Preview/Settings plumbing, allowlista `FULLMAG_CPU_THREADS` oraz backendowych `FULLMAG_FDM_EXECUTION`/`FULLMAG_FEM_EXECUTION` dla zadeklarowanych profili; nieznana wartość env w typed profilu kończy się jawnym błędem; użycie external resolution dla typed Auto | Pełne CLI/env compatibility, durable Submit provenance i runtime |
+| E2 | W toku: host ledger, typed service policy, host-aware admission/recovery, pre-spawn cancellation, walidowany `ComputeNodeSnapshot` v2 z lease'em publishera i epoch fencing requestu/rezerwacji; explicit CPU/GPU placement jest porównywany z bieżącym inventory; sampler publikuje topologię Linux/Windows, CPU set i limit cgroup Linux; owner-bound CPU admission używa minimum budżetu polityki i świeżej efektywnej pojemności OS/cgroup oraz wymaga obsługi quota workera na Linuxie | Odczyt ograniczeń Windows Job Object dla hosta nadal jest unavailable; runtime affinity proof, Linux build, migracja i ścieżki recovery |
+| E3 | W toku: exact host lease/UUID binding, GPU visibility checks, wielogrupowa Windows affinity, przypięte CPU IDs, fail-closed OS affinity, źródłowa polityka pul wątków FEM i Windows Job Object hard-cap z exact readback; dodano Linux cgroup v2 adapter z quota/readback przed spawn, pre-exec attach i sprawdzeniem członkostwa procesu | Durable worker enforcement receipts, NUMA placement, Linux build oraz Windows/Linux compile i runtime execution proof; źródła pul/limits nie są zweryfikowane kompilacyjnie |
+| E4 | W toku: profile drafts, compute preview, Jobs/Cancel, statusy solverów, `stale` po 30 s, podsumowanie polityki batcha oraz podwidoki Settings Overview/Resources/Profiles; dodano typowany, rewizyjny GET/PUT NodePolicy z lokalną capability operatora, CAS i walidacją po stronie hosta. Granica zapisu: operator lokalnej aplikacji desktopowej; zwykły browser pozostaje tylko do odczytu | Pozostałe mutacje zasobów/profili, pełna integracja Study/Jobs oraz browser/runtime proof na bieżącym backendzie |
+| E5 | W toku: typed case bindings/materialization, trwały `FmsBatchIntent` i sequence-fenced cursor, parent Submit/List/Cases, OutputStorage snapshot, fair publisher child RunIntent, `max_parallel_cases`, `failure_policy`/`stopped`, pause/resume/cancel admission, Inspector z lifecycle i SolutionSetami, task-level/batch-level cancel, scoped cancel jednego materialized case z exact replay/revision fencing, operatorowy retry taska/batcha oraz źródłowy browser SolutionSet/member/artifact | Pełna reconciliation case’ów i runtime/browser proof pozostają otwarte; result UI nie ma jeszcze aktualnego typechecku ani browser proof |
+| E6 | W toku, częściowo: trwała tożsamość provider job, idempotency key, monotoniczne obserwacje i blokada retry przy aktywnym zewnętrznym jobie | Zdalne dołączanie node, adapter providera/schedulera, CAS transfer/resume, staging/reconnect, UI i odbiór dwóch węzłów |
 | E7 | Oczekuje | Noty numeryczne, partition/collectives, wykonanie i kwalifikacja distributed solve |
 
 ## Pierwszy fragment E1
@@ -2296,3 +2296,1742 @@ i niezależność rewizji. Testów Cargo nie uruchamiano; `rustfmt --check` nie
 przeszedł z powodu odmowy dostępu podczas kanonikalizacji ścieżki. To wyłącznie
 model: host sampling, trwałe przypisywanie rewizji, owner/boot publication,
 read-only API i enforcement świeżości w admission pozostają otwarte.
+
+### E2 — host sampling, trwały snapshot i read-only API — 13.10.2026
+
+Użytkownik ustalił granicę `stale = 30 s`. Runtime-control zbiera próbkę co
+5 sekund podczas działania host runtime service, zapisuje CPU effective
+capacity, RAM i opcjonalną inwentaryzację NVIDIA z limitem 2 sekund. Brak
+topologii CPU, affinity/quota, capabilities runtime i klasy partycji GPU
+pozostaje jawnie `unsupported`/`not_reported`; widoczność GPU nie jest
+deklarowana jako egzekwowana. Linux boot ID pochodzi z systemu; Windows używa
+konserwatywnego identyfikatora wyprowadzonego z uptime i zegara ściennego.
+
+`HostResourceLedger` przechowuje osobny snapshot JSON ograniczony do 4 MiB,
+pod wspólną blokadą writera i atomową publikacją. Model przypisuje niezależne
+rewizje inventory/capabilities z ich digestów, resetuje je przy zmianie bootu
+i odrzuca replay starszej próbki. API udostępnia `GET /v2/platform/compute/nodes`
+oraz `GET /v2/platform/compute/nodes/{node_id}`; freshness jest przeliczana
+przy odczycie, a odpowiedź ma ETag/304. Lista zwraca najwyżej lokalny host.
+
+Kod próbuje opublikować pierwszą próbkę przed zwolnieniem schedulera, a następnie
+odświeża ją co 5 sekund. Nadal obowiązuje wcześniejsza bramka `runtime_service_main`,
+która odrzuca v2 `host_execution` przed nabyciem ownera. Dlatego ten producent
+nie ma jeszcze potwierdzonej, działającej ścieżki runtime; bez zapisanego
+snapshotu endpoint zwraca `not_probed`. Nie usunięto bramki startu usługi.
+
+`HostRuntimeAdmission` sprawdza teraz przed nowym admission i recovery, czy
+snapshot istnieje, waliduje się, pasuje do skonfigurowanego ledger/node/policy
+epoch, pochodzi z aktualnego bootu i ma próbkę nie starszą niż 30 sekund.
+Brak, stale, unavailable lub poprzedni boot wstrzymuje wybór zadania; kontrola
+przed spawn również odmawia użycia nieaktualnej próbki. Regresja źródłowa
+pokrywa obliczanie granicy 30 sekund i defer przy braku snapshotu. To nie
+potwierdza liveness procesu ownera ani monotonicznego epoch między jego
+restartami; te fencing gates, zgodność inventory z polityką, OpenAPI/type
+generation, integracja Home/Settings i browser/runtime proof pozostają otwarte.
+
+Weryfikacja: scoped `git diff --check` nie wykazał błędów białych znaków; nowe
+pliki sprawdzono przez `git diff --no-index --check` (wyłącznie ostrzeżenia o
+konwersji LF/CRLF). `rustfmt --check` odmówił kanonikalizacji ścieżki repo.
+`just runner-container-status` nie uruchomił klienta Python (`-1073741502`),
+także przy użyciu dołączonego runtime Python; dlatego managed source check,
+OpenAPI codegen i type generation nie zostały uruchomione. Testów jednostkowych
+nie kompilowano ani nie wykonywano. `git fetch` zakończył się poprawnie;
+`HEAD` i `origin/master` są równe `8c0b0cae6122ba3dea06a17cd2d28cd524dec849`,
+`git ls-files --unmerged` jest pusty. Współdzielone dirty pliki pozostają
+niestage'owane i nietknięte.
+
+Po dodaniu freshness/boot gate: scoped `git diff --check` nadal przechodzi;
+kontrola nowych plików przez `--no-index --check` zgłasza wyłącznie
+ostrzeżenia CRLF, a skan zmienionych plików nie znajduje markerów konfliktu.
+`HEAD` pozostaje równy `origin/master` (`0` commitów w obie strony), index jest
+pusty, a testów/buildów nadal nie uruchomiono.
+
+### E2 — API odrzuca próbkę z poprzedniego bootu — 13.10.2026
+
+Read-only compute-node API porównuje `snapshot.boot_id` z identyfikatorem
+bieżącego hosta. Rozbieżność daje stan węzła `unavailable`, także gdy próbka
+ma mniej niż 30 sekund; pole freshness wewnątrz historycznego snapshotu nadal
+opisuje wyłącznie wiek próbki. Odpowiedź i jej kształt się nie zmieniły.
+Source regression pokrywa `Current` przy zgodnym i różnym boot ID.
+
+Pliki: `crates/fullmag-api/src/router_v2/handlers/platform/compute_nodes.rs`
+(SHA-256 `08ab4c0f3ba8e022e55049b87cf945975b915c0f73178970c76075755287ec8c`)
+i `crates/fullmag-api/src/schemas/compute_nodes.rs` (SHA-256
+`fc9d37ed295b27aa40a18c3188fb782a05b59e8577170ade0f72562473448ff9`). Skan
+białych znaków i `git diff --check` nie wykazały błędów. `rustfmt --check`
+odmówił kanonikalizacji ścieżki workspace (`os error 5`); regresji nie
+kompilowano ani nie uruchamiano zgodnie z zakazem testów jednostkowych.
+OpenAPI/typegen, managed build, runtime i browser pozostają niezweryfikowane.
+
+`git fetch origin master` zakończył się poprawnie; `HEAD` i `origin/master` są
+równe `3857b9f02123e97448a2b32e6dd8982f78935593` (`0/0`), bez unmerged paths
+i bez staged zmian. Pozostałe bramki E2 — dynamiczny host inventory owner,
+zgodność pełnego inventory z polityką — oraz pełne E0–E7 pozostają otwarte.
+
+### E5 — projekcja trwałego child run i lifecycle case — 13.10.2026
+
+Lista przypadków batcha wykrywa child `FmsRunIntent` także przy
+`case_index == next_case_index`, czyli w dozwolonym oknie awarii po trwałym
+zapisie intentu, a przed przesunięciem kursora. Przed ekspozycją runu handler
+sprawdza deterministyczny idempotency key, RunId, projekt, fingerprint RunSpec
+i referencje CAS. Brak dziecka wewnątrz opublikowanego prefiksu, child poza
+kursem lub kursor wykraczający poza manifest kończą się błędem, nie cichym
+stanem pending.
+
+Odpowiedź `cases` zawiera opcjonalny `published_run`, status katalogu oraz
+podsumowanie tasków z lifecycle. `published_case_count` pozostaje trwałym
+watermarkiem kursora i może być o jeden mniejszy od już widocznego childa w
+oknie replay. Regresja źródłowa odtwarza ten przypadek, idempotentny replay i
+późniejszą materializację katalogu. Nie kompilowano ani nie uruchamiano testów.
+
+Pliki źródłowe: `crates/fullmag-api/src/router_v2/handlers/persistence/projects.rs`
+(SHA-256 `6a416ef543b81736f8b3015953d1b4ca73b59028d5ab5fecae09b8c88decf5cb`),
+`crates/fullmag-api/src/schemas/projects.rs` (SHA-256
+`4270cc5f06a946402ac7ecc9a969dc3d37107048835b8bbb24eef0fffe127c1b`) i
+`crates/fullmag-api/src/router_v2/tests/project_documents.rs` (SHA-256
+`da6095d1644e161f5830aa89762f67870005ef0851140a54b5b545617c1ed18f`).
+Scoped `git diff --check` jest czysty. `openapi-v2-types.ts` nie zawiera jeszcze
+nowego wariantu/stanu; generator i typegen pozostają nieuruchomione, a Inspector
+nie konsumuje jeszcze `published_run` ani listy tasków.
+
+### E2 — zachowanie formatu snapshot v1 i świeża synchronizacja — 13.10.2026
+
+Ujednolicono komentarze modelu oraz specyfikacji: w obecnym
+`compute_node_snapshot.v1` `runtime_owner_id` oznacza stabilną tożsamość host
+ledgeru, a `owner_epoch` epokę skonfigurowanej polityki. Nie są to pola
+dynamicznego host inventory producer lease. Planowana wersja v2 wprowadzi
+odrębne `host_owner_id` i `host_owner_epoch`; dotychczasowych pól v1 nie
+reinterpretujemy. Odpowiednia reguła jest też doprecyzowana w ADR 0052.
+
+`git fetch origin master` zakończył się poprawnie z uprawnionym zapisem do
+`.git/FETCH_HEAD`. `HEAD`, `origin/master` i `FETCH_HEAD` są równe
+`e1865ce66c0291be2bfc03a77253b77972b62d4f`; rozbieżność wynosi `0/0`,
+`git ls-files --unmerged` oraz staged paths są puste. Wspólne zmiany pozostają
+niestage'owane i zachowane. `just runner-container-status` nadal kończy się
+kodem `-1073741502`, dlatego managed OpenAPI/typegen, build, browser i runtime
+pozostają `NOT VERIFIED`; testów jednostkowych nie kompilowano ani nie
+uruchamiano zgodnie z zakazem repo.
+
+### E3 — izolacja GPU w środowisku accepted worker — 13.10.2026
+
+`accepted_study_supervisor::spawn_worker` buduje teraz środowisko widoczności
+urządzeń wyłącznie z lease'u: dla CPU ustawia pustą `CUDA_VISIBLE_DEVICES` i
+usuwa FDM/FEM/generic CUDA indices; dla GPU maskuje proces do UUID z lease'u,
+ustawia oba backendowe ordinaly na `0` i usuwa inherited generic selector.
+Dotyczy to obu ścieżek accepted worker, nie tylko host-bound, dzięki czemu
+odziedziczony index FEM nie może wybrać innej karty po maskowaniu.
+
+Dodano źródłową regresję dla CPU i pojedynczego GPU UUID; zgodnie z zakazem repo
+nie kompilowano ani nie uruchamiano testów. `git diff --check` przechodzi.
+`rustfmt --check` odmówił kanonikalizacji workspace (`os error 5`), więc
+formatowanie pozostaje niezweryfikowane. SHA-256
+`crates/fullmag-api/src/accepted_study_supervisor.rs`:
+`416b60e12bae68ee206241dab36115e7e6fe9296b964ef1ee42017158ec524d8`.
+To wiąże maskę GPU i ordinal, ale nie dowodzi CPU affinity, limitu OS ani
+rzeczywistego device receipt; te punkty E3 są nadal otwarte.
+
+### E5 — Inspector konsumuje trwałą projekcję child run — 13.10.2026
+
+`ProjectBatchesSection` odróżnia teraz planowany RunId od runu potwierdzonego
+przez `published_run`. Przypadek bez durable child pokazuje wyłącznie planowany
+RunId i nie oferuje szczegółów ani wyników. Dla opublikowanego child panel
+pokazuje stan katalogu i lifecycle tasków; dopiero jego RunId otwiera szczegóły
+runu oraz odkrywanie SolutionSetów. `validateProjectBatchCasesEnvelope`
+sprawdza zgodność stanu case z publikacją, identyczność planowanego i trwałego
+RunId, katalogu, rewizji, lifecycle oraz unikalność tasków.
+
+Dodano regresje źródłowe dla case bez publikacji, pending/materialized+publikacji, niespójnej tożsamości oraz zduplikowanych tasków, a także scenariusz+Inspectora z jednym planowanym i jednym materialized child. Nie kompilowano ani+nie uruchamiano testów jednostkowych.
+
+`check-control-room-production-source` i `lint-control-room-source` przeszły+na niezmienionym fingerprintcie źródeł+`9f37bcb7efe613a516e38d96734d19f6af89caf71a3b62e4048ac47b0a964d55`.+Receipty: `C:\git\fullmag\storage\builds\fullmag-0950f4dca4ffe38f\windows-control-room-source-check\production-source\258b29ef64904dde80f4bf09fd1bcf12\receipt.json` i+`C:\git\fullmag\storage\builds\fullmag-0950f4dca4ffe38f\windows-control-room-source-check\lint\a5a70973adf547bf9c93f876a5df616b\receipt.json`.+React Doctor zakończył się kodem 0, ale zgłosił jedno ostrzeżenie+`react-doctor/prefer-useReducer` przy istniejących, powiązanych pięciu+`useState` w `ProjectBatchesSection.tsx`; ten etap nie dodaje nowego stanu.+Receipt: `C:\git\fullmag\storage\builds\fullmag-0950f4dca4ffe38f\windows-control-room-source-check\react-doctor\a48e2bc64e26479593333c4346259d28\receipt.json`.++Scoped `git diff --check` dla czterech zmienionych plików jest czysty. Repozytoryjny+check bez ograniczenia ścieżek nadal nie jest dostępny, bo Git nie może wejść do+submodułu `external_solvers/3` (`Permission denied`). Hashe SHA-256: `projectBatchResources.ts`+`c09052853fe560c467cd0254f0604248530e0d2a4cd6a3201be3032e85bb06d7`,+`projectBatchResources.test.ts`+`1f427b561fe5fece99c539849b19f9db7138fcd74ebe77de68aed2d9f7a85546`,+`ProjectBatchesSection.tsx`+`ff4741559fe011416b14f339c4799159beb7c79f877b07ef687acd6a7c1140fd`,+`ProjectBatchesSection.test.tsx`+`174c09cee2637374eae1ea332c71ef7f450df5f19085d7b686d29adf23ab2a15`.++`git fetch origin master` potwierdził `HEAD`, `origin/master` i `FETCH_HEAD`+na `7a70eee3345cba31b6902e00919d5b444f819913` (`0/0`); commit został+utworzony poza tym etapem i zmienia osobny zakres runtime/OpenAPI. Indeks i+unmerged paths są puste. Nie otwierano przeglądarki; browser, runtime, retry/cancel+case, pełne przeglądanie artefaktów oraz pozostałe bramki E5 pozostają+`NOT VERIFIED`/otwarte.
+### E4 — Start pokazuje świeżość inventory hosta — 13.10.2026
+
+Ekran Start odczytuje `/v2/platform/compute/nodes` przez wygenerowany typ,
+fasadę `ControlRoomApi.platform` i globalny resource hook. `useComputeProbe`
+pozostaje jednym właścicielem odczytu współdzielonym z rail i Settings;
+obserwuje inventory co 5 sekund wyłącznie, gdy ekran jest widoczny, i obejmuje
+je ręcznym odświeżeniem. Rail i Settings pokazują liczbę węzłów oraz stany
+`current`, `stale`, `not_probed`, `unavailable` i błąd ostatniego refreshu
+oddzielnie od telemetrii CPU/GPU i solver lanes. Granica `stale_after_seconds`
+wynosi 30 sekund zgodnie z decyzją użytkownika.
+
+Dodano źródłowe regresje dla fasady, zmiany revision snapshotu i widoku raila.
+Testów jednostkowych nie kompilowano ani nie uruchamiano. Zaktualizowano
+`docs/design/start-screen/docs/09-compute-environment.md`, aby opisywał osobny
+zasób inventory. `git diff --check` dla zmienionych źródeł przechodzi.
+
+Pierwszy zarządzany `generate-client` wygenerował artefakty OpenAPI, ale receipt
+ma stan `failed`, ponieważ fingerprint zmienił się podczas generacji. Dwa
+następne uruchomienia nie weszły do route z powodu aktywnej blokady kanonicznego
+storage (`Storage is busy`); blokady nie usuwano ani nie omijano. Idempotencja
+generacji, bieżący typecheck/lint i przeglądarka dla tej poprawki pozostają
+`NOT VERIFIED` i wymagają wykonania po zwolnieniu storage.
+
+### E4 — Settings pokazuje szczegóły snapshotu inventory — 13.10.2026
+
+Panel inventory w Settings pokazuje źródło i czas próbki, revision, świeżość,
+topologię CPU (logiczne ID, sockety, NUMA i znane rdzenie), dozwolone CPU,
+limit oraz obserwowaną pojemność, RAM, stabilne UUID GPU, PCI ID, nazwę, VRAM,
+partycję i NUMA. Pola last_known pozostają odróżnione od bieżących. Widok
+pokazuje również zgłoszone mechanizmy enforcementu i wyjaśnia, że odczyt nie
+jest rezerwacją ani przypisaniem solvera. Parser odrzuca snapshot o niezgodnej
+wersji lub tożsamości hosta.
+
+Dodano parser wybranych pól wersjonowanego snapshotu i widok Settings
+korzystający z istniejących klas/tokens Start Screen; dokumentacja projektu
+opisuje rozdzielenie inventory, telemetrii i capabilities. Testów jednostkowych
+nie kompilowano ani nie uruchamiano. Generator OpenAPI i dalsze zarządzane
+bramki frontendowe są nadal niezweryfikowane: kanoniczny storage pozostawał
+zajęty, a poprzedni receipt generacji zakończył się failed z powodu zmiany
+fingerprintu podczas runu. Przeglądarka dla nowego panelu pozostaje
+NOT VERIFIED.
+
+Zarządzany route production-source `6a47d7f0da2644528371e4e7678b662b`
+dotarł do TypeScript, ale zakończył się niepowodzeniem: nullable RAM przekazano
+do formattera wymagającego liczby. Poprawiono panel, aby `null` pokazywał jako
+Unavailable. Ten receipt także wykrył zmianę fingerprintu źródeł podczas
+kontroli; kolejna próba czeka na zwolnienie ponownie aktywnej blokady storage.
+Testy jednostkowe pozostały wyłączone.
+
+
+### E1 — allowlista legacy CPU threads do wspólnego resolvera — 13.10.2026
+
+CLI importuje teraz wyłącznie `FULLMAG_CPU_THREADS` jako warstwę `legacy_env`
+`resources.cpu.threads` dla skryptów z deklarowanym profilem lub przypiętą
+materializacją. Normalizacja akceptuje `auto` i dodatnie `u32`; puste, zerowe,
+niecałkowite, przepełnione lub nie-Unicode wartości kończą się jawnym błędem.
+Warstwa jest przechowywana w tej samej materializacji i zachowuje źródło pola.
+Zwykłe skrypty bez profilu pozostają na starej ścieżce. Ponowna walidacja
+materializacji, która już zawiera `legacy_env`, nie dopisuje duplikatu.
+
+`RAYON_NUM_THREADS`, `OMP_NUM_THREADS`, `CUDA_VISIBLE_DEVICES` i selektory
+ordinal GPU pozostają ograniczeniami/adapterami runtime, nie są tym importerem
+interpretowane jako intent użytkownika. Import pozostałych zgodnych wejść oraz
+trwałe Submit provenance i runtime pozostają otwarte; E1 nie jest ukończony.
+Dodano regresje źródłowe parsera, zachowania origin w resolverze i konfliktu
+`auto` z odmiennym jawnym środowiskiem.
+
+`git diff --check` dla dwóch zmienionych plików: PASS. `rustfmt --check` nie
+mógł skanonikalizować katalogu workspace (Windows `os error 5`). Zarządzany
+`just check-cli-source` zakończył się przed kontrolą źródeł kodem
+`-1073741502` (`0xC0000142`) przy starcie repozytoryjnego interpretera Python;
+nie uruchamiano bezpośredniego Cargo ani testów jednostkowych. Kompilacja
+zmienionego CLI, runtime i browser pozostają NOT VERIFIED. Checkout jest na
+`master`, HEAD i `origin/master` są równe
+`1ce6fee668f8bbe56da0c193361bf25a258e2b16`; index i unmerged paths są puste.
+Pliki pozostają niestage'owane.
+
+SHA-256 `crates/fullmag-cli/src/python_bridge.rs`:
+`063d930bf71d5f7122cf2f7b43fa9944bc5bd5beadf00d70317a2dc70f882ad5`.
+SHA-256 `crates/fullmag-application/src/execution_profile_reference_tests.rs`:
+`b5db611917a4d20f9aa5b5f65628d8ffcf9677c48dbbf251ca2ac9a5ffa59bca`.
+
+Po potwierdzeniu przez użytkownika granicy `stale = 30 s` sprawdzono, że ta
+sama stała `COMPUTE_NODE_SAMPLE_STALE_AFTER_SECONDS` jest ponownie liczona przez
+`ComputeNodeSnapshot::is_current_at` i bramkę `HostRuntimeAdmission` używaną
+przed admission, recovery oraz spawnem. Wiek równy 30 sekundom pozostaje
+bieżący; próbka starsza niż 30 sekund odracza admission. Nie znaleziono
+otwartego okna/karty Control Room; widoczne strony przeglądarki nie uruchamiają
+Fullmag, więc browser proof pozostaje NOT VERIFIED.
+
+Ponowny zarządzany `just windows-workspace-build dev dev 3197 auto` zakończył
+się kodem `-1073741502` (`0xC0000142`) podczas uruchamiania `powershell.exe`
+launcherem `scripts/windows/run_fullmag.ps1`, przed rozpoczęciem kompilacji.
+Nie uruchamiano bezpośredniego Cargo ani ręcznego builda. Bieżąca kompilacja
+CLI/runtime i pełny typecheck po wygenerowaniu aktualnego klienta pozostają
+NOT VERIFIED.
+
+### E4 — rozdzielenie stanu węzła od wieku próbki — 13.10.2026
+
+Review Settings ujawnił, że UI renderowało tylko `snapshot.sample.freshness`.
+API może jednak zwrócić świeżą wiekowo próbkę z `node.state=unavailable`, gdy
+`boot_id` należy do poprzedniego uruchomienia hosta. Summary przenosi teraz
+stan per-node do karty; badge pokazuje `Unavailable · previous host boot`, a
+metryka `Sample freshness` nadal oddzielnie opisuje wiek próbki. Dodano źródłową
+regresję obu stanów jednocześnie. Projekt Start Screen opisuje tę różnicę.
+
+`git diff --check` przeszedł dla śledzonych źródeł UI. ESLint wywołany przez
+pnpm nie dotarł do analizy: `EPERM` przy kanonikalizacji `apps/control-room`.
+Próba z katalogu głównego także nie znalazła lokalnego binarium ESLint.
+React Doctor nie zwrócił wyniku i został przerwany po zawieszeniu na selekcji
+projektu; nie traktować go jako PASS. Unit testów i typechecku nie uruchomiono.
+Zarządzany `just windows-ui dev 3197 auto dev` zatrzymał się przed startem
+launchera kodem `-1073741502` (`0xC0000142`), dlatego przeglądarkowy proof tej
+zmiany nadal jest NOT VERIFIED.
+
+### E4 — starzenie zachowanego snapshotu inventory — 13.10.2026
+
+Jeżeli odświeżenie API zawiedzie, Start nadal pokazuje ostatni udany snapshot.
+Dotąd jego etykieta mogła pozostać `Current` po przekroczeniu limitu wieku,
+ponieważ backendowy stan nie zmieniał się bez kolejnej odpowiedzi. Summary
+przelicza teraz `sample.collected_at` lokalnie według `stale_after_seconds`;
+dokładnie 30 sekund pozostaje bieżące, a po przekroczeniu limitu węzeł i próbka
+przechodzą w `stale`. Stan `unavailable` po zmianie `boot_id` pozostaje osobny,
+choć wiek próbki może później również stać się `stale`. UI nadal nie traktuje
+inventory jako rezerwacji ani przydziału.
+
+Dodano regresje źródłowe dla wieku 30 s / 30,001 s, błędu refresh i utrzymania
+stanu poprzedniego bootu. Zaktualizowano opis `docs/design/start-screen/docs/09-compute-environment.md`.
+`git diff --check` dla śledzonych plików oraz kontrola białych znaków i końców
+wierszy dla 5 zmienionych źródeł/dokumentów: PASS. Transpile/syntax check
+TypeScript przeszedł dla 3 plików produkcyjnych; pełny typecheck pozostaje
+NOT VERIFIED. Nie kompilowano ani nie uruchamiano testów jednostkowych.
+
+Zarządzany `just check-control-room-production-source` nie uruchomił repozytoryjnej
+kontroli: Git Bash zakończył inicjalizację błędem `NtCreateDirectoryObject`
+(`0xC0000022`), przed uruchomieniem skryptu źródłowego. Nie omijano preflightu.
+Browser proof pozostaje NOT VERIFIED. Checkout: `master`, HEAD i lokalne
+`origin/master` `1ce6fee668f8bbe56da0c193361bf25a258e2b16`; 52 wpisy statusu
+obejmują całą istniejącą dirty pracę, index i unmerged paths są puste.
+Nie stage'owano ani nie commitowano zmian.
+
+SHA-256 `computeNodeInventory.ts`:
+`402fdfdc1f0756be0829c45cb56e2c94c8cbdbcfa4ea95b49fa0c2119fa49f33`;
+`useComputeProbe.ts`: `4d495d731adc31acb2ea21c88f440f0c5389380611f3eba2c6baccb8ac7bd13d`;
+`ComputeNodeInventoryStatus.tsx`: `636ef477291ef3d9d2b82d849f6d5e0f6766cc3cb426bc9b2a5e030a5a0b4e4e`;
+`computeNodeInventory.test.tsx`:
+`05ba06cb3135446fecbf6ce8496b4653bfc12ef2e59c8fa4d192179589ed65e8`;
+`09-compute-environment.md`:
+`25559c8d56f6a64c3a1d24cdcfa94c8f70c530551b777a2e9c1dc7dd3a101db4`.
+
+### E1 — zachowanie zewnętrznego rozstrzygnięcia typed Auto — 13.10.2026
+
+CLI zachowuje `FULLMAG_CPU_THREADS=auto` w materializacji jako requested
+intent. Runner odczytuje teraz osobne `FULLMAG_CPU_THREADS_AUTO_RESOLVED` przy
+rozstrzyganiu typed Auto, więc liczba pochodząca z launchera/admission steruje
+pulą bez zamiany intentu `auto` na liczbę. Jawny typed count nadal wygrywa z
+tym zewnętrznym rozstrzygnięciem. Dodano regresję źródłową dla obu przypadków.
+
+Testów jednostkowych nie kompilowano ani nie uruchamiano. `rustfmt --check`
+zatrzymał się przed formatowaniem na Windows `os error 5` przy kanonikalizacji
+repozytorium. `git diff --check` oraz kontrola białych znaków i końców wierszy
+dla runnera i checkpointu: PASS. Kompilacja runnera, runtime i browser
+pozostają NOT VERIFIED.
+
+SHA-256 `crates/fullmag-runner/src/lib.rs`:
+`ede525230866fd2142505a7ef361bc0bf60298e44a8b5d5a16e2d5d971a7eafd`.
+
+### E2 — wyłączny lease właściciela inventory i ComputeNodeSnapshot v2 — 13.10.2026
+
+Wspólny `HostResourceLedger` zyskał osobny natywny lock `HostInventoryOwner`
+i ograniczony rekord ownera. Stabilne `host_owner_id` pochodzi z tożsamości
+ledgera, a `host_owner_epoch` rośnie przy każdym przejęciu po zwolnieniu locka.
+Epoka pozostaje niezależna od `HostResourceLedgerPolicy.owner_epoch` i
+`RuntimeServiceOwner`; usługi różnych store'ów współdzielą jednego publishera.
+V2 snapshot dodaje parę `host_owner_id`/`host_owner_epoch`; v1 zachowuje stare
+pola i znaczenie. Publikacja v2 weryfikuje dokładny token, ID i epoch lease'a
+pod writer lockiem tego samego ledgera.
+
+Runtime service próbuje uzyskać lease i publikuje próbkę v2. Usługi bez lease'a
+czekają na wspólną świeżą próbkę i ponawiają próbę przejęcia. Host admission
+oraz odczyt API sprawdzają aktywny lease i jego epoch; stary snapshot po
+przejęciu nie otwiera admission, niezależnie od wieku. UI parsuje v1 i v2,
+odrzucając v2 bez poprawnej pary owner ID/epoch.
+
+`HostReservationRequest` oraz trwała rezerwacja przechowują osobną parę ID/epoch
+producenta inventory; nie reinterpretują `host_owner_epoch` polityki. Reserve,
+solver/preparation admission i zużycie launch permit sprawdzają pod wspólną
+blokadą ledgera aktywny lease oraz świeży snapshot v2 o tej samej epoce. Przejęcie
+host-owner między utworzeniem requestu a zapisem lub spawnem zamyka tę próbę.
+Świeżość jest ponownie sprawdzana przed finalnym `Tentative→Committed`, a
+reconciliation rezerwacji poprzedniej epoki nie promuje jej po takeover.
+Nowy ledger i pierwszy zapis migrowanego stanu emitują dokument v2; odczyt nadal
+przyjmuje istniejące v1.
+
+Dodano regresje źródłowe dla przydziału epoch 1, wyłączności locka, inkrementacji
+epoch po zwolnieniu, stabilności ID po reopen, publikacji, aktywnego owner lease'a
+oraz fencing rezerwacji po takeover. Nie kompilowano ani nie uruchamiano testów
+zgodnie z zakazem. Pełna zgodność inventory z polityką, migracja/recovery
+istniejących rezerwacji oraz kompilacja/runtime i browser proof pozostają
+NOT VERIFIED.
+
+Kontrole po zmianie: scoped `git diff --check` **PASS**. `just
+check-api-service-source` i `just runner-container-status` zakończyły się przed
+uruchomieniem właściwej kontroli błędem inicjalizacji procesu `0xC0000142`;
+kontrola kompilacji źródeł nie powstała. `rustfmt --check` zatrzymał się na
+kanonikalizacji katalogu repozytorium z `os error 5`. Testów jednostkowych,
+buildów i browser proof nie uruchamiano.
+
+### E2 — admission sprawdza przypięte fakty inventory — 13.10.2026
+
+Request z przypiętymi CPU IDs wymaga bieżącej topologii i OS-allowed setu,
+które obejmują politykę oraz wybrane identyfikatory. Przydział GPU wymaga
+bieżącego UUID, potwierdzonej partycji `full_device` oraz raportowanego VRAM
+nie mniejszego od pojemności polityki i requestu. `last_known`, nieobecna
+topologia/pojemność i `unknown` partycji nie otwierają rezerwacji ani startu.
+Kontrole działają przy reserve, solver/preparation commit i reconciliation
+oraz bezpośrednio przed wydaniem/zużyciem launch permit. Rezerwacje bez ownera
+pozostają co najwyżej tentative; commit/launch nadal wymagają ownera.
+
+Sampler `nvidia-smi` odczytuje teraz `mig.mode.current`: tylko `Disabled`
+raportuje pełne urządzenie. Starszy query zachowuje telemetrię z partycją
+`unknown`; `Enabled` i `N/A` także nie udają całej karty. NVIDIA dokumentuje
+pole i wartości w [MIG User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/getting-started-with-mig.html).
+CPU topology w obecnym samplerze nadal jest `unavailable`, więc host policy
+z przypiętą maską CPU pozostaje zamknięta do czasu jej wiarygodnego pomiaru.
+Nie jest to dowód egzekwowania affinity, maski GPU ani fizycznej kwalifikacji.
+
+Dodano źródłowe regresje dla zachowania `last_known` CPU, nieznanej partycji
+GPU, trybu MIG `Disabled` oraz fallbacku starego query. Nie kompilowano ani
+nie uruchamiano testów. `git diff --check` dla zmienionych plików: **PASS**.
+Ponowny `just runner-container-status` zakończył się przed uruchomieniem
+kontroli błędem procesu `-1073741502` (`0xC0000142`), dlatego kompilacja źródeł
+pozostaje **NOT VERIFIED**. `rustfmt` nie ponawiano po wcześniejszym błędzie
+Windows `os error 5` przy kanonikalizacji repozytorium.
+
+Bieżący checkout: `master`, `HEAD` i `origin/master`
+`e87fca59f5eff6c59c45ab43a424fc5142750568`; bez unmerged entries i staged
+paths. HEAD przesunął się podczas pracy do commitów dokumentacji/review innego
+zadania; zachowano wszystkie lokalne zmiany. Nie tworzono worktree, nie
+stage'owano i nie commitowano. Kolejny krok: uwzględnić CPU quota w pojemności,
+następnie ponownie ocenić migrację i recovery rezerwacji.
+
+### E2 — topologia CPU i OS-allowed set — 13.10.2026
+
+Sampler Linux odczytuje online CPU IDs, package/core, SMT siblings i mapowanie
+NUMA z sysfs oraz affinity wątku pobierającego próbkę przez `sched_getaffinity`;
+to nie dowodzi affinity child workerów. Bufor maski
+rośnie przy `EINVAL`, więc nie zakłada stałej granicy 1024 CPU. Quota czyta
+z membership/mount mapowania `/proc/self/cgroup` + `/proc/self/mountinfo`,
+przechodzi hierarchię cgroup v1/v2 i stosuje najniższy limit do capacity.
+Niepoprawny lub niespójny sysfs/affinity nie jest zamieniany na pusty ani
+last-known jako wartość current. Windows korzysta z
+`GetLogicalProcessorInformationEx`, `GetNumaProcessorNodeEx`, process/group
+affinity i zachowuje grupę oraz group-local ID. Jeśli proces należy do wielu
+grup, topology pozostaje widoczna, ale allowed set jest `unavailable`, bo ta
+ścieżka nie wylicza kompletnej maski wielu grup. `cpu.os_constraints.quota`
+pozostaje unavailable na Windows, bo nie jest jeszcze czytany Job Object CPU
+rate limit. Weryfikacja kompletnej pojemności cgroup/job limit i jej współpracy
+z polityką/lease pozostaje otwarta.
+
+Dodano źródłowe regresje parsera list CPU Linux (zakresy/duplikaty), limitu
+cgroup v2 (w tym wartości ułamkowe) oraz ścieżek mountinfo z escapowaniem.
+Zgodnie z ograniczeniem projektu nie kompilowano ani nie uruchamiano testów.
+`git diff --check` dokumentacji i kontrola whitespace/końca pliku samplera:
+PASS. Nie uruchamiano testów, `rustfmt` ani builda: testowe buildy są
+zakazane, a poprzednia kontrola `rustfmt` zatrzymała się na Windows
+`os error 5`; managed runner wcześniej kończył się `0xC0000142` przed kontrolą.
+Linux/Windows compile, managed runtime, worker affinity enforcement, browser
+proof i kwalifikacja pozostają **NOT VERIFIED**.
+
+SHA-256 `crates/fullmag-runtime-control/src/compute_node_probe.rs`:
+`3962d5936528187d11118bc71962709964f30bfcf2bac1c8478a7877f798c829`.
+SHA-256 `docs/design/start-screen/docs/09-compute-environment.md`:
+`b56547800e749c88f13dd5c4f17db034a6b01c3b33d9adb15a8ab80c9276a698`.
+
+Checkout potwierdzono jako `master`, HEAD i `origin/master`
+`3cc61e8e2ff9e72a5794fe8da7b7011f7f473187`; HEAD przesunął się podczas pracy
+do kolejnego niezależnego commita na `master`. Zmiany nadal są dirty i
+niestage'owane; zachowano pozostałe istniejące pliki robocze.
+
+### E2 — efektywna pojemność CPU ogranicza admission — 13.10.2026
+
+Odpowiedź użytkownika ustala `stale` po 30 sekundach. Wspólne źródło
+`ComputeNodeSnapshot` liczy próbkę jako `current` do dokładnie 30 s włącznie,
+a host admission ponownie sprawdza wiek oraz aktywny owner lease.
+
+Owner-bound CPU reservation jest ograniczane przez minimum
+`HostResourceLedgerPolicy.total_budget.cpu_millis` i bieżącego
+`cpu.effective_capacity_millis`, o ile ten pomiar jest `Available`. Do sumy
+wchodzą Tentative, Committed i Quarantined. Kontrola jest przed publikacją nowej
+rezerwacji, przed `Tentative→Committed`, przed wydaniem solver/preparation
+launch permit oraz przy walidacji permitu przed spawnem. Brak pomiaru nie
+zamienia się w zero ani last-known; jawny limit operatora pozostaje wtedy
+obowiązujący. Obniżenie pomiaru nie zatrzymuje istniejącego procesu ani nie
+blokuje jego ścieżki release.
+
+Dodano regresję źródłową: przy polityce 4000 milli-CPU i bieżącym pomiarze
+500, rezerwacje 400 + 200 nie mogą przekroczyć obserwowanej pojemności.
+Scoped `git diff --check` dla źródła, specyfikacji i checkpointu: **PASS**.
+`cargo fmt --check -p fullmag-session` nie doszedł do formatowania: rustfmt
+odmówił kanonikalizacji checkoutu (`os error 5`), więc format pozostaje
+**NOT VERIFIED**. Testów jednostkowych ani buildów nie kompilowano/uruchamiano
+zgodnie z repozytoryjnym zakazem. Pełne Rust compile/runtime oraz worker
+affinity i quota enforcement pozostają **NOT VERIFIED**. Windows Job quota oraz
+wielogrupowa affinity nadal są nieraportowane.
+
+SHA-256 `crates/fullmag-session/src/host_resource_ledger.rs`:
+`344a4830e220bfae13d86c510aba49e7dd53ec612070578ca765e32ceb1796ce`.
+SHA-256 `docs/specs/compute-resource-execution-v1.md`:
+`65eba845fe6160025fe39c02dd8367e97fe380972982334e4fcdf44b759346d1`.
+
+Remote `refs/heads/master` i lokalny HEAD potwierdzono bezpośrednio na
+`3cc61e8e2ff9e72a5794fe8da7b7011f7f473187`; nie ma nowszego commita do
+fast-forward ani merge. Wcześniejszy `FETCH_HEAD` `1ce6fee...` jest przodkiem
+HEAD. Brak nierozwiązanych ścieżek w scoped diff; pełny Git status nadal
+zgłasza `EPERM` przy odczycie submodule `external_solvers/3`. Nie utworzono
+worktree ani build/run zasobów; wszystkie istniejące dirty zmiany zachowano,
+bez stagingu i commitów. Następny krok: kontynuować recovery E2, native pools i
+measured receipts E3, a następnie E4–E7.
+
+### E3 — wymuszenie CPU placementu przy starcie workerów — 13.10.2026
+
+Supervisor solvera pobiera `cpu_ids` z zatwierdzonego placementu konkretnego
+resource ID, a FEM preparation z mapy placementów tej samej host service
+config. Legacy launch bez host bindingu przekazuje pustą maskę; puste CPU IDs
+oznaczają samo budżetowanie i nie są deklarowane jako affinity.
+
+Linux buduje dynamiczną maskę z CPU IDs, dobiera jej minimalny rozmiar z
+`sched_getaffinity` i wywołuje `sched_setaffinity` w `pre_exec`, przed `exec`
+programu workera. Odczyt zwrotny przed `exec` wymaga dokładnej zgodności maski;
+jeśli OS zawęził ją po zmianie cpuset, spawn kończy się błędem zamiast
+uruchamiać worker na mniejszej alokacji. Maska ma limit 16 MiB. Windows przy
+żądanej masce ustawia `INHERIT_PARENT_AFFINITY`, przypisuje gated worker do Job
+Object, sprawdza processor group, wywołuje `SetProcessAffinityMask` i odczytuje
+`GetProcessAffinityMask` przed zwolnieniem startup gate. Proces musi zachować
+dokładną maskę w systemowym zbiorze CPU; błąd affinity kończy gated proces i
+nie uruchamia solvera.
+Placement Windows ogranicza się do jednej grupy; obsługa wielu grup, Job CPU
+quota oraz pełna konfiguracja native thread pools pozostają otwarte.
+
+Dodano źródłowe regresje budowania maski Linux (wiele słów, minimalna szerokość
+jądra i odrzucenie nadmiernego CPU ID), rzeczywistego odczytu maski uruchomionego
+procesu oraz mapowania grup Windows (w tym odmowę maski wielogrupowej). Nie
+kompilowano ani nie uruchamiano testów zgodnie z repozytoryjnym zakazem.
+`git diff --check` przechodzi dla zmienionych supervisorów, helpera procesu i
+checkpointu. Kontrola `rustfmt` zatrzymała się na Windows `os error 5` przy
+kanonikalizacji checkoutu; format pozostaje **NOT VERIFIED**.
+
+Zarządzany Windows backend-dev build z tej migawki zakończył się exit 0 i
+komunikatem `Windows native Fullmag build is ready`; Cargo zbudowało
+`fullmag-api` oraz `fullmag-desktop` dla `x86_64-pc-windows-msvc`, profilu
+`backend-dev`. `windows-runtime/build-manifest.json` wiąże build z pełnym
+commitem `1c0c35dcf8a4d7dcb0cbde10f3c723c83b729a22`, dirty source snapshot SHA-256
+`30ad419872263b72330c5d54f6c6d72007453ef5b64d88c5ff1df37637a23aef` i API
+binaru SHA-256 `d40f262ac4e29e5e75d9511ac4c710cbed227da21df1b94605984c84872e24e5`.
+SHA-256 zmienionego `owned_worker_process.rs` w tej migawce to
+`9c1281a3c8b7dff403144f7cab2b22d76452ccef0db684564abbd2606d8a4dae`.
+Build nie kompilował testów, nie uruchomił workera ani nie zmienił działającego
+workspace. Log:
+`<FULLMAG_PROJECT_STORAGE_ROOT>/builds/fullmag-0950f4dca4ffe38f/windows-native-fdm-cpu-dev/logs/native-build-52682c8398e24769ad66d3cccbb0508a.log`.
+
+Linux build, OS runtime affinity na Linux/Windows, trwały receipt zmierzonego
+worker affinity/native threads, NUMA, FEM/GPU runtime, browser proof i
+kwalifikacja pozostają **NOT VERIFIED**.
+Dotychczasowa kontrola `rustfmt` zatrzymała się wcześniej na Windows
+`os error 5`; format tego fragmentu pozostaje **NOT VERIFIED**.
+
+SHA-256 `crates/fullmag-api/src/owned_worker_process.rs`:
+`9c1281a3c8b7dff403144f7cab2b22d76452ccef0db684564abbd2606d8a4dae`.
+SHA-256 `crates/fullmag-api/src/accepted_study_supervisor.rs`:
+`f47dc392bd81e6e8c9d35f56778f8f426be0d819ce2157dfdf657c50ea494702`.
+SHA-256 `crates/fullmag-api/src/accepted_fem_preparation_supervisor.rs`:
+`1a9e661cf2aa4f5c5edb9519a81776268035ccbe2187b08e9b859b1681ef0e85`.
+
+Po `git fetch origin master` `HEAD`, `refs/remotes/origin/master` i `FETCH_HEAD`
+zgadzają się na `1c0c35dcf8a4d7dcb0cbde10f3c723c83b729a22`; nie ma nowszego
+commita do fast-forwardu. Brak unmerged entries potwierdzono przez
+`git ls-files -u`. `git diff --check` dla E3 źródeł i checkpointu: **PASS**.
+Wszystkie zmiany pozostają niestage'owane; nie tworzono worktree ani commitów.
+
+Po Windows buildzie `master` przesunął się do
+`631895d044655fdc58fefdaafdd22b5945f9b872`; `origin/master`, `origin/HEAD` i
+bezpośrednie `git ls-remote origin refs/heads/master` zgadzają się. Nowy commit
+zmienia wyłącznie `docs/plans/active/refactor_runtime/final/p8/53bm-camera-preservation.md`,
+więc skompilowane źródła compute/API pozostały identyczne. `git ls-files -u`
+nadal nie zwraca konfliktów.
+
+Microsoft dokumentuje, że `INHERIT_PARENT_AFFINITY` dziedziczy affinity
+rodzica, a `SetProcessAffinityMask` ogranicza maskę do jednej grupy na
+systemach >64 CPU: [Process Creation Flags](https://learn.microsoft.com/en-us/windows/desktop/ProcThread/process-creation-flags),
+[SetProcessAffinityMask](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setprocessaffinitymask).
+Te źródła potwierdzają użyty kształt API, nie wynik wykonania na tym hoście.
+
+### E3 — środowisko pul wątków z alokacji — 13.10.2026
+
+Host-bound accepted worker przed wydaniem launch permitu odzyskuje dokładny
+durable `Start`, przyjęty `RunSpec` i `ProblemIR`. Środowisko potomne łączy
+typed/legacy żądanie liczby wątków z cardinality CPU IDs przypiętych do lease'a;
+brak przydzielonych CPU lub żądanie większe od maski kończy się błędem przed
+spawnem. Auto dla ogólnego CPU i auto dla native FEM mają osobne wartości:
+`FULLMAG_CPU_THREADS_AUTO_RESOLVED` oraz
+`FULLMAG_NATIVE_THREADS_AUTO_RESOLVED`. FEM respektuje nową wartość native i
+zachowuje starszą zmienną jako fallback. GPU z native auto dostaje limit 1;
+OpenMP otrzymuje limit i blokadę nested teams, a domyślne pule BLAS są ustawione
+na 1. Odziedziczone CPU/Rayon/OpenMP/BLAS i pinning GOMP/KMP są usuwane, a
+wartości GPU nadal pochodzą wyłącznie z UUID allocation. Legacy worker bez host
+allocation zachowuje dotychczasowe środowisko. Jawne `native_threads` i
+`blas_threads` nadal są blokowane przez planner capability gate; ten kod ich nie
+kwalifikuje ani nie dowodzi rzeczywistego rozmiaru utworzonych pul.
+
+Dodano regresje źródłowe mapowania auto CPU/native i BLAS, odrzucenia oversubscription,
+izolacji odziedziczonego środowiska oraz pierwszeństwa nowego native resolved
+limit z kompatybilnym fallbackiem. Testów nie kompilowano ani nie uruchamiano
+zgodnie z zakazem repozytorium. `git diff --check` przechodzi; `rustfmt` nadal
+zwraca Windows `os error 5` przy kanonikalizacji checkoutu. Zarządzany build
+został zatrzymany przed kompilacją przez zajęty heavy slot; źródła tego fragmentu
+pozostają **NOT VERIFIED**.
+
+Zapis `FETCH_HEAD` w sandboxie odmówiono (`Permission denied`). Bezpośredni
+odczyt remote, lokalny `HEAD` i `origin/master` są obecnie zgodne na
+`29ca31c72dd1d4d7901f88843c0e87e639372956`. Od `802fc997e` doszedł commit
+`29ca31c72` z poprawką dokumentacji camera readiness; nie zmienia żadnego z
+dirty plików tego zadania. Wcześniejsze `8cf2e569c` i `802fc997e` również są
+poza zakresem.
+
+Ponowiona próba zarządzanego `windows-backend-dev` zakończyła się przed
+kompilacją po 120 s oczekiwania na `native Windows Fullmag build`. Ostatni
+`build-status.json` opisuje poprzedni ukończony build z 19:18 UTC i PID `79048`,
+który już nie działa; heavy lock nadal jest zablokowany do odczytu, a CIM nie
+udostępnił procesu trzymającego uchwyt. Nie wykonano recovery ani nie przerwano
+procesu. Nowe źródła pozostają **NOT VERIFIED** kompilacyjnie.
+
+SHA-256 `crates/fullmag-api/src/accepted_study_supervisor.rs`:
+`109e331a4df861d68bab7558a9160c95e996902a59a33096162a19cbad2ace05`.
+
+### E3 — środowisko FEM preparation z rezerwacji — 13.10.2026
+
+Host-bound FEM preparator odrzuca pustą alokację CPU i dostaje limity Rayon,
+OpenMP, BLAS oraz Gmsh wyprowadzone z CPU IDs przydzielonych jego preparation
+lease. Odziedziczone limity pul i affinity GOMP/KMP są czyszczone przed
+ustawieniem wartości dla dziecka. Ścieżka legacy bez host bindingu zachowuje
+dotychczasowe środowisko. Dodano regresje źródłowe pustej alokacji, mapowania
+liczby CPU na Gmsh/OpenMP i izolacji env; testów nie kompilowano ani nie
+uruchamiano.
+
+SHA-256 `crates/fullmag-api/src/accepted_fem_preparation_supervisor.rs`:
+`6c42787978b35c0fefa86e4c4b384412efb06ed893788b6e5688c343fae7c68b`.
+
+### E3 — jedna aktywna pula dla natywnego FEM CPU — 13.10.2026
+
+Supervisor używa odzyskanego `ExecutionPlan` do rozpoznania lane’ów FEM przed
+wydaniem launch permitu. Dla natywnego FEM CPU proces potomny dostaje Rayon=1
+i OpenMP ograniczony do alokacji; runner także tworzy jednowątkową pulę
+sterującą podczas natywnego solve. Dla natywnego FEM z pojedynczym wątkiem
+OpenMP, w tym GPU z domyślnym native=1, pula Rayon zachowuje przydzielony budżet
+CPU. FDM nie zmienia swojej puli. Dodano regresje źródłowe mapowania oraz
+wyboru puli runnera; nie kompilowano ani nie uruchamiano testów.
+
+Scoped `git diff --check` dla trzech źródeł E3: **PASS**. Kompilacja runnera i
+API, rzeczywiste limity runtime oraz execution receipts pozostają
+**NOT VERIFIED**; zarządzany Windows build nadal nie może zająć heavy slotu.
+
+SHA-256 `crates/fullmag-runner/src/lib.rs`:
+`9e241356313bf514800db2fd6f4ab98c690bed1acb597b0d84917a3782786bcb`.
+
+Szacunkowe pokrycie całości E0–E7 wynosi 50–55%: E0–E1 są w większości
+zrealizowane; E2–E5 mają znaczące, lecz niepełne wdrożenia; E6–E7 pozostają
+nierozpoczęte. To szacunek zakresu wymagań, nie liczby plików. W E3 nadal
+otwarte są dowód braku nakładania pul Rayon/OpenMP dla każdej lane, raport
+rzeczywistego enforcementu i pomiaru w receipt, Linux cgroup/quota, Windows
+CPU sets/multi-group/Job quota oraz kompilacja i runtime. Kolejne kroki E2–E5
+obejmują recovery i pełne uzgodnienie admission, profile/API/browser proof,
+batch cancellation/restart oraz kwalifikację równoległych cases.
+
+Scoped status obejmuje osiem wymienionych w tym zadaniu plików; index i
+unmerged entries są puste. Pełny status nadal napotyka brak dostępu do
+submodule `external_solvers/3`. Źródła thread policy pozostają **NOT VERIFIED**
+kompilacyjnie; testów nie kompilowano ani nie uruchamiano zgodnie z zakazem
+repozytorium. Nie wykonano recovery zajętego heavy locka.
+
+### E4 — podwidoki Compute w Settings — 13.10.2026
+
+Istniejąca strona Settings grupuje teraz Overview, Resources i Profiles pod
+wspólnym selektorem z prymitywu `SegmentedControl`. Overview pokazuje bieżącą
+telemetrię i runtime lanes; Resources pokazuje walidowany snapshot hosta,
+topologię CPU i tożsamość GPU, z jawną informacją, że są to odczyty i ekran nie
+zmienia polityki zasobów. Brak snapshotu ma własny stan. Panel profili pozostaje
+zamontowany podczas przełączania podwidoków, aby zachować draft i stan
+uzgadniania publikacji.
+
+Dodano regresje SSR dla selektora Settings i granicy tylko do odczytu widoku
+Resources. `git diff --check` dla czterech zmienionych plików: **PASS**;
+ukierunkowany ESLint dla obu źródeł i obu plików testowych: **PASS**. Testów
+nie uruchamiano zgodnie z zakazem repozytorium. React Doctor wybrał projekt,
+lecz przez około dwie minuty nie zwrócił wyniku; przerwano wyłącznie ten skan.
+Pełny typecheck pominięto, bo repozytoryjny config obejmuje `*.test.tsx`.
+Browser proof i edycja host resource policy pozostają otwarte.
+
+SHA-256 `apps/control-room/src/modules/start/sections/ComputeEnvironmentSettings.tsx`:
+`62e925ef7ebd0efbc60821bf578a8cc37b523849eefc9215594dac23b30338dd`;
+`SettingsSection.tsx`:
+`9a551b4c453c5089484fe5fa2773b1e39160f726f570dd2901a3f53070911cd3`;
+`ComputeEnvironmentSettings.test.tsx`:
+`132e0ccf1769a1e30ca7d8b27cbd4e6435948df19cac97a2b9bec47f9292d660`;
+`IndexedLocations.test.tsx`:
+`52ceec0777c9bbd0bfd9216f6e9078ca6a55c9265125fad067154a2c9251bdfa`.
+
+### E4 — duplikowanie profili wykonania — 13.10.2026
+
+Lista opublikowanych profili ma teraz osobne akcje **Duplicate** i **New version**.
+Duplicate klonuje pełny profil, zachowuje sparse/advanced defaults, nadaje nowe
+ID `exec:copy:<uuid>` i rozpoczyna od wersji `1`; dalej korzysta z istniejącej
+publikacji niezmiennej wersji, `expected_revision` i `client_intent_id`. Układ
+akcji zawija się na wąskich szerokościach.
+
+Dodano regresję modelu dla kopiowania tożsamości, wersji, wartości zasobów i
+izolacji obiektu źródłowego. `git diff --check` dla czterech zmienionych plików:
+**PASS**. Testów nie kompilowano ani nie uruchamiano zgodnie z zakazem
+repozytorium. ESLint i `check:architecture-hygiene` zakończyły się przed
+kontrolą przez `EPERM: realpath` dla `apps/control-room`; jakość tych bramek
+pozostaje **NOT VERIFIED**.
+
+Próba otwarcia managed Windows workspace na wolnym porcie `3197` przez
+`just windows-ui dev 3197 false dev` zakończyła się przed dostępnością UI kodem
+`-1073741502`; nie powstał listener i nie uzyskano browser proof. Nie
+uruchamiano buildu ani backendu. Naprawa/wyjaśnienie startu hostowego launchera
+pozostaje otwarte.
+
+Aktualny lokalny `master`, `origin/master` i odczyt live remote są zgodne na
+`48d3893cca7d7f7fdd0b7408051d3955039318ac`. Index i unmerged entries są puste;
+pełny `git status` nadal nie może wejść do submodułu `external_solvers/3`, więc
+scoped status jest granicą listy zmian. Nie stage'owano plików. Niezależny
+`docs/plans/active/refactor_runtime/final/p8/53bm-camera-preservation.md`
+pozostaje zachowany.
+
+Szacunkowe pokrycie całości pozostaje **50–55%**: ten fragment domyka jedną
+akcję katalogu profili, ale nie zamyka policy Apply/Cancel, browser proof,
+pełnego API, batch lifecycle ani etapów E6–E7.
+
+### E4 — stabilne prezentowanie metadanych inventory — 13.10.2026
+
+Podgląd inwentarza hosta formatuje próbkę w jawnej strefie UTC i stałym locale,
+żeby tekst renderowany przez serwer nie różnił się od pierwszego renderu
+przeglądarki. Odczyty CPU/RAM/VRAM poza bezpiecznym zakresem integera nie są
+zaokrąglane do pozornie dokładnej wartości. Dodano regresję SSR dla widocznego
+czasu UTC. `git diff --check -- apps/control-room/src/modules/start`: **PASS**;
+ukierunkowany `pnpm exec eslint` dla komponentów inventory i ich modelu/SSR testu:
+**PASS**. Testów nie kompilowano ani nie uruchamiano zgodnie z zakazem
+repozytorium. Browser proof pozostaje **NOT VERIFIED**: polityka bezpieczeństwa
+przeglądarki zablokowała dostęp do otwartego adresu localhost.
+
+Repo pozostaje na `master`, `HEAD`, `origin/master` i live remote są zgodne na
+`279b634ea57f0d6383d58793c9e065e58ad45eea`; unmerged entries i staged paths są
+puste. Wspólne dirty pliki pozostają zachowane i niestage'owane.
+
+### E4 — lokalna edycja polityki węzła — 15.10.2026
+
+Settings → Compute → Resources pozwala lokalnemu operatorowi aplikacji
+edytować CPU IDs, allowlistę GPU UUID, rezerwy CPU/RAM/scratch i VRAM per GPU,
+limit workerów oraz draining. Nieedytowane priority order i parallelism
+patterns są zachowywane. Zmiana polityki wpływa na przyszłe admission;
+istniejące rezerwacje pozostają bez zmian.
+
+Typed GET/PUT API zwraca dokument polityki bez wewnętrznego host ID. PUT wymaga
+ephemeral capability z natywnej aplikacji oraz If-Match dla aktualnej rewizji;
+host waliduje politykę względem skonfigurowanej pojemności, a zapis używa CAS
+ledgeru. Konflikt zachowuje draft i wymaga jawnego porównania oraz rebase.
+Tauri udostępnia capability tylko głównemu oknu pod skonfigurowanym scheme,
+hostem, portem i ścieżką; tryb z zewnętrznym UI oraz zwykła przeglądarka są
+read-only. Wybór granicy „lokalny operator aplikacji” i limit stale 30 s
+pochodzą od użytkownika.
+
+Weryfikacja na HEAD `d9f2beadef172be080ae6844ff43e8fa846ee3b9`:
+managed `api-openapi-codegen` zakończył się `passed` (kompilacja binarnego API
+do generowania OpenAPI, bez testów); wygenerowano typy i klienta v2; statyczna
+higiena API oraz `git diff --check` dla zmienionych plików zadania: **PASS**.
+ESLint nie rozpoczął analizy, bo konfiguracja nie może załadować
+`@eslint/compat`. Skan React Doctor nie zwrócił wyniku przez 25 s i został
+przerwany. Typecheck nie uruchomiono, ponieważ konfiguracja obejmuje testy;
+testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z AGENTS.md.
+Browser proof edytora, obsługi błędów w działającej aplikacji i runtime
+admission pozostaje **NOT VERIFIED**.
+
+Lokalny `master`, `origin/master` i live remote zgadzają się na
+`d9f2beadef172be080ae6844ff43e8fa846ee3b9`; unmerged entries i staged paths są
+puste. Pełny status nadal nie może wejść do submodule
+`external_solvers/3`; wspólne dirty pliki poza zakresem zachowano, zmian nie
+stage'owano i nie tworzono worktree ani commitów.
+
+Szacunkowe pokrycie całości E0–E7 wynosi **55–60%**: E0–E1 są w większości
+zrealizowane; E2–E5 pozostają częściowe, a E6–E7 nierozpoczęte. Ten fragment
+zamyka lokalną warstwę authoringu polityki, ale nie kwalifikuje browser/runtime
+zachowania ani skuteczności admission. Otwarte pozostają m.in. pełna kwalifikacja
+profili i zasobów, batch lifecycle/cancellation oraz wszystkie etapy E6–E7.
+
+### E4 — odizolowanie capability operatora od workerów — 15.10.2026
+
+Przegląd granicy procesu wykazał, że API otrzymuje losowy token operatora w
+zmiennej środowiskowej, a potomne `Command` domyślnie dziedziczą środowisko.
+Wspólny helper usuwa capability przed każdym wykrytym spawnem w API: accepted
+worker, FEM preparator, runtime service i jego schedulery, semantic validator,
+NVIDIA telemetry i resource-pool discovery. Dodano regresję źródłową dla
+`Command::env_remove`; skrypt solvera nie powinien otrzymać uprawnienia PUT.
+
+Zarządzany `api-service-source-check` zakończył się `passed` dla HEAD
+`d9f2beadef172be080ae6844ff43e8fa846ee3b9` (receipt
+`7dd8a94e650b4f82976c12a1fa3d0431`); obejmuje API, runtime service oraz
+powiązane schedulery/workery. `api-resource-pool-check` także `passed`
+(receipt `f2578f714f8b4e829a3bd93a19356138`). Pierwszy check puli miał
+`source_changed`: w trakcie zmienił się niezwiązany
+`crates/fullmag-application/src/batch_expansion_tests.rs`; porównanie hashy
+potwierdziło, że był to jedyny zmieniony plik. Po ustabilizowaniu snapshotu
+powtórny check przeszedł. Ten plik zachowano bez zmian przez zadanie.
+
+Testów nie kompilowano ani nie uruchamiano. Browser proof nadal
+**NOT VERIFIED**; backendowi API nie przekazano rzeczywistej capability przez
+działającą aplikację. Scoped `git diff --check` dla zmian tej poprawki:
+**PASS**. Zmian nie stage'owano; brak commitów i nowego worktree.
+
+### Bieżący snapshot — 15.10.2026
+
+Lokalny `master`, `origin/master` i live remote wskazują
+`f4c15a8781a8bc43fa72464b81d074aaa973898c`. Końcowe zarządzane
+`api-service-source-check` (`064f4be337794edd870ec44342433692`) oraz
+`api-resource-pool-check` (`f5e47e72a4cc45ff8089e74288d311cd`) zakończyły się
+`passed` dla tego SHA przy `source_changed=false`. `project-entrypoint-check`
+zakończył się `passed` dla wcześniejszego source HEAD
+`df12c14ae5bc3d17fa8867c9da802eead51e88de`; nie traktuję go jako kontroli
+całego bieżącego commita. Scoped `git diff --check` dla zmienionych plików
+zadania także przeszedł. Nie kompilowano ani nie uruchamiano testów jednostkowych.
+
+Brak konfliktów merge i staged paths; dirty pliki wspólnego checkoutu, w tym
+prace poza zakresem, pozostają zachowane. Zmian nie stage'owano, nie
+commitowano ani nie tworzono nowego worktree. Szacunek pokrycia E0–E7 pozostaje
+**55–60%**; etapy E2–E5 są nadal częściowe, a E6–E7 oczekują na realizację.
+
+### E5 — anulowanie zadania w opublikowanym case — 15.10.2026
+
+`ProjectBatchesSection` udostępnia Cancel dla accepted/queued oraz Stop dla
+preparing/running tasków wybranego child runu. Wykorzystuje istniejącą trwałą
+mutację `cancelRunTask`: przed claimem żądanie jest związane z aktualną rewizją
+katalogu, a po claimie wysyła komendę Stop. Po ACK odświeżane są run, cases i
+batch; niepowodzenie mutacji jest rozróżnione od zaakceptowanej mutacji z
+nieudanym odświeżeniem. Dodano źródłowe regresje dla Stop aktywnego taska i
+rewizyjnego cancel queued taska.
+
+`git diff --check` dla komponentu i regresji: **PASS**. ESLint nie uruchomił
+analizy, bo host nie ma dostępnego executable `eslint`; testów nie kompilowano
+ani nie uruchamiano. To kontrola taska child, nie atomowy batch-level pause/
+cancel; retry oraz browser/runtime proof nadal pozostają otwarte. Bieżący
+checkout jest na `master` i `origin/master` `08c633413ae0afab4b0c658eee6e160763059be0`;
+zmiany pozostają unstaged, bez commita i bez worktree.
+
+### E5 — trwałe komendy admission dla batcha — 15.10.2026 (WIP)
+
+Checkpoint ekspansji batcha w wersji v2 zachowuje teraz append-only historię
+komend z revision CAS, payload digest i idempotentnym replay; v1 bez komend
+pozostaje czytelne. API źródłowo obsługuje
+pause/resume oraz `cancel_admission`; cancel zatrzymuje publikację następnych
+cases, a już opublikowane przypadki mogą dokończyć pracę. Publisher serializuje
+odczyt bramki, zapis child RunIntent i przesunięcie kursora na wspólnym writerze,
+więc komenda przyjęta przed publikacją nie przepuszcza kolejnego case. Lista
+batchy zwraca stan expansion i revision komend. Dodano regresję store dla
+replay, pause/resume, cancel admission i monotonicznego kursora.
+
+Scoped `git diff --check` dla zmian Rust tej części: **PASS**. `just
+generate-api-openapi` zakończyło się błędem procesu `-1073741502`; OpenAPI i
+wygenerowany klient pozostają nieodświeżone. Nie kompilowano ani nie uruchamiano
+testów jednostkowych zgodnie z AGENTS.md. UI jeszcze nie wysyła tych komend;
+widok batcha rozpoznaje stany paused/cancelled. Cancel aktywnych child tasks,
+retry i indeks attemptów pozostają otwarte.
+Browser/runtime proof: **NOT VERIFIED**.
+
+Snapshot 15.10.2026: `master` i `origin/master` wskazują
+`8d8ec18a31ff038e3a1b0f374fe5b8977f4b20ae`; unmerged entries i staged paths są
+puste. Wspólny checkout zawiera również dirty pliki spoza tej części; żadnego
+nie stage'owano ani nie commitowano i nie tworzono worktree. Pokrycie E0–E7
+pozostaje szacunkowo **55–60%**: ten backendowy fragment jest WIP do czasu
+generacji klienta, UI, pełnego batch lifecycle i wymaganej kwalifikacji.
+
+### E5 — batch-level cancellation i paged task fanout — 15.10.2026
+
+Batch inspector udostępnia teraz dwie osobne akcje. Gdy batch może jeszcze
+publikować cases, `Cancel pending` trwale zamyka admission; po ACK pobiera cały
+stabilny case prefix i zleca cancel accepted/queued tasków po ich bieżącej
+rewizji katalogu. Aktywne taski pozostają uruchomione. `Stop active + cancel
+pending` używa tego samego fence admission, dodatkowo wysyła Stop do
+preparing/running tasków i czeka w UI na osobne terminalne statusy.
+Stronicowanie case’ów sprawdza postęp cursorów i duplikaty między stronami.
+Niejednoznaczna odpowiedź zachowuje ten sam batch command ID i zestaw task
+cancellation IDs; jawne HTTP 4xx wymaga refreshu i ponownego wyboru akcji. Case
+task summary zwraca zwalidowane względem katalogu
+`cancellation_requested`, więc odświeżenie nie tworzy nowego żądania dla taska,
+który już ma trwałą cancellation intent. Case’y oczekujące na materializację są
+raportowane do ponownego sprawdzenia po refreshu.
+
+Dodano źródłowe regresje UI dla obu ścieżek, retry po utracie odpowiedzi,
+revision-fenced queued task i pomijania istniejącej cancellation intent;
+test Rust sprawdza przejście `cancellation_requested=false → true`. Testów nie
+kompilowano ani nie uruchamiano zgodnie z AGENTS.md. `api-openapi-codegen`
+(`4400c5471dcf461381eede39f4830ff9`) oraz generated client (`721d10352df44d08a85e9747a0ce9d9b`)
+zakończyły się `passed`; `api-hygiene`
+(`c061039baf2f4041afa8b0667c0db1c1`) także `passed`. `git diff --check` dla
+zmienianych plików przechodzi. Rustfmt check nie wystartował: jego proces nie
+mógł skanonizować katalogu repozytorium z powodu `Access denied`.
+
+Frontend `production-source` pozostaje **NOT VERIFIED** — host nie ma
+skonfigurowanego `typescript-native`; ESLint pozostaje **NOT VERIFIED** z powodu
+brakującego `@eslint/compat`. Browser, managed runtime, rzeczywiste terminalne
+receipts i skuteczność zwolnienia zasobów także **NOT VERIFIED**. Lokalny
+`master` i `origin/master` wskazują `8dd76eb9b39bdd5b9b97ac67b00877400820fe82`;
+ten równoległy commit dotyczy wyłącznie browser/runtime evidence dla innego
+obszaru. Staged paths są puste; istniejące dirty pliki zadania i prace spoza
+zakresu zostały zachowane, bez commitów i bez nowego worktree. Pokrycie E0–E7
+szacuję obecnie na **60–62%**. E1–E5 wciąż są częściowe; E6–E7 pozostają
+nierozpoczęte.
+
+### Bieżący snapshot po synchronizacji mastera — 15.10.2026
+
+Lokalny `master`, `origin/master` i `origin/HEAD` wskazują
+`3982c38a5f40575a12085f0367706eb7c30b0359`. Od snapshotu kontroli E5 na
+`8dd76eb9b39bdd5b9b97ac67b00877400820fe82` historia remote przesunęła się o
+cztery pliki testów/dokumentacji poza zmianą Compute Environment i batch
+cancellation. Z tego powodu nie przypisuję wcześniejszym kontrolom statusu
+pełnego sprawdzenia nowego SHA; zachowują wartość dla niezmienionych źródeł API.
+
+`git diff --cached --name-only` i `git ls-files -u` są puste: nie ma staged
+paths ani nierozwiązanych konfliktów. Wspólny checkout zawiera liczne lokalne,
+niestage'owane zmiany w Compute Environment, API, Inspectorze oraz innych
+obszarach; pozostawiono je bez zmian. Nie utworzono worktree ani commitów.
+
+Pokrycie pozostaje szacunkowo **60–62%**. E0 jest zrealizowany; E1–E5 są
+częściowe, w tym E5 ma trwałe komendy admission, przegląd paginowanych cases
+i batch-level cancellation. Retry attempts z lineage oraz pełne browse/
+materialization reconciliation nadal są otwarte. E6–E7 nie rozpoczęto. Testów
+jednostkowych nie kompilowano ani nie uruchamiano; browser, managed runtime,
+terminalne receipts i zwolnienie zasobów są **NOT VERIFIED**. Kontrole
+`api-openapi-codegen`, generated client i `api-hygiene` zakończyły się
+`passed` na wcześniejszym snapshotcie, ale nie są pełną bramką dla aktualnego
+HEAD.
+
+### E3 — wielogrupowe CPU affinity Windows — 15.10.2026
+
+Windows worker mapuje przydzielone globalne CPU IDs na posortowane
+`GROUP_AFFINITY` i ustawia `JobObjectGroupInformationEx` całego worker Job po
+przypisaniu procesu, ale przed zwolnieniem bramki startowej. Odczyt
+`QueryInformationJobObject` musi dokładnie zgadzać się z żądaniem; błąd lub
+różnica pozostawia solver przed startem i zgłasza awarię przygotowania.
+Windows probe odczytuje tę samą affinity Job, mapuje maski grup na CPU IDs
+snapshotu i odrzuca pustą, zduplikowaną albo niezgodną z bieżącą topologią
+maskę. Dodano regresje źródłowe dla mapowania przez granicę grupy i
+odrzucenia CPU spoza topologii.
+
+`git diff --check` dla obu źródeł: **PASS**. `cargo fmt --check` i bezpośredni
+`rustfmt --check` nie mogły skanonizować katalogu repozytorium (`Access
+denied`). Zarządzana recepta `windows-backend-dev` najpierw nie wystartowała
+przez błąd obiektu NT w Git Bash; bezpośredni launcher Windows zakończył
+preflight na odmowie dostępu do `storage/.initialize.lock`. Nie rozpoczął się
+build, testów jednostkowych nie kompilowano ani nie uruchamiano, a kompilacja
+Windows i rzeczywiste runtime affinity pozostają **NOT VERIFIED**. Nie
+obchodzono blokady storage.
+
+### E5 — odzyskiwanie materializacji child run — 15.10.2026
+
+Inspector batcha udostępnia teraz `Materialize tasks` dla opublikowanego child
+runu w stanie `pending_materialization`. Akcja wywołuje istniejący, idempotentny
+`POST /v2/persistence/projects/{project_id}/runs/{run_id}/materialization`;
+po sukcesie resource hook unieważnia szczegóły runu, listę runów i przypadki
+batcha na zwróconej `catalog_revision`, a Inspector odświeża ich status.
+Niepewny wynik transportu zachowuje dokładne `run_id` i pokazuje retry, dzięki
+czemu ponowienie korzysta z tej samej trwałej tożsamości child runu.
+Jednoznaczne odrzucenie HTTP 4xx dostaje osobny komunikat z kodem i przyczyną;
+nie jest etykietowane jako niepewny timeout i nie oferuje „Retry materialization”.
+Backendowa
+granica znajduje się w `crates/fullmag-api/src/router_v2/handlers/persistence/projects.rs`
+(handler materializacji); trwały helper
+`crates/fullmag-api/src/run_intent_persistence.rs::materialize_accepted_run_catalog`
+zwraca istniejący katalog przy powtórzeniu tej samej materializacji.
+
+Dodano test UI dla timeoutu, retry tego samego `run_id`, odrębnej odpowiedzi
+409 oraz test resource hooka sprawdzający unieważnienie trzech rodzin zasobów.
+Testów nie kompilowano
+ani nie uruchamiano zgodnie z AGENTS.md. `git diff --check` dla zmienionych
+plików przechodzi; React Doctor dla zmienionego zakresu uruchomił się, lecz
+pozostaje **NOT VERIFIED**: po wyborze projektu nie zwrócił postępu ani wyniku
+przez kilka minut i został przerwany. Browser proof także **NOT VERIFIED**:
+lokalny workspace na `localhost:3197` zwrócił `ERR_CONNECTION_REFUSED`.
+Zmiana zamyka ręczną ścieżkę uzgodnienia
+pojedynczej opublikowanej materializacji; nie realizuje retry attempts z
+lineage ani pełnego lifecycle/reconciliation wszystkich batch cases.
+
+Snapshot: lokalny `master` i `origin/master` wskazują
+`5260690815131bc610450606398e951439d6f290` (`docs(refactor): record passing
+Control Room integration gates`). `git fetch origin` zakończył się
+powodzeniem, a bieżący odczyt `origin/master` jest zgodny z lokalnym HEAD;
+nie ma nierozwiązanych wpisów indeksu.
+Wspólny checkout nadal ma liczne niestage'owane zmiany z kilku prac; zachowano
+je bez commitów i bez nowego worktree. Pokrycie E0–E7 nadal szacuję na około
+**62%**: E0 ukończony, E1–E5 częściowe, E6–E7 nierozpoczęte. Build Windows,
+testy, browser, managed runtime i terminalne receipts pozostają **NOT VERIFIED**.
+
+### E2 — nieznana pojemność CPU nie otwiera admission — 15.10.2026
+
+`compute_node_probe` nie publikuje już efektywnej pojemności wyliczonej z
+affinity lub `available_parallelism`, kiedy próbka limitu CPU zawiodła.
+Windows raportuje `Unlimited` wyłącznie poza Job Object; wewnątrz Job Object
+oznacza quota jako `Unsupported`, bo przy zagnieżdżonych jobach nie można
+potwierdzić limitu przodka. `HostResourceLedger` odrzuca teraz owner-bound
+rezerwację CPU, jeśli efektywna pojemność jest niedostępna, zamiast traktować
+brak obserwacji jak brak limitu. Odmowa nie publikuje rezerwacji.
+
+Dodano źródłowe regresje dla nieznanego limitu w samplerze i admission ledger.
+`git diff --check` dla obu plików: **PASS**. Read-only `rustfmt --check`
+przetworzył pliki, lecz zgłosił istniejące różnice formatowania w innych
+fragmentach tych dużych, lokalnie zmienionych źródeł; nie przeformatowano ich
+hurtowo. Testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z
+AGENTS.md. Linux/Windows build, runtime admission i affinity pozostają
+**NOT VERIFIED**.
+
+### E5 — scoped cancellation pojedynczego case’a — 16.10.2026
+
+`ProjectBatchesSection` pokazuje teraz `Cancel case` wyłącznie dla opublikowanego
+child runu z materialized task catalog. Operacja dotyka tasków tylko tego
+CaseId: tworzy trwałe cancellation intent dla accepted/queued i wysyła Stop do
+preparing/running. Sąsiednie cases pozostają dostępne. Niepublikowany child
+run i `pending_materialization` pokazują powód braku tej akcji.
+
+Niepewna odpowiedź zachowuje dokładne request IDs i oczekiwane rewizje; po
+potwierdzeniu kolejnego intentu plan przesuwa rewizję następnego taska tego
+samego runu zgodnie z odpowiedzią API. Po ostatnim żądaniu Inspector ponownie
+odczytuje case i nie zgłasza zakończenia, dopóki resource nie pokaże
+cancellation intent, `stopping` albo stanu terminalnego. Przy opóźnionym
+readmodel retry odświeża status bez ponownego wysyłania zakończonych żądań.
+Batch-level fanout korzysta z tego samego sekwencyjnego fencing rewizji.
+
+Dodano regresję źródłową dla izolacji sąsiedniego case’a, retry identycznego
+requestu po nieznanym wyniku, rewizji kolejnego pending taska oraz braku akcji
+przed materializacją. Testów jednostkowych nie kompilowano ani nie uruchamiano
+zgodnie z `AGENTS.md`. Scoped `git diff --check`: **PASS**. React Doctor wybrał
+projekt Control Room, po czym nie zwrócił wyniku przez kilka minut i został
+przerwany; ESLint zakończył się błędem brakującego `@eslint/compat`. Obie
+kontrole pozostają **NOT VERIFIED**. Browser, build, managed runtime i terminalne
+receipts dla tej zmiany także **NOT VERIFIED**.
+
+SHA-256 źródeł po zmianie:
+
+- `apps/control-room/src/modules/inspector/panels/ProjectBatchesSection.tsx`:
+  `CF09F98115A5F51C8044B35DA44655B1354740D7386C381E0409789147DBF24D`.
+- `apps/control-room/src/modules/inspector/panels/ProjectBatchesSection.test.tsx`:
+  `C86CDAA5DCB6D70B554CEFB8AFBBAC71C63D27CFB1661111087178B8E42E889E`.
+
+Lokalny `master` i `origin/master` wskazują
+`f9179caf0a0681bdc92c2a87a308be21e9903919`; staged paths i unmerged entries
+są puste. Zmiany pozostają lokalne, bez commitów i worktree. Zachowano pięć
+niepowiązanych dirty plików workspace/Python. Szacunek całego E0–E7 pozostaje
+około **62%**: ten fragment rozszerza częściowe E5, nie zamyka etapu. E6–E7
+pozostają nierozpoczęte.
+
+### E5 — operatorowy retry pojedynczego taska child (częściowo wdrożony) — 16.10.2026
+
+Dodano szkic endpointu `POST .../runs/{run_id}/tasks/{task_id}/retry` z
+rev-fenced requestem i stabilnym `retry_id`. Handler dopuszcza tylko taski
+`failed`/`interrupted`, wymaga pojedynczego process-exit receipt dokładnie dla
+bieżącego run/task/attempt/epoch/resource oraz odrzuca aktywny lease. Zapisuje
+trwałe `FmsRetryDecision` i stosuje je bez niejawnego zwalniania lease. Replay
+tej samej decyzji oraz odzyskanie decyzji zapisanej przed awarią obejmują okno
+między trwałym intentem a przejściem taska do `queued`. Dodano źródłową regresję
+HTTP odrzucającą retry taska w stanie `accepted`. Dodatkowo handler wymaga
+potwierdzenia `Released` dokładnie tej lease wskazanej przez exit receipt,
+zgodnego run/task/attempt/epoch/resource/token/heartbeat; sam brak aktywnej
+lease nie jest uznawany za dowód zwolnienia. Dodano źródłową regresję
+porównującą exact fence z lease.
+
+OpenAPI oraz wygenerowany klient mają nową trasę i typy. Fasada Control Room
+udostępnia retry, resource hook zachowuje ten sam `retry_id` po niepewnym
+wyniku i usuwa zapisany intent po sukcesie albo potwierdzonym konflikcie rewizji.
+Inspector pokazuje akcję wyłącznie dla taska `failed`/`interrupted` bez
+cancellation intent. Źródłowe regresje obejmują exact Released lease,
+powtórzenie tego samego intentu po nieznanym wyniku, nowy intent po konflikcie
+rewizji oraz widoczność akcji w Inspectorze.
+
+Zarządzane kontrole: `just check-api-source` **PASS**, receipt
+`3b3671ecdb3043cba962ef67421b11d5`; `just generate-api-openapi` **PASS**, receipt
+`ee50051112274f5b8cc1aab4a92ffeb6`; `just generate-control-room-client`
+**PASS**, receipt `71474c109ac4448681b7969c216ae700`; `just
+check-control-room-api-hygiene` **PASS**, receipt
+`f11cc57384e34809a482b73ce6c1bcdb`.
+Kontrola `just check-control-room-production-source` nie wystartowała z powodu
+brakującego pakietu `typescript-native` w `apps/control-room/node_modules`, receipt
+`b44d7ba106af4b62b131aa5ed76a62fe`. Pełna kontrola produkcyjnego TypeScript
+pozostaje **NOT VERIFIED**. Scoped `git diff --check`: **PASS**. Testów
+jednostkowych nie kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`.
+Browser, runtime i terminalne receipts dla retry pozostają **NOT VERIFIED**.
+Ten fragment domyka operatorową ścieżkę żądania retry, ale pełna reconciliation
+batch cases, przeglądanie artefaktów wyników i runtime/browser acceptance E5
+pozostają otwarte.
+
+Lokalny `master` i `origin/master` nadal wskazują
+`f9179caf0a0681bdc92c2a87a308be21e9903919`; staged paths i unmerged entries są
+puste. Zmiany pozostają lokalne; nie commitowano i nie tworzono worktree.
+Szacunek całego E0–E7 pozostaje około **62%**: endpoint to nieukończony fragment
+E5, a E6–E7 nadal nie rozpoczęto.
+
+### E5 — podgląd artefaktów wyników case w Inspectorze (częściowo wdrożony) — 16.10.2026
+
+Do `ProjectBatchesSection` dodano wejście do podglądu wyników konkretnego child
+Runu. Lokalny panel Inspectora stronicuje członków SolutionSet i ich artefakty,
+sprawdza digest manifestu przed pokazaniem stron, prezentuje zweryfikowane
+scalar artifacts oraz pozwala otworzyć materialized dataset wyłącznie po
+zgodności ścieżki, referencji i rozmiaru artefaktu oraz stanie integrity
+`verified`. Member i scalar details pokazują `attempt_id` oraz ocenę naukową,
+żeby zachować widoczną linię prób w przeglądanych wynikach. Wybór datasetu używa
+typowanej, przypiętej selekcji kernela; nie dodano endpointów ani importu z
+wewnętrznego modułu Results Navigator.
+
+Weryfikacja źródeł batch publishera potwierdziła idempotentny replay okna
+`RunIntent` zapisany przed kursorem: retry expansion publikuje ten sam child
+intent i przesuwa cursor pod tym samym writer lease. Istniejący test
+`project_documents` również sprawdza widoczność takiego dziecka przed awansem
+kursora. Pozostałe failure/restart punkty i ich runtime reconciliation nadal
+nie mają pełnego acceptance dowodu.
+
+Dodano źródłowe regresje dla otwarcia przypiętego datasetu, scalar read
+związany z manifest digest/object ref/byte length, odrzucenia strony członków z
+innym manifest digest oraz blokady przy innej referencji/rozmiarze datasetu.
+Testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z
+`AGENTS.md`. `git diff --check` zmienionego pliku sekcji: **PASS**; kontrola
+końcówek linii sygnalizuje konwersję CRLF→LF przy następnym zapisie.
+
+`just check-control-room-production-source` i `just doctor-control-room-source`
+zakończyły się kodem procesu Windows `-1073741502`; oba zwróciły wyłącznie błąd
+recepty, bez diagnostyki źródła ani ścieżki receipt. TypeScript production,
+React Doctor, przeglądarka i runtime dla tej zmiany pozostają **NOT VERIFIED**.
+Odczyt aktywnej karty `127.0.0.1:32871/workspace` potwierdził reconnecting
+session services, nieudany compute probe oraz `API contract version mismatch:
+expected 1.0.0, got missing`; port `localhost:3197` odrzucił połączenie.
+To zamyka tylko część przeglądania wyników E5; pełna reconciliation case’ów,
+testy concurrency/fairness/cancel/retry po restarcie, acceptance cap≥4 oraz
+runtime/browser acceptance nadal pozostają otwarte. E6–E7 nie rozpoczęto.
+
+Zmiany pozostają lokalne na `master`, bez stagingu, commita i nowego worktree.
+Szacunek całego E0–E7 pozostaje orientacyjnie około **62%**; pojedynczy fragment
+Inspectora nie zmienia faktu, że E1–E5 mają otwarte bramki, a E6–E7 są oczekujące.
+
+### E3 — limit CPU procesu potomnego Windows — 16.10.2026
+
+Host-bound solver i FEM preparator pobierają świeży `ComputeNodeSnapshot` przed
+zapisem durable launch intentu. Z `lease.budget.cpu_millis` i tej próbki
+wyliczają limit Job Object jako
+`floor(cpu_millis * 10000 / effective_capacity_millis)`, w skali 0.01%.
+Nieprawidłowy budżet, brak świeżej pojemności albo limit poniżej precyzji OS
+zamyka spawn. Przed przypisaniem i otwarciem startup gate Job Object ustawia
+`ENABLE | HARD_CAP`, odczytuje limit z powrotem i wymaga dokładnej zgodności;
+nieudane ustawienie/odczyt nie uruchamia solvera. Legacy worker bez host
+bindingu zachowuje dotychczasowe zachowanie. `HostRuntimeAdmission` zwraca
+sprawdzony snapshot, którego używa zarówno admission, jak i wyliczenie limitu.
+
+Dodano źródłowe testy konwersji, pełnego limitu 100%, zaokrąglenia w dół i
+odrzucania budżetu poza zakresem/precyzją. Testów jednostkowych nie
+kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`. Scoped `git diff --check`
+dla trzech supervisor/helperów i runtime-control: **PASS**. `just
+check-api-source` zakończył się kodem procesu Windows `-1073741502` bez nowego
+receiptu ani diagnostyki źródła; Python import i storage-path resolution
+działają, ale bieżąca kompilacja pozostaje **NOT VERIFIED**. Istniejący receipt
+`3b3671ecdb3043cba962ef67421b11d5` z 13:22 UTC ma inny digest źródeł i nie jest
+dowodem dla tej zmiany. Rustfmt i Windows runtime readback pozostają **NOT
+VERIFIED**.
+
+Nie ma jeszcze równoważnej izolacji quota per worker dla Linux cgroup v2.
+Odczyt quota hosta działającego wewnątrz Windows Job Object także pozostaje
+unavailable; osobno otwarte są measured execution receipts, NUMA oraz runtime
+proof dla Linux/Windows. Zmiany pozostają dirty na współdzielonym `master`;
+bez stagingu, commita, resetu i nowego worktree. Cały E0–E7 nadal w toku;
+konserwatywny szacunek wzrasta z około 62% do około **63%**. E6–E7 nie
+rozpoczęto.
+
+SHA-256 `crates/fullmag-api/src/owned_worker_process.rs`:
+`67f21415c8382f651b823f213f47a9067ee82a64a1bb78e6c67c78f8f254dbd5`.
+SHA-256 `crates/fullmag-api/src/accepted_study_supervisor.rs`:
+`4b58281a8b57d69cd1f522842c34390e6aebd0c0a0fa327da8f4cba087488b81`.
+SHA-256 `crates/fullmag-api/src/accepted_fem_preparation_supervisor.rs`:
+`39e4f04a49267c99154e1dd97f66b2e9816db25a82014e7fabe57cb29ea5e125`.
+SHA-256 `crates/fullmag-runtime-control/src/host_runtime.rs`:
+`ea015a4d11b5e959508a952922e5ee2fbf77d9ea7e39fa5c9bd11d699f1c6cb9`.
+
+### E3 continuation — CPU quota walidowane przed trwałą autoryzacją startu — 16.10.2026
+
+Walidację dokładności Windows Job Object przeniesiono z funkcji spawn do
+supervisorów. Solver sprawdza ją przed `authorize_worker_launch`, a FEM
+preparator przed `commit_preparation_process_launch`; nieosiągalna kwota nie
+zużywa zatem trwałej bramki uruchomienia i nie pozostawia nowego launch intentu
+bez procesu. Wyliczony limit jest przekazywany do wspólnego helpera procesu,
+który nadal wymaga OS readback przed zwolnieniem startup gate. Ścieżki Linux
+pozostają bez zmian i nadal nie mają quota per worker.
+
+Po tej korekcie ponowiono jedynie źródłowy `git diff --check`: **PASS**.
+`just check-api-source` wciąż kończy się przed receipt kodem Windows
+`-1073741502`; nie jest to dowód kompilacji tej korekty. Testów jednostkowych
+nie kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`.
+
+Aktualne SHA-256 po korekcie kolejności launch:
+`owned_worker_process.rs` — `67f21415c8382f651b823f213f47a9067ee82a64a1bb78e6c67c78f8f254dbd5`;
+`accepted_study_supervisor.rs` — `4fc03c788ba9443ae7c1dce5216cf8beea5ce6ac9a9944e11a190a8a61f2219c`;
+`accepted_fem_preparation_supervisor.rs` — `8b146a9e82e0424299fbb6f3d4ea217f8387f9cac9ed4aa64e264abb9f9cadc2`;
+`host_runtime.rs` — `ea015a4d11b5e959508a952922e5ee2fbf77d9ea7e39fa5c9bd11d699f1c6cb9`.
+
+### E4 — lokalna capability do publikacji profili — 16.10.2026
+
+`POST /v2/platform/compute/profiles` wymaga teraz capability operatora
+lokalnej aplikacji Fullmag, sprawdzanej przed odczytem konfiguracji i walidacją
+profilu. OpenAPI source opisuje bearer header i odpowiedź 403. `ControlRoomApi`
+nie udostępnia już publikacji bez capability; `useComputeProbe` przekazuje token
+uzyskany przez Tauri, a hook katalogu profili pozostaje tylko do odczytu.
+Settings pokazuje powód ograniczenia i wyłącza tworzenie, duplikowanie, nową
+wersję oraz Apply w zwykłej przeglądarce. Specyfikację API zaktualizowano.
+
+Dodano source regression checks dla odmowy Origin-only w handlerze, nagłówka
+Authorization klienta i read-only Settings bez lokalnej capability. Testów
+jednostkowych nie kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`.
+`git diff --check` dla zmienionych plików: **PASS**. ESLint nie wystartował:
+`pnpm` zwrócił `EPERM: operation not permitted, realpath ...\\apps\\control-room`.
+
+`just generate-api-openapi` nadal kończy się przed receipt kodem Windows
+`-1073741502`, także z Pythonem 3.12 podanym wyłącznie dla recepty `just`.
+`runner-container-status` i `storage-info` zwracają ten sam kod. Wygenerowany
+OpenAPI oraz typy TS nie zostały odświeżone; zgodność source→OpenAPI i testy
+API są **NOT VERIFIED**. Otwarty Chrome workspace pod
+`127.0.0.1:32871/workspace` pokazuje reconnect usług i błąd brakującej wersji
+kontraktu API; dowód UI/browser dla tej zmiany pozostaje **NOT VERIFIED**.
+
+Checkout to współdzielony `master`, `HEAD` i `origin/master` są
+`f9179caf0a0681bdc92c2a87a308be21e9903919`; niczego nie stage'owano,
+nie commitowano i nie tworzono worktree. Pełny `git status` nadal zgłasza
+odmowę dostępu w obcym submodule `external_solvers/3`.
+
+SHA-256 źródeł po zmianie:
+`compute_profiles.rs` — `78dc72c1794f8fde4eb3d7a1f81ab2a6a8fd21c7e8cfea5feb07cca7993f2654`;
+`ControlRoomApi.ts` — `09a50c7c8c595a20a1a2cc1fc20ea6b3a1df55d8f21ea8af945dcebe485c0373`;
+`ControlRoomApi.test.ts` — `0261c87cacb78a3ea75c7a9fda1db6b1b811b1e17d3bb40aff71893b5b88388`;
+`useExecutionProfilesResource.ts` — `202719b543789dc264b89dee0fc3b96fbdaa9e8393e0caf7277cb526ba25ec22`;
+`types.ts` — `0e16c77e5999d31e844cd9fd358c67a2e16424603ccd578332565c5dc64bb118`;
+`useComputeProbe.ts` — `821b71304aa4b463719287e51fb9e443a9baba03d89808ebce0d8f97727aa4c4`;
+`StartScreen.tsx` — `372192f2f53ed7ec05536f0ff5481e499132ff984e625a8114eb5e5cf4e75f9b`;
+`SettingsSection.tsx` — `48d4d54e7645137fe6b0a5faF334b2f353d4eff6e2c7e9933854485f5007d69b`;
+`ExecutionProfilesSettings.tsx` — `a4b99013d49f01d8d355d421ec37464a124658b2de07b8005dbc1bf96e222c01`;
+`ExecutionProfilesSettings.test.tsx` — `5d1c9c8666daea0a4968e854acab4335dedfdc7294c81d7d329be1148c05e22d`;
+`compute-resource-execution-v1.md` — `0503f886d185df0da6928a2cc3363b826dfbf816c206dfd3dcdd3bfe017c6ad0`.
+
+Cały zakres E0–E7 pozostaje szacunkowo na **63%**: E0 jest ukończony,
+E1–E5 nadal częściowe, E6–E7 nierozpoczęte. Ta zmiana domyka wyłącznie
+źródłową granicę autoryzacji profili w E4; synchronizacja wygenerowanych
+kontraktów, lint, browser proof i runtime pozostają otwarte.
+
+### E4 continuation — wygenerowany kontrakt i source gates — 16.10.2026
+
+Powyższy stan „OpenAPI oraz typy TS nie zostały odświeżone” opisuje pierwszą,
+nieudaną próbę i został zastąpiony wynikami poniżej. Zarządzana trasa
+`api-openapi-codegen` zakończyła się **PASS** po poprawce błędu kompilacji w
+`host_runtime.rs`; receipt:
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-api-source-check/api-openapi-codegen/ec43362c9afa48e2b0604ab0cd29218b/receipt.json`.
+Wygenerowano OpenAPI v2, ścieżki i typy klienta. Trasa `generate-client`
+zakończyła się **PASS**:
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-control-room-source-check/generate-client/414421ac7f914fd1b48b10e83951475b/receipt.json`.
+`api-source-check` i `api-hygiene` również zakończyły się **PASS**; ich
+receipty to odpowiednio
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-api-source-check/api-source-check/9780a98e2bbc46bfb57b65551a3b3066/receipt.json` oraz
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-control-room-source-check/api-hygiene/aaa71cc462f949849f3bf3362b8683c7/receipt.json`.
+
+Frontendowy `production-source` pozostał **NOT VERIFIED**: trasa zakończyła się
+przed typecheckiem, bo brakuje `typescript-native` w zależnościach. Rozwiązany
+`FULLMAG_FRONTEND_ROOT` istnieje, ale nie zawiera istniejącego workspace'u;
+nie instalowano ani nie zmieniano zależności.
+Receipt:
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-control-room-source-check/production-source/e8c1b0be203b4c2ab7b625b1d773dc13/receipt.json`.
+Testów jednostkowych nie kompilowano ani nie uruchamiano. ESLint nadal nie
+startuje przez `pnpm` `EPERM`, a bieżący backend nie daje poprawnego dowodu
+browser/UI; lint, browser i runtime pozostają **NOT VERIFIED**.
+
+`git diff --check --ignore-submodules=all`: **PASS** (Git zgłosił ostrzeżenia
+o normalizacji CRLF/LF). Checkout nadal jest na `master`, `HEAD` i
+`origin/master` są zgodne, nie ma staged files ani unmerged entries. Cały
+zakres pozostaje szacunkowo na **63%**: pozytywne kontrole źródeł synchronizują
+E4, lecz nie zamykają runtime ani kwalifikacji UI; E6–E7 nadal nie rozpoczęto.
+
+### E5 continuation — paginated result browser — 16.10.2026
+
+W aktualnym drzewie `BatchCaseResults` przegląda strony SolutionSet members i
+ich artifacts przez typed resource hooks. Scalar read jest przypięty do
+manifest digest, object reference i byte length. Dataset można otworzyć w
+Inspectorze dopiero po zgodności ścieżki, revision, artifact metadata i
+`integrity=verified`; selekcja jest pinned dataset reference, nie kopią
+canonical data w stanie UI.
+
+Klucz komponentu zawiera teraz `projectId`, `runId`, SolutionSet ID, revision i
+manifest digest. Dzięki temu lokalna strona/member/artifact selection nie
+przechodzi do innego runu nawet wtedy, gdy SolutionSet ma te same widoczne
+identyfikatory. Istnieją źródłowe testy dla pinned dataset/scalar, niezgodnych
+bytes i manifestu; nie kompilowano ani nie uruchamiano testów jednostkowych
+zgodnie z `AGENTS.md`.
+
+`git diff --check --ignore-submodules=all`: **PASS**; typecheck i browser proof
+dla result UI pozostają **NOT VERIFIED**. E5 nadal wymaga pełnej reconciliation
+case’ów i runtime/browser acceptance. Konserwatywny szacunek całego E0–E7
+wzrasta do około **64%**: jeden wcześniej otwarty element UI ma implementację
+źródłową, ale nie ma jeszcze dowodu kompilacji ani działania w przeglądarce.
+
+### E6 continuation — durable provider job identity — 16.10.2026
+
+Dodano do `fullmag-session` trwały typ `FmsProviderJobSubmission`, związany
+z dokładnym `run/task/attempt/ownership_epoch`, providerem, targetem,
+schedulerem, admitted `resource_id`, digestem requestu i stabilnym idempotency
+key. Stan początkowy
+`submission_unknown` jest zapisywany przed kontaktem z providerem. API store
+pozwala przygotować intent, odczytać go, wyliczyć rekordy do reconnection i
+zapisywać obserwacje z kontrolą monotonicznej rewizji; provider job ID pozostaje
+niezmienny.
+
+Nowy intent wymaga istniejącego admission, zgodnego `Preparing` attemptu oraz
+aktywnego lease. Retry i admission następnego attemptu są blokowane, dopóki
+wszystkie provider job records danego taska nie będą terminalne (`rejected`
+oznacza potwierdzoną odmowę bez joba). Dodano test
+źródłowy dla replay intentu, niezmiennego provider job ID i blokady retry w
+stanie `running`; testu nie skompilowano ani nie uruchomiono zgodnie z
+`AGENTS.md`.
+
+To jest trwały rdzeń reconciliation, nie działający adapter zewnętrzny. Nadal
+brakuje wywołań provider API, remote node enrollment/identity i reconnect,
+transferu/resume CAS, stage-in/out, integracji allocation adaptera oraz UI.
+`git diff --check --ignore-submodules=all`: **PASS**. Build, testy, provider
+runtime, reconnect oraz kwalifikacja E6 pozostają **NOT VERIFIED**. Cały zakres
+E0–E7 szacuję na około **65%**; E6 ma pierwszy kod źródłowy, a jego pełna ścieżka
+i całe E7 nadal pozostają otwarte.
+
+### E5 continuation — durable batch-case retry — 16.10.2026
+
+Dodano komendę retry na poziomie batcha, przypiętą do stabilnych
+`CaseId`/`RunId`/`TaskId`, `command_id`, `retry_id` i oczekiwanej rewizji
+katalogu. Store wykonuje preflight przed trwałym zapisem komendy; retry
+wymaga terminalnego receipt poprzedniego taska i zwolnionej dokładnej lease.
+Replay po nieznanym ACK zachowuje identyfikatory próby, a nowa rewizja katalogu
+tworzy nową próbę. Frontend Inspector przekazuje retry przez typed batch command
+hook i odświeża zasoby po błędzie.
+
+`generate-api-openapi`, `generate-control-room-client` i
+`check-control-room-api-hygiene`: **PASS**, bez zmian źródeł w trakcie tras.
+Receipty: `storage/builds/fullmag-0950f4dca4ffe38f/windows-api-source-check/api-openapi-codegen/7b8114ff4cc3415ab265564c178e96cd/receipt.json`,
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-control-room-source-check/generate-client/096a2b7da4ed471182658eea14da7986/receipt.json` oraz
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-control-room-source-check/api-hygiene/490268802b00483eae5f16cac49d9ba6/receipt.json`.
+`doctor-control-room-source`: **PASS**, jeden znany warning
+`react-doctor/prefer-useReducer` w istniejącym `ProjectBatchesSection.tsx:107`.
+
+Lint jest **NOT VERIFIED**: ESLint nie uruchomił się z powodu brakującego
+`@eslint/compat`. Frontendowy `production-source` także jest **NOT VERIFIED**,
+bo brakuje `typescript-native`; nie instalowano zależności. Źródłowe testy
+regresyjne dodano, ale zgodnie z `AGENTS.md` nie kompilowano ani nie
+uruchamiano testów jednostkowych. Browser/runtime dla retry oraz pełna
+reconciliation batcha pozostają **NOT VERIFIED**.
+
+Po usunięciu pustej linii na końcu pliku testowego
+`git diff --check --ignore-submodules=all`: **PASS**. Checkout pozostaje na
+współdzielonym `master`, bez stagingu, commita i worktree. Cały zakres E0–E7
+szacuję na około **66%**: retry batcha ma implementację źródłową, lecz E1–E5
+pozostają częściowe, E6 ma wyłącznie trwały szkielet provider-job, a E7 oraz
+kwalifikacja runtime/przeglądarki nadal są otwarte.
+
+### E1 continuation — backendowe legacy device env w materializacji profilu — 16.10.2026
+
+Zadeklarowany profil skryptu importuje teraz jawny wybór urządzenia z
+`FULLMAG_FDM_EXECUTION` albo `FULLMAG_FEM_EXECUTION` do tej samej warstwy
+`legacy_env`, z origin wskazującym dokładną zmienną. Wybór lane jest zgodny z
+backendem CLI i dotychczasową regułą dla `auto`; wartości `cpu`, `gpu`, `cuda`
+i `all_in_gpu` są mapowane na kanoniczne `cpu`/`gpu`, a `auto` nie dodaje
+ograniczenia. Konflikt z jawnym profilem przechodzi przez konflikt resolvera.
+Podsumowanie żądania skryptu korzysta teraz z tego samego wyboru backendowego,
+więc nie raportuje zawsze FDM, gdy CLI uruchamia FEM.
+
+Dodano źródłowe regresje wyboru zmiennej i zachowania originu; zgodnie z
+`AGENTS.md` nie kompilowano ani nie uruchamiano testów jednostkowych.
+`git diff --check --ignore-submodules=all`: **PASS** (ostrzeżenia normalizacji
+CRLF/LF). `rustfmt --check` jest **NOT VERIFIED**, ponieważ narzędzie nie mogło
+skanonikalizować katalogu checkoutu (Windows `os error 5`). Produkcyjny
+`check-cli-source` również pozostaje **NOT VERIFIED**: przed zgłoszeniem joba
+`runner-container-status` i `storage-info` zakończyły się kodem Windows
+`-1073741502`; job nie został utworzony, więc ten etap nie wygenerował danych
+stagingowych do kwalifikacji ani sprzątania. Zmiana nie domyka pozostałych wejść
+zgodności, walidacji runtime ani pełnego E1.
+
+### E1 continuation — lane-specific legacy device intent — 16.10.2026
+
+Skryptowe profile i materializacje wiążą teraz legacy device environment
+oddzielnie dla każdego `ProblemIR` (base oraz każdego etapu). Importer najpierw
+materializuje profil i jawne warstwy CLI, odczytuje backend z tego samego
+`MaterializedExecutionRequestIR`, a potem wybiera odpowiadające mu
+`FULLMAG_FDM_EXECUTION` albo `FULLMAG_FEM_EXECUTION`. `FULLMAG_CPU_THREADS`
+pozostaje wspólną warstwą zasobów CPU. Nie importuje ponownie originu już
+obecnego w przypiętej materializacji. Gdy backend jest `auto`/`hybrid` i obie
+zmienne jawnie żądają różnych urządzeń, import kończy się
+`execution_intent_conflict` zamiast wybierać jedną lane po cichu.
+
+Pythonowy export wykrywa profil na bazowym problemie, etapach albo workspace i
+w takim skrypcie pomija pojedynczy launcher-wide `runtime_device_override`.
+Resolver Rust wiąże env per etap; zwykłe skrypty bez profilu zachowują ścieżkę
+zgodności z obecnym override. Dodano regresje źródłowe dla wyboru backendu,
+konfliktu `auto` oraz wykrywania profilu w osobnym etapie.
+
+Testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z
+`AGENTS.md`. Parsowanie AST zmienionych plików Python: **PASS**.
+`git diff --check --ignore-submodules=all`: **PASS** (ostrzeżenia normalizacji
+CRLF/LF). Kontrola Rust, build i runtime pozostają **NOT VERIFIED**.
+Istniejący `Fullmag_build_runner` jest zatrzymany (`exit_code=137`, profile
+unverified), a wolne miejsce na C: wynosi ok. 5,9 GiB, poniżej progu 10 GiB;
+nie zgłoszono joba ani nie uruchomiono builda/testów.
+
+Pobrany `FETCH_HEAD`, lokalny `master` i `origin/master` wskazują
+`f9179caf0a0681bdc92c2a87a308be21e9903919`. Nie ma unmerged entries ani
+staged files; istniejące zmiany współdzielonego checkoutu pozostały zachowane.
+Cały E0–E7 nadal szacuję na ok. **66%**: ta korekta zmniejsza jedno ryzyko E1,
+ale nie zamyka jego macierzy precedence ani dalszych kryteriów, a E2–E7 i
+kwalifikacja runtime/przeglądarki nadal wymagają pracy i dowodów.
+
+### E1 continuation — walidacja wartości device env w typed profilu — 16.10.2026
+
+Importer profilu typowanego rozróżnia teraz brak/pustą wartość i `auto`
+(brak nadpisania), jawne `cpu`/`gpu`/`cuda`/`all_in_gpu` oraz nieznane wartości
+(błąd wskazujący nazwę zmiennej i wartość). Dopasowanie jest niewrażliwe na
+wielkość liter. Ogólny launcherowy helper pozostaje bez zmian; importer jest
+wywoływany wyłącznie dla skryptu z zadeklarowanym profilem.
+
+Dodano źródłową regresję dla pustego/Auto, jawnych urządzeń i nieobsługiwanej
+wartości. Testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z
+`AGENTS.md`; Rust, build i runtime pozostają **NOT VERIFIED**. Procent całego
+E0–E7 pozostaje ok. **66%**: poprawka domyka jedną ścieżkę walidacji env w E1,
+ale nie zmienia statusu etapów ani ich wymaganych dowodów.
+
+### E1 continuation — task-level pinned execution provenance — 16.10.2026
+
+GET szczegółów runu wiąże task z `step_id` przez deterministyczne
+`task_id_for_study_step`, odczytując zaakceptowany StudyPlan i
+StudyProblemCatalog z ich CAS references. Helper sprawdza referencje i digesty,
+waliduje plan/katalog oraz używa już przypiętego `execution_materialization`;
+nie rozwiązuje profilu ponownie z Settings ani stanu hosta. Task resource ma
+typowane `execution.step_id` i opcjonalny pełny snapshot materializacji.
+Historyczny katalog bez materializacji dostaje tylko step ID, bez fabrykowania
+profilu lub originów. Dodano asercje źródłowe do istniejącego testu ścieżki
+Submit→materialize→GET.
+
+Brama OpenAPI i frontendowego klienta pozostaje otwarta. Sandboxowa próba
+`just runner-container-status` zwróciła `-1073741502`; autoryzowany odczyt
+statusu wykazał istniejący runner w stanie `exited`, `exit_code=137`. Odczyt
+kolejki pokazał zero zadań `queued` i zero aktywnych. Próba wznowienia istniejącego
+kontenera nie uzyskała lifecycle locka (`Local runner container lifecycle lock
+is unavailable`), więc nie uruchomiono joba ani nie zmieniono kontenera.
+Zarządzana trasa `api-openapi-codegen` nie została uruchomiona, dlatego
+wygenerowany OpenAPI/TypeScript i widok task-level w Inspectorze nie są jeszcze
+zsynchronizowane. Nie edytowano wygenerowanych plików ręcznie. Testu Rust nie
+kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`. `git diff
+--check --ignore-submodules=all` dla zmienionego backendu przeszedł; pełna
+kontrola źródeł, OpenAPI, frontend, runtime i browser pozostają **NOT VERIFIED**.
+Brak joba oznacza, że ta iteracja nie utworzyła stagingu ani danych builda do
+kwalifikacji/sprzątania. Szacunek E0–E7 pozostaje ok. **66%**.
+
+### Kontrola UI, kontraktu i runnera — 16.10.2026
+
+Użytkownik potwierdził granicę zapisu polityki hosta jako operator lokalnej
+aplikacji. Jest zgodna z ADR 0052: zapisy `NodePolicy` wymagają capability
+wydanej przez desktop, a sam `Origin` nie autoryzuje zapisu. Nie zmieniamy
+zakresu uprawnień dla API dostępnego po sieci.
+
+W źródłach task resource zawiera już przypięte `execution.step_id` i opcjonalną
+materializację. Wygenerowany `ProjectRunTaskResource` nadal tych pól nie ma,
+a `ProjectRunsSection` ich nie wyświetla. Nie uruchamiano generatora i nie
+edytowano artefaktów generowanych ręcznie.
+
+Odczyt przeglądarki istniejącego workspace `127.0.0.1:32871/workspace`
+pokazał `Session services are reconnecting`, nieudany odczyt compute probe,
+inventory w stanie `Reading host inventory…` oraz błąd ustawienia telemetry:
+`API contract version mismatch: expected 1.0.0, got missing`. To nie potwierdza
+runtime'u zgodnego z bieżącym checkoutem; browser/API pozostają **NOT VERIFIED**.
+
+Najnowszy odczyt runnera wykazał kontener `running`, lecz worker jest
+`paused`, `accepting_jobs=false`, `stop_requested=true` (operator,
+request `374f015ca15d4ad7bbecbf28f7989d80`), `retention_draining=true` i brak
+aktywnych zadań. Nie wznowiono runnera ani nie zgłoszono codegenu. Checkout
+pozostaje na `master` bez staged files i konfliktów; istniejące zmiany
+współdzielonego drzewa zachowano. Szacunek całego E0–E7 pozostaje ok. **66%**.
+
+### E2 continuation — jedno przypięcie root ledgera na host — 16.10.2026
+
+Dodano bounded rejestr `host_id` → kanoniczny ledger root pod wspólnym
+`FULLMAG_STATE_ROOT`, chroniony istniejącym `Writer` i atomową publikacją.
+Jawna inicjalizacja lokalnego operatora przypina pierwszy root. Produkcyjne
+otwarcia wymagają zgodnego istniejącego wpisu; nie zakładają rejestru ani nie
+uzupełniają brakującego wpisu. Inny root, brak wpisu lub uszkodzona zawartość
+kończą się fail-closed przed otwarciem drugiego ledgera. Niskopoziomowe
+`initialize`/`open` są teraz prywatne dla crate; API, runtime-control i CLI
+przechodzą przez granicę aplikacji.
+
+Regresje źródłowe obejmują wiele store'ów i hostów, konflikt root, odczyt bez
+wcześniejszego pinu oraz zachowanie uszkodzonego rejestru. Zaktualizowano
+ADR 0052, §13.14 specyfikacji i kryteria E2. Testów jednostkowych ani builda
+nie uruchomiono zgodnie z `AGENTS.md`. `git diff --check --ignore-submodules=all`
+przechodzi. `rustfmt --check` pozostaje **NOT VERIFIED**: narzędzie nie mogło
+skanonikalizować checkoutu z `os error 5`; nie obchodzono ograniczenia dostępu.
+
+Kontrola źródłowa potwierdza, że pozostałe bezpośrednie wywołania
+`HostResourceLedger::initialize/open` są wyłącznie wewnętrznymi testami
+`fullmag-session`, a wszystkie wejścia inicjalizacji konfiguracji przekazują
+root stanu aplikacji. Build, testy, migracja istniejących instalacji i
+runtime pozostają **NOT VERIFIED**. `master` i `origin/master` nadal wskazują
+`f9179caf0a0681bdc92c2a87a308be21e9903919`; dirty checkout i zmiany innych
+fragmentów zadania pozostają zachowane, bez staged files. Ocena całości E0–E7
+pozostaje ok. **66%**; ten fragment wzmacnia E2, ale nie zamyka jego odbioru
+ani kolejnych etapów.
+
+### Uzgodnienie kontraktu nieznanej pojemności CPU — 16.10.2026
+
+Porównanie specyfikacji z aktywnym kodem wykazało sprzeczność: §4/§13.14
+pozwalały użyć samego limitu operatora przy braku bieżącego pomiaru, podczas
+gdy sampler i `HostResourceLedger` odmawiają nowego owner-bound CPU admission.
+Zachowuję fail-closed wdrożone w E2/E3: `Unavailable`, brak effective capacity
+lub `stale` nie dopuszcza nowej rezerwacji; polityka operatora jest tylko górną
+granicą. Zaktualizowano §4/§13.14 i ADR 0052.
+
+Microsoft Learn potwierdza, że `QueryInformationJobObject(NULL, ...)` odczytuje
+job bezpośredni procesu, a dla nested jobs nie daje pełnej hierarchii; stawka
+child job jest liczona względem rodzica. Nie implementuję odczytu tylko
+bezpośredniego joba jako efektywnej pojemności hosta. Bieżący sampler zostawia
+quota `Unsupported` wewnątrz Job Object, a admission pozostaje fail-closed.
+Źródła: [QueryInformationJobObject](https://learn.microsoft.com/windows/win32/api/jobapi2/nf-jobapi2-queryinformationjobobject),
+[JOBOBJECT_CPU_RATE_CONTROL_INFORMATION](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-jobobject_cpu_rate_control_information).
+
+Nie zmieniano kodu wykonawczego w tym uzgodnieniu; testów/builda nie uruchomiono.
+`git diff --check --ignore-submodules=all` pozostaje wymaganą kontrolą po edycji.
+Pełny pomiar pojemności Windows w nested Job Object i runtime proof nadal są
+**NOT VERIFIED**; to nie zamyka kryterium Windows E2/E3 ani E0–E7.
+
+### E1 UI — przyczyna niedostępnej pojemności CPU — 16.10.2026
+
+Model inventory zachowuje teraz rozpoznane `Observation.reason` dla effective
+CPU capacity. Ustawienia pokazują powód `unavailable` (m.in. unsupported,
+permission denied i probe failed), a nie tylko ogólny status; nieznane wartości
+pozostają opisane bezpiecznym komunikatem ogólnym. Dodano regresję źródłową
+dla Windowsowego przypadku `unsupported`. Testów nie kompilowano ani nie
+uruchamiano zgodnie z `AGENTS.md`; pozostają **NOT VERIFIED**.
+`git diff --check --ignore-submodules=all` przechodzi. Całość E0–E7 nadal ok.
+**66%**; ten
+usprawniony szczegół poprawia diagnostykę UI, ale nie zamyka etapu ani kolejnych
+kryteriów.
+
+### E1 continuation — task-level execution provenance w Inspectorze — 16.10.2026
+
+Project Run Details pokazuje teraz `step_id` oraz zwalidowaną, przypiętą
+materializację taska Study: profil i hash, żądane backend/device/precision/mode,
+pełne zasoby intentu (target, CPU, GPU/UUID, RAM, scratch, parallelism i
+placement) oraz origins pól. Rozróżnia request z profilem, request bez
+reusable profilu i historyczny wpis bez materializacji; nie opisuje intentu
+jako rzeczywistej alokacji ani wykonania. Parser ogranicza rozmiary ciągów,
+liczbę origins, sprawdza schemat/hash i odrzuca nieznany kształt snapshotu.
+
+Dodano regresje źródłowe dla kompletnej materializacji, profilu opcjonalnego,
+historycznego kroku oraz błędnego hash/identity. Nie edytowano wygenerowanego
+OpenAPI ani typów. Ręczny parser widoku nie zamyka wymaganej synchronizacji
+OpenAPI/klienta: wygenerowany `ProjectRunTaskResource` nadal nie typuje pola
+`execution`, a task-level typecheck i browser proof pozostają **NOT VERIFIED**.
+Testów nie kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`.
+Repozytoryjny `react-doctor --verbose --scope changed` nie zwrócił wyniku po
+czterech minutach; kontrolowana próba z `--no-supply-chain --no-dead-code
+--no-score --max-duration 20` również nie wypisała diagnostyki po dwóch
+minutach i została przerwana. React Doctor pozostaje **NOT VERIFIED**.
+`git diff --check --ignore-submodules=all` przechodzi; kontrola trailing
+whitespace nowych plików nie znalazła wpisów. Ocena pełnego E0–E7 pozostaje
+ok. **66%**; ten pionowy widok posuwa E1 do przodu, ale nie zastępuje codegenu,
+run receipt ani pozostałych bramek.
+
+### E3 continuation — per-worker Linux CPU quota — 16.10.2026
+
+Dodano Linux-only adapter `worker_cgroup`: sprawdza istniejący delegowany root
+cgroup v2 i kontroler `cpu`, ustawia `cpu.max` z readbackiem przed uruchomieniem,
+przypina worker przez pre-exec write do `cgroup.procs`, sprawdza PID oraz
+ograniczenie czasowe i tożsamość katalogu przy cleanup. Probe hosta publikuje
+`cpu_quota=Supported` tylko po utworzeniu i usunięciu próbnego cgroup. Brak
+delegacji kończy się `Unavailable`; Linux owner-bound CPU admission jest
+fail-closed. `FULLMAG_WORKER_CGROUP_ROOT` musi wskazywać jawnie skonfigurowany,
+już delegowany cgroup v2; kod nie włącza kontrolerów hosta.
+
+Supervisory Study i FEM preparation przygotowują quota przed launch authorization
+i przekazują exact cgroup do `OwnedWorkerProcess`. Ta zmiana nie dodaje jeszcze
+durable worker enforcement receipt ani NUMA placement. Testy jednostkowe,
+build i runtime nie uruchomiono zgodnie z `AGENTS.md`; `rustfmt --check` jest
+**NOT VERIFIED** po odmowie dostępu podczas canonicalization checkoutu.
+Wymagany jest jeszcze source review, Linux build/runtime proof i aktualizacja
+receiptu. Cały E0–E7 pozostaje szacowany na ok. **66%**: nowy adapter wzmacnia
+E3, lecz nie zamyka wymaganych dowodów ani etapów E6/E7.
+
+### E1 continuation — host summary i capability-only runtime — 16.10.2026
+
+Home Compute Environment oraz Settings → Compute → Overview pokazują teraz
+tożsamość hosta i skrót trwałego inventory: stan próbki, CPU topology,
+dozwolone przez OS logiczne CPU, efektywną pojemność CPU z przyczyną
+niedostępności, pamięć, liczbę stabilnych GPU UUID, rewizję inventory i czas
+próbki. Pokazywany licznik workerów pochodzi z hostowej polityki i pozostaje
+oddzielony od telemetrycznego użycia CPU/GPU; UI nie przypisuje aktywnych runów
+do urządzeń. Brak node-scoped źródła alokacji i kolejki nadal blokuje rzetelne
+per-device assignment, liczniki queued/running/completed i akcję „View jobs”.
+
+Gdy istnieje wyłącznie raport capabilities, model Compute Environment zachowuje
+zgłoszone statusy torów FDM/FEM, a CPU/GPU telemetry pozostają jawnie
+niedostępne. Dodano regresję źródłową tego przypadku; nie kompilowano ani nie
+uruchamiano testów zgodnie z `AGENTS.md`. `git diff --check --ignore-submodules=all`
+przechodzi. ESLint oraz architecture hygiene nie wystartowały: `pnpm` zgłosił
+`EPERM` przy `realpath` katalogu `apps/control-room`, a bezpośrednie `node`
+z tego katalogu nie zwróciło wyniku i zostało przerwane. Build, pełny typecheck,
+browser/layout proof i runtime pozostają **NOT VERIFIED**. Zmiana posuwa E1,
+ale nie zamyka żadnego etapu E0–E7; ocena planu pozostaje ok. **66%**.
+
+### Zarządzany build Windows — nieudana próba i retencja danych — 16.10.2026
+
+Autoryzowana trasa `scripts/windows/run_fullmag.ps1` uruchomiła profil
+`windows-native-fdm-cpu-dev` dla brudnego checkoutu `master`, HEAD
+`f9179caf0a0681bdc92c2a87a308be21e9903919`, worktree id
+`fullmag-0950f4dca4ffe38f`. `build-status.json` zakończył się terminalnie ze
+stanem `failed`, exit code 1 o `2026-10-16T19:48:17Z`; log
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-native-fdm-cpu-dev/logs/native-build-ddf2559ed13f40b48a047bd7aff91adc.log`
+ma 76 564 B. Cargo skompilowało zależności i większość workspace; jedyny błąd
+to E0382 w `get_run`: `intent.specification` było przenoszone przed późniejszym
+użyciem `&intent`. Kod poprawiono przez klonowanie JSON zgodnie z istniejącym
+wzorcem w tym samym handlerze. Poprawka czeka na powtórną weryfikację przez
+zarządzany launcher. Nie opublikowano pakietu runtime ani nie uruchomiono UI;
+port 3197 pozostaje zamknięty.
+
+Retencja po błędzie: resolver `scripts/fullmag_storage.py resolve
+--profile windows-native-fdm-cpu-dev` wskazuje storage
+`C:\git\fullmag\storage` i build root
+`C:\git\fullmag\storage\builds\fullmag-0950f4dca4ffe38f\windows-native-fdm-cpu-dev`.
+Brak aktywnego procesu build/cargo/rustc/node/fullmag i brak listenera na
+3197; był to build natywny, bez ścieżki kontenerowej ani joba runnera. Wolne
+miejsce `C:` wynosiło 11 199 430 656 B. Zachowano status, log, zamrożony
+snapshot źródeł `c1f4afdb50ab5b8f7452f60d4e044b5aebf95879c7471d2a66118201af163a9d`,
+częściowy `cargo-target` i cache przyrostowy do diagnozy oraz kolejnej próby;
+nie wykazano bezpiecznego kandydata do usunięcia i niczego nie skasowano.
+Pełny rozmiar katalogów snapshotu i targetu nie został zmierzony (rekurencyjny
+skan przerwano po długim czasie); log ma znany rozmiar podany wyżej. Zachowane
+dane wrócą do oceny po terminalnym wyniku kolejnego builda. Testów jednostkowych
+nie kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`. Błąd builda nie
+zmienia szacunku realizacji całego E0–E7: ok. **66%**.
+
+### Managed Windows build i bieżący browser proof — 16.10.2026
+
+Poprawka `get_run` przeszła zarządzany build natywny Windows. Receipt
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-native-fdm-cpu-dev/build-status.json`:
+stan `completed`, exit 0, start `22:17:01+02:00`, koniec `22:28:13+02:00`,
+HEAD `f9179caf0a0681bdc92c2a87a308be21e9903919`, build manifest
+`a10423906cc963bd569e61c46788a8c08a8c276f082b432a2e74f81b216c9e2a4`.
+Użyty source snapshot ma identyfikator
+`7f8327e79466681967a12a0b56f187f39afb89485e6adfa62640efc0ee96b85b` oraz
+digest źródeł `207379c969338fc93649022601df4db8df17bba18fba2c3a9ff8a48018c13ac9`;
+tożsamość źródeł przed/po buildzie pozostała zgodna. Nie kompilowano ani nie
+uruchamiano testów jednostkowych.
+
+Pierwsze uruchomienie pakietu po poprawnym buildzie zatrzymało UI, ponieważ
+`scripts/windows/run_fullmag.ps1` nie przekazywał developmentowego owner
+configuration wymaganego przez sidecar. Launcher uzupełnia teraz generację,
+ścieżkę statusu, hash źródeł i wersję z nonce oraz zweryfikowanego build
+manifestu, po walidacji i preflight ścieżki. Po poprawce managed workspace
+uruchomił API na 8081 i Next.js na 3197; status
+`storage/runtimes/fullmag-0950f4dca4ffe38f/native-workspace-status.json` jest
+`running`. `GET /workspace` zwrócił HTTP 200, a kontrola w przeglądarce Chrome
+pokazała ekran Start oraz Settings → Compute → Overview.
+
+W aktualnej próbce UI pokazał NVIDIA GeForce RTX 4080 SUPER, 48 logicznych
+wątków CPU, około 4,5/17,2 GB VRAM oraz brak telemetrii obciążenia CPU i RAM.
+Cztery lanes pozostały `Not reported`, a `ComputeNodeSnapshot` ma stan
+`Not probed`, zgodnie z brakiem publikacji inventory przez ten desktopowy
+host. Settings → Compute → Resources poprawnie pokazało brak snapshotu i
+brak stabilnej tożsamości urządzeń; edytor NodePolicy i jego zapis nie były
+dostępne w zwykłej przeglądarce bez capability lokalnej aplikacji desktopowej.
+Ta sesja potwierdza odczytowy widok UI na zarządzanym Windows dev workspace,
+nie publisher snapshotu, edycję polityki, admission, solver execution ani
+kwalifikację. Przy starcie API odnotowało błąd zwalniania już odblokowanego
+native writer lock (Windows error 158), ale kontynuowało start; obserwowany
+widok i odczyty działały. Przyczyna i wpływ błędu blokady pozostają
+**NOT VERIFIED**.
+
+W trakcie browser proof zauważono, że pusty inventory nie renderowało karty
+tożsamości, a pierwszy wariant pustego stanu mylił `not_probed` z pustą listą
+węzłów. `ComputeNodeOverviewSummary` pokazuje teraz jawny stan `Not probed`
+oraz przyczynę zgodną z nagłówkiem inventory; błąd odczytu i rzeczywiście pusta
+lista zachowują osobne komunikaty. Next.js dev HMR przeładował komponent, a
+nowa sesja przeglądarki potwierdziła spójny tekst w Home i Settings → Compute
+→ Overview. Ta korekta UI powstała po source snapshot zarządzanego buildu;
+potwierdza ją HMR/browser, nie tamten build.
+
+Checkout pozostał na współdzielonym `master`; nie stage'owano ani nie
+commitowano zmian. Skrypt PowerShell przeszedł kontrolę składni, a build i
+browser proof potwierdziły start i odczytowy widok tego fragmentu. Testy jednostkowe,
+lint/typecheck aplikacji, edycja NodePolicy w lokalnej aplikacji operatora,
+runtime admission, E6 i E7 nadal wymagają dowodów. Cały plan E0–E7 pozostaje
+w przybliżeniu **66%**; browser proof zmniejsza brak dowodów odczytowego UI,
+ale nie zamyka etapu ani celu.
+
+### Granica lokalnego operatora i blokada codegen — 16.10.2026
+
+Użytkownik wybrał operatora lokalnej aplikacji Fullmag jako jedyną granicę
+uprawnienia do zapisu `NodePolicy`. Bieżący kod ma odpowiadający temu łańcuch:
+desktopowy `ApiSidecar` tworzy losowy token, przekazuje go wyłącznie procesowi
+API i wiąże ten sidecar z `127.0.0.1` oraz dokładnym originem rendererowej
+strony, a zarejestrowana komenda Tauri udostępnia token rendererowi.
+Renderer rozpoznaje tę capability i przekazuje ją jako `Authorization: Bearer`
+przy zmianie polityki; endpoint porównuje token z wartością procesu w trybie
+constant-time i odmawia zapisu, gdy konfiguracji lub capability brakuje.
+Procesy potomne solverów usuwają tę zmienną środowiskową. Frontend ma edytor
+polityki i bramkuje go obecnością capability. Zwykła przeglądarka nie otrzymuje
+tokena. Ten zakres dotyczy desktopowego sidecara; ogólny serwer API zachowuje
+dotychczasowy bind/CORS, gdy zmienne sidecara nie są ustawione. Jest to
+potwierdzenie spójności źródeł, nie dowód działania zapisu ani restrykcji
+sieciowych w spakowanej aplikacji desktopowej; takiego runtime proof nadal
+brakuje.
+
+Po wyborze tej granicy desktopowy sidecar został dodatkowo ograniczony do
+IPv4 loopback, używa identycznego adresu w URL UI/API i wysyła CORS wyłącznie
+dla tego originu. Ogólny serwer zachowuje dotychczasowe zachowanie bez tych
+zmiennych środowiskowych. Ta poprawka jest na razie source-only: `git diff
+--check --ignore-submodules=all` przechodzi, ale `rustfmt --check` nie zdołał
+skanonikalizować checkoutu z powodu `Access denied`; zarządzanego buildu po tej
+zmianie nie uruchomiono, a próba codegen nadal trafia na problem locka storage.
+
+Aktualizacja OpenAPI nie doszła do generowania plików. `just generate-api-openapi`
+zakończył się błędem procesu Windows `-1073741502`; bezpośrednie wywołanie
+zarządzanej walidacji trasy dotarło do preflightu i nie mogło otworzyć
+`C:\git\fullmag\storage\.initialize.lock` (`Permission denied`). Plik locka
+istnieje, a jego ACL pokazuje Modify dla użytkownika; nie ustalono właściciela
+ewentualnego uchwytu ani bezpiecznego sposobu jego zwolnienia. Odczyt procesów
+PowerShell nie wykazał PID 109800, kontrola TCP przez CIM została odrzucona,
+a `openfiles /query` także zwróciło `Access denied`.
+Port 3197 odmawia połączenia, mimo że `native-workspace-status.json` nadal
+deklaruje `running`. Ponieważ pełna kontrola procesów i listenerów nie była
+dostępna, nie uruchamiano `windows-runtime-recover` i nie ruszano locka.
+Nie powstał nowy receipt codegen ani zmiana wygenerowanych typów; dotychczasowy
+artefakt OpenAPI pozostaje starszy od bieżącego źródła, a jego konsumenta TS
+nie regenerowano.
+
+Checkout pozostaje na `master`, bez stage i commitów. Nie użyto alternatywnego
+rootu storage ani ręcznej edycji wygenerowanych plików. Jednostkowych testów
+nie kompilowano ani nie uruchamiano zgodnie z `AGENTS.md`; ten checkpoint
+uzupełnia źródłowe rozpoznanie granicy operatora, ale nie podnosi kwalifikacji
+runtime ani całego planu E0–E7, które pozostają około **66%**.
+
+### Codegen i zarządzany Windows build po ograniczeniu sidecara — 16.10.2026
+
+Późniejsze kontrole potwierdziły zakończenie poprzednio zablokowanych tras,
+bez ingerencji w lock lub cache. Managed OpenAPI codegen zakończył się
+`passed` (`storage/builds/fullmag-0950f4dca4ffe38f/windows-api-source-check/api-openapi-codegen/02cc59f3f28a4ac4b712b524e40dac4a/receipt.json`),
+a client generation i API hygiene również zakończyły się `passed`
+(`windows-control-room-source-check/generate-client/21a542e0b4384f1d9036f0de81cab256/receipt.json`,
+`windows-control-room-source-check/api-hygiene/1f8ff92afc9a47f9a395886ee586995d/receipt.json`).
+Receipty nie kompilowały testów jednostkowych.
+
+Zarządzany React Doctor scope scan zakończył się `passed` bez zmiany źródeł i
+odnotował jeden warning `prefer-useReducer` w
+`apps/control-room/src/modules/inspector/panels/ProjectBatchesSection.tsx:107`;
+nie wykazano w nim błędu zachowania. Zarządzany lint zakończył się błędem
+środowiska przed analizą źródeł: brak pakietu `@eslint/compat` ładowanego przez
+`apps/control-room/eslint.config.mjs`. Nie zmieniano zależności ani nie omijano
+tej bramki. Rustfmt nadal **NOT VERIFIED** z powodu `Access denied`, a
+`git diff --check --ignore-submodules=all` przechodzi.
+
+`just windows-workspace-build dev dev 3197 auto` zakończył się `completed`,
+exit 0, 16.10.2026 o 23:23:46 czasu lokalnego. Receipt
+`storage/builds/fullmag-0950f4dca4ffe38f/windows-native-fdm-cpu-dev/build-status.json`
+ma manifest SHA-256
+`c11420843aa54326630f30e5a9c07abe72733dd215e04ba49c6e8727acea7ef8`.
+Manifest `windows-runtime/build-manifest.json` potwierdza target
+`x86_64-pc-windows-msvc`, profil `backend-dev`, kompilację API/CLI i desktopowego
+`fullmag-ui`, `source_identity_check=passed`, wymuszoną kontrolę lokalnych zmian
+oraz identyczny SHA-256 snapshotu przed/po buildzie
+`74faf0c5641e43c80eb5982e5218c73f2d7296880ddb080d217429cc37edd856` (rekord
+snapshotu `649395d77c0d3cebf08933a8cf05b9348aa9226ff49ec1e2be2cd5581edb9f63`).
+To dowodzi kompilacji Windows dla bieżącego dirty `master`, nie runtime.
+Nie uruchamiano spakowanej aplikacji desktopowej ani zapisu `NodePolicy`; bind,
+CORS i capability wymagają runtime proof. Testów jednostkowych nie
+kompilowano ani nie wykonywano. Częściowy Cargo target, źródłowy snapshot,
+manifest, logi i receipt pozostawiono do dalszej weryfikacji; niczego nie
+usuwano.
+
+Stan końcowy nadal około **66%** całego E0–E7: lokalny Windows compile gate dla
+API, CLI i desktop sidecara przeszedł, podobnie codegen i API hygiene, ale nie
+zamyka to E1–E4. Pozostają m.in. spakowany runtime lokalnego operatora,
+admission/affinity/quota readback, Linux build/runtime, E6, E7 oraz
+kwalifikacja naukowa i wydania. Checkout nadal jest na współdzielonym `master`;
+nie stage'owano ani nie commitowano zmian, a remote `origin/master` pozostaje
+równy `f9179caf0a0681bdc92c2a87a308be21e9903919`.

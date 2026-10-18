@@ -36,16 +36,24 @@ interface FixtureControl {
 declare global { interface Window { __antennaSolveTargetsFixture?: FixtureControl; } }
 
 function makeFixture() {
-  const makeScene = (name: string): SceneResource => ({
-    revision: 1, scene_revision: 1, scene: { id: `session-${name}`, name: `Fixture ${name}`, authoring_schema: "fixture", source_of_truth: "fixture" },
+  const makeScene = (name: string): SceneResource => {
+    const value: SceneResource = {
+    revision: 1, scene_revision: 1, scene: { id: `restored-model-${name}`, name: `Fixture ${name}`, authoring_schema: "fixture", source_of_truth: "fixture" },
     objects: [{ id: sourceId, name: "Golden antenna", role: "antenna" }, {
       id: "immutable-waveguide", name: "Guide", role: "magnet", regions: [{ region_id: "core", name: "Core", owner_object: "immutable-waveguide", shape: { kind: "box", center: [0, 0, 0], size: [1, 1, 1] } }],
     }],
+    current_transports: [{ name: "current-fixed", kind: "current_transport", model: "ohmic_poisson",
+      ...(typeof window !== "undefined" && new URL(window.location.href).searchParams.get("source") === "current-driven" ? { conservative_current_source: {} } : {}) }],
     antenna_field_solve_stages: [{ id: solveId, source_object_id: sourceId, current_transport_id: "current-fixed", port_mode_ids: ["port-fixed"],
       conductor_mesh_policy: "inherit_source", solver_policy: "default", model: "quasistatic_conduction_biot_savart3d", oersted_realization: "direct_tetra_quadrature",
-      field_sampling_domain: { kind: "global" }, outputs: [{ id: "basis", quantity: "H_ant_basis" }], target_refs: [{ kind: "global" }],
+      field_sampling_domain: typeof window !== "undefined" && new URL(window.location.href).searchParams.get("sampling") === "region" ? { kind: "region", object_id: "immutable-waveguide", region_id: "core" } : { kind: "global" }, outputs: [{ id: "basis", quantity: "H_ant_basis" }], target_refs: [{ kind: "global" }],
     }], antenna_target_projections: [], solved_antenna_drives: [],
-  });
+    };
+    const persisted = typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("realization") : null;
+    // Inject the negative HTTP fixture after constructing the typed valid scene.
+    if (persisted !== null) Object.assign(value.antenna_field_solve_stages![0], { oersted_realization: persisted });
+    return value;
+  };
   const state = { name: "A" as "A" | "B", clock: 1, scenes: { A: makeScene("A"), B: makeScene("B") }, renders: 0 };
   const calls: Call[] = [], unexpected: string[] = [], pending: (() => void)[] = [];
   const bus = new EventBus<KernelEventMap>();
@@ -88,7 +96,18 @@ function makeFixture() {
           const revision = (before.revision ?? 0) + 1;
           const after: SceneResource = { ...before, revision, scene_revision: revision, antenna_field_solve_stages: submitted as SceneResource["antenna_field_solve_stages"] };
           state.scenes[ownName] = after;
-          resolve(json({ transaction_kind: "merge_patch", scene_revision: revision, committed_scene: after }));
+          const acknowledged = structuredClone(after);
+          const ack = typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("ack") : null;
+          if (ack === "foreign-model") acknowledged.scene!.id = "foreign-model";
+          if (ack === "changed-targets") acknowledged.antenna_field_solve_stages![0]!.target_refs = [{ kind: "global" }];
+          if (ack === "changed-sampling") acknowledged.antenna_field_solve_stages![0]!.field_sampling_domain = { kind: "global" };
+          if (ack === "duplicate-stage") acknowledged.antenna_field_solve_stages!.push(structuredClone(acknowledged.antenna_field_solve_stages![0]!));
+          if (ack === "changed-realization") acknowledged.antenna_field_solve_stages![0]!.oersted_realization = "vector_potential_solver";
+          if (ack === "changed-policy") acknowledged.antenna_field_solve_stages![0]!.solver_policy = "foreign-policy";
+          if (ack === "stale-revision") acknowledged.revision = acknowledged.scene_revision = before.revision;
+          if (ack === "revision-mismatch") acknowledged.scene_revision = revision + 1;
+          resolve(json({ transaction_kind: "merge_patch", scene_revision: ack === "stale-revision" ? before.revision : revision,
+            committed_scene: ack === "missing-scene" ? null : acknowledged }));
         }));
       }
       unexpected.push(`${request.method} ${path}`);
@@ -115,7 +134,7 @@ function EditorOwner() {
   return <>
     <output data-testid="solve-owner">{scene.data?.scene?.id}</output>
     <output data-testid="solve-dirty">{String(session?.dirty ?? false)}</output>
-    <div data-testid="solve-editor"><AntennaSolveTargetsEditor objectId={sourceId} stageId={solveId} scene={scene.data} status={scene.status} refetch={scene.refetch} /></div>
+    <div data-testid="solve-editor"><AntennaSolveTargetsEditor objectId={sourceId} stageId={solveId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} /></div>
     <div style={{ height: 550 }} aria-hidden="true" />
   </>;
 }

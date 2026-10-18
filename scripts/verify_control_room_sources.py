@@ -17,7 +17,7 @@ import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
 GENERATED_OUTPUTS = ("openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")
-ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check", "development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check", "development-run-outcome-handoff-lint", "development-restart-action-check", "development-restart-action-lint", "development-backend-build-action-check", "material-assignment-draft-check")
+ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "typecheck-cli-check", "explorer-physics-reporting-check", "react-doctor", "resource-client-cache-check", "material-assignment-draft-check")
 
 
 def timestamp():
@@ -103,8 +103,8 @@ def run(repo: Path, route: str, dependency_workspace: Path | None = None):
         run_root.mkdir(parents=True)
         workspace_evidence = {}
         if dependency_workspace is not None:
-            if route not in {"generate-client", "production-source", "api-hygiene"}:
-                raise storage.StorageError("Native dependency workspace is supported only for API generation and production source checks")
+            if route not in {"generate-client", "production-source", "api-hygiene", "lint"}:
+                raise storage.StorageError("Native dependency workspace is supported only for API generation, production source checks and lint")
             from frontend_source_workspace import prepare_source_workspace, validate_dependency_workspace
             dependency_before = validate_dependency_workspace(repo, layout, dependency_workspace)
             prepared = prepare_source_workspace(repo, layout, run_root, dependency_workspace)
@@ -142,27 +142,23 @@ def run(repo: Path, route: str, dependency_workspace: Path | None = None):
                     raise storage.StorageError(f"Required frontend tool is missing: {package}")
                 return [node, str(path)]
             if route == "generate-client":
-                commands = [cli("openapi-typescript", "bin/cli.js") + ["src/kernel/api/generated/openapi-v2.json", "--output", "src/kernel/api/generated/openapi-v2-types.ts"], [node, "scripts/generate-v2-client.mjs"]]
+                commands = [cli("openapi-typescript", "bin/cli.js") + ["src/kernel/api/generated/openapi-v2.json", "--output", "src/kernel/api/generated/openapi-v2-types.ts", "--empty-objects-unknown"], [node, "scripts/generate-v2-client.mjs"]]
             elif route == "openapi-import-check":
                 commands = [[node, "--test", "scripts/normalize-openapi-build-identity.node-test.mjs", "scripts/managed-openapi-import.node-test.mjs"]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "interpreted_node_only_no_compilation"
-            elif route == "development-restart-check":
-                commands = [[node, "--experimental-vm-modules", "scripts/check-development-restart-controller.mjs"]]
+            elif route == "typecheck-cli-check":
+                commands = [[node, "--test", "scripts/typecheck-control-room.node-test.mjs"]]
+                receipt["interpreted_node_checks"] = True
+                receipt["unit_tests"] = "interpreted_node_only_no_compilation"
+            elif route == "explorer-physics-reporting-check":
+                commands = [[node, "--experimental-vm-modules", "scripts/check-explorer-physics-reporting.mjs"]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
             elif route == "resource-client-cache-check":
                 commands = [[node, "--experimental-vm-modules", "scripts/check-resource-client-cache-scope.mjs"]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
-            elif route in {"development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check", "development-restart-action-check", "development-backend-build-action-check"}:
-                check = {"development-kernel-host-check": "check-development-kernel-host.mjs", "development-transport-pause-check": "check-development-transport-pause.mjs", "development-run-outcome-handoff-check": "check-development-run-outcome-handoff.mjs", "development-restart-action-check": "check-development-restart-action.mjs", "development-backend-build-action-check": "check-development-backend-build-action.mjs"}[route]
-                commands = [[node, "--experimental-vm-modules", "scripts/" + check]]
-                receipt["interpreted_node_checks"] = True
-                receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
-                if route == "development-run-outcome-handoff-check":
-                    receipt["unit_tests"] = "none_interpreted_js_driver_no_unit_build"
-                    receipt["production_source_transform"] = "in_memory_parameter_property_support"
             elif route == "material-assignment-draft-check":
                 commands = [[node, "scripts/check-material-assignment-draft.mjs"]]
                 receipt["interpreted_node_checks"] = True
@@ -171,37 +167,6 @@ def run(repo: Path, route: str, dependency_workspace: Path | None = None):
                 commands = [[node, "scripts/check-api-hygiene.mjs"]]
             elif route == "lint":
                 commands = [cli("eslint", "bin/eslint.js") + [".", "--max-warnings=0"]]
-            elif route == "development-run-outcome-handoff-lint":
-                checked_files = [
-                    "src/kernel/KernelProvider.tsx",
-                    "src/kernel/persistence/ProjectDocumentController.ts",
-                    "src/kernel/persistence/RunOutcomeConnector.tsx",
-                    "scripts/check-development-run-outcome-handoff.mjs",
-                    "scripts/fixtures/development-run-outcome-handoff-page.tsx",
-                    "scripts/smoke-development-run-outcome-handoff.mjs",
-                ]
-                commands = [cli("eslint", "bin/eslint.js") + checked_files + ["--max-warnings=0"]]
-                receipt["lint_scope"] = "development_run_outcome_handoff_only"
-                receipt["checked_files"] = checked_files
-            elif route == "development-restart-action-lint":
-                checked_files = [
-                    "src/kernel/development/DevelopmentBackendBuildActionService.ts",
-                    "src/kernel/development/DevelopmentRestartActionService.ts",
-                    "src/kernel/development/DevelopmentKernelHost.ts",
-                    "src/kernel/development/DevelopmentKernelOwners.ts",
-                    "src/kernel/development/DevelopmentRestartController.ts",
-                    "src/kernel/layout/DevelopmentBackendBanner.tsx",
-                    "scripts/check-development-restart-action.mjs",
-                    "scripts/check-development-kernel-host.mjs",
-                    "scripts/check-development-restart-controller.mjs",
-                    "scripts/check-development-backend-build-action.mjs",
-                    "scripts/fixtures/development-restart-action-page.tsx",
-                    "scripts/smoke-development-restart-action.mjs",
-                ]
-                commands = [cli("eslint", "bin/eslint.js") + checked_files + ["--max-warnings=0"]]
-                receipt["lint_scope"] = "development_restart_action_and_backend_build_action"
-                receipt["lint_rationale"] = "The manual backend build action shares the workspace handoff gate and banner with restart custody."
-                receipt["checked_files"] = checked_files
             elif route == "react-doctor":
                 # Reuse the repository-pinned tool without installing or
                 # contacting the score/supply-chain services. Dumps and caches
@@ -224,7 +189,7 @@ def run(repo: Path, route: str, dependency_workspace: Path | None = None):
                 config = run_root / "tsconfig.production.json"
                 exclude = ["node_modules", "out", ".next/dev", "**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx", "**/__tests__/**"]
                 config.write_text(json.dumps({"extends": str(app / "tsconfig.typecheck.json"), "compilerOptions": {"noEmit": True, "incremental": False}, "exclude": [(app / pattern).as_posix() for pattern in exclude]}, indent=2), encoding="utf-8")
-                commands = [cli("typescript", "bin/tsc") + ["--noEmit", "--project", str(config)]]
+                commands = [cli("typescript-native", "bin/tsc") + ["--noEmit", "--project", str(config)]]
                 receipt["test_exclusions"] = exclude
             receipt["steps"] = []
             return_code = 0

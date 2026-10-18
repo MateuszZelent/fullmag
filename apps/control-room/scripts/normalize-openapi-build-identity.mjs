@@ -161,6 +161,78 @@ export function validateManagedSnapshotOpenApiReceipt(document, receipt, proof, 
   }
 }
 
+// Docker exports are admitted only when the raw bytes, source pins, package
+// hashes, image identity and successful export terminal state agree. The
+// caller supplies hashes obtained from the bounded files it actually read.
+export function validateDockerOpenApiReceipt(document, assembly, proof, expected) {
+  const {
+    expectedCommit,
+    expectedSnapshot,
+    expectedSourceDigest,
+    inputSha256,
+    inputByteLength,
+    inputPath,
+    assemblyPath,
+    packageRoot,
+    backendBuildReceiptPath,
+    apiBinarySha256,
+    backendBuildReceiptSha256,
+  } = expected ?? {};
+  if (!isCommit(expectedCommit) ||
+      ![expectedSnapshot, expectedSourceDigest, inputSha256, apiBinarySha256,
+        backendBuildReceiptSha256].every(isSha256) ||
+      !Number.isSafeInteger(inputByteLength) || inputByteLength <= 0 ||
+      !isNonEmptyString(inputPath) || !isNonEmptyString(assemblyPath) ||
+      !isNonEmptyString(packageRoot) || !isNonEmptyString(backendBuildReceiptPath)) {
+    throw new TypeError("Docker export requires complete source, path and package hash evidence");
+  }
+
+  const identity = document?.["x-fullmag-build-identity"];
+  if (!identity || typeof identity !== "object" || Array.isArray(identity) ||
+      identity.git_commit !== expectedCommit ||
+      identity.source_snapshot_sha256 !== expectedSnapshot ||
+      !["clean", "dirty"].includes(identity.worktree_state) ||
+      !isBuildTimestamp(identity.built_at_utc)) {
+    throw new TypeError("Docker OpenAPI export does not match the expected source identity");
+  }
+
+  const assemblyBinarySha256 = assembly?.binary_hashes?.["fullmag-api"];
+  const sourceIdentity = assembly?.native_source_identity;
+  if (!assembly || typeof assembly !== "object" || Array.isArray(assembly) ||
+      assembly.schema !== "fullmag.docker-all-image.v1" ||
+      assembly.state !== "succeeded" || assembly.exit_code !== 0 ||
+      assembly.commit !== expectedCommit ||
+      assembly.source_snapshot_sha256 !== expectedSnapshot ||
+      assembly.source_digest !== expectedSourceDigest ||
+      !isImageDigest(assembly.image_id) ||
+      !isSha256(assemblyBinarySha256) ||
+      !isSha256(assembly.build_receipt_sha256) ||
+      assembly.build_receipt_sha256 !== backendBuildReceiptSha256 ||
+      !samePortablePath(assembly.package_root, packageRoot) ||
+      !samePortablePath(assembly.backend_build_receipt, backendBuildReceiptPath) ||
+      !sourceIdentity || typeof sourceIdentity !== "object" || Array.isArray(sourceIdentity) ||
+      sourceIdentity.schema !== "fullmag.source-snapshot.v2" ||
+      sourceIdentity.head_commit_full !== expectedCommit ||
+      sourceIdentity.source_snapshot_sha256 !== expectedSnapshot ||
+      sourceIdentity.source_snapshot_dirty !== (identity.worktree_state === "dirty")) {
+    throw new TypeError("Docker assembly does not prove the expected source-pinned package");
+  }
+
+  if (!proof || typeof proof !== "object" || Array.isArray(proof) ||
+      proof.schema !== "fullmag.direct-package-openapi-export.v1" ||
+      proof.state !== "succeeded" || proof.exit_code !== 0 ||
+      proof.commit !== expectedCommit || proof.snapshot !== expectedSnapshot ||
+      proof.source_digest !== expectedSourceDigest ||
+      proof.image_id !== assembly.image_id ||
+      proof.binary_sha256 !== assemblyBinarySha256 ||
+      proof.binary_sha256 !== apiBinarySha256 ||
+      proof.stdout_sha256 !== inputSha256 ||
+      !samePortablePath(proof.input, inputPath) ||
+      !samePortablePath(proof.assembly, assemblyPath)) {
+    throw new TypeError("Docker export proof does not bind the successful package export");
+  }
+}
+
 function isBuildTimestamp(value) {
   return typeof value === "string" &&
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) &&
@@ -169,6 +241,27 @@ function isBuildTimestamp(value) {
 
 function isSha256(value) {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isCommit(value) {
+  return typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
+}
+
+function isImageDigest(value) {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
+}
+
+function samePortablePath(left, right) {
+  const normalize = (value) => {
+    if (!isNonEmptyString(value)) return null;
+    let normalized = value.replaceAll("\\", "/").replace(/\/{2,}/g, "/");
+    const wslPath = /^\/mnt\/([a-z])\/(.*)$/i.exec(normalized);
+    if (wslPath) normalized = `${wslPath[1]}:/${wslPath[2]}`;
+    return normalized.replace(/\/+$/, "").toLowerCase();
+  };
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  return normalizedLeft !== null && normalizedLeft === normalizedRight;
 }
 
 function isNonEmptyString(value) {

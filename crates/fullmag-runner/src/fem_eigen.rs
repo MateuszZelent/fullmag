@@ -19,6 +19,7 @@ pub use crate::fem::eigen_equilibrium_contract::{
     FemRelaxationProducerProvenance, FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1,
     FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH, FEM_RELAXATION_PRODUCER_PROVENANCE_V1,
 };
+pub use crate::fem::antenna_equilibrium::{accepted_antenna_equilibrium_artifacts, publish_accepted_antenna_equilibrium, load_verified_antenna_equilibrium, AntennaEquilibriumBinding, VerifiedAntennaEquilibriumContext};
 pub(crate) use crate::fem::eigen_equilibrium_contract::{
     accepted_relax_to_eigen_handoff_from_run, AcceptedFemEigenEquilibriumHandoff,
     fem_relaxation_producer_provenance_sample_relative_path,

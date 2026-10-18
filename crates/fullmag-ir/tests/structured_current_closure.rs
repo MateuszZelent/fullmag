@@ -15,6 +15,7 @@ fn closure() -> StructuredCurrentClosureIR {
                 region_id: Some("source-arm".to_string()),
             },
             plane: StructuredCutPlaneIR {
+                coordinate_frame: None,
                 axis: StructuredCutAxisIR::X,
                 offset_m: 2.0e-9,
                 normal: StructuredCutNormalIR::PositiveAxis,

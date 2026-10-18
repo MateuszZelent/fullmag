@@ -778,7 +778,7 @@ describe("useViewport3DSceneModel", () => {
     ).toHaveLength(2);
   });
 
-  it("keeps FDM native-layer visibility on the local structured-grid target state", () => {
+  it("resolves FDM native layers from canonical state and pending local target edits", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const nativeLayerSettingsBlock = source.slice(
       source.indexOf("const fdmNativeLayerSettingsById = useMemo"),
@@ -788,9 +788,9 @@ describe("useViewport3DSceneModel", () => {
     expect(nativeLayerSettingsBlock).toContain(
       "resolveViewport3DFdmTargetVisualization({",
     );
-    expect(nativeLayerSettingsBlock).not.toContain(
-      "visualizationState: renderingState",
-    );
+    expect(nativeLayerSettingsBlock).toContain("snapshot: objectVisualizationSnapshot");
+    // FDM native layers use canonical local targets; the FEM registry must not override them.
+    expect(nativeLayerSettingsBlock).not.toContain("visualizationState: renderingState");
   });
 
   it("uses canonical local Airbox settings for both FDM Airbox carriers", () => {

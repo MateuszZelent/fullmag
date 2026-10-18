@@ -131,11 +131,11 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Runtime descriptor | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Canonical runtime selection | Ownership test |
+| Runtime descriptor | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Canonical runtime selection | Ownership test |
 | Selection helpers | `packages/fullmag-py/src/fullmag/world.py` | `engine`, `device`, `mode`, `threads` | Study-builder selection surface | Ownership test |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Runtime selection state, validation, and resolution. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Runtime selection state, validation, and resolution. | Source-map validator and focused API tests |
+| Runtime selection state, validation, and resolution. | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Runtime selection state, validation, and resolution. | Source-map validator and focused API tests |

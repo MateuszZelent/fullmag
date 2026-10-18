@@ -14,10 +14,12 @@ import { resolveScratchAuthoringAction } from "./scratchAuthoringGuideModel";
 export function ScratchAuthoringGuide({
   commandContext,
   kernel,
+  onCloseModal,
   readiness,
 }: {
   readonly commandContext: CommandContext;
   readonly kernel: KernelApi;
+  readonly onCloseModal?: () => void;
   readonly readiness: ResourceResult<ModelReadinessResource>;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -53,20 +55,20 @@ export function ScratchAuthoringGuide({
   return (
     <section
       aria-labelledby="fm-scratch-authoring-guide-title"
-      className="border-t border-fm-border bg-fm-surface px-4 py-3 text-fm-primary"
+      className="fm-helper-guide"
       data-readiness-revision={readiness.data?.scene_revision ?? "unknown"}
       data-readiness-status={readiness.status}
       data-testid="scratch-authoring-guide"
     >
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-baseline gap-3">
+      <header className="fm-helper-guide__header">
+        <div className="fm-helper-guide__title-group">
           <h2
-            className="m-0 font-fm-ui text-sm font-semibold"
+            className="fm-helper-guide__title"
             id="fm-scratch-authoring-guide-title"
           >
             Next steps
           </h2>
-          <span className="text-xs text-fm-muted" role="status">
+          <span className="fm-helper-guide__status" role="status">
             {readiness.data
               ? `${readiness.status === "stale" ? "Cached result: server reported " : "Server reports "}${readiness.data.ready_to_run ? "ready" : "not ready"} to run.`
               : readiness.status === "loading"
@@ -74,17 +76,17 @@ export function ScratchAuthoringGuide({
                 : "Model readiness is not available yet."}
           </span>
           {readiness.data && incompleteCount > 0 ? (
-            <span className="text-xs text-fm-muted">
+            <span className="fm-helper-guide__meta">
               {incompleteCount} {incompleteCount === 1 ? "check" : "checks"} need attention.
             </span>
           ) : null}
           {readiness.data ? (
-            <span className="text-xs text-fm-muted">
+            <span className="fm-helper-guide__meta">
               Scene revision {readiness.data.scene_revision}
             </span>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="fm-helper-guide__actions">
           <Button
             size="sm"
             type="button"
@@ -99,7 +101,13 @@ export function ScratchAuthoringGuide({
             size="sm"
             type="button"
             variant="ghost"
-            onClick={() => setCollapsed((current) => !current)}
+            onClick={() => {
+              const nextCollapsed = !collapsed;
+              setCollapsed(nextCollapsed);
+              if (nextCollapsed) {
+                onCloseModal?.();
+              }
+            }}
           >
             {collapsed ? "Show steps" : "Hide steps"}
           </Button>
@@ -107,17 +115,17 @@ export function ScratchAuthoringGuide({
       </header>
 
       {readiness.status === "error" && !readiness.data ? (
-        <p className="mb-0 mt-2 text-sm text-fm-danger" role="alert">
+        <p className="fm-helper-guide__error" role="alert">
           {readiness.error?.message ?? "Could not load model readiness."}
         </p>
       ) : null}
 
       {!collapsed ? (
-        <div className="mt-3" id="fm-scratch-authoring-checks">
+        <div className="fm-helper-guide__content" id="fm-scratch-authoring-checks">
           {checks.length > 0 ? (
             <ol
               aria-label="Model readiness checklist"
-              className="m-0 grid max-h-[36vh] list-none gap-2 overflow-y-auto overscroll-contain p-0 md:grid-cols-2 xl:grid-cols-3"
+              className="fm-helper-guide__grid"
             >
               {checks.map((check) => {
                 const resolvedAction = resolveScratchAuthoringAction(check);
@@ -140,48 +148,42 @@ export function ScratchAuthoringGuide({
 
                 return (
                   <li
-                    className="flex min-w-0 items-start justify-between gap-3 rounded-md border border-fm-border bg-fm-base px-3 py-2"
+                    className="fm-helper-guide__card"
                     data-check-id={check.id}
                     data-check-state={check.state}
                     key={check.id}
                   >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                        <span className="text-sm font-medium">{check.label}</span>
+                    <div className="fm-helper-guide__card-copy">
+                      <div className="fm-helper-guide__card-head">
+                        <span className="fm-helper-guide__card-title">{check.label}</span>
                         <span
-                          className={
-                            check.state === "complete"
-                              ? "text-xs text-fm-success"
-                              : check.state === "stale"
-                                ? "text-xs text-fm-warning"
-                                : "text-xs text-fm-secondary"
-                          }
+                          className="fm-helper-guide__card-badge"
+                          data-state={check.state}
                         >
                           {stateLabel}
                         </span>
                       </div>
                       {check.reason ? (
-                        <p className="mb-0 mt-1 text-xs text-fm-secondary">
+                        <p className="fm-helper-guide__card-reason">
                           {check.reason}
                         </p>
                       ) : null}
                       {check.id === "domain" ? (
-                        <p className="mb-0 mt-1 text-xs text-fm-muted">
+                        <p className="fm-helper-guide__card-hint">
                           Configure policy in the Universe Inspector now or later. Automatic bounds are derived after geometry is added.
                         </p>
                       ) : null}
                       {action?.kind === "explorer" && action.targetResource ? (
-                        <p className="mb-0 mt-1 break-all text-xs text-fm-muted">
+                        <p className="fm-helper-guide__card-hint">
                           Target: {action.targetResource}
                         </p>
                       ) : null}
                     </div>
                     {action ? (
                       <Button
-                        className="shrink-0"
                         size="sm"
                         type="button"
-                        variant="ghost"
+                        variant={check.state === "complete" ? "ghost" : "secondary"}
                         onClick={() => openAction(check)}
                       >
                         {action.label}
@@ -192,22 +194,22 @@ export function ScratchAuthoringGuide({
               })}
             </ol>
           ) : readiness.data ? (
-            <p className="mb-0 text-sm text-fm-secondary">
+            <p className="fm-helper-guide__empty">
               The readiness resource did not report any checks.
             </p>
           ) : null}
           {extraBlockers.length > 0 ? (
             <section
               aria-label="Additional run blockers"
-              className="mt-3 rounded-md border border-fm-border bg-fm-base px-3 py-2"
+              className="fm-helper-guide__blockers"
             >
-              <h3 className="mb-2 mt-0 text-sm font-medium">
+              <h3 className="fm-helper-guide__blockers-title">
                 Additional server blockers
               </h3>
-              <ul className="m-0 grid list-none gap-2 p-0">
+              <ul className="fm-helper-guide__blockers-list">
                 {extraBlockers.map((blocker) => (
                   <li
-                    className="flex flex-wrap items-center justify-between gap-2 text-sm text-fm-secondary"
+                    className="fm-helper-guide__blockers-item"
                     key={blocker}
                   >
                     <span>{blocker}</span>
@@ -215,7 +217,10 @@ export function ScratchAuthoringGuide({
                       size="sm"
                       type="button"
                       variant="ghost"
-                      onClick={() => kernel.layout.openBottomPanel("diagnostics")}
+                      onClick={() => {
+                        kernel.layout.openBottomPanel("diagnostics");
+                        onCloseModal?.();
+                      }}
                     >
                       View diagnostics
                     </Button>
@@ -228,12 +233,12 @@ export function ScratchAuthoringGuide({
           !readiness.data.ready_to_run &&
           incompleteCount === 0 &&
           extraBlockers.length === 0 ? (
-            <p className="mb-0 mt-2 text-sm text-fm-secondary">
+            <p className="fm-helper-guide__empty">
               The server reports that this model is not ready to run, but did not report an incomplete check or additional blocker detail.
             </p>
           ) : null}
           {readiness.status === "stale" ? (
-            <p className="mb-0 mt-2 text-xs text-fm-warning" role="status">
+            <p className="fm-helper-guide__stale" role="status">
               Readiness data is out of date. Check readiness to refresh it.
             </p>
           ) : null}

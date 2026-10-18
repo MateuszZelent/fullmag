@@ -134,40 +134,13 @@ There is no supported `fm.PerObjectMeshRecipe(source=...)` route. The `maximum_e
 
 | Repository path | Stable symbol | Responsibility |
 | --- | --- | --- |
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Supported study-level mesh path and IR. |
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Fail-closed rejection of per-object source. |
-| `packages/fullmag-py/src/fullmag/world.py` | `_resolve_flat_fem_hint` | Study-level FEM hint and shared source resolution. |
-| `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `generate_mesh_from_file` | Python imported-file dispatch. |
-| `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `realize_fem_mesh_asset` | Imported asset preference and validation. |
-| `crates/fullmag-plan/src/mesh.rs` | `load_mesh_from_source` | Lazy planner JSON MeshIR loading and validation. |
-| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | Validated MeshIR consumption and FEM plan construction. |
-| `crates/fullmag-runner/src/dispatch.rs` | `execute_fem_with_context_in_mode` | Production plan normalization and CPU/GPU native execution routing. |
+| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | [`class FEM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | Supported study-level mesh path and IR. |
+| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Fail-closed rejection of per-object source. |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L7793) | [`_resolve_flat_fem_hint`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L7793) | Study-level FEM hint and shared source resolution. |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py#L883) | [`generate_mesh_from_file`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py#L883) | Python imported-file dispatch. |
+| [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1290) | [`realize_fem_mesh_asset`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1290) | Imported asset preference and validation. |
+| [`crates/fullmag-plan/src/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/mesh.rs#L2047) | [`load_mesh_from_source`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/mesh.rs#L2047) | Lazy planner JSON MeshIR loading and validation. |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L3583) | [`plan_fem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L3583) | Validated MeshIR consumption and FEM plan construction. |
+| [`crates/fullmag-runner/src/dispatch.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/dispatch.rs#L2453) | [`execute_fem_with_context_in_mode`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/dispatch.rs#L2453) | Production plan normalization and CPU/GPU native execution routing. |
 | `crates/fullmag-runner/src/dispatch.rs` | `execute_native_fem` | Configuration-selected native CPU/GPU execution implementation. |
-| `crates/fullmag-runner/src/dispatch.rs` | `apply_native_fem_runtime_contract` | Populates runtime provenance fields after observations exist; returns `()`. |
-
-
-## Scope and purpose
-
-This page defines the public contract for imported FEM mesh assets. It is an authoring and implementation reference: the Python example, the serialized ProblemIR description, the implementation mapping, and the adjacent source map are the source-backed contract. A capability marked partial or not evaluated is not presented as a production guarantee.
-
-## Scientific and numerical model
-
-The mesh or grid is a discrete approximation of the continuous domain. For a Cartesian partition, each spacing satisfies `Delta_i = L_i / N_i`; for a geometry-dependent FEM mesh, the requested local target is bounded by the active bulk, interface, boundary, and topology constraints. In compact form, `h_target(x) = min(h_bulk(x), h_interface(x), h_boundary(x))`. Length quantities use SI metres (`m`); counts, orders, and topology labels are dimensionless.
-
-The equations and assumptions in the earlier physical-problem and governing-equations sections state the model-specific specialization. This section does not introduce a conversion from FEM to FDM, a hidden topology conversion, or a silent CPU fallback.
-
-## Parameters
-
-The exact callable and argument names are the ones shown in the `## Python API` section above. For this page the parameter family is mesh path, FEM order, and imported-mesh validation. Use the documented defaults, validation rules, and ProblemIR lowering exactly as shown; do not replace a canonical argument with an unlisted alias. Numerical lengths must be supplied in metres, and invalid positive-length, count, order, periodicity, or topology constraints must fail closed rather than being silently repaired.
-
-## Control Room workflow
-
-In Control Room, select the engine and mesh workflow, enter the same values as the Python authoring example, inspect the planned mesh or grid report, and only then submit the run. The UI is a projection of the public contract: a missing control is not evidence that the backend accepts the option, and a visible control is not evidence that a production lane is enabled. When the page or capability register marks a field partial or not evaluated, keep the workflow explicitly bounded to the implemented path.
-
-## Diagnostics and failure semantics
-
-A valid request must preserve the declared geometry, units, element or cell topology, and backend lane. Reject non-finite or non-positive lengths, invalid counts and orders, incompatible periodic or shared-boundary data, and unsupported topology combinations at the owning validation layer. Reports should retain requested and resolved values, source identity, and any capability gate. No diagnostic may hide a failed mesh realization by substituting another discretization.
-
-## Where this is implemented
-
-The existing implementation-mapping and source-code-index sections identify the exact public authoring, ProblemIR, planner, realization, and runtime owners for this topic. The adjacent `.source-map.json` file is the machine-readable source of truth for those paths, symbols, responsibilities, backend matrix, and reviewed revision. Claims in this page must be updated together with that map when an owner moves.
+| [`crates/fullmag-runner/src/dispatch.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/dispatch.rs#L3409) | [`apply_native_fem_runtime_contract`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/dispatch.rs#L3409) | Populates runtime provenance fields after observations exist; returns `()`. |

@@ -133,6 +133,7 @@ const CANONICAL_QUANTITY_IDS: Record<string, string> = {
 };
 
 const SCALAR_SPATIAL_QUANTITY_IDS = new Set([
+  "V_electric",
   "eden_ani",
   "eden_demag",
   "eden_dmi",
@@ -171,6 +172,8 @@ const QUANTITY_UNITS: Record<string, string> = {
   H_mel: "A/m",
   H_oe: "A/m",
   H_therm: "A/m",
+  J_charge: "A/m²",
+  V_electric: "V",
   dm_dt: "1/s",
   eden_ani: "J/m³",
   eden_demag: "J/m³",

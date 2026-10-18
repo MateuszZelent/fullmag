@@ -1,51 +1,106 @@
 {
   "document": {
     "path": "public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Zero-phase periodic master/slave constraint sets implemented in FEM CPU"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "partial",
+      "reason": "Zero-phase periodic constraint sets planned and supported on qualified FEM GPU paths"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Periodic exchange and FFT demag wrap implemented in FDM CPU"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented",
-      "reason": "authoring and IR documented; runtime qualification separate"
+      "status": "implemented",
+      "reason": "Periodic exchange and FFT demag wrap implemented in FDM GPU"
     }
   ],
   "equations": [
     {
-      "id": "eq-periodic",
+      "id": "eq-periodic-continuity",
       "symbols": [
-        "q"
+        "m",
+        "phi",
+        "r_minus",
+        "r_plus",
+        "delta_r"
       ],
       "sources": [
-        "source_periodic"
+        "source_periodic",
+        "source_spin_wave_bc_ir"
+      ]
+    },
+    {
+      "id": "eq-periodic-linearized",
+      "symbols": [
+        "delta_m",
+        "delta_phi",
+        "r_minus",
+        "r_plus"
+      ],
+      "sources": [
+        "source_periodic_phase_policy_ir",
+        "source_periodic_constraint_set_ir",
+        "source_periodic_constraint_sets_fn"
       ]
     }
   ],
   "symbols": [
     {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
+      "id": "m",
+      "latex": "\\mathbf{m}",
+      "meaning": "unit magnetization field",
       "si_unit": "\\mathrm{1}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "magnetostatic scalar potential",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "delta_m",
+      "latex": "\\delta\\mathbf{m}",
+      "meaning": "linearized dynamic magnetization amplitude",
+      "si_unit": "\\mathrm{1}"
+    },
+    {
+      "id": "delta_phi",
+      "latex": "\\delta\\phi",
+      "meaning": "linearized dynamic magnetostatic scalar potential amplitude",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "r_minus",
+      "latex": "\\mathbf{r}_-, \\mathbf{r}_+",
+      "meaning": "paired master and slave boundary coordinates",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "r_plus",
+      "latex": "\\Delta\\mathbf{r}",
+      "meaning": "periodic lattice translation vector $\\mathbf{r}_+ - \\mathbf{r}_-$",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "delta_r",
+      "latex": "\\Delta\\mathbf{r}",
+      "meaning": "periodic lattice translation vector $\\mathbf{r}_+ - \\mathbf{r}_-$",
+      "si_unit": "\\mathrm{m}"
     }
   ],
   "sources": [
@@ -53,7 +108,31 @@
       "id": "source_periodic",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class PeriodicBC",
-      "responsibility": "public constructor and IR lowering"
+      "responsibility": "public constructor and IR lowering for zero-phase periodic boundary pairs"
+    },
+    {
+      "id": "source_spin_wave_bc_ir",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "SpinWaveBoundaryConditionIR",
+      "responsibility": "canonical IR enum for spin-wave boundary conditions"
+    },
+    {
+      "id": "source_periodic_phase_policy_ir",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "PeriodicPhasePolicyIR",
+      "responsibility": "planner IR representation of zero-phase vs Bloch-phase boundary policies"
+    },
+    {
+      "id": "source_periodic_constraint_set_ir",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "PeriodicConstraintSetIR",
+      "responsibility": "resolved periodic/Floquet constraint set for magnetic and magnetostatic domains"
+    },
+    {
+      "id": "source_periodic_constraint_sets_fn",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "frequency_response_periodic_constraint_sets",
+      "responsibility": "lowers periodic and Floquet boundary conditions into planner constraint sets"
     }
   ],
   "public_api": {

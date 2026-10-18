@@ -267,7 +267,7 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
         "loader_trace": loader_contract,
         "native_abi": dict(query_mesh_abi(fullmag_path, runtime_root)),
         "build": {
-            "mfem_version": "4.9",
+            "mfem_version": "4.10",
             "hypre_version": "3.1.0",
             "libceed_version": "0.12.0",
             "cuda_toolkit": cuda_toolkit,

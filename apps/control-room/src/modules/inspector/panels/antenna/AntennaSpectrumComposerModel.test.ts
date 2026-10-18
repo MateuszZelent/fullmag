@@ -8,7 +8,8 @@ import {
 } from "./AntennaSpectrumComposerModel";
 
 const scene = {
-  objects: [{ id: "magnet" }],
+  objects: [{ id: "magnet" }, { id: "conductor" }],
+  current_transports: [{ name: "current" }],
   antenna_field_solve_stages: [{
     id: "solve", source_object_id: "conductor", current_transport_id: "current",
     port_mode_ids: ["port"], outputs: [{ id: "basis", quantity: "H_ant_basis" }],

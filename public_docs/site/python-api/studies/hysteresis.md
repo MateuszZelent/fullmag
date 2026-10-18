@@ -155,7 +155,7 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStag
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class Hysteresis` | Canonical Python API behavior | Ownership test and source-map validator |
+| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | [`class Hysteresis`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | Canonical Python API behavior | Ownership test and source-map validator |
 | Settle policy | `packages/fullmag-py/src/fullmag/model/study.py` | `SettlePipeline`, `SettleTree`, `RelaxStep`, `MinimizeStep` | Per-point settle program | Ownership test |
 | Stage surface | `packages/fullmag-py/src/fullmag/world.py` | `StudyStagesBuilder.add_hysteresis_sweep` | Stage-first authoring entrypoint | Ownership test |
 
@@ -163,4 +163,4 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStag
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Hysteresis study schedule, settle, and storage lowering. | `packages/fullmag-py/src/fullmag/model/study.py` | `class Hysteresis` | Hysteresis study schedule, settle, and storage lowering. | Source-map validator and focused API tests |
+| Hysteresis study schedule, settle, and storage lowering. | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | [`class Hysteresis`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | Hysteresis study schedule, settle, and storage lowering. | Source-map validator and focused API tests |

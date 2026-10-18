@@ -184,8 +184,8 @@
       "id": "periodic-layer-owner",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Preserves exact layers and physical regions; classifies only the combined domain boundary as exterior.",
-      "evidence_status": "source_regression_passed_runtime_not_verified"
+      "responsibility": "Preserves exact magnetic owner layers and physical regions; classifies the combined-domain boundary as exterior, pins the pre-3D ring source surfaces to the owner target, and leaves exterior-air planes independently gradable.",
+      "evidence_status": "source_regression_passed_owner_field_consumers_passed_runtime_not_verified"
     },
     {
       "id": "periodic-layer-regression",
@@ -205,8 +205,50 @@
       "id": "scoped-layer-meshed-extrusion",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Uses fixed meshed extrusion that copies one source-face triangulation through exact z levels; current finite ROI density gate fails.",
-      "evidence_status": "source_mechanism_reviewed_actual_density_failed"
+      "responsibility": "Uses one recombined extrusion layer in magnetic intervals and geometry-only extrusion in exterior air; the historical full meshed-extrusion source-face route did not establish finite ROI density, while the current body-first/source-plane candidate remains unqualified for that gate.",
+      "evidence_status": "interpreted_gmsh_passed_density_not_verified"
+    },
+    {
+      "id": "scoped-magnetic-extrusion",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Constrains magnetic intervals to one recombined GEO layer while preserving exact owner planes; a ring hole-air volume is grouped in those intervals.",
+      "evidence_status": "interpreted_gmsh_passed_runtime_not_verified"
+    },
+    {
+      "id": "scoped-exterior-air-extrusion",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Leaves exterior-air intervals outside the magnetic thickness geometry-only for independent air grading; grouped ring hole-air remains constrained in magnetic intervals.",
+      "evidence_status": "interpreted_gmsh_passed_runtime_not_verified"
+    },
+    {
+      "id": "scoped-air-boundary-policy",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Uses the h_inner/body_hmax boundary rule, owner-volume Restrict field, and ring-only owner source-surface seed to separate magnetic and air targets.",
+      "evidence_status": "interpreted_gmsh_owner_field_consumers_passed_density_not_verified"
+    },
+    {
+      "id": "scoped-source-plane-seeds",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_embed_mixed_source_face_seed_points",
+      "responsibility": "Projects scoped ComponentRestrictedBox and graded Box/Cylinder/Sphere targets onto the magnetic source plane, validates the GeometryName owner, composes owner lower bounds, excludes trimmed holes with gmsh.model.isInside, rejects malformed source bounding boxes, and embeds points before 2-D generation while preserving exact layers and independent exterior-air planes.",
+      "evidence_status": "focused_real_gmsh_graded_passed_runtime_density_not_verified"
+    },
+    {
+      "id": "graded-source-plane-policy",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_add_exact_plane_projected_cap_field",
+      "responsibility": "Evaluates owner-bound graded upper descriptors on every z-directed exact layer plane with the canonical owner/lower composition; nonparallel exact-cap projections fail closed, while managed runtime and density remain unverified.",
+      "evidence_status": "focused_real_gmsh_graded_passed_runtime_density_not_verified"
+    },
+    {
+      "id": "plane-projected-graded-descriptors",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_PLANE_PROJECTED_UPPER_KINDS",
+      "responsibility": "Allowlist consumed by the exact-plane cap and swept source-face route for ComponentRestrictedGradedBox, ComponentRestrictedGradedCylinder and ComponentRestrictedGradedSphere; unsupported exact-cap projections fail closed.",
+      "evidence_status": "focused_real_gmsh_graded_passed_runtime_density_not_verified"
     },
     {
       "id": "scoped-layer-density-regression",

@@ -8,8 +8,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    router_v2::handlers::platform::development_backend::DevelopmentBackendObservation,
-    schemas::development_backend::DevelopmentBackendState,
+    router_v2::handlers::platform::development_backend::{
+        DevelopmentBackendObservation, DevelopmentBackendState,
+    },
 };
 
 const READINESS_LEASE_TTL: Duration = Duration::from_secs(5);

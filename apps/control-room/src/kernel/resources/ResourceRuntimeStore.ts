@@ -495,6 +495,7 @@ export class ResourceRuntimeStore<TData = unknown> {
           ...entry.snapshot,
           settledExternalRevision: externalRevision,
         };
+        this.notify(entry);
       }
       return Promise.resolve(entry.snapshot);
     }

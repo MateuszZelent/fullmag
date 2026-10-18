@@ -86,7 +86,9 @@ impl Workspace {
         }
     }
 
-    /// [`Self::open`] at `state_dir()/workspace.db`.
+    /// [`Self::open`] at the workspace state directory's `workspace.db`.
+    /// `FULLMAG_WORKSPACE_STATE_DIR` scopes that database without changing
+    /// the global runtime state directory.
     pub fn open_default() -> Result<(Workspace, OpenOutcome)> {
         Self::open(default_database_path()?)
     }

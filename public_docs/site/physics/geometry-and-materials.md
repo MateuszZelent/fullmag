@@ -519,12 +519,12 @@ device-specific support.
 
 | Claim or API | Repository path | Stable symbol | Responsibility |
 |---|---|---|---|
-| primitives, imports, booleans, transforms | `packages/fullmag-py/src/fullmag/model/geometry.py` | `class Box`, `class Cylinder`, `class Ellipsoid`, `class ImportedGeometry`, `class Difference`, `class Union`, `class Intersection`, `class Translate` | typed geometry and `to_ir()` |
+| primitives, imports, booleans, transforms | [`packages/fullmag-py/src/fullmag/model/geometry.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/geometry.py#L111) | `class Box`, `class Cylinder`, `class Ellipsoid`, [`class ImportedGeometry`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/geometry.py#L111), `class Difference`, `class Union`, `class Intersection`, `class Translate` | typed geometry and `to_ir()` |
 | high-level geometry handle | `packages/fullmag-py/src/fullmag/world.py` | `MagnetHandle`, `StudyBuilder.geometry` | object creation and base material properties |
 | object regions and overrides | `packages/fullmag-py/src/fullmag/model/structure.py` | `ObjectRegion` | region identity, material proxy, transitions, local mesh policy |
 | base material | `packages/fullmag-py/src/fullmag/model/structure.py` | `Material` | SI validation and material IR |
 | analytic and sampled fields | `packages/fullmag-py/src/fullmag/model/structure.py` | `MaterialParameterField`, `MaterialParameterAssignment` | field payload and scoped assignment |
-| full problem lowering | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem`, `build_geometry_assets_for_request` | ProblemIR and optional geometry assets |
+| full problem lowering | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601), `build_geometry_assets_for_request` | ProblemIR and optional geometry assets |
 | shared-domain mesh policy | `packages/fullmag-py/src/fullmag/model/structure.py` and `world.py` | `ObjectRegion.mesh`, `GeometryMeshHandle` | mesh intent before backend realization |
 
 Focused public API evidence includes the region-lowering, boolean-difference, centered-shape,

@@ -44,18 +44,35 @@ export type FdmNativeLayerRegionMembershipResource =
   components["schemas"]["FdmNativeLayerRegionMembershipResource"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
+export type ArtifactFieldCatalogQuery = NonNullable<paths["/v2/sessions/current/data/fields"]["get"]["parameters"]["query"]>;
 export type FieldAvailabilityResource =
   components["schemas"]["FieldAvailabilityResource"];
 export type FieldMetaResource = components["schemas"]["FieldMeta"];
-export type QuantityCatalogResource =
-  components["schemas"]["QuantityCatalogResponse"];
+/** Pending managed export: schemas/quantities.rs::QuantityTensorDescriptor/QuantityCatalogEntry. */
+export interface QuantityTensorDescriptor {
+  rank: number;
+  shape: number[];
+  layout: string;
+  axes: string[];
+  component_labels: string[];
+}
+export type QuantityCatalogResource = Omit<components["schemas"]["QuantityCatalogResponse"], "quantities"> & {
+  quantities: (components["schemas"]["QuantityCatalogEntry"] & { tensor?: QuantityTensorDescriptor | null })[];
+};
 export interface FieldAvailabilityQuery {
+  stage_id?: string | null;
+  carrier_id?: string | null;
+  expected_carrier_revision?: string | null;
+  view?: string | null;
   target_id?: string | null;
   scope_kind?: string | null;
   scope_id?: string | null;
   owner_object_id?: string | null;
 }
 export interface FieldMetaQuery {
+  carrier_id?: string | null;
+  expected_carrier_revision?: string | null;
+  view?: string | null;
   component?: string | null;
   owner_object_id?: string | null;
   scope_id?: string | null;
@@ -77,7 +94,15 @@ export type FieldStateInspectResponse =
   components["schemas"]["FieldStateInspectResponse"];
 export type FieldStateTargetRef =
   components["schemas"]["FieldStateTargetRef"];
-export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
+export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"] & {
+  carrier_id?: string | null;
+};
+/** Existing provider-owned geometry selector; generated schema follows runtime export. */
+export interface ArtifactCarrierGeometryQuery {
+  carrier_id: string;
+  stage_id?: string;
+  expected_carrier_revision: string;
+}
 export type FieldVectorPendingResponse =
   components["schemas"]["FieldVectorPendingResponse"];
 type FdmFieldVectorQueryBase = Omit<
@@ -227,21 +252,6 @@ export type GeometryRealizationResource =
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
 export type HealthResource = components["schemas"]["HealthResponse"];
-export type DevelopmentBackendResource =
-  components["schemas"]["DevelopmentBackendResource"];
-export type DevelopmentBackendBuildRequest =
-  components["schemas"]["DevelopmentBackendBuildRequest"] & {
-    schema: "fullmag.development-backend-build-request.v1";
-  };
-export type DevelopmentBackendBuildRequestResource =
-  components["schemas"]["DevelopmentBackendBuildRequestResource"] & {
-    ready_build_id: string | null;
-    ready_source_sha256: string | null;
-  };
-export type DevelopmentRestartRequest =
-  components["schemas"]["DevelopmentRestartRequest"];
-export type DevelopmentRestartResource =
-  components["schemas"]["DevelopmentRestartResource"];
 export type ImportSessionAssetRequest =
   components["schemas"]["ImportSessionAssetRequest"];
 export type SessionAssetImportResponse =
@@ -761,27 +771,8 @@ export interface ObjectPatchRequest extends BaseAuthoringTransaction {
   transform?: JsonObject | null;
   visible?: boolean | null;
 }
-export interface ObjectMetricsResource {
-  energies: {
-    anisotropy: number;
-    demag: number;
-    dmi: number;
-    exchange: number;
-    total: number;
-    zeeman: number;
-  };
-  has_solver_sample: boolean;
-  magnetization_average: {
-    mx: number;
-    my: number;
-    mz: number;
-  } | null;
-  object_id: string;
-  revision: number;
-  source: string;
-  step: number;
-  time_seconds: number;
-}
+export type ObjectMetricsResource = components["schemas"]["ObjectMetricsResource"];
+
 export type SceneResource = components["schemas"]["SceneResource"];
 export type FrozenSpinsCollectionResource =
   components["schemas"]["FrozenSpinsCollectionResource"];
@@ -916,6 +907,9 @@ export type ProjectBatchSubmitResource = components["schemas"]["ProjectBatchSubm
 export type ProjectBatchListQuery = components["schemas"]["ProjectBatchListQuery"];
 export type ProjectBatchListResource = components["schemas"]["ProjectBatchListResource"];
 export type ProjectBatchSummaryResource = components["schemas"]["ProjectBatchSummaryResource"];
+export type ProjectBatchCommandAction = components["schemas"]["ProjectBatchCommandAction"];
+export type ProjectBatchCommandRequest = components["schemas"]["ProjectBatchCommandRequest"];
+export type ProjectBatchCommandResource = components["schemas"]["ProjectBatchCommandResource"];
 export type ProjectBatchAxisSummaryResource = components["schemas"]["ProjectBatchAxisSummaryResource"];
 export type ProjectBatchCasesQuery = components["schemas"]["ProjectBatchCasesQuery"];
 export type ProjectBatchCasesResource = components["schemas"]["ProjectBatchCasesResource"];
@@ -924,6 +918,10 @@ export type ProjectRunTaskCancellationRequest =
   components["schemas"]["ProjectRunTaskCancellationRequest"];
 export type ProjectRunTaskCancellationResource =
   components["schemas"]["ProjectRunTaskCancellationResource"];
+export type ProjectRunTaskRetryRequest =
+  components["schemas"]["ProjectRunTaskRetryRequest"];
+export type ProjectRunTaskRetryResource =
+  components["schemas"]["ProjectRunTaskRetryResource"];
 export type SolutionSetDiscoveryPageResource =
   components["schemas"]["SolutionSetDiscoveryPageResource"];
 export type SolutionSetDiscoveryPageQuery =
@@ -1037,6 +1035,9 @@ export interface FieldVectorIdentityIssue {
 }
 
 export interface FieldVectorResponseMetadata {
+  carrierId?: string | null;
+  carrierRevision?: string | null;
+  carrierDigest?: string | null;
   component: string | null;
   domainGenerationId: string | null;
   artifactGenerationId?: string | null;
@@ -1124,6 +1125,10 @@ export type ExecutionProfileCatalogResource = components["schemas"]["ExecutionPr
 export type ComputePreviewRequest = components["schemas"]["ComputePreviewRequest"];
 export type ExecutionRequestLayer = components["schemas"]["ExecutionLayerSchema"];
 export type ComputePreviewResource = components["schemas"]["ComputePreviewResource"];
+export type ComputeNodesResource = components["schemas"]["ComputeNodesResource"];
+export type ComputeNodesState = components["schemas"]["ComputeNodesState"];
+export type ComputeNodePolicyResource = components["schemas"]["ComputeNodePolicyResource"];
+export type ComputeNodePolicyUpdateRequest = components["schemas"]["ComputeNodePolicyUpdateRequest"];
 export type ExecutionProfileVersionResource = components["schemas"]["ExecutionProfileVersionResource"];
 export type ExecutionProfile = ExecutionProfileVersionResource["profile"];
 export type PublishExecutionProfileRequest = components["schemas"]["PublishExecutionProfileRequest"];

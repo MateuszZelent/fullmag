@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object wavegu
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,12 +54,12 @@ fm.SinWaveguide(...) and fm.ArchWaveguide(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```length/width/height/period``` | ```float``` | ```required``` | ```m``` | positive | waveguide dimensions and period | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```parameters``` |
-| ```amplitude``` | ```float``` | ```required``` | ```m``` | finite | sinusoidal amplitude | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```amplitude``` |
-| ```phase``` | ```float``` | ```0.0``` | ```rad``` | finite | phase offset | FEM/FDM CPU/GPU: IR; resolver-specific | ```phase``` |
-| ```z0``` | ```float``` | ```0.0``` | ```m``` | finite | vertical offset | FEM/FDM CPU/GPU: IR; resolver-specific | ```z0``` |
-| ```arch_height``` | ```float``` | ```required``` | ```m``` | finite for ArchWaveguide | arch height | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```arch_height``` |
-| ```name``` | ```str``` | ```sin_waveguide/arch_waveguide``` | ```1``` | non-empty | stable name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
+| `length/width/height/period` | `float` | `required` | `m` | positive | waveguide dimensions and period | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `parameters` |
+| `amplitude` | `float` | `required` | `m` | finite | sinusoidal amplitude | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `amplitude` |
+| `phase` | `float` | `0.0` | `rad` | finite | phase offset | FEM/FDM CPU/GPU: IR; resolver-specific | `phase` |
+| `z0` | `float` | `0.0` | `m` | finite | vertical offset | FEM/FDM CPU/GPU: IR; resolver-specific | `z0` |
+| `arch_height` | `float` | `required` | `m` | finite for ArchWaveguide | arch height | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `arch_height` |
+| `name` | `str` | `sin_waveguide/arch_waveguide` | `1` | non-empty | stable name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
 
 ### Stage-first example
 

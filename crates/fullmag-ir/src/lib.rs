@@ -31,6 +31,7 @@ pub mod quantities;
 pub mod selection;
 pub mod spectral_validation;
 pub mod spin_transport;
+pub mod transport_identity;
 pub mod antenna_lead_preparation;
 pub mod study;
 pub mod study_v04;
@@ -911,14 +912,16 @@ impl ProblemIR {
         validate_spin_transport_modules(self, &mut errors);
         validate_magnetoelastic(self, &mut errors);
         validate_region_owned_semantics(self, &mut errors);
+        let field_only = matches!(self.study, StudyIR::FieldOnly { .. });
         let antenna_study = matches!(self.study, StudyIR::AntennaFieldSolve { .. });
-        if !antenna_study && self.regions.is_empty() {
+        let source_only = field_only || antenna_study;
+        if self.regions.is_empty() && !source_only {
             errors.push("at least one region is required".to_string());
         }
-        if !antenna_study && self.materials.is_empty() {
+        if self.materials.is_empty() && !source_only {
             errors.push("at least one material is required".to_string());
         }
-        if !antenna_study && self.magnets.is_empty() {
+        if self.magnets.is_empty() && !source_only {
             errors.push("at least one magnet is required".to_string());
         }
         let has_material_anisotropy = self.materials.iter().any(|material| {
@@ -933,8 +936,21 @@ impl ProblemIR {
                 || material.kc2_field.is_some()
                 || material.kc3_field.is_some()
         });
-        if !antenna_study && self.energy_terms.is_empty() && !has_material_anisotropy {
+        if !source_only && self.energy_terms.is_empty() && !has_material_anisotropy {
             errors.push("at least one interaction or material anisotropy is required".to_string());
+        }
+        if field_only {
+            if self.geometry.entries.is_empty() {
+                errors.push("field_only requires explicitly authored geometry".into());
+            }
+            if !self.magnets.is_empty() || !self.materials.is_empty() || !self.energy_terms.is_empty()
+                || !self.field_drives.is_empty() || !self.solved_antenna_drives.is_empty()
+                || !self.spin_torque_modules.is_empty() || !self.spin_transport_modules.is_empty()
+                || !self.magnetization_constraints.is_empty() || self.temperature.is_some()
+                || self.current_density.is_some() || !self.couplings.is_empty()
+            {
+                errors.push("field_only cannot contain magnetic state, interactions, dynamics or torque".into());
+            }
         }
         errors.extend(validate_study_contracts(
             &self.study,
@@ -1205,6 +1221,7 @@ impl ProblemIR {
                     }
                 }
                 GeometryEntryIR::MicrostripAntenna {
+                    r#loop,
                     name,
                     length_m,
                     thickness_m,
@@ -1215,7 +1232,24 @@ impl ProblemIR {
                     return_offset_m,
                     conductors,
                     terminal_faces,
-                } => antenna::validate_microstrip_geometry(
+                } => {
+                    if let Some(loop_geometry) = r#loop {
+                        errors.extend(loop_geometry.validation_errors());
+                        if *return_offset_m<=0.0 {errors.push("closed microstrip loop requires positive return offset".into());}
+                        if let (Some(inlet),Some(outlet))=(stations.first(),stations.last()) {
+                            for (width,offset,signal_width) in [(loop_geometry.inlet_connection_width_m,loop_geometry.inlet_connection_offset_v_m,inlet.signal_width_m),
+                                (loop_geometry.outlet_connection_width_m,loop_geometry.outlet_connection_offset_v_m,outlet.signal_width_m)] {
+                                if [signal_width,*return_width_m].iter().any(|target| (offset+width/2.0).min(*target/2.0)<=(offset-width/2.0).max(-*target/2.0)) {
+                                    errors.push("microstrip bridge must contact signal and return with positive area".into());
+                                }
+                            }
+                        }
+
+                        if loop_geometry.inlet_connection_part_id==loop_geometry.outlet_connection_part_id || conductors.iter().any(|part| part.id==loop_geometry.inlet_connection_part_id || part.id==loop_geometry.outlet_connection_part_id) {
+                            errors.push("microstrip bridge IDs must be distinct from signal and return".into());
+                        }
+                    }
+                    antenna::validate_microstrip_geometry(
                     name,
                     *length_m,
                     *thickness_m,
@@ -1227,7 +1261,8 @@ impl ProblemIR {
                     conductors,
                     terminal_faces,
                     &mut errors,
-                ),
+                );
+                },
                 GeometryEntryIR::CpwAntenna {
                     name,
                     length_m,
@@ -3253,6 +3288,14 @@ if let Some(stage_autosave) = &study.sampling().stage_autosave {
     }
 }
 match &study {
+    StudyIR::FieldOnly { sampling } => {
+        if !sampling.outputs.is_empty()
+            || sampling.table_autosave.is_some()
+            || sampling.stage_autosave.is_some()
+        {
+            errors.push("field_only results must be owned by explicit field stages, not LLG sampling".into());
+        }
+    }
     StudyIR::AntennaFieldSolve { sampling, .. } => {
         if !sampling.outputs.is_empty()
             || sampling.table_autosave.is_some()

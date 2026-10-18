@@ -16,21 +16,15 @@ const tsBuildInfoFile = frontendRoot
   ? resolve(frontendRoot, "tsbuildinfo", "control-room.tsbuildinfo")
   : undefined;
 const require = createRequire(import.meta.url);
-const typescriptPackageJsonPath = require.resolve("typescript/package.json");
-const typescriptPackageRoot = dirname(typescriptPackageJsonPath);
-const typescriptPackage = JSON.parse(
-  readFileSync(typescriptPackageJsonPath, "utf8"),
-);
-const typescriptTscBin = typescriptPackage.bin?.tsc;
-if (typeof typescriptTscBin !== "string" || isAbsolute(typescriptTscBin)) {
-  throw new Error(
-    "The resolved TypeScript package must declare a relative tsc binary.",
-  );
+const typescriptPackagePath = require.resolve("typescript-native/package.json");
+const typescriptPackage = JSON.parse(readFileSync(typescriptPackagePath, "utf8"));
+const typescriptCommand = typescriptPackage.bin?.tsc;
+if (typeof typescriptCommand !== "string" || !typescriptCommand.trim() || isAbsolute(typescriptCommand)) {
+  throw new Error("typescript-native package does not declare a tsc command");
 }
-
 const toolEntrypoints = {
   next: require.resolve("next/dist/bin/next"),
-  tsc: resolve(typescriptPackageRoot, typescriptTscBin),
+  tsc: require.resolve(resolve(dirname(typescriptPackagePath), typescriptCommand)),
 };
 
 function runTool(tool, args) {

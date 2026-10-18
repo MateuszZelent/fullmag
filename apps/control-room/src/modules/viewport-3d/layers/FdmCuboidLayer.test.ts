@@ -1122,6 +1122,20 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).not.toContain("surface.instanceColor = null;");
   });
 
+  it("invalidates only the owned material mounted on the Three.js surface", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
+
+    expect(layerSource).toContain(
+      "const surfaceMaterialRef = useRef<MeshBasicMaterial>(null);",
+    );
+    expect(layerSource).toContain("ref={surfaceMaterialRef}");
+    expect(layerSource).toContain("const mountedSurfaceMaterial = surface.material;");
+    expect(layerSource).toContain("mountedSurfaceMaterial === surfaceMaterial");
+    expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshBasicMaterial");
+    expect(layerSource).toContain("mountedSurfaceMaterial.needsUpdate = true;");
+    expect(layerSource).not.toContain("surfaceMaterial.needsUpdate = true;");
+  });
+
   it("does not recreate FDM materials for vector-only setting changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
     const surfaceMaterialBlock = layerSource.slice(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ import fullmag_storage
 from windows import stage_workspace_frontend
 from frontend_source_workspace import (
     SourceWorkspaceError,
+    _dependency_input_paths,
     prepare_source_workspace,
     validate_dependency_workspace,
 )
@@ -27,21 +29,27 @@ from frontend_source_workspace import (
 
 PROFILE = fullmag_storage.WINDOWS_WORKSPACE_STORAGE_PROFILES["dev"]
 SOURCE_PROFILE = "windows-control-room-source-check"
+_STORAGE_ENVIRONMENT_KEYS = tuple(sorted(fullmag_storage.MANAGED_VARIABLES))
 
 
 class FrontendSourceWorkspaceTests(unittest.TestCase):
     def setUp(self) -> None:
+        temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
         self.temp_dir = tempfile.TemporaryDirectory(
-            prefix=".test-frontend-source-workspace-", dir=SCRIPT_ROOT.parent
+            prefix=".test-frontend-source-workspace-", dir=temp_root
         )
         self.addCleanup(self.temp_dir.cleanup)
         self.root = Path(self.temp_dir.name)
         self.repo = self.root / "checkout"
         self.repo.mkdir()
         self.storage_root = self.root / "storage"
-        self._previous_storage = os.environ.get("FULLMAG_PROJECT_STORAGE_ROOT")
-        os.environ["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.storage_root)
+        self._previous_storage_environment = {
+            name: os.environ.get(name) for name in _STORAGE_ENVIRONMENT_KEYS
+        }
         self.addCleanup(self._restore_storage_environment)
+        for name in _STORAGE_ENVIRONMENT_KEYS:
+            os.environ.pop(name, None)
+        os.environ["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.storage_root)
 
         self._write_source_fixture()
         self._git("init", "--quiet")
@@ -51,14 +59,15 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
         self._git("commit", "--quiet", "-m", "Create frontend source fixture")
 
         self.layout = fullmag_storage.resolve_layout(self.repo, SOURCE_PROFILE)
+        os.environ["FULLMAG_BUILD_STORAGE_ROOT"] = self.layout["build_storage_root"]
         self.run_root = Path(self.layout["build_root"]) / "api-hygiene" / "run-001"
         self.run_root.mkdir(parents=True)
         self.native_layout = fullmag_storage.resolve_layout(self.repo, PROFILE)
-        build_root = Path(self.native_layout["build_root"])
-        build_root.mkdir(parents=True)
+        self.native_build_root = Path(self.native_layout["build_root"])
+        self.native_build_root.mkdir(parents=True)
         self.native_stage = stage_workspace_frontend.stage_workspace_frontend(
             self.repo,
-            build_root,
+            self.native_build_root,
             mode="dev",
             web_port=3197,
         )
@@ -74,10 +83,11 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
         )
 
     def _restore_storage_environment(self) -> None:
-        if self._previous_storage is None:
-            os.environ.pop("FULLMAG_PROJECT_STORAGE_ROOT", None)
-        else:
-            os.environ["FULLMAG_PROJECT_STORAGE_ROOT"] = self._previous_storage
+        for name, value in self._previous_storage_environment.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def _git(self, *args: str) -> None:
         result = subprocess.run(
@@ -124,6 +134,35 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
             self.run_root,
             self.native_workspace,
         )
+
+    def _stage_frozen_workspace(
+        self,
+        origin_repo: Path | None = None,
+    ) -> tuple[dict[str, object], dict[str, object], Path]:
+        from windows import build_snapshot
+
+        snapshot = build_snapshot.create_snapshot(
+            origin_repo or self.repo,
+            self.native_build_root,
+        )
+        stage = stage_workspace_frontend.stage_workspace_frontend(
+            Path(snapshot["source_root"]),
+            self.native_build_root,
+            mode="dev",
+            web_port=3197,
+            source_snapshot_record=snapshot["record_path"],
+        )
+        workspace = Path(stage["workspace_root"])
+        (workspace / "node_modules").mkdir()
+        (workspace / "node_modules" / "root-dependency.marker").write_text(
+            "root dependency data", encoding="utf-8"
+        )
+        app = workspace / "apps" / "control-room"
+        (app / "node_modules").mkdir()
+        (app / "node_modules" / "app-dependency.marker").write_text(
+            "app dependency data", encoding="utf-8"
+        )
+        return stage, snapshot, workspace
 
     def _dependency_input_snapshot(self) -> dict[str, bytes | None]:
         manifest = Path(self.native_stage["manifest_path"])
@@ -187,6 +226,134 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
         )
         self.assertEqual(self._dependency_input_snapshot(), before)
 
+    def test_reuses_dependencies_from_a_verified_frozen_source_snapshot(self) -> None:
+        stage, snapshot, workspace = self._stage_frozen_workspace()
+        manifest = json.loads(Path(stage["manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest["source_selection"],
+            "verified-frozen-snapshot-selected-inputs",
+        )
+        self.assertEqual(
+            manifest["build_source_snapshot"],
+            {
+                "record_path": snapshot["record_path"],
+                "inventory_sha256": snapshot["inventory_sha256"],
+                "source_root": snapshot["source_root"],
+            },
+        )
+
+        checked = validate_dependency_workspace(self.repo, self.layout, workspace)
+        self.assertEqual(checked["dependency_workspace"], str(workspace))
+        self.assertEqual(
+            checked["dependency_input_hashes"]["pnpm-lock.yaml"],
+            hashlib.sha256((self.repo / "pnpm-lock.yaml").read_bytes()).hexdigest(),
+        )
+
+    def test_frozen_dependencies_must_match_current_checkout_inputs(self) -> None:
+        _, _, workspace = self._stage_frozen_workspace()
+        lockfile = self.repo / "pnpm-lock.yaml"
+        original = lockfile.read_bytes()
+        try:
+            lockfile.write_bytes(original + b"# changed after snapshot\n")
+            with self.assertRaises(SourceWorkspaceError):
+                validate_dependency_workspace(self.repo, self.layout, workspace)
+        finally:
+            lockfile.write_bytes(original)
+
+    def test_frozen_snapshot_from_another_checkout_is_rejected(self) -> None:
+        foreign_repo = self.root / "foreign-frozen-checkout"
+        shutil.copytree(self.repo, foreign_repo, ignore=shutil.ignore_patterns(".git"))
+        subprocess.run(["git", "-C", str(foreign_repo), "init", "--quiet"], check=True)
+        subprocess.run(
+            ["git", "-C", str(foreign_repo), "config", "user.name", "Foreign frozen fixture"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(foreign_repo), "config", "user.email", "foreign-frozen@example.invalid"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(foreign_repo), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(foreign_repo), "commit", "--quiet", "-m", "Foreign frozen fixture"],
+            check=True,
+        )
+        _, snapshot, workspace = self._stage_frozen_workspace(foreign_repo)
+        self.assertEqual(snapshot["origin_repo_root"], str(foreign_repo))
+
+        with self.assertRaisesRegex(SourceWorkspaceError, "different checkout"):
+            validate_dependency_workspace(self.repo, self.layout, workspace)
+
+    def test_frozen_snapshot_pin_rejects_incomplete_forged_and_redirected_metadata(self) -> None:
+        stage, _, workspace = self._stage_frozen_workspace()
+        manifest_path = Path(stage["manifest_path"])
+        original = manifest_path.read_bytes()
+        redirected_root = str(self.root / "redirected-frozen-source")
+        cases = (
+            ("missing snapshot pin", lambda data: data.pop("build_source_snapshot")),
+            (
+                "incomplete snapshot pin",
+                lambda data: data["build_source_snapshot"].pop("source_root"),
+            ),
+            (
+                "extra snapshot pin field",
+                lambda data: data["build_source_snapshot"].update(extra="forged"),
+            ),
+            (
+                "forged inventory hash",
+                lambda data: data["build_source_snapshot"].update(
+                    inventory_sha256="0" * 64
+                ),
+            ),
+            (
+                "redirected snapshot record",
+                lambda data: data["build_source_snapshot"].update(
+                    record_path=str(self.root / "redirected-record.json")
+                ),
+            ),
+            (
+                "redirected pin source root",
+                lambda data: data["build_source_snapshot"].update(
+                    source_root=redirected_root
+                ),
+            ),
+            (
+                "redirected manifest source root",
+                lambda data: data.update(source_root=redirected_root),
+            ),
+            (
+                "legacy selection with frozen pin",
+                lambda data: data.update(
+                    source_selection="filesystem-current-selected-inputs"
+                ),
+            ),
+        )
+        try:
+            for label, mutate in cases:
+                with self.subTest(case=label):
+                    data = json.loads(original)
+                    mutate(data)
+                    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+                    with self.assertRaises(SourceWorkspaceError):
+                        validate_dependency_workspace(self.repo, self.layout, workspace)
+        finally:
+            manifest_path.write_bytes(original)
+
+    def test_tampered_frozen_snapshot_record_is_rejected(self) -> None:
+        _, snapshot, workspace = self._stage_frozen_workspace()
+        record_path = Path(snapshot["record_path"])
+        original = record_path.read_bytes()
+        record_path.chmod(0o644)
+        try:
+            data = json.loads(original)
+            data["inventory_sha256"] = "0" * 64
+            record_path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(SourceWorkspaceError):
+                validate_dependency_workspace(self.repo, self.layout, workspace)
+        finally:
+            record_path.chmod(0o644)
+            record_path.write_bytes(original)
+            record_path.chmod(0o444)
+
     def test_missing_root_or_app_node_modules_is_rejected(self) -> None:
         for missing in (
             self.native_workspace / "node_modules",
@@ -206,12 +373,31 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
         source_package.write_bytes(original_source + b"\n")
         with self.assertRaises(SourceWorkspaceError):
             validate_dependency_workspace(self.repo, self.layout, self.native_workspace)
+
         source_package.write_bytes(original_source)
 
         installed_lock = self.native_workspace / "pnpm-lock.yaml"
         original_lock = installed_lock.read_bytes()
         installed_lock.write_bytes(original_lock + b"\n")
         with self.assertRaises(SourceWorkspaceError):
+            validate_dependency_workspace(self.repo, self.layout, self.native_workspace)
+
+    def test_patch_files_are_dependency_inputs(self) -> None:
+        patch = self.repo / "patches" / "next.patch"
+        patch.parent.mkdir()
+        patch.write_text("patch input\n", encoding="utf-8")
+        self.assertIn(patch, _dependency_input_paths(self.repo))
+
+    def test_removed_source_patch_rejects_orphaned_installed_patch(self) -> None:
+        source_patch = self.repo / "patches" / "next.patch"
+        source_patch.parent.mkdir()
+        source_patch.write_text("patch input\n", encoding="utf-8")
+        installed_patch = self.native_workspace / "patches" / "next.patch"
+        installed_patch.parent.mkdir()
+        installed_patch.write_text("patch input\n", encoding="utf-8")
+        source_patch.unlink()
+
+        with self.assertRaisesRegex(SourceWorkspaceError, "patch inventory.*extra=patches/next.patch"):
             validate_dependency_workspace(self.repo, self.layout, self.native_workspace)
 
     def test_workspace_from_foreign_worktree_is_rejected(self) -> None:

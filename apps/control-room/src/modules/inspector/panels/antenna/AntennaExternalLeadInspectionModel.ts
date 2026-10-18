@@ -9,6 +9,8 @@ import {
   type SessionResourceIdentity,
 } from "@/kernel/resources/sessionResourceIdentity";
 
+import { closedLoopManifest } from "@/kernel/resources/antennaClosedLoopInspectionModel";
+
 export const MAX_INSPECTION_PREVIEW_SAMPLES = 8;
 
 export interface InspectionRuntimeSelection {
@@ -101,6 +103,8 @@ export function inspectionMatchesRuntimeStage(
 }
 
 export function inspectionPreviewCount(inspection: AntennaExternalLeadInspectionResource): number {
+  const closed = closedLoopManifest(inspection);
+  if (closed) return Math.min(MAX_INSPECTION_PREVIEW_SAMPLES, closed.target_count);
   const manifest = inspection.manifest;
   if (inspection.status !== "inspection_only" || inspection.qualification !== "NOT VERIFIED" ||
       inspection.field_scope !== "external_electrode_truncation" || !manifest ||

@@ -1,4 +1,278 @@
 # Status realizacji całego planu refaktoryzacji
+Natywny build 15.10.2026 — [P8-53DA](p8/53da-native-capture-and-runtime-free-browser.md):
+zarządzany Windows dev **PASS, exit 0**, source_identity_check=passed,
+manifest 340c667b3756a46f089338ac9216897598631d674eaef6b72472ea2072678a32.
+Kompilacja zakończona mimo późniejszych commitów checkoutu. Uruchomiono
+rzeczywisty browser lifecycle na tym pakiecie; wynik jeszcze nieznany.
+Pełny plan **IN PROGRESS**, bez awansu bramek solvera lub wydania.
+
+Odbiór CI 15.10.2026 — [P8-53DA](p8/53da-native-capture-and-runtime-free-browser.md):
+Control Room job 116363230322 dla c689caee2 **SUCCESS**: typecheck, lint,
+**8537 PASS / 13 skip / 0 FAIL**, audyt wydajności i produkcyjny build Next.
+Regresja retencji powłoki ma zielony odbiór. Natywny build i rzeczywisty
+browser lifecycle nadal w toku/NOT VERIFIED; pełny plan **IN PROGRESS**.
+
+Checkpoint 15.10.2026 — [P8-53DA](p8/53da-native-capture-and-runtime-free-browser.md):
+utrwalanie natywnych wejść przed długą kopią frontendu/docs: **17/17 PASS**.
+Pięć błędów fixture meshing poprawiono; celowany odbiór **4 PASS + 2 subtesty**.
+Rzeczywista odmowa jakości tet4 pozostaje otwarta, próg 0.1 zachowany.
+UI **8536 PASS / 1 FAIL / 13 skip**: przygotowano poprawkę zegara testu
+retencji, wymagany nowy CI. Bramka rzeczywistego browser lifecycle bez
+RuntimeSession przygotowana; runtime **NOT VERIFIED**. Nowy natywny build
+e87965eccad443abba20c0a4441e3f4a uruchomiony, wynik jeszcze nieznany.
+Pełny plan **IN PROGRESS**, procenty bez awansu.
+
+Aktualizacja [P8-53CZ](p8/53cz-nonblocking-preparation-ci-followup.md):
+najnowszy odbiór UI **8535 PASS / 1 FAIL / 13 skip**; pozostały brak
+localStorage w fixture poprawiono, dodano test zachowania realnej powłoki
+przy błędzie transportu. Wymaga nowego CI. Python ordered-stage roundtrip
+**56 PASS + 35 subtestów**, 0 błędów/pominięć, renderer bez zmian.
+Pakiet Windows i pełny lifecycle nadal NOT VERIFIED. Procenty bez awansu.
+
+Checkpoint 15.10.2026 — [P8-53CZ](p8/53cz-nonblocking-preparation-ci-followup.md):
+CI wykryło własną regresję propsów testu, następnie 7 porażek testów/audytu
+po zmianie preparation UI. Przygotowano poprawki fixture i audytu przy
+zachowaniu nowych kontraktów; ponowny odbiór CI wymagany. Interpretowany
+audyt PASS. Build Windows nie wystartował przez zajęty slot. Zmapowano
+otwarty authoring bez RuntimeSession w P2. Pełny plan **IN PROGRESS**.
+
+Checkpoint 15.10.2026 — [P8-53CY](p8/53cy-nonblocking-preparation-workspace.md):
+usunięto globalny preparation gate/inert; status jest kompaktowy i nieblokujący.
+Scenariusz komponentów w przeglądarce: 7 kroków PASS, retained draft/focus/canvas,
+WebGL 1000×620 bez utraty kontekstu; wykryto i poprawiono widoczność zwiniętych
+szczegółów. Świeże powtórzenie c7e641e dało cały receipt PASS przy stabilnych
+źródłach. Typecheck wykazał 7 błędów w obcych dirty zmianach compute/batch,
+lint jeden obcy błąd; React Doctor PASS. Review: brak P0–P2 w zakresie poprawki.
+Checker output storage poprawiony i opublikowany jako `b7051deb5`.
+Pełny plan **IN PROGRESS**, procenty bez awansu do zakończenia bramek.
+
+Checkpoint 15.10.2026 — [P8-53CX](p8/53cx-python-scene-contract-acceptance.md):
+CI potwierdziło Gmsh exact-layer airbox SUCCESS. Kolejne 8 porażek testów
+sceny Python poprawiono zgodnie z rendererem i canonical auxiliary identity;
+dokładny zestaw pięciu plików CI lokalnie **127/127 PASS**, bez skip.
+Odbiór nowych poprawek w CI i nowe regresje Rust pozostają wymagane.
+Pełny plan **IN PROGRESS**, procenty bez awansu.
+
+Checkpoint 15.10.2026 — [P8-53CW](p8/53cw-nested-pipeline-and-application-fixtures.md):
+naprawiono rekurencyjną walidację aktywnych etapów i zachowano deklaracje
+scope wyłączonych etapów. Przygotowano sześć napraw fixture batch/RunIntent,
+zachowując FDM/FEM intent, pełne fingerprinty i negatywne assert’y.
+Parser/diff i source review PASS; wykonanie nowych regresji Rust wymaga CI.
+Pełny plan **IN PROGRESS**, procenty bez awansu przed odbiorem.
+
+Checkpoint 15.10.2026 — [P8-53CV](p8/53cv-ci-application-followup.md):
+poprawka meshera opublikowana jako `6b58b6f10`. Starszy CI napraw fixture
+doszedł do wykonania aplikacji: **101 PASS / 9 FAIL**. Trwa diagnoza
+replay/typed modules/preparation/antenna; walidatorów nie osłabiano.
+Ponowny build Windows zakończył limit oczekiwania przed startem kompilacji;
+brak nowego pakietu. Pełny plan **IN PROGRESS**, procenty bez awansu.
+
+Checkpoint 15.10.2026 — [P8-53CU](p8/53cu-body-first-production-regression.md):
+body-first CAD w produkcyjnym generatorze przechodzi pełny Box **45/45**,
+owner-fields **2/2** i scoped-ring **2/2**, bez skip i przy stabilnych źródłach.
+Zamknięto lokalną porażkę owner XY; pełny Python CI, pakiet Windows oraz
+solver/device/release qualification nadal wymagają osobnych dowodów.
+Pełny plan **IN PROGRESS**, procenty bez awansu przed odbiorem integracji.
+
+Checkpoint 15.10.2026 — [P8-53CR](p8/53cr-application-fixture-imports-and-inventory.md)
+i [P8-53CS](p8/53cs-staged-mesher-negative-evidence.md):
+naprawiono pięć kolejnych błędów kompilacji fixture aplikacji i opublikowano
+`90d35237d`; odbiór CI wymagany. Kandydat fazowego meshera nie zachowuje body
+XY ani tetraedrów i został odrzucony jako rozwiązanie. Zachowano negatywne
+dowody i oceniono retencję bez usuwania. Restart backendu z UI jest poza
+aktualnym zakresem produktu; obowiązuje zapis i ponowny start CLI.
+Pełny plan **IN PROGRESS**, procenty bez awansu.
+
+Checkpoint 14.10.2026 — [P8-53CP](p8/53cp-worker-environment-fixture-types.md)
+i [P8-53CQ](p8/53cq-owner-air-separated-field-controls.md):
+fixture kompozycji anteny **3/3 PASS w CI**. Dwa kolejne E0277 testu
+środowiska workera poprawiono i opublikowano jako `720fcda27`; odbiór trwa.
+Diagnostyka wykonała 10 obserwacji ze stabilnymi źródłami: oddzielne kontrole
+pól nadal nie odtwarzają referencji owner XY. Box **44/45 PASS**, numeric WIP
+pozostaje niezakwalifikowany. Pełny plan **IN PROGRESS**, procenty bez awansu.
+
+Checkpoint 14.10.2026 — [P8-53CN](p8/53cn-owner-air-repeatability-and-gates.md):
+publiczny Box po doprecyzowaniu air-plane contract **44/45 PASS**, bez skip;
+pozostała rzeczywista porażka niezależności owner XY. Powtórzenia ring dają
+identyczne wyniki dla identycznych wejść, lecz 30/50 nm nadal różnią się.
+Browser fixture PR #168 **PASS**; Rust CI ujawniło kolejny fixture anteny,
+Python CI nadal **FAIL**. Numeric candidate jest lokalnym WIP.
+Procenty bez awansu; pełny plan **IN PROGRESS**.
+
+Checkpoint 14.10.2026 — [P8-53CJ](p8/53cj-exact-layer-diagnostic-checkpoint.md),
+[P8-53CK](p8/53ck-ir-antenna-fixture-contract.md),
+[P8-53CL](p8/53cl-inspector-topology-si-fixture.md) i
+[P8-53CM](p8/53cm-production-mesh-gate-results.md):
+PR #165 scalony; CI Control Room 8541 PASS / 13 skip i generated API PASS.
+Naprawy fixture IR i jednostek FMMT Inspectora są w draft PR #168; CI trwa.
+Mesher candidate: scoped-ring/implicit-cap 2/2 PASS; publiczny Box 36/39 PASS,
+3 porażki zakresu air planes i osobny rzeczywisty FAIL owner XY ring.
+Kandydat pozostaje lokalnym WIP; nie zmieniono oczekiwań ani tolerancji testów.
+Procenty P0–P8 bez awansu; pełny plan IN PROGRESS.
+
+Checkpoint 14.10.2026 — [P8-53CH](p8/53ch-canonical-api-generation-and-antenna-scope.md)
+i [P8-53CI](p8/53ci-scoped-exact-layer-mesher-diagnosis.md):
+CI odebrało **87/87 API session** i **315/315 fullmag-session**, w tym late
+standalone regression. Control Room poprawił się do 8535 PASS / 6 FAIL;
+uzupełniono pozostały scope mocka anteny, wymagane nowe CI. Kontrakt API
+odtworzono maszynowo do bajtowej zgodności z przypiętym CI artefaktem;
+managed generate-client, production TS7 i API hygiene PASS. Mesher exact
+layers wymaga naprawy spełniającej count i niezależne owner/air fields;
+diagnoza nie zastępuje implementacji. **Pełny plan IN PROGRESS.**
+
+Checkpoint 14.10.2026 — [P8-53CF](p8/53cf-frontend-integration-fixtures-and-debug.md)
+i [P8-53CG](p8/53cg-standalone-runtime-preview-finalization.md):
+przywrócono Debug anteny i canonical compute-node path; naprawiono mocks API,
+KernelContext i formularza Radix oraz nieaktualne fixtures/assertions.
+Produkcyjny TS7 PASS `cb7fbcad`, końcowy lint PASS `47b0e7a1`, source review
+bez P0/P1/P2. Poprawiono ordering late preview w standalone inspection;
+odbiory CI/browser/runtime tej poprawki pozostają wymagane. Drift generated
+API oraz 4 błędy Python layered airbox są nadal otwarte. Procentów nie podniesiono.
+
+Checkpoint 14.10.2026 — [P8-53CE](p8/53ce-current-integration-gates.md):
+CI na `868a224b` potwierdziło **315/315 sesji** oraz **1039/1039** w modal
+observables z pełnym frontend typecheck. Pełna seria Control Room:
+8525 PASS / 16 FAIL / 13 skipped i 9 unhandled errors. Cztery kolejne
+blokady kompilacji fixtures API poprawione źródłowo; odbiór ich CI wymagany.
+Pełny build desktopu nadal nieodebrany; retencja nieuzyskana (HTTP 500).
+**P8 i cały plan IN PROGRESS; procentów nie podniesiono.**
+
+Checkpoint 14.10.2026 — [P8-53CB](p8/53cb-frontend-compiler-api-and-native-cli.md):
+rozdzielono compiler API 6 od natywnego CLI 7; poprawiono zgodność pluginów
+z ESLint 10 bez wyłączania reguł. Pełny lint PASS `909b25eb`, produkcyjne
+źródła TS7 PASS `898a6f7f`, regresje CLI **5/5 PASS**.
+CLI/API skompilowane; desktop i pełny pakiet nadal blokuje brak miejsca.
+Browser/runtime i CI pozostają odrębnymi bramkami; procentów nie podniesiono.
+
+Checkpoint 14.10.2026 — [P8-53CA](p8/53ca-verified-frozen-frontend-dependencies.md):
+walidator przyjmuje poprawnie przypięte zależności z sealed source snapshotu;
+końcowe interpreted regresje **16/16 PASS**, receipt `a435001e`.
+Production source TS7 PASS `00a38ea0`; CLI/API z nowego snapshotu skompilowane.
+Cały native build failed przy desktopie z powodu braku miejsca. Świeży lint
+ujawnił niezgodność parsera ESLint z API TS7; wymagany kolejny przyrost.
+**Pełny pakiet, browser/runtime, P8 i cały plan pozostają IN PROGRESS.**
+
+Checkpoint 14.10.2026 — [P8-53BZ](p8/53bz-typed-authoring-and-browser-buffer-contracts.md):
+naprawiono typowany ACK authoringu, przeglądarkowe granice buforów i import
+helpera ribbonu; uzupełniono fixtures scope/nazw i rozdzielono TypeScript 7
+od oficjalnego compiler API 6 dla testów AST. Managed production source
+typecheck PASS (`1fbabb24`); lokalnie nie kompilowano unit tests.
+Nowe CI, build oraz browser/runtime nadal wymagają odbioru. Dwie próby
+buildu zakończyły oczekiwanie przed kompilacją z powodu zajętego slotu.
+**P8 i cały plan pozostają IN PROGRESS; procentów nie podniesiono.**
+
+Checkpoint 14.10.2026 — [P8-53BU](p8/53bu-authenticated-restore-frame.md):
+natywny probe publikuje ramkę v2 z uwierzytelnionym request ID/generation
+i źródłowym API/PID. Konsument odróżnia legacy v1 bez awansu jego dowodu.
+Managed checks **209/209**, zero skipów; native CLI/API/desktop build-only
+**exit 0**, manifest b08a5648. Realny odbiór v2 i A→B→C nadal NOT VERIFIED;
+publiczny restart zablokowany. Procentów całego planu nie podniesiono.
+
+Checkpoint 14.10.2026 — [P8-53BT](p8/53bt-browser-chain-ledger.md):
+wdrożono immutable ledger maksymalnie dwóch cykli z bindingiem
+nonce/request/API/session/build i właściwą custody starego API. Końcowe
+managed checks **201/201, zero skipów**, receipt 35b7439f, source identity
+before=after. To prerequisite danych; native reader i ProofBridge v2 oraz
+rzeczywisty A→B→C nadal otwarte, publiczny restart pozostaje zablokowany.
+Procentów całego planu nie podniesiono.
+
+Checkpoint 14.10.2026 — [P8-53BS](p8/53bs-restart-remaining-gates.md):
+audyt odróżnił historyczne braki od najnowszego dowodu pojedynczego restartu
+z kamerą (81eb7f40 ponownie odczytany: completed/0, 10 checks, 27 waited).
+Potwierdzono ograniczenie harnessu do jednego cyklu i jednego Finish;
+następny przyrost to jawny łańcuch A→B→C z dwoma immutable baseline,
+świeżymi pinami i pełnym process custody. Dowód dwóch restartów oraz pełna
+macierz stanów Inspectora/fault nadal NOT VERIFIED. Procentów nie podniesiono.
+
+Checkpoint 14.10.2026 — [P8-53BR](p8/53br-explorer-physics-browser-proof.md):
+produkcyjne drzewo Explorera przeszło trzy browser scenariusze normalizacji
+fizyki (receipt `96d56620e5914b2eb596927758850904`, exit 0). Brak błędów
+strony, mutacji i nieoczekiwanych odczytów API; źródła stabilne, własny serwer
+zamknięty. Jest to dowód renderowania per obiekt na danych kontrolnych,
+nie realnego API/solvera ani wydania. **P8 i cały plan pozostają IN PROGRESS;
+procentów nie podniesiono.**
+
+Checkpoint 14.10.2026 — [P8-53BQ](p8/53bq-explorer-physics-normalization.md):
+naprawiono dwa odrębne P2 raportowania DMI oraz duplikatów interakcji.
+Rzeczywisty adapter przed poprawką odtworzył błąd (RED b3c09083), po poprawce
+**31/31 PASS** (4ff5cba7), production source typecheck PASS (a1f721ad).
+Nie zmieniono solvera ani publicznego API; unit sources pozostają NOT RUN.
+Nowy browser proof i integracja są NOT VERIFIED. Kompatybilny launcher
+TypeScript z [P8-53BP](p8/53bp-pr160-integration-gates.md) jest lokalnie
+zacommitowany w `50929f025798eed85f69b98fc63c01bec8ae3877`; push napraw
+czeka na decyzję dotyczącą automatycznego CI kompilującego unit testy.
+**P8 i cały plan pozostają IN PROGRESS; procentów nie podniesiono.**
+
+Checkpoint 14.10.2026 — nowy pakiet `cb9c2825` z poprawkami
+[P8-53BN](p8/53bn-explorer-effective-physics.md) i
+[P8-53BO](p8/53bo-grid-modal-correlation.md) przeszedł pełną natywną bramkę:
+receipt `81eb7f40d2c8428baae938f5be5bef73`, **completed / exit 0,
+10 kontroli, 27/27 procesów odebranych**. Zachowano scenę, dirty document
+revision 2 i sześć pól kamery; Grid published, Compute completed
+(10 kroków / jeden etap), normalne Close completed. Staged production
+typecheck/lint exit 0. Nie kompilowano testów jednostkowych.
+Poprawki są na branchu PR #160 (`c5b0da654`, `8327547da`), nie na remote master.
+CI sprawdza merge `9b3dd8d1627fdd6d7ab3c8005dbc49ba04148b07`
+z remote `e40295e419aaf212fb69885c573ac6d6e60c9e69` i nadal jest czerwone:
+[diagnoza integracji P8-53BP](p8/53bp-pr160-integration-gates.md).
+**P8-53 i cały plan pozostają IN PROGRESS; procentów nie podniesiono.**
+
+Aktualizacja 14.10.2026 — pełna bramka natywnego restartu z kamerą,
+autoringiem modelu i wykonaniem Grid/Compute **PASS**:
+`2998926363e84fd5b32569767c9a44b0`, exit 0, 10 kontroli, 27/27 procesów
+odebranych. Kamera ma wszystkie sześć pól identycznych przed/po;
+scena i dirty document zachowane. Compute wykonał 10 kroków i 1 etap;
+Grid, Compute oraz normalne Close zakończyły się completed w nowym API.
+Dowód dotyczy Windows/FDM CPU-reference, double/strict, małego boxu
+z komórką5nm, Uniform i jawną anizotropią. Nie kwalifikuje innych lane.
+PR #160 jest nadal otwarty; modal Grid wymaga osobnej poprawki korelacji
+requestId. **P8-53 i cały plan pozostają IN PROGRESS.**
+Szczegóły: [P8-53BM](p8/53bm-camera-preservation.md).
+
+Checkpoint 14.10.2026 — poprawka niekompletnej fizyki `2d767a5b2252855f33579f94e89158c4ba7b5798`
+jest na branchu PR #160, jeszcze nie na remote master. Nowy produkcyjny
+pakiet `1bcaf4c1` ukończony exit 0; frozen API 303 PASS, 99/99 procesów
+odebranych, receipt `a6c4edb5665f46709d61fa5b535fd3d9`. Znana odmowa
+renderowania niekompletnej fizyki zwraca 400 zamiast 500 i nie zmienia
+sceny/revision; pozostałe nieznane wyniki zachowują fail-closed.
+Generacja klienta i production source typecheck PASS.
+
+Próba browserowa `a7e054cc1fb44299b8caf33a59877b11` potwierdziła guard
+capture kamery, capture po zapisie oraz zachowanie sześciu pól kamery,
+modelu i dirty document po restarcie. Staged typecheck/lint exit 0.
+Grid doszedł do nowego wykonawcy, lecz odmówił z powodu brakującego
+rozmiaru komórki FDM w wejściu kontrolnym. Próba anulowana terminalnie,
+25/25 procesów odebranych; całej bramki nie oznaczono PASS.
+**P8-53BM/P8-53 nadal IN PROGRESS; procentów całego planu nie podniesiono.**
+Szczegóły i następny kompletny zestaw wejść: [ledger P8-53BM](p8/53bm-camera-preservation.md).
+
+Aktualizacja 14.10.2026 — nowy pakiet `cd7fe207` ukończony, exit 0.
+Realna próba `14152bbfe6a44c23a485176a4c0ff127` odtworzyła 1 obiekt,
+1 region, 1 materiał i identyczny dirty document po zmianie API instance.
+Uzupełniający odczyt nowego API potwierdził wszystkie sześć pól kamery
+identycznych przed/po; viewport 700×297, context_lost=false.
+Pełny scenariusz nie zaliczony: kontrolny obiekt nie miał magnetization
+asset, więc normalny Build Grid odmówił. Próba jawnie anulowana, 24/24
+procesów i frontend odebrane. Kolejna próba musi przypisać Uniform texture
+przed capture/restart; poprawioną kolejność opisuje
+[ledger P8-53BM](p8/53bm-camera-preservation.md).
+**P8-53BM/P8-53 nadal IN PROGRESS**, bez awansu procentów całego planu.
+
+Checkpoint 14.10.2026 — [P8-53BM](p8/53bm-camera-preservation.md):
+pakiet 94fc ukończony; poprawiono wyścig publikacji lease fixture przez
+istniejącą blokadę natywnego writera. Pełna bramka API po poprawce PASS:
+301 kontroli, exit 0, 98/98 procesów odebranych, receipt
+`ee9dc8ae88c840b09716322aba936a9c`. Regresje interpretowane: 186 PASS.
+Kanoniczny eksport OpenAPI i bramka dokumentu: 33 PASS, 6/6 procesów;
+po synchronizacji kontraktu production typecheck PASS. Poprzednia próba
+browser 57e2 nie dotarła do UI z powodu nieaktualnych wygenerowanych typów.
+Nowy build z aktualnym frontendem jest w toku. Poprawka
+`e9b32c3bf8c486e88cde3c4472f3c19a531f9fed` jest na branchu
+`codex/camera-handoff-checkpoint-20261014` w
+[PR #160](https://github.com/MateuszZelent/fullmag/pull/160), jeszcze bez
+integracji na remote master. **P8-53BM/P8-53 pozostają IN PROGRESS**:
+brak nowego dowodu kamery po restarcie, CI merge tree wymaga napraw.
+Procentów całego planu nie zwiększono na podstawie samych bramek API.
 
 Checkpoint 13.10.2026 — [P8-53BM: zachowanie kamery](p8/53bm-camera-preservation.md):
 natywny pakiet API/CLI/desktop completed exit 0; regresja API 301 kontroli
@@ -9,8 +283,16 @@ oraz `48d3893cca7d7f7fdd0b7408051d3955039318ac` są na remote master.
 Rzeczywisty browser utworzył 1 obiekt, 1 region i 1 materiał oraz potwierdził
 niezerowy canvas bez utraty kontekstu. Restart odmówił capture przed POST;
 próba została jawnie anulowana, 19/19 procesów terminalnych. Brak dowodu
-kamery po restarcie. Nowy build diagnostyki nie wystartował przez zajęty
-slot (120s, exit 2). **P8-53BM i P8-53 pozostają IN PROGRESS**; procentów
+kamery po restarcie. Następny build diagnostyki zakończył się completed,
+exit 0, manifest `3ab4d4ca2feb2a3fee1ab859e70992c8d0838d86c8f6ca65eccd0c252532b0d4`.
+Próba browser `2217069eff234263823106a5d37a1928` odmówiła przed UI przez
+dwa błędy TypeScript (17/17 procesów terminalnych); minimalne poprawki
+mają production typecheck PASS i review bez P0/P1/P2. Fixture bannera
+potwierdził osobną diagnostykę odmowy potwierdzenia kandydata, 13 kontroli.
+Regresja API nowego pakietu `caab51c039de43a38d93fc3d93c830d2` przerwała
+się po 7 kontrolach na timeout wait własnego procesu; brak pełnego PASS.
+Nowy snapshot z poprawkami TypeScript jest w budowie.
+**P8-53BM i P8-53 pozostają IN PROGRESS**; procentów
 całego planu nie zmieniono. [P8-55](p8/55-network-storage-assessment-20261013.md)
 uzupełnia ocenę Z: o niezależne bramki lokalnego writera i TEMP; nie ma
 kwalifikacji aktywnego storage SMB ani migracji.

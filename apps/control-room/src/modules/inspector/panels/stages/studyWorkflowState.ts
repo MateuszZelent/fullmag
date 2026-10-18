@@ -25,8 +25,10 @@ export interface EffectiveStudyAutosaveOutput {
 }
 
 export interface EffectiveStudyFftResponse {
+  readOnly: boolean;
+  analysis: "gamma" | "finite_k" | "unsupported";
   detrend: "none" | "mean" | "linear";
-  responseComponent: "my" | "mz";
+  responseComponent: "mx" | "my" | "mz";
   sourceStageId: string;
   susceptibilityFloorFraction: number;
   window: "hann";
@@ -111,6 +113,8 @@ export function resolveStudyWorkflowStateBefore(
     if (draft.kind === "fft_response") {
       fftResponse = draft.fftResponse.enabled
         ? {
+            analysis: draft.fftResponse.analysis ?? "gamma",
+            readOnly: Boolean(draft.fftResponse.readOnly),
             detrend: draft.fftResponse.detrend,
             responseComponent: draft.fftResponse.responseComponent,
             sourceStageId: draft.stageId,
@@ -137,7 +141,19 @@ export function validateStudyWorkflow(
   for (const [index, draft] of drafts.entries()) {
     if (draft.kind !== "run") continue;
     const state = resolveStudyWorkflowStateBefore(drafts, index);
-    if (state.fftResponse && !state.tableAutosave) {
+    if (state.fftResponse?.analysis === "unsupported") {
+      issues.push({ index, message: "The imported response analysis is unrecognized; its raw request is preserved and no Gamma sampling contract is inferred.", severity: "error" });
+    }
+    if (state.fftResponse?.analysis === "finite_k") {
+      const m = state.outputs.find((output) => output.quantity === "m" && output.outputKind === "field");
+      const h = state.outputs.find((output) => output.quantity === "H_drive" && output.outputKind === "field");
+      if (!m || !h) {
+        issues.push({ index, message: "Finite-k response requires active field autosave for both m and H_drive.", severity: "error" });
+      } else if (!Number.isFinite(m.everySeconds) || !Number.isFinite(h.everySeconds) || !(m.everySeconds! > 0) || !(h.everySeconds! > 0) || m.everySeconds !== h.everySeconds) {
+        issues.push({ index, message: "Finite-k m and H_drive field clocks must resolve to the same positive sampling period.", severity: "error" });
+      }
+    }
+    if (state.fftResponse?.analysis === "gamma" && !state.tableAutosave) {
       issues.push({
         index,
         message:
@@ -146,7 +162,7 @@ export function validateStudyWorkflow(
       });
       continue;
     }
-    if (state.fftResponse && state.tableAutosave) {
+    if (state.fftResponse?.analysis === "gamma" && state.tableAutosave) {
       const quantities = new Set(
         state.tableAutosave.quantities.map((quantity) => quantity.toLowerCase()),
       );

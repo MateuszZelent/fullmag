@@ -8,12 +8,12 @@ const kernelProviderSource = readFileSync(
 ).replace(/\r\n/g, "\n");
 
 describe("KernelProvider performance contracts", () => {
-  it("preserves the kernel host across Fast Refresh through lazy state ownership", () => {
+  it("preserves the kernel across Fast Refresh through lazy state ownership", () => {
     expect(kernelProviderSource).toContain(
-      "const [host] = useState(() => new DevelopmentKernelHost(createKernel));",
+      "const [kernel] = useState(() => createKernel());",
     );
     expect(kernelProviderSource).not.toContain(
-      "useMemo(() => new DevelopmentKernelHost(createKernel)",
+      "DevelopmentKernelHost",
     );
   });
 
@@ -25,22 +25,29 @@ describe("KernelProvider performance contracts", () => {
       "resourceData: runtimeResourceDataRef.current",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, startupVisible, paused]);",
+      "}, [kernel, sessionScopeKey]);",
     );
     expect(kernelProviderSource).not.toContain(
-      "}, [kernel, runtimeResourceData, startupVisible]);",
+      "}, [kernel, runtimeResourceData]);",
     );
     expect(kernelProviderSource).not.toContain(
       "}, [kernel, runtimeResourceData, startupState.isVisible]);",
     );
   });
 
-  it("uses startup visibility selectors only for interactions that must wait for the workspace", () => {
+  it("keeps shortcut handling available while preparation still gates runtime data", () => {
     expect(kernelProviderSource).toContain(
       "useSimulationStartupOverlayVisibility",
     );
     expect(kernelProviderSource).toContain(
       "const startupVisible = useSimulationStartupOverlayVisibility();",
+    );
+    expect(kernelProviderSource).toContain("enabled: !startupVisible");
+    expect(kernelProviderSource).not.toContain(
+      "if (startupVisible) {\n      return;\n    }",
+    );
+    expect(kernelProviderSource).toContain(
+      "dispatchShortcutCommand(kernel.commands, event, context);",
     );
     expect(kernelProviderSource).not.toContain(
       "function RealtimeConnector({ kernel }: { kernel: KernelApi }) {\n  const startupVisible",
@@ -64,7 +71,7 @@ describe("KernelProvider performance contracts", () => {
       "const expectedSessionId = sessionIdentity?.sessionId ?? null;",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId, paused]);",
+      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId]);",
     );
   });
 

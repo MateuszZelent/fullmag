@@ -279,21 +279,21 @@ CAD construction, Gmsh generation, selector resolution, or quality analysis ran 
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| study-level schema and lowering | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` |
-| per-object schema and topology validation | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` |
-| operation sequence | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class MeshOperation` |
+| study-level schema and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | [`class FEM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) |
+| per-object schema and topology validation | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) |
+| operation sequence | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L568) | [`class MeshOperation`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L568) |
 | typed swept controls | `packages/fullmag-py/src/fullmag/model/discretization.py` | `SweepDistribution`, `SweptMeshControls` |
 | stage-first mesh authoring | `packages/fullmag-py/src/fullmag/world.py` | mesh facades on `StudyBuilder` and magnetic object handles |
-| target precedence | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `resolve_shared_domain_targets` |
+| target precedence | [`packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py#L573) | [`resolve_shared_domain_targets`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py#L573) |
 | Gmsh shared-domain generation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_infra.py` | shared assembly owner |
 | swept generation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | sweepability and swept construction owners |
 | size-field composition | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | size-field plan owner |
 | extraction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | native extraction owner |
-| realization/degradation report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` |
-| object UI and request canonicalization | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` |
+| realization/degradation report | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L30) | [`_build_shared_domain_build_report`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L30) |
+| object UI and request canonicalization | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts#L503) | [`buildObjectMeshPolicyReplaceRequest`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts#L503) |
 | object mesh inspector | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` |
 | airbox UI and transaction | `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `AirboxMeshParametersPanel` |
-| airbox request canonicalization | `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` |
+| airbox request canonicalization | [`apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts#L255) | [`buildAirboxMeshPolicyReplaceRequest`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts#L255) |
 
 (python-api-discretization-fem-validation)=
 ## Verification and scientific qualification

@@ -135,6 +135,29 @@ export function antennaFieldSolveStudyStages(
   return { stages: [...stages, action], alreadyAdded: false };
 }
 
+export type AntennaStudyReference =
+  | { state: "missing" }
+  | { state: "invalid"; message: string }
+  | { state: "present"; queueId: string; index: number; enabled: boolean };
+
+/** Resolve navigation through the same reference/conflict checks as the add command. */
+export function antennaFieldSolveStudyReference(scene: SceneResource, target: AntennaSolveTarget): AntennaStudyReference {
+  try {
+    const plan = antennaFieldSolveStudyStages(scene, target);
+    if (!plan.alreadyAdded) return { state: "missing" };
+    const source = readStudyStageSource(scene.study);
+    const matches = source.entries.flatMap((entry, index) =>
+      (entry.stageKind ?? entry.payload.kind) === "antenna_field_solve" && entry.payload.stage_id === target.stageId
+        ? [{ entry, index }] : []);
+    if (matches.length !== 1) return { state: "invalid", message: "The Study reference is missing or ambiguous; no execution is selected." };
+    const { entry, index } = matches[0];
+    return { state: "present", queueId: entry.queueId ?? String(entry.payload.stage_id ?? entry.payload.id ?? index),
+      index, enabled: entry.enabled };
+  } catch (error) {
+    return { state: "invalid", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export const addAntennaFieldSolveStudyCommand: CommandContribution = {
   id: ADD_ANTENNA_FIELD_SOLVE_STAGE_COMMAND,
   title: "Add Field Solve to Study",

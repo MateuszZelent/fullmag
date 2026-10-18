@@ -13,7 +13,6 @@ import type { KernelApi } from "../types";
 
 import {
   SimulationStartupOverlayView,
-  WorkspaceStartupGateView,
   openSimulationPreparationDiagnostics,
   resolveSimulationStartupOverlayState,
   shouldRefreshSimulationStartupStatus,
@@ -240,7 +239,7 @@ describe("SimulationStartupOverlay", () => {
     ).toMatchObject({ isVisible: false, kind: "hidden" });
   });
 
-  it("renders an accessible blocking modal-style status panel", () => {
+  it("renders an accessible nonmodal status with collapsed details", () => {
     const html = renderToStaticMarkup(
       <SimulationStartupOverlayView
         state={resolveSimulationStartupOverlayState(
@@ -249,19 +248,23 @@ describe("SimulationStartupOverlay", () => {
       />,
     );
 
-    expect(html).toContain('data-interaction-state="blocked"');
-    expect(html).toContain('role="dialog"');
-    expect(html).toContain('aria-modal="true"');
+    expect(html).toContain('aria-label="Simulation preparation status"');
+    expect(html).not.toContain('data-interaction-state="blocked"');
+    expect(html).not.toContain('role="dialog"');
+    expect(html).not.toContain('aria-modal="true"');
     expect(html).toContain('role="status"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("View preparation details");
     expect(html).toContain("Compiling simulation");
     expect(html).toContain("Compiling the model");
-    expect(html).toContain("Simulation controls will be available");
+    expect(html).toContain('aria-label="Simulation preparation progress"');
   });
 
-  it("retains the previous initial gate until the workspace has mounted", () => {
+  it("renders pending status beside the workspace content", () => {
     const html = renderToStaticMarkup(
-      <KernelContext.Provider value={startupGateKernel()}>
-        <WorkspaceStartupGateView
+      <>
+        <div data-slot-id="viewport-main">Viewport module</div>
+        <SimulationStartupOverlayView
           state={resolveSimulationStartupOverlayState({
             data: null,
             error: new Error("no active local live workspace"),
@@ -269,38 +272,23 @@ describe("SimulationStartupOverlay", () => {
             revision: null,
             status: "error",
           })}
-        >
-          <div data-slot-id="viewport-main">Viewport module</div>
-        </WorkspaceStartupGateView>
-      </KernelContext.Provider>,
+        />
+      </>,
     );
+
+    const viewportTag = html.match(
+      /<div[^>]*data-slot-id="viewport-main"[^>]*>/,
+    )?.[0];
+    const startupStatusTag = html.match(
+      /<aside[^>]*class="fm-simulation-startup"[^>]*>/,
+    )?.[0];
 
     expect(html).toContain("Preparing simulation");
-    expect(html).not.toContain("viewport-main");
-  });
-
-  it("keeps one fallback diagnostics slot available before the workspace mounts", () => {
-    const kernel = startupGateKernel();
-    kernel.layout.openBottomPanel("diagnostics");
-    const html = renderToStaticMarkup(
-      <KernelContext.Provider value={kernel}>
-        <WorkspaceStartupGateView
-          state={resolveSimulationStartupOverlayState({
-            data: null,
-            error: new Error("no active local live workspace"),
-            refetch,
-            revision: null,
-            status: "error",
-          })}
-        >
-          <div data-slot-id="viewport-main">Viewport module</div>
-        </WorkspaceStartupGateView>
-      </KernelContext.Provider>,
-    );
-
-    expect(html.match(/data-slot-id="panel-bottom"/g)).toHaveLength(1);
-    expect(html).toContain('data-startup-diagnostics="visible"');
-    expect(html).not.toContain("viewport-main");
+    expect(html).toContain("viewport-main");
+    expect(viewportTag).toBeDefined();
+    expect(viewportTag).not.toMatch(/\s(?:inert|aria-hidden)(?:=|\s|>)/);
+    expect(startupStatusTag).toBeDefined();
+    expect(startupStatusTag).not.toContain("aria-modal");
   });
 
   it("selects startup overlay state instead of subscribing to full session status", () => {
@@ -447,7 +435,7 @@ describe("SimulationStartupOverlay", () => {
     expect(html.match(/aria-live="off"/g)).toHaveLength(1);
   });
 
-  it("keeps failure controls visible during the initial gated failure", () => {
+  it("keeps failure diagnostics available without gating the workspace", () => {
     const failed = preparationResource({
       active_stage_id: null,
       failure: {
@@ -470,9 +458,10 @@ describe("SimulationStartupOverlay", () => {
     );
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={kernel}>
-        <WorkspaceStartupGateView state={state}>
+        <>
           <div data-slot-id="viewport-main">Viewport module</div>
-        </WorkspaceStartupGateView>
+          <SimulationStartupOverlayView state={state} />
+        </>
       </KernelContext.Provider>,
     );
 
@@ -485,7 +474,9 @@ describe("SimulationStartupOverlay", () => {
     expect(html).not.toContain("Connecting to the simulation backend");
     expect(html).not.toContain('aria-valuenow="');
     expect(html).toContain("Failed");
-    expect(html).not.toContain("viewport-main");
+    expect(html).toContain("viewport-main");
+    expect(html).not.toContain('aria-modal="true"');
+    expect(html).not.toContain(" inert");
   });
 
   it("serializes only the bounded safe preparation projection", () => {

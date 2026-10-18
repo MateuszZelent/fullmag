@@ -29,8 +29,11 @@ import type {
   ProjectBatchCasesResource,
   ProjectBatchListQuery,
   ProjectBatchListResource,
+  ProjectBatchCommandRequest,
+  ProjectBatchCommandResource,
   ProjectBatchSubmitRequest,
   ProjectBatchSubmitResource,
+  PublishExecutionProfileRequest,
 } from "./apiTypes";
 import {
   ANALYSIS_RESULT_BRANCH_POINTS_PATH,
@@ -3237,6 +3240,134 @@ describe("ControlRoomApi", () => {
     });
   });
 
+  it("classifies proxy 5xx responses without a contract header as unavailable", async () => {
+    for (const status of [500, 503]) {
+      const requestId = `req-proxy-${status}`;
+      const api = new ControlRoomApi({
+        maxGetRetries: 0,
+        requestIdFactory: () => requestId,
+        fetchImpl: async () =>
+          new Response("proxy unavailable", {
+            headers: { "x-request-id": `response-${status}` },
+            status,
+          }),
+      });
+
+      await expect(api.sessions.current.status()).rejects.toMatchObject({
+        code: "API_UNAVAILABLE",
+        message: "Fullmag API unavailable",
+        requestId: `response-${status}`,
+        status,
+      });
+    }
+  });
+
+  it("does not poison a pinned client on an unpinned proxy 5xx", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    let calls = 0;
+    const api = new ControlRoomApi({
+      expectedApiInstance: pin,
+      maxGetRetries: 0,
+      fetchImpl: async () => {
+        calls += 1;
+        return calls === 1
+          ? new Response("proxy unavailable", { status: 503 })
+          : jsonResponse(liveStatusFixture(), {
+              headers: { "x-fullmag-api-instance": pin },
+            });
+      },
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      code: "API_UNAVAILABLE",
+      status: 503,
+    });
+    await expect(api.sessions.current.status()).resolves.toMatchObject({
+      api_contract_version: "1.0.0",
+    });
+    expect(calls).toBe(2);
+  });
+
+  it("keeps an explicit replacement instance as a hard fence on a 5xx", async () => {
+    const api = new ControlRoomApi({
+      expectedApiInstance: "12345678-1234-4234-8234-123456789abc",
+      maxGetRetries: 0,
+      fetchImpl: async () =>
+        new Response("replacement unavailable", {
+          headers: { "x-fullmag-api-instance": "87654321-1234-4234-8234-123456789abc" },
+          status: 503,
+        }),
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      code: "API_INSTANCE_MISMATCH",
+      status: 409,
+    });
+  });
+
+  it("preserves contract mismatch for wrong-version 5xx responses", async () => {
+    const api = new ControlRoomApi({
+      maxGetRetries: 0,
+      fetchImpl: async () =>
+        new Response("backend failure", {
+          headers: {
+            "x-api-contract-version": "0.9.0",
+            "x-request-id": "wrong-version-request",
+          },
+          status: 503,
+        }),
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      status: 0,
+      message: "API contract version mismatch: expected 1.0.0, got 0.9.0",
+    });
+  });
+
+  it("preserves contract mismatch for missing-version 4xx responses", async () => {
+    const api = new ControlRoomApi({
+      fetchImpl: async () => new Response("client failure", { status: 404 }),
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      status: 0,
+      message: "API contract version mismatch: expected 1.0.0, got missing",
+    });
+  });
+
+  it("classifies exhausted network failures as unavailable with the request id", async () => {
+    const api = new ControlRoomApi({
+      maxGetRetries: 0,
+      requestIdFactory: () => "req-network-unavailable",
+      fetchImpl: async () => {
+        throw new TypeError("fetch failed");
+      },
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      code: "API_UNAVAILABLE",
+      message: "Fullmag API unavailable",
+      requestId: "req-network-unavailable",
+      status: 0,
+    });
+  });
+
+  it("preserves an Error-shaped AbortError without retry or reclassification", async () => {
+    const abortError = new Error("aborted");
+    abortError.name = "AbortError";
+    const fetchImpl = vi.fn(async () => {
+      throw abortError;
+    });
+    const api = new ControlRoomApi({
+      fetchImpl,
+      maxGetRetries: 2,
+      requestIdFactory: () => "req-aborted",
+    });
+
+    await expect(api.sessions.current.status()).rejects.toBe(abortError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("reports non-ok status responses as API errors", async () => {
     const api = new ControlRoomApi({
       fetchImpl: async () =>
@@ -3539,12 +3670,12 @@ describe("ControlRoomApi", () => {
         observedUrl = String(url);
         return jsonResponse({
           energies: {
-            anisotropy: 0,
-            demag: 0,
-            dmi: 0,
-            exchange: 0,
-            total: 0,
-            zeeman: 0,
+            anisotropy: null,
+            demag: null,
+            dmi: null,
+            exchange: null,
+            total: null,
+            zeeman: null,
           },
           has_solver_sample: false,
           magnetization_average: { mx: 1, my: 0, mz: 0 },
@@ -3565,6 +3696,7 @@ describe("ControlRoomApi", () => {
     expect(result).toMatchObject({
       has_solver_sample: false,
       object_id: "arch_Waveguide",
+      energies: { anisotropy: null, demag: null, dmi: null, exchange: null, total: null, zeeman: null },
     });
   });
 
@@ -3646,7 +3778,7 @@ describe("ControlRoomApi", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  it("loads typed platform health and capabilities through generated v2 paths", async () => {
+  it("loads typed platform health, capabilities, and compute nodes through generated v2 paths", async () => {
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
       const path = new URL(String(url)).pathname;
       if (path === "/v2/platform/health") {
@@ -3655,6 +3787,14 @@ describe("ControlRoomApi", () => {
           api_contract_version: "1.0.0",
           status: "ok",
           uptime_seconds: 12,
+        });
+      }
+      if (path === "/v2/platform/compute/nodes") {
+        return jsonResponse({
+          nodes: [],
+          schema_version: "compute_nodes.v1",
+          stale_after_seconds: 30,
+          state: "not_probed",
         });
       }
       return jsonResponse({ engines: [], profile_version: "runtime-capabilities.v1" });
@@ -3668,9 +3808,14 @@ describe("ControlRoomApi", () => {
     await expect(api.platform.capabilities()).resolves.toMatchObject({
       profile_version: "runtime-capabilities.v1",
     });
+    await expect(api.platform.computeNodes()).resolves.toMatchObject({
+      state: "not_probed",
+      stale_after_seconds: 30,
+    });
     expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
       "/v2/platform/health",
       "/v2/platform/capabilities",
+      "/v2/platform/compute/nodes",
     ]);
   });
 
@@ -5300,6 +5445,77 @@ describe("ControlRoomApi", () => {
     }]);
   });
 
+  it("requests a durable task retry with its stable retry identity", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          disposition: "accepted",
+          run_id: "run-1",
+          task_id: "task-1",
+          retry_id: "retry-1",
+          previous_attempt_id: "attempt-1",
+          previous_ownership_epoch: 2,
+          lifecycle: "queued",
+          catalog_revision: 5,
+        });
+      },
+    });
+    const request = { retry_id: "retry-1", expected_catalog_revision: 4 };
+
+    const result = await api.persistence.projects.retryRunTask(
+      "project-1",
+      "run-1",
+      "task-1",
+      request,
+    );
+
+    expect(result).toMatchObject({
+      disposition: "accepted",
+      lifecycle: "queued",
+      catalog_revision: 5,
+      retry_id: request.retry_id,
+    });
+    expect(requests).toEqual([{
+      body: request,
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1/tasks/task-1/retry",
+    }]);
+  });
+
+  it("sends the local operator capability when publishing an execution profile", async () => {
+    let observedHeaders = new Headers();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        observedHeaders = new Headers(init?.headers);
+        return jsonResponse({});
+      },
+    });
+    const request: PublishExecutionProfileRequest = {
+      expected_revision: 0,
+      client_intent_id: "profile-intent-1",
+      profile: {
+        schema_version: "execution_profile.v1",
+        profile_id: "exec:interactive",
+        version: "1",
+        defaults: {},
+      },
+    };
+
+    await api.platform.publishComputeProfile(request, {
+      operatorCapability: "a".repeat(32),
+    });
+
+    expect(observedHeaders.get("authorization")).toBe(`Bearer ${"a".repeat(32)}`);
+  });
+
   it("reads a durable project run without a current-session target", async () => {
     const requests: Array<{ method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({
@@ -5411,6 +5627,7 @@ describe("ControlRoomApi", () => {
         max_parallel_cases: 2,
         failure_policy: "continue_independent",
         published_case_count: 0,
+        command_revision: 0,
         expansion_state: "pending",
       }],
       next_cursor: null,
@@ -5426,6 +5643,21 @@ describe("ControlRoomApi", () => {
       }],
       next_cursor: null,
     };
+    const commandRequest: ProjectBatchCommandRequest = {
+      action: "pause_admission",
+      command_id: "command-1",
+      expected_revision: 0,
+      reason: "Pause from inspector",
+    };
+    const commandAccepted: ProjectBatchCommandResource = {
+      action: "pause_admission",
+      batch_id: "batch-1",
+      command_id: "command-1",
+      command_revision: 1,
+      disposition: "accepted",
+      expansion_state: "paused",
+      revision: 0,
+    };
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
       fetchImpl: async (input, init) => {
@@ -5435,7 +5667,11 @@ describe("ControlRoomApi", () => {
           method: init?.method,
           url,
         });
-        if (init?.method === "POST") return jsonResponse(accepted, { status: 201 });
+        if (init?.method === "POST") {
+          return url.endsWith("/commands")
+            ? jsonResponse(commandAccepted, { status: 202 })
+            : jsonResponse(accepted, { status: 201 });
+        }
         if (url.includes("/cases")) return jsonResponse(casesPage);
         return jsonResponse(batchPage);
       },
@@ -5448,20 +5684,26 @@ describe("ControlRoomApi", () => {
     const cases = await api.persistence.projects.listBatchCases(
       "project-1", "batch-1", casesQuery,
     );
+    const commanded = await api.persistence.projects.commandBatch(
+      "project-1", "batch-1", commandRequest,
+    );
 
     expect(submitted).toEqual(accepted);
     expect(listed).toEqual(batchPage);
     expect(cases).toEqual(casesPage);
+    expect(commanded).toEqual(commandAccepted);
     expect(requests.map(({ method, url }) => ({ method, url: new URL(url).pathname }))).toEqual([
       { method: "POST", url: "/v2/persistence/projects/project-1/batches" },
       { method: "GET", url: "/v2/persistence/projects/project-1/batches" },
       { method: "GET", url: "/v2/persistence/projects/project-1/batches/batch-1/cases" },
+      { method: "POST", url: "/v2/persistence/projects/project-1/batches/batch-1/commands" },
     ]);
     expect(requests[0]?.body).toEqual(batchRequest);
     const batchListUrl = new URL(requests[1]!.url);
     expect(batchListUrl.searchParams.get("limit")).toBe("25");
     expect(batchListUrl.searchParams.get("cursor")).toBe("batch-prev");
     expect(new URL(requests[2]!.url).searchParams.get("limit")).toBe("10");
+    expect(requests[3]?.body).toEqual(commandRequest);
   });
 
   it("loads and patches object interaction resources through v2 model facade methods", async () => {
@@ -6306,7 +6548,7 @@ describe("ControlRoomApi", () => {
         url: "http://127.0.0.1:8765/v2/sessions/current/meshing/policies/objects/free%20layer",
       },
       {
-        body: { config: { maximum_element_size: 5e-9 } },
+        body: { config: { maximum_element_size: "5e-9" } },
         method: "PUT",
         url: "http://127.0.0.1:8765/v2/sessions/current/meshing/policies/objects/free%20layer",
       },

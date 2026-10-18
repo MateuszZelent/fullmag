@@ -106,6 +106,7 @@ pub struct ExternalStageTerms {
     /// Additional magnetic field in A/m, assembled before the Gilbert RHS.
     pub additional_field_apm: Vec<Vector3>,
     /// Direct contribution to `dm/dt` in 1/s, added after the Gilbert RHS.
+    /// This is already an explicit RHS, not an unconverted Gilbert source.
     pub direct_torque_per_s: Vec<Vector3>,
 }
 
@@ -140,9 +141,12 @@ impl CoupledImexArk2Tableau {
 /// Coupled transport uses it to bound transport-induced torque error before
 /// either subsystem commits state.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TransportStageErrorBudget {
+pub struct TransportStageErrorBudget<'a> {
     pub dt_s: f64,
-    pub embedded_lte_m: f64,
+    /// Raw embedded Heun-minus-Euler error, borrowed only during the callback.
+    pub embedded_error_m: &'a [Vector3],
+    /// Excluded frozen cells; physical transport target fields remain intact.
+    pub frozen_cells: Option<&'a [bool]>,
 }
 
 // ── Grid & Cell ────────────────────────────────────────────────────────

@@ -68,6 +68,12 @@ impl NativeRestartPump {
         self.last_canceled_helper
     }
 
+    /// Drain only the owned helper handle after diagnostic API shutdown.
+    /// Never renew readiness, resume observers, or contact a stopped API.
+    pub(crate) fn drain_candidate_preparation_for_probe(&mut self) -> Result<bool> {
+        self.cancel_candidate_preparation()
+    }
+
     /// Each old API has one immutable slot. Once attempted, it is never
     /// executed again, including when result publication is uncertain.
     pub(crate) fn step(

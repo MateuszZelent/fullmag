@@ -17,7 +17,7 @@ import type {
   AntennaFieldSolutionResource,
   AntennaFieldPayloadKind,
   AntennaExternalLeadInspectionResource,
-  AntennaInspectionDisplayResource,
+  AntennaInspectionDisplayResource as LegacyAntennaInspectionDisplayResource,
   AntennaInspectionManifestPayloadKind,
   AntennaInspectionPayloadKind,
   AntennaStageOutputCatalogResource,
@@ -28,6 +28,7 @@ import type {
 import { useKernel } from "../KernelContext";
 
 import { useResource } from "./useResource";
+import { closedLoopManifest, closedLoopDisplayMatches, isClosedLoopDisplay, parseClosedLoopManifest, type AntennaInspectionDisplay as AntennaInspectionDisplayResource, type ClosedLoopPayloadKind } from "./antennaClosedLoopInspectionModel";
 import { sessionResourceIdentitiesEqual } from "./sessionResourceIdentity";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 
@@ -89,7 +90,7 @@ export function requireMatchingAntennaPayloadRevision(
 
 export async function antennaInspectionPayloadEtag(
   inspection: AntennaExternalLeadInspectionResource,
-  payloadKind: AntennaInspectionPayloadKind,
+  payloadKind: AntennaInspectionPayloadKind | ClosedLoopPayloadKind,
   payloadSha256: string,
 ): Promise<string> {
   const output = inspection.outputs.length === 1 ? inspection.outputs[0] : null;
@@ -320,6 +321,7 @@ export function useAntennaExternalLeadInspectionResource(
         ? api.data.antenna
             .externalLeadInspection(stageId, { signal, sessionScopeKey })
             .catch(ignoreMissingAntennaResource<AntennaExternalLeadInspectionResource>)
+            .then((result) => { if (result) closedLoopManifest(result); return result; })
         : Promise.resolve(null),
     [api, stageId],
   );
@@ -334,7 +336,7 @@ export function useAntennaExternalLeadInspectionResource(
 }
 
 function inspectionDisplayPayloadMatchesManifest(
-  display: AntennaInspectionDisplayResource["device_potential"],
+  display: LegacyAntennaInspectionDisplayResource["device_potential"],
   manifest: NonNullable<AntennaExternalLeadInspectionResource["manifest"]>["device_potential"],
 ): boolean {
   return (["sha256", "byte_count", "value_count", "scalar_type", "layout", "unit"] as const)
@@ -343,7 +345,7 @@ function inspectionDisplayPayloadMatchesManifest(
 
 function inspectionCurrentDisplayMatchesManifest(
   inspection: AntennaExternalLeadInspectionResource,
-  display: AntennaInspectionDisplayResource,
+  display: LegacyAntennaInspectionDisplayResource,
 ): boolean {
   const manifest = inspection.manifest;
   const current = display.device_current;
@@ -393,6 +395,7 @@ export function antennaInspectionDisplayMatchesOwner(
   inspection: AntennaExternalLeadInspectionResource,
   display: AntennaInspectionDisplayResource,
 ): boolean {
+  if (isClosedLoopDisplay(display)) return closedLoopDisplayMatches(inspection, display);
   const output = inspection.outputs.length === 1 ? inspection.outputs[0] : null;
   return Boolean(output && inspection.manifest &&
     inspectionCurrentDisplayMatchesManifest(inspection, display) &&
@@ -442,11 +445,11 @@ export function useAntennaInspectionDisplayResource(
       if (!inspection || !ownerMatches || !stageId || !contentDigest) return null;
       const result = await api.data.antenna.externalLeadInspectionDisplay(
         stageId, contentDigest, { signal, sessionScopeKey },
-      ).catch(ignoreMissingAntennaResource<AntennaInspectionDisplayResource>);
+      ).catch(ignoreMissingAntennaResource<LegacyAntennaInspectionDisplayResource>);
       if (result && !antennaInspectionDisplayMatchesOwner(inspection, result)) {
         throw new Error("antenna display metadata does not match its immutable inspection owner");
       }
-      return result;
+      return result as AntennaInspectionDisplayResource | null;
     }, [api, contentDigest, inspection, ownerMatches, stageId],
   );
   return useResource<AntennaInspectionDisplayResource | null>({
@@ -456,16 +459,21 @@ export function useAntennaInspectionDisplayResource(
   });
 }
 
-type AntennaDisplayPayloadKind = "device_positions" | "device_topology" | "device_potential" | "sample_positions" | "magnetic_field" |
+type AntennaDisplayPayloadKind = ClosedLoopPayloadKind | "device_positions" | "device_topology" | "device_potential" | "sample_positions" | "magnetic_field" |
   "current_center_positions" | "current_center_density" | "current_trace_positions" | "current_trace_density";
 
 function inspectionDisplayPayloadDescriptor(display: AntennaInspectionDisplayResource, kind: AntennaDisplayPayloadKind) {
+  if (isClosedLoopDisplay(display)) {
+    const manifest = parseClosedLoopManifest(display.closed_loop_display);
+    const payload = manifest.payloads[kind as ClosedLoopPayloadKind];
+    return payload ? { ...payload, byte_count: payload.byte_length } : undefined;
+  }
   switch (kind) {
     case "current_center_positions": return display.device_current?.center_positions;
     case "current_center_density": return display.device_current?.center_current_density;
     case "current_trace_positions": return display.device_current?.trace_positions;
     case "current_trace_density": return display.device_current?.trace_current_density;
-    default: return display[kind];
+    default: return kind in display ? display[kind as "device_positions"] : undefined;
   }
 }
 
@@ -496,7 +504,7 @@ export function useAntennaInspectionDisplayPayloadResource(
       }
       const expectedEtag = await antennaInspectionPayloadEtag(inspection, payloadKind, descriptor.sha256);
       const result = await api.data.antenna.externalLeadInspectionPayload(
-        display.runtime_stage_id, payloadKind, display.content_digest,
+        display.runtime_stage_id, payloadKind as AntennaInspectionPayloadKind, display.content_digest,
         { signal, sessionScopeKey, range: options.range,
           maxResponseBytes: Math.min(options.maxResponseBytes ?? descriptor.byte_count, descriptor.byte_count) },
       );
@@ -523,7 +531,7 @@ export function useAntennaInspectionDisplayPayloadResource(
 
 export function useAntennaExternalLeadInspectionPayloadResource(
   inspection: AntennaExternalLeadInspectionResource | null | undefined,
-  payloadKind: AntennaInspectionManifestPayloadKind | null | undefined,
+  payloadKind: AntennaInspectionManifestPayloadKind | ClosedLoopPayloadKind | null | undefined,
   options: Pick<AntennaPayloadResourceOptions, "enabled" | "range" | "maxResponseBytes"> = {},
 ) {
   const { api } = useKernel();
@@ -539,22 +547,23 @@ export function useAntennaExternalLeadInspectionPayloadResource(
     sessionEpoch: inspection.session_epoch,
     requestScopeEpoch: inspection.request_scope_epoch,
   });
-  const hasPayload = Boolean(
+  const closed = inspection ? closedLoopManifest(inspection) : null;
+  const hasPayload = Boolean(closed ||
     inspection?.status === "inspection_only" && inspection.manifest &&
     contentDigest && inspection.manifest.content_digest === contentDigest,
   );
   const load = useCallback(
     async ({ signal, sessionScopeKey }: { signal: AbortSignal; sessionScopeKey?: string }) => {
       if (!inspection || !ownerMatches || !hasPayload || !stageId || !payloadKind || !contentDigest) return null;
-      const descriptor = inspection.manifest?.[payloadKind];
+      const descriptor = closed ? closed.payloads[payloadKind as ClosedLoopPayloadKind] : inspection.manifest?.[payloadKind as AntennaInspectionManifestPayloadKind];
       if (!descriptor) throw new Error("antenna inspection has no selected payload descriptor");
       const expectedEtag = await antennaInspectionPayloadEtag(inspection, payloadKind, descriptor.sha256);
       const result = await api.data.antenna.externalLeadInspectionPayload(
-        stageId, payloadKind, contentDigest, { signal, sessionScopeKey, range: options.range, maxResponseBytes: options.maxResponseBytes },
+        stageId, payloadKind as AntennaInspectionPayloadKind, contentDigest, { signal, sessionScopeKey, range: options.range, maxResponseBytes: options.maxResponseBytes },
       );
       return requireMatchingAntennaPayloadRevision(result, expectedEtag);
     },
-    [api, contentDigest, hasPayload, inspection, options.maxResponseBytes, options.range, ownerMatches, payloadKind, stageId],
+    [api, closed, contentDigest, hasPayload, inspection, options.maxResponseBytes, options.range, ownerMatches, payloadKind, stageId],
   );
 
   return useResource<BinaryResourceResult<ArrayBuffer> | null>({

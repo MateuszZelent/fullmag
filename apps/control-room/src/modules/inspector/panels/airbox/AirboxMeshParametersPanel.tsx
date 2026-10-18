@@ -39,7 +39,6 @@ import {
   updateInspectorDraftState,
   type InspectorDraftState,
 } from "../inspectorDraftState";
-import { FemMeshReadinessGuideCard } from "../mesh-guide/FemMeshReadinessGuideCard";
 import {
   AIRBOX_GRADING_MODES,
   updateAirboxLengthUnit,
@@ -582,7 +581,6 @@ export function AirboxMeshParametersPanel({
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-mesh-policy-draft="airbox">
-      {!isFdm ? <FemMeshReadinessGuideCard compact universePolicy={resource} /> : null}
       <InspectorGroup title="Transactions">
         {isFdm ? (
           <FeedbackBanner

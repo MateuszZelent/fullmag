@@ -1303,6 +1303,7 @@ mod tests {
             port_mode_id: "common".into(),
             solution_id: solution_id.into(),
             field_solution: crate::AntennaFieldSolutionSamples {
+                sample_carrier: None,
                 solution_id: solution_id.into(),
                 source_object_id: "antenna".into(),
                 port_mode_id: "common".into(),
@@ -1612,13 +1613,10 @@ mod tests {
         )
         .expect_err("cancelled publication must not return a ready asset");
         assert!(error.message.contains("cancelled before atomic rename"));
-        let revision_parent = root.join("antenna/field_solutions/solution");
-        let final_revision = revision_parent.join(&asset_id);
+        let revision_parent = root.join(solution_prefix(&result.solution_id));
+        let final_revision = physical_solution_revision_dir(&root, &result.solution_id, &asset_id);
         assert!(revision_parent.is_dir(), "retain the shared organizing parent");
-        assert!(
-            !final_revision.exists(),
-            "cancelled publication must not rename the revision"
-        );
+        assert!(!final_revision.exists(), "cancelled publication must not rename the revision");
         assert!(!final_revision.join(SOLUTION_MANIFEST_NAME).exists());
         assert!(!final_revision.join("common/H_per_A.f64le").exists());
         let staging_prefix = format!(".solution.{asset_id}.tmp-");
@@ -1626,14 +1624,9 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .any(|name| name.to_string_lossy().starts_with(&staging_prefix));
-        assert!(
-            !leaked_staging,
-            "cancelled publication must remove its temporary directory"
-        );
-        assert!(
-            fs::read_dir(&revision_parent).unwrap().next().is_none(),
-            "a cancelled publication in a fresh namespace must leave no revision or staging children"
-        );
+        assert!(!leaked_staging, "cancelled publication must remove its temporary directory");
+        assert!(fs::read_dir(&revision_parent).unwrap().next().is_none(), "a cancelled publication in a fresh namespace must leave no revision or staging children");
+
         fs::remove_dir_all(&root).ok();
     }
 

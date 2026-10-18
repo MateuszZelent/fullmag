@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object import
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,11 +54,11 @@ fm.ImportedGeometry(source, scale=1.0, units=None, name=None, volume="full")
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```source``` | ```str or PathLike``` | ```required``` | ```1``` | non-empty | source asset path or identifier | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```source``` |
-| ```scale``` | ```float or tuple[float,float,float]``` | ```1.0``` | ```1 or dimensionless vector``` | positive scalar/vector | import scale | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```scale``` |
-| ```units``` | ```str or None``` | ```None``` | ```1``` | recognized unit when supplied | source units | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```units``` |
-| ```name``` | ```str or None``` | ```None``` | ```1``` | non-empty when supplied | stable name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```volume``` | ```str``` | ```full``` | ```1``` | current supported value full | surface/volume import policy | FEM/FDM CPU/GPU: IR; resolver-specific | ```volume``` |
+| `source` | `str or PathLike` | `required` | `1` | non-empty | source asset path or identifier | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `source` |
+| `scale` | `float or tuple[float,float,float]` | `1.0` | `1 or dimensionless vector` | positive scalar/vector | import scale | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `scale` |
+| `units` | `str or None` | `None` | `1` | recognized unit when supplied | source units | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `units` |
+| `name` | `str or None` | `None` | `1` | non-empty when supplied | stable name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `volume` | `str` | `full` | `1` | current supported value full | surface/volume import policy | FEM/FDM CPU/GPU: IR; resolver-specific | `volume` |
 
 ### Stage-first example
 

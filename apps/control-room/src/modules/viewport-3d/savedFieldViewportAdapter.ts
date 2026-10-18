@@ -247,7 +247,7 @@ export function buildSavedFieldViewportSceneModel({
   );
   if (!topologyModel) return null;
 
-  const quantityVectorColorMode = field.componentCount >= 3
+  const quantityVectorColorMode = field.componentCount === 3
     ? vectorColorMode
     : "magnitude";
   const savedRenderVector = savedFieldVector(geometry, field, support);
@@ -263,13 +263,13 @@ export function buildSavedFieldViewportSceneModel({
       fieldRevision: field.savedScopeKey,
       fullScalarColorMode: "magnitude",
       fullScalarColorPalette: palette,
-      fullVectorBudget: field.componentCount >= 3
+      fullVectorBudget: field.componentCount === 3
         ? Math.min(2048, field.nodeCount)
         : 0,
       partScalarColorModes: new Map([[carrier.id, "magnitude"]]),
       partScalarColorPalettes: new Map([[carrier.id, palette]]),
       partVectorBudgets: new Map([
-        [carrier.id, field.componentCount >= 3 ? Math.min(2048, field.nodeCount) : 0],
+        [carrier.id, field.componentCount === 3 ? Math.min(2048, field.nodeCount) : 0],
       ]),
       partVectorScopes: new Map([[carrier.id, "full"]]),
       scalarColorModes: new Set(["magnitude"]),

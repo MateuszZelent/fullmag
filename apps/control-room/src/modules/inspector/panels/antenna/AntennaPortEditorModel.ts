@@ -92,13 +92,13 @@ export function acknowledgeAntennaPortDraft(
 /** Reject a malformed ACK before either history or the canonical cache is published. */
 export function committedAntennaPortScene(
   response: AuthoringTransactionResponse, submitted: AntennaPortDraft, objectId: string, portId: string,
-  sessionId: string, expectedPort: AntennaPortModeResource,
+  expectedSceneId: string, expectedPort: AntennaPortModeResource,
 ): SceneResource {
   acknowledgeAntennaPortDraft(submitted, submitted, response.scene_revision);
   const scene = response.committed_scene;
   const matches = scene?.antenna_port_modes?.filter((mode) => mode.id === portId) ?? [];
   const mode = matches[0];
-  if (!scene || scene.scene?.id !== sessionId || scene.revision !== response.scene_revision ||
+  if (!expectedSceneId.trim() || !scene || scene.scene?.id !== expectedSceneId || scene.revision !== response.scene_revision ||
       (scene.scene_revision !== undefined && scene.scene_revision !== response.scene_revision) || matches.length !== 1 ||
       mode.source_object_id !== objectId || mode.schema_version !== expectedPort.schema_version ||
       mode.normalization_current_a !== expectedPort.normalization_current_a || !antennaPortDraftMatches(mode, submitted) ||

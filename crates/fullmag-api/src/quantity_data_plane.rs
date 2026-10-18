@@ -249,7 +249,8 @@ fn estimate_planar_sample_bytes(result: &PlanarSampleResult) -> usize {
             + overlay.segments.len()
                 * std::mem::size_of::<crate::planar_sampling::PlanarOverlaySegment>()
     });
-    scalar + vectors + occupancy + source_ids + overlay
+    let components = result.component_values.len() * std::mem::size_of::<f64>();
+    scalar + components + vectors + occupancy + source_ids + overlay
 }
 
 impl JsonResourceCache {
@@ -520,7 +521,50 @@ pub(crate) fn topological_charge_cache_key(
 ///
 /// Held in `AppState` as `Arc<QuantityDataPlaneStore>`. Independent locks keep unrelated
 /// topology, projection, slice, and analysis resources from blocking one another.
+/// The cache retains verified immutable views, never caller-supplied field bytes.
+/// A record/owner revision is part of every key; at most two bundles and 128 MiB coexist.
+pub(crate) struct VerifiedInspectionCache {
+    entries: HashMap<String, (Arc<crate::router_v2::handlers::data::inspection_field_provider::VerifiedInspectionFields>, u64, usize)>,
+    access: u64,
+    bytes: usize,
+}
+impl VerifiedInspectionCache {
+    fn new() -> Self { Self {entries:HashMap::new(),access:0,bytes:0} }
+    pub(crate) fn get(&mut self, key: &str) -> Option<Arc<crate::router_v2::handlers::data::inspection_field_provider::VerifiedInspectionFields>> {
+        self.access=self.access.wrapping_add(1);
+        let entry=self.entries.get_mut(key)?; entry.1=self.access; Some(Arc::clone(&entry.0))
+    }
+    pub(crate) fn insert(&mut self, key: String, value: Arc<crate::router_v2::handlers::data::inspection_field_provider::VerifiedInspectionFields>) -> Result<(),crate::error::ApiError> {
+        const LIMIT:usize=128*1024*1024;
+        // A u64 selector never replaces the full SHA256 identity.
+        for (existing,_,_) in self.entries.values() {
+            for next in value.fields.values() { for old in existing.fields.values() {
+                let next=crate::router_v2::handlers::data::inspection_field_provider::locator(next)?;
+                let old=crate::router_v2::handlers::data::inspection_field_provider::locator(old)?;
+                if next.carrier_revision==old.carrier_revision && next.carrier_digest!=old.carrier_digest {
+                    return Err(crate::error::ApiError::conflict("immutable artifact carrier revision collision"));
+                }
+            }}
+        }
+        // Fixed hashed key plus a conservative bucket/map allocation allowance.
+        let entry_bytes=value.retained_bytes.checked_add(key.capacity()).and_then(|n|n.checked_add(1024))
+            .ok_or_else(||crate::error::ApiError::conflict("inspection cache allocation overflow"))?;
+        if entry_bytes>LIMIT {return Ok(());}
+        if let Some(old)=self.entries.remove(&key) {self.bytes=self.bytes.saturating_sub(old.2);}
+        while self.entries.len()>=2 || self.bytes.saturating_add(entry_bytes)>LIMIT {
+            let Some(oldest)=self.entries.iter().min_by_key(|(_,v)|v.1).map(|(k,_)|k.clone()) else {break;};
+            if let Some(old)=self.entries.remove(&oldest) {self.bytes=self.bytes.saturating_sub(old.2);}
+        }
+        self.access=self.access.wrapping_add(1);self.bytes+=entry_bytes;
+        self.entries.insert(key,(value,self.access,entry_bytes));
+        Ok(())
+    }
+}
+
 pub(crate) struct QuantityDataPlaneStore {
+    pub verified_inspection_cache: StdMutex<VerifiedInspectionCache>,
+    /// One accepted CAS materialization at a time, including cancelled request workers.
+    pub accepted_inspection_admission: Arc<tokio::sync::Semaphore>,
     /// Bounded shared FMMT buffers keyed by exact route-specific topology ETag.
     pub topology_cache: StdMutex<SharedBinaryCache>,
     /// Cache for projected (component-selected or magnitude) field vector binaries.
@@ -564,6 +608,8 @@ impl QuantityDataPlaneStore {
         max_bytes_each: usize,
     ) -> Self {
         Self {
+            verified_inspection_cache: StdMutex::new(VerifiedInspectionCache::new()),
+            accepted_inspection_admission: Arc::new(tokio::sync::Semaphore::new(1)),
             topology_cache: StdMutex::new(SharedBinaryCache::new(
                 DEFAULT_MAX_TOPOLOGY_ENTRIES,
                 DEFAULT_MAX_TOPOLOGY_BYTES,
@@ -630,6 +676,8 @@ mod tests {
                 basis_order: 0,
                 integration_order: 0,
             },
+            n_comp: 1,
+            component_values: vec![1.0; value_count],
             scalar_values: vec![1.0; value_count],
             vector_values: None,
             occupancy: vec![Occupancy::Occupied; value_count],

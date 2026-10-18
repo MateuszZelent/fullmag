@@ -36,7 +36,9 @@ pub(crate) fn with_materialized_external_lead_request<T>(
         .ok_or_else(|| RunError {
             message: "materialized external lead input has no authored source".into(),
         })?;
-    let ConservativeCurrentSourceIR::ExternalLeadCurrent { revision, .. } = source;
+    let ConservativeCurrentSourceIR::ExternalLeadCurrent { revision, .. } = source else {
+        return Err(RunError {message:"prepared closed-loop source cannot enter the legacy external-lead adapter".into()});
+    };
     let terminals = input
         .outer_terminals
         .iter()

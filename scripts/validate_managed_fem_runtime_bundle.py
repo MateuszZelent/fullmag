@@ -240,7 +240,7 @@ def validate_source_provenance_consistency(
 
 
 STARTUP_STAMP = re.compile(
-    r"^\[fullmag\] build: [^|]+ \| commit: (?P<git_commit>[0-9a-f]{40}) "
+    r"^\[fullmag\] (?:version: [^|]+ \| )?build: [^|]+ \| commit: (?P<git_commit>[0-9a-f]{40}) "
     r"\| (?P<worktree_state>clean|dirty) \| source snapshot: "
     r"(?P<source_snapshot_sha256>[0-9a-f]{64})$"
 )

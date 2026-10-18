@@ -42,6 +42,13 @@ vi.mock("@/shared/runtime/CommandDetailDialog", () => ({
   CommandDetailDialog: () => null,
 }));
 
+vi.mock("@/shared/ui/Tooltip", () => ({
+  TooltipProvider: ({ children }: { children: ReactNode }) => children,
+  Tooltip: ({ children }: { children: ReactNode }) => children,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => children,
+  TooltipContent: () => null,
+}));
+
 vi.mock("@/shared/ui/ContextMenu", () => ({
   ContextMenu: ({ children }: { children: ReactNode }) => children,
   ContextMenuContent: () => null,

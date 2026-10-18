@@ -78,7 +78,8 @@ impl std::fmt::Display for PreparationPlanError {
 impl std::error::Error for PreparationPlanError {}
 
 /// Evidence returned by the stateless native MFEM mesh/function-space producer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NativeFemMeshSpaceEvidence {
     pub abi_version: u32,
     pub producer_id: String,
@@ -105,7 +106,7 @@ pub struct NativeFemMeshSpaceEvidence {
 }
 
 impl NativeFemMeshSpaceEvidence {
-    fn validate_for_mesh(
+    pub fn validate_for_mesh(
         &self,
         mesh: &fullmag_ir::MeshIR,
         expected_fe_order: u32,

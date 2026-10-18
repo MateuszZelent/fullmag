@@ -1,7 +1,7 @@
 # Airbox mesh grading
 
-- Status: geometric and legacy linear field generation implemented; full 0105 production evidence pending
-- Last updated: 2026-10-14
+- Status: geometric/legacy field generation implemented; scoped exact-layer candidate implemented; full 0105 production and managed-runtime evidence **NOT VERIFIED**
+- Last updated: 2026-10-15
 - Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
 (airbox-grading-problem-statement)=
@@ -267,59 +267,233 @@ production criteria, not claims about the current partial report.
 - Current reports do not yet publish the complete canonical band/growth gate.
 - Linear grading remains compatibility behavior and is not removed here.
 - FMMQ v1 cannot carry mixed topology quality evidence.
-- The scoped exact-layer route creates one CAD volume for each precomputed
-  z slab. Under component-scoped sizing fields, both the Box and Ring extrusion
-  branches request exactly one extrusion mesh layer per slab with
-  `numElements=[1]`, `heights=[1.0]`, and `recombine=True`. The Ring branch now
-  follows the same layer-count policy as Box while retaining its existing
-  already-defined slab geometry and shared periodic workflow. Recombined
-  extrusion keeps the existing Fullmag converter responsible for prism-to-Tet4
-  subdivision; source configuration alone does not prove that prism elements
-  reach the converter or that periodic faces match. The unscoped compatibility
-  route is unchanged. Runtime layer, topology, sizing, orientation, and periodic
-  checks remain `NOT VERIFIED` until the hosted regressions pass.
-- A hosted periodic certificate reports equal periodic-face counts. For the
-  first failed face, all three nodes of that particular source triangle have
-  mapped destination IDs, but no destination face has exactly that mapped
-  vertex set. This establishes a connectivity mismatch for that face; it does
-  not prove complete node or face mapping across the periodic pair. The
-  certificate runs after element subdivision and extraction, so this observation
-  alone does not identify the stage that chose the incompatible diagonal.
-- Gmsh 4.15.2's `meshGRegionExtruded::extrudeMesh` keeps a nondegenerate
-  extrusion of each triangular source element as a prism. Its
-  `SubdivideExtrudedMesh` pass collects only non-recombined extruded regions;
-  that pass then chooses prism splits and creates tetrahedra. The scoped Box and
-  Ring candidates therefore request `numElements=[1]`, `heights=[1.0]`, and
-  `recombine=True` for each already-defined CAD slab, avoiding that native
-  non-recombined subdivision path. Gmsh also has an optional recombined
-  `QuadToTri` path, so these flags do not prove that prism elements reach
-  Fullmag. The existing `subdivide_layered_prisms` converter supports vertical
-  prism6/quad4 meshes and replaces them with tet4/tri3 without adding nodes or
-  changing physical regions; it applies a positive-orientation correction to
-  generated tetrahedra. Its coordinate-ranked split does not receive periodic
-  mappings. Periodic face bijection must therefore remain a separate strict
-  acceptance check after extraction. See the
-  [Gmsh 4.15.2 extrusion source](https://github.com/live-clones/gmsh/blob/gmsh_4_15_2/src/mesh/meshGRegionExtruded.cpp).
-- Hosted regressions for the scoped one-layer routes must capture bounded Gmsh
-  element-type counts immediately before and after the Fullmag conversion and
-  require actual `prism6` input to become `tet4` output. The existing Ring
-  regression retains its strict checks for requested and resolved layer counts,
-  exact body planes and expected body extents, owner-volume and air-volume size behavior,
-  positive cells, shared-face incidence at body layer seams, periodic node
-  translations, and bijective mapped boundary-face connectivity. This is a
-  swept Tet4 generator experiment, not support for general native mixed-prism
-  FEM inputs; no native adapter contract changes.
-- Owner-volume and air-volume fields are installed before final
-  `mesh.generate(3)`, but current evidence does not prove that the Box route
-  preserves exact owner-volume upper and lower fields, independent air sizing,
-  or the prior body XY mesh. Those behaviors must be measured; configured
-  field values alone are not evaluated size values.
-- GHA must establish exact magnetic z planes, one nonempty body mesh slab per
-  requested interval, no tetrahedron crossing an internal plane, positive cells,
-  shared-face incidence at body layer seams, mapped periodic node translations
-  and bijective mapped boundary-face connectivity, unchanged body XY under
-  air-cap changes, and measured near-to-far air coarsening before the scoped Box
-  or Ring route is runtime-qualified.
+- Before the magnetic-interval correction (integration baseline
+  `c106fd3e3ad6f851d2bb81b0a06867a8d2165dea`), the scoped route created exact
+  CAD partitions using geometry-only GEO extrusion, without `numElements`,
+  `heights` or `recombine`, then generated one conforming 3D mesh after
+  magnetic-owner and air-volume sizing fields were installed. The fields, rather than a copied
+  source-face triangulation or cap projection, determine the in-plane density
+  in each owner volume. Exact magnetic z planes and periodic surface pairings
+  remain separate geometry/topology obligations. The GHA regressions must
+  still establish exact planes, scoped body and air density in a common region,
+  positive cells, shared-face incidence at body layer seams, mapped periodic
+  node translations, and actual near-to-far air coarsening before this route
+  is runtime-qualified.
+- On the 2026-10-14 integration baseline, the four public Box/DE fixtures
+  requesting $L=6$ magnetic layers were rejected because the realized magnetic
+  nodes contained seven to nine intervals. These are interior magnetic planes,
+  not additional airbox boundaries. CAD partitions alone therefore do not yet
+  prove the ADR-0027 $L+1$ node-plane contract. The existing guard must remain
+  fail closed; neither the requested layer count nor the guard tolerance is
+  relaxed to accept this output.
+- A diagnostic candidate may set `numElements=[1]` and `heights=[1.0]` for
+  each scoped GEO interval, without restoring the old copied-cap field stack
+  or enabling recombination. Gmsh documents these arguments as controlling
+  elements and normalized layer heights in mesh extrusion (see its
+  [extrusion API](https://gmsh.info/doc/texinfo/gmsh.html#index-gmsh_002fmodel_002fgeo_002fextrude)).
+  This is an experimental candidate, not the implemented production route.
+  It is admissible only if the same realization satisfies exact planes,
+  owner-floor and body/air size separation, positive tet4, seam incidence,
+  periodic translations and actual near-to-far air growth. Passing the count
+  alone cannot justify copying one in-plane mesh through all air levels or
+  losing independent owner-volume fields. An isolated diagnostic executes the
+  candidate in memory; it does not change requested Python/ProblemIR intent,
+  published capability status or numerical solver qualification.
+- A second diagnostic candidate confines that mesh constraint to intervals
+  whose midpoint lies inside the magnetic thickness. Exterior air intervals
+  remain geometry-only so that their 3D size fields retain freedom to coarsen.
+  For a ring, the grouped extrusion also constrains the complementary hole
+  within those thickness intervals; this consequence must be measured, not
+  treated as equivalent to unrestricted air meshing. Both candidates use the
+  same authored $L$, original size fields and unchanged acceptance guards.
+- A further diagnostic candidate (`magnetic_prism_partitions`) adds
+  `recombine=True` only to the constrained magnetic-thickness intervals.
+  Exterior air intervals remain geometry-only and all owner/air size fields
+  remain unchanged. The existing `subdivide_layered_prisms` converter replaces
+  prism6 and quad4 cells with tet4 and tri3 without adding nodes, using shared
+  coordinate ordering to choose matching diagonals on periodic copies. This
+  tests whether local tetrahedral extrusion splitting caused the failed face
+  bijection; it is not a production correction or a proven diagnosis. The
+  grouped ring-hole constraint and every exact-plane, density, positivity,
+  seam and periodic acceptance gate still apply.
+- The diagnostic stages below record the successive candidates before the
+  body-first regression result. Their failures and pending steps describe
+  those historical source variants, not a qualification of the current source.
+- The initial prism candidate constrained scoped magnetic-thickness intervals
+  to one recombined prism layer per CAD partition, then uses the existing
+  coordinate-ordered, node-preserving tetrahedral converter. Exterior air
+  intervals retain geometry-only extrusion and independent size fields; the
+  unscoped route retains its premeshed extrusion settings. The later body-first
+  ordering also applies to its CAD construction. Requested Python/ProblemIR layer
+  counts, guards and tolerances are unchanged. For a ring, its hole shares the
+  constraint inside magnetic-thickness intervals. The two isolated candidate
+  regressions passed on Gmsh 4.15.2 before this correction was introduced;
+  production Box/DE and owner-field regressions must still be executed on the
+  corrected source. This implementation is not solver or device qualification.
+- The working-source prism candidate passes the scoped-ring and implicit-cap
+  regressions, but does not satisfy all production gates. With a fixed ring
+  owner target of $20\,\mathrm{nm}$, changing the far-air target from
+  $30$ to $50\,\mathrm{nm}$ changes seven magnetic XY nodes. The target
+  report stays constant, so it does not prove invariant interface topology.
+  The public Box series also reports extra air-only Z levels; its equality
+  against every CAD boundary must be reconciled with the magnetic-only exact
+  layer contract before changing assertions. Guards and tolerances remain
+  unchanged. This candidate is unqualified and is not a completed correction.
+- A bounded diagnostic will separate two hypotheses without editing production
+  sources: (a) freeze the $30\,\mathrm{nm}$ air CAD level schedule while
+  retaining the $50\,\mathrm{nm}$ size fields, and (b) retain the
+  $50\,\mathrm{nm}$ level schedule while freezing downstream air and
+  exterior upper-envelope values to their $30\,\mathrm{nm}$ controls.
+  Both keep the magnetic layer count, owner target, outer domain and acceptance
+  guards unchanged. These are experimental controls, not public authoring
+  semantics; record source variants, level/tag counts, interface triangles
+  and magnetic XY nodes before conversion. Neither experiment nor source
+  inspection can establish FEM CPU/GPU solver qualification.
+- The first isolation run collected all four observations on Gmsh 4.15.2.
+  Reference $30\,\mathrm{nm}$ and baseline $50\,\mathrm{nm}$ had
+  different magnetic XY sets. Both frozen controls produced the same third
+  XY set, which matched neither reference. Consequently neither the level
+  schedule nor the field values alone explain the observed result. Repeat
+  both unchanged baselines after the controls in the same child process to
+  test identical-input repeatability before attributing the effect to either
+  factor. Record the actually executed function origin separately from any
+  prepared source snapshot. This is a diagnostic requirement, not permission
+  to relax XY equality, seed only a global cap or declare qualification.
+- Before changing the generator, the next owner/air diagnostic keeps the
+  magnetic mesh as the object of qualification, not merely an effective-target
+  report. A proposed staged construction first meshes magnetic volumes using
+  their owner and finite three-dimensional local fields, before enabling air
+  grading. It then preserves the completed magnetic mesh while meshing the
+  remaining air volumes. Gmsh documents `Mesh.MeshOnlyEmpty` for keeping
+  already meshed entities, and `Mesh.MeshOnlyVisible` for selecting a subset;
+  the latter is explicitly experimental in the official manual. Accordingly
+  these controls are diagnostic candidates only, not a qualified production
+  route. Prism-to-tetrahedron conversion timing, shared triangular interfaces,
+  periodic correspondence, local ROI density and exact magnetic layers must
+  all pass before adopting such a route. Premeshing one face with a global cap
+  is not an equivalent substitute for finite three-dimensional local fields.
+- A staged diagnostic on Gmsh 4.15.2 produced 96 magnetic prisms and converted
+  them to 288 tetrahedra before air meshing. With all entities visible in
+  phase two, Gmsh recreated 96 magnetic prisms despite `Mesh.MeshOnlyEmpty`.
+  The next control excludes completed magnetic volumes from phase-two visible
+  entities while keeping shared surfaces visible. Preserve the converted
+  magnetic count and coordinates before converting any newly produced air
+  prisms with the existing coordinate-based converter. Do not accept a
+  regenerated magnetic prism mesh merely because a later conversion restores
+  its element count; that would not prove preservation of the completed mesh.
+- Excluding magnetic volume visibility in phase two also recreated the prisms.
+  A further diagnostic may remove the consumed meshing constraints only from
+  the completed magnetic **volume entities** with `model.mesh.removeConstraints`.
+  Do not remove constraints globally or from shared/periodic surfaces. The
+  purpose is to prevent replay of the magnetic extrusion after its mesh was
+  validated and converted, not to relax exact-layer or periodic acceptance
+  checks. Preserve the before/after node set and converted tetrahedra, and
+  reject changed counts, topology or periodic correspondence.
+- Subsequent staged observations changed magnetic XY even before the air
+  phase, and again during air meshing. Visibility and volume-only constraint
+  removal therefore do not establish isolation. A separate construction
+  diagnostic builds the magnetic CAD intervals first from the magnetic lower
+  cap, then extends air upward from its upper cap and downward from its lower
+  cap. Preserve the exact same SI levels and reorder volume bookkeeping back
+  into increasing-z interval order before assigning physical groups. This
+  tests the source-entity dependency chain without removing local fields or
+  changing authored air/owner targets. Stable construction is not accepted
+  as a fix until owner XY, PBC, local finite ROI density, positive cells and
+  full Box partition gates pass. The earlier staged route remains rejected.
+- The body-first CAD diagnostic produced identical magnetic XY digests for
+  authored air targets of $30$ and $50\,\mathrm{nm}$, with magnetic volume
+  tags `[1, 3, 5]` in both cases. This supports applying the same construction
+  ordering as a working-source candidate, while retaining owner, local-field,
+  periodic and exact-layer guards unchanged. Production acceptance still
+  requires the full Box, owner-field and scoped-ring regressions; these two
+  observations alone do not qualify the generator or FEM solver lanes.
+- After applying that exact body-first construction to the production
+  function, managed interpreted regressions passed: full Box **45/45**
+  (`409ccebf9ac340ec94f4b45b24bdf813`), owner-fields **2/2**
+  (`e83f417a5e9a46fcb4eb4eeff955f2d9`) and scoped-ring **2/2**
+  (`6ad52b15f503403daa8cc3e478e7263d`). Each receipt records stable sources
+  and a waited child with exit 0, without timeout or skipped selected tests.
+  These are meshing regression results; full Python CI, FEM solver/device
+  execution and scientific/release qualification remain separate gates.
+- Before changing the generator, the next owner/air diagnostic keeps the
+  authored $50\,\mathrm{nm}$ air
+  target and its CAD level schedule unchanged, and separates two controls:
+  only the air grading field uses $30\,\mathrm{nm}$; or only owner `VOut`
+  and the global air ceiling use $30\,\mathrm{nm}$. Compare both with the
+  unchanged $50\,\mathrm{nm}$ baseline and the existing all-fields control.
+  This experiment preserves owner $h_\max=20\,\mathrm{nm}$, local field
+  scope, exact magnetic layers, periodic topology and all production guards.
+  It does not authorize replacing local fields with one global cap or
+  relaxing owner XY equality. Unchanged in-memory baseline clones were
+  separately observed to reproduce the original baseline XY sets.
+- The current scoped exact-layer candidate first creates exact CAD layer
+  partitions. For intervals whose midpoint lies in the magnetic owner,
+  `_generate_coincident_ring_airbox_mesh` calls GEO extrusion with
+  `numElements=[1]`, `heights=[1.0]` and `recombine=True`; exterior-air
+  intervals use geometry-only extrusion so their independent grading remains
+  possible. For a ring, the grouped source entities also constrain the
+  complementary hole-air volume in magnetic-thickness intervals; that is not
+  equivalent to unrestricted air meshing. It then installs the owner-volume
+  and air-volume fields and runs one conforming 3D mesh. This is an
+  implemented source candidate, not a production qualification: managed runtime, the 0105 density gate, positive
+  cells, seam incidence, periodic translations and measured air coarsening
+  remain **NOT VERIFIED**.
+- A scoped `ComponentRestrictedBox` can be evaluated correctly by Gmsh's
+  three-dimensional background field and still be missed while the source
+  face is triangulated: the first two-dimensional triangles may be larger than
+  the box footprint. `_embed_mixed_source_face_seed_points` projects the
+  authored box and lower-bound composition onto the actual source plane,
+  filters trimmed CSG holes with `gmsh.model.isInside`, and embeds bounded
+  point targets before 2-D generation. This is a realization of the existing
+  local size policy; it does not thicken the box, change CAD boundaries, or
+  claim a solver or production-runtime result. The focused interpreted Gmsh
+  source-face and owner/ring/periodic consumers pass; managed runtime and
+  0105 qualification remain **NOT VERIFIED**.
+- The source-face path now accepts the rectangular
+  `ComponentRestrictedBox` and the graded
+  `ComponentRestrictedGradedBox`, `ComponentRestrictedGradedCylinder` and
+  `ComponentRestrictedGradedSphere` descriptors. `_source_face_owner_matches`
+  validates the owner binding for graded fields and excludes a descriptor
+  bound to another geometry. `_localize_source_plane_seed_descriptor`
+  projects accepted footprints into the exact source-plane axes, retains the
+  complete graded parameter set (including `TransitionDistance`) for the later
+  owner-volume field, and rejects invalid or non-parallel cylinder projections.
+  `_embed_mixed_source_face_seed_points` composes the owner lower bounds and
+  retains only points accepted by `gmsh.model.isInside`; malformed source
+  bounding boxes fail closed. The focused interpreted source regression
+  (`test_source_plane_seed_rejects_invalid_surface_bounding_box` and
+  `test_source_plane_seed_supports_graded_component_fields`) passed with two
+  tests and four subtests. This is source-level evidence; actual Gmsh mesh
+  runtime, density, managed runtime and 0105 production qualification remain
+  **NOT VERIFIED**. Follow-up focused real-Gmsh checks passed for the graded
+  Box (805 nodes/3456 elements), graded Cylinder (777 nodes/3370 elements)
+  and existing Box (819 nodes/3577 elements), with the expected cell-topology
+  sets. The exact-plane cap remains z-directed; nonparallel graded projections
+  and unsupported exact-cap variants fail closed. These mesh checks do not
+  qualify the 0105 density gate or managed runtime.
+- An earlier 2026-10-14 baseline omitted fixed layer arguments in the
+  scoped branch, so public $L=6$ fixtures realized seven to nine magnetic
+  intervals. Those were interior magnetic planes, not additional airbox
+  boundaries. The current candidate constrains only magnetic intervals and
+  keeps the exact-plane guard fail closed. The pre-seed baseline's four-public
+  result (DE plus three Box cases) was recorded before the ring-only
+  source-surface change; normalized source comparison shows
+  that edit changed no implementation bytes. The evidence covers three public
+  cases (DE plus the default-cap and explicit-minimum-above-hmax Box cases), six ring public
+  cases, two owner-field consumers and six periodic-conforming cases. The
+  explicit-cap-below-body-hmax Box rerun was interrupted after approximately
+  120 seconds without a pytest result (exit 130), so it is not a fresh pass.
+  Earlier implicit-cap and scoped-ring logs were not repeated after the later
+  graded source-plane change. The two-test source-level regression and the
+  three focused real-Gmsh graded runs are recorded above; they do not qualify
+  managed runtime or 0105. The exact commands and dirty-source hashes are
+  reported with the task checkpoint rather than treated as release evidence.
+- The diagnostic variants in
+  `scripts/verify_exact_layer_mesh_diagnostics.py` remain bounded historical
+  comparisons. They are not the checked-in route and cannot establish
+  production behavior. In particular, no variant may weaken exact magnetic
+  planes, owner-floor and body/air separation, positive tet4 cells, seam
+  incidence, periodic translations, or measured near-to-far air growth.
 - The resolved exact-layer generator cap and the reported `effective_airbox_target`
   are distinct. `_resolve_box_airbox_layer_sizes` keeps the interface target
   `h_inner` at the authored airbox minimum when present, or at `body_hmax`
@@ -358,12 +532,19 @@ production criteria, not claims about the current partial report.
 | Boundary span | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_resolve_airbox_boundary_transition_span` | resolves numeric side/corner transition spans | FEM meshing | planner tests |
 | Physical model | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:airbox-grading-governing-equations` | source-free exterior equations motivating grading | FEM contract | publication review |
 | Chordal ring volume bound | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:eq-ring-polygon-hole-volume-bound` | conditional geometric bound for a verified common polygonal hole prism | FEM mesh geometry | planned GHA regression |
-| Exact-layer Box extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | requests one extrusion mesh layer per scoped Box CAD slab and leaves prism subdivision to Fullmag's coordinate-ranked Tet4 conversion | FEM meshing | source implemented; runtime NOT VERIFIED, GHA required |
-| Exact-layer ring extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | requests one recombined extrusion mesh layer per already-defined scoped Ring slab and leaves prism subdivision to Fullmag's coordinate-ranked Tet4 conversion | FEM meshing | source implemented; runtime `NOT VERIFIED`, GHA required |
-| Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | verifies body planes, positive tetrahedra, closed boundary geometry, shared body-seam incidence, owner-floor provenance, regional density, and actual periodic node translations | FEM meshing | source regression; GHA pending |
-| Implicit exact-layer cap regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_implicit_airbox_cap_coarsens_far_air` | verifies measured far-air tetrahedral sizes coarsen relative to near-air sizes when only the growth ratio sets the outer cap | FEM meshing | source regression; GHA pending |
-| Pure implicit-cap resolver regression | `packages/fullmag-py/tests/test_meshing.py` | `test_box_airbox_layer_size_resolution_preserves_explicit_targets` | checks that an implicit cap grows from the larger of body target and interface target, while no-limit and explicit-cap behavior stay unchanged | FEM meshing | source test added; GHA pending |
+| Exact-layer ring construction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | creates exact CAD volumes; uses one recombined extrusion layer only in magnetic intervals and geometry-only extrusion in exterior air, then composes scoped owner/air fields | FEM meshing | interpreted Gmsh regression passed; managed runtime/0105 **NOT VERIFIED** |
+| Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | verifies body planes, positive tetrahedra, closed boundary geometry, shared body-seam incidence, owner-floor provenance, regional density, and actual periodic node translations | FEM meshing | interpreted Gmsh regression passed; managed runtime/0105 **NOT VERIFIED** |
+| Implicit exact-layer cap regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_implicit_airbox_cap_coarsens_far_air` | verifies measured far-air tetrahedral sizes coarsen relative to near-air sizes when only the growth ratio sets the outer cap | FEM meshing | interpreted Gmsh regression passed; managed runtime/0105 **NOT VERIFIED** |
 | Pure chordal-bound regression | `packages/fullmag-py/tests/test_meshing.py` | `test_ring_chordal_bound_guard_and_refinement` | checks the analytic inequality, invalid geometry rejection, and bound tightening under refinement | FEM mesh geometry | source test added; GHA pending |
-| Exact-layer airbox target resolution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` | preserves the interface target and authored cap; an implicit cap grows four ratio steps from the larger of `body_hmax` and `h_inner` | FEM meshing | implemented |
+| Scoped magnetic extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | applies one recombined GEO layer (`numElements=[1]`, `heights=[1.0]`) only to intervals inside the magnetic owner | FEM meshing | interpreted Gmsh regression passed; runtime/0105 **NOT VERIFIED** |
+| Scoped exterior-air extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | leaves exterior-air intervals geometry-only so air grading can add independent z levels | FEM meshing | interpreted Gmsh regression passed; runtime/0105 **NOT VERIFIED** |
+| Owner/air boundary policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | selects air `IncludeBoundary` from `h_inner <= body_hmax`, restricts the owner cap to body volumes, and pins ring `annulus`/`hole` source surfaces with a neutral-`VOut` owner seed | FEM meshing | focused interpreted Gmsh owner consumers passed; density/runtime **NOT VERIFIED** |
+| Scoped source-plane target realization | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_embed_mixed_source_face_seed_points` | projects `ComponentRestrictedBox` and graded Box/Cylinder/Sphere descriptors into exact source-plane coordinates, validates the GeometryName owner, composes owner lower bounds, filters trimmed surfaces with `gmsh.model.isInside`, rejects malformed bounding boxes, and embeds bounded targets before 2-D generation | FEM meshing | focused source regression and real-Gmsh graded Box/Cylinder/existing-Box checks passed; mesh runtime, density and 0105 **NOT VERIFIED** |
+| Graded source-plane policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_add_exact_plane_projected_cap_field` | evaluates owner-bound upper descriptors on each z-directed exact layer plane with the canonical upper/lower composition; nonparallel exact-cap projections fail closed | FEM meshing | focused real-Gmsh graded checks passed; managed runtime, density and 0105 **NOT VERIFIED** |
+| Plane-projected graded descriptors | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_PLANE_PROJECTED_UPPER_KINDS` | allowlist consumed by the exact-plane cap and swept source-face route for graded Box/Cylinder/Sphere descriptors; unsupported exact-cap projections are rejected | FEM meshing | focused real-Gmsh graded checks passed; mesh runtime and density **NOT VERIFIED** |
+| Public CAD/air guard | `scripts/test_box_layered_airbox_mesh.py` | `_assert_public_box_planes` | requires CAD boundaries, exact magnetic `L+1`, nonempty intervals, no CAD-crossing tetrahedra, positive cells and incident exterior-air planes while allowing extra air levels | FEM meshing | interpreted Gmsh regression passed; runtime/0105 **NOT VERIFIED** |
+| Box prism conversion trace | `scripts/test_box_layered_airbox_mesh.py` | `_assert_scoped_box_prisms_were_converted` | captures bounded element-type counts around the existing Fullmag conversion and requires actual `prism6` input to become `tet4`; periodic face bijection remains a separate strict gate | FEM meshing | source regression present; merged-source execution **NOT VERIFIED** |
+| Pure implicit-cap resolver regression | `packages/fullmag-py/tests/test_meshing.py` | `test_box_airbox_layer_size_resolution_preserves_explicit_targets` | checks the implicit cap starts from the larger body/interface target while preserving no-limit and authored-cap behavior | FEM meshing | source regression present; CI execution **NOT VERIFIED** |
+| Exact-layer airbox target resolution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` | derives interface and finite outer cap for the exact-layer Box/ring generator | FEM meshing | implemented |
 | Effective-target report | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_resolve_effective_shared_domain_targets` | reports resolved airbox intent, not yet the exact-layer generator's implicit cap | FEM meshing | report limitation |
 | Scoped Box periodic prism split | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | keeps scoped slab prisms out of Gmsh's native non-recombined tetrahedral subdivision so the existing coordinate-ranked Fullmag conversion performs the split | FEM meshing | source implemented; runtime `NOT VERIFIED`; hosted GHA must verify actual prism-to-Tet4 conversion and mapped face bijection |

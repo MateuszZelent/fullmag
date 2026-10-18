@@ -40,6 +40,7 @@ from a `completed` one.
 | `RuntimeSelection.backend_target` | `BackendTarget` | `auto` | $1$ | Enum value; normalized by runtime selection. | Requested backend family. | FEM/FDM CPU/GPU; planner resolves capability. | `backend_policy.requested_backend` |
 | `RuntimeSelection.execution_mode` | `ExecutionMode` | `strict` | $1$ | Enum value; normalized by runtime selection. | Requested execution mode. | FEM/FDM CPU/GPU; planner resolves capability. | `backend_policy.execution_mode` |
 | `Result.status` | `str` | required | $1$ | One of `completed`, `planned`, or `not-executable`. | Resolved execution outcome. | FEM/FDM CPU/GPU runtime record. | `runtime.status` |
+
 | Record | Meaning |
 |---|---|
 | requested backend/mode/precision | What the script asked for |
@@ -130,12 +131,12 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Requested selection | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Requested descriptors | Ownership test |
-| Resolved result | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Resolved status | Ownership test |
+| Requested selection | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Requested descriptors | Ownership test |
+| Resolved result | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Resolved status | Ownership test |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Requested runtime descriptors and provenance metadata. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Requested runtime descriptors and provenance metadata. | Source-map validator and focused API tests |
-| Resolved execution result and status. | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Resolved execution result and status. | Source-map validator and focused API tests |
+| Requested runtime descriptors and provenance metadata. | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Requested runtime descriptors and provenance metadata. | Source-map validator and focused API tests |
+| Resolved execution result and status. | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Resolved execution result and status. | Source-map validator and focused API tests |

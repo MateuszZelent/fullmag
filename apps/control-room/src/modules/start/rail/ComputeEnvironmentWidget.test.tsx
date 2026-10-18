@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ComputeEnvironment, ComputeProbeState } from "../model/types";
+import type { ComputeEnvironment, ComputeNodeInventorySummary, ComputeProbeState } from "../model/types";
 
 import { ComputeEnvironmentWidget } from "./ComputeEnvironmentWidget";
 
@@ -12,9 +12,18 @@ const baseCompute: ComputeEnvironment = {
   warnings: [],
 };
 
-function render(compute: ComputeProbeState, refreshing = false) {
+function render(
+  compute: ComputeProbeState,
+  refreshing = false,
+  nodeInventory?: ComputeNodeInventorySummary,
+) {
   return renderToStaticMarkup(
-    <ComputeEnvironmentWidget compute={compute} onConfigure={vi.fn()} refreshing={refreshing} />,
+    <ComputeEnvironmentWidget
+      compute={compute}
+      nodeInventory={nodeInventory}
+      onConfigure={vi.fn()}
+      refreshing={refreshing}
+    />,
   );
 }
 
@@ -46,6 +55,38 @@ describe("ComputeEnvironmentWidget solver routes", () => {
     expect(html).not.toContain('data-availability="available"');
   });
 
+  it("labels experimental diagnostics while retaining unknown production availability", () => {
+    const html = render({
+      ...baseCompute,
+      runtimeLanes: [
+        {
+          backend: "FEM",
+          device: "CPU",
+          availability: "unknown",
+          precisions: [],
+          diagnostic: { kind: "experimental", state: "available" },
+        },
+        {
+          backend: "FEM",
+          device: "GPU",
+          availability: "unknown",
+          precisions: [],
+          diagnostic: {
+            kind: "experimental",
+            state: "unavailable",
+            reason: "Native FEM GPU driver is unavailable",
+          },
+        },
+      ],
+    });
+
+    expect(html).toContain("Experimental");
+    expect(html).toContain("Experimental unavailable");
+    expect(html).toContain("Native FEM GPU driver is unavailable");
+    expect(html).toContain('data-availability="unknown" data-diagnostic-state="available"');
+    expect(html).not.toContain('data-availability="available"');
+  });
+
   it("keeps the initial probe state distinct from a missing runtime report", () => {
     const html = render(undefined);
 
@@ -72,5 +113,20 @@ describe("ComputeEnvironmentWidget solver routes", () => {
     expect(html).toContain("Latest available telemetry sample");
     expect(html).toContain(new Date(sampledAt).toLocaleString());
     expect(html).toContain(`dateTime="${new Date(sampledAt).toISOString()}"`);
+  });
+
+  it("shows host inventory freshness separately from telemetry and solver lanes", () => {
+    const html = render(baseCompute, false, {
+      hasSnapshot: true,
+      nodeCount: 1,
+      nodes: [],
+      refreshFailed: false,
+      resourceStatus: "ready",
+      staleAfterSeconds: 30,
+      state: "current",
+    });
+
+    expect(html.replace(/<[^>]*>/g, "")).toContain("Host inventory · Current · 1 node");
+    expect(html).toContain("Samples become stale after 30 seconds.");
   });
 });

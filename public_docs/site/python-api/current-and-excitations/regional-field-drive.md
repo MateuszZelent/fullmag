@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object region
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,16 +54,16 @@ fm.RegionalFieldDrive(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```id``` | ```str``` | ```required``` | ```1``` | non-empty | stable drive ID | FEM/FDM CPU/GPU: IR; resolver-specific | ```id``` |
-| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | display name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```target``` | ```FieldTarget``` | ```required``` | ```1``` | typed global/object/region target | spatial target | FEM/FDM CPU/GPU: IR; resolved field drive | ```target``` |
-| ```amplitude_B_T``` | ```float``` | ```required``` | ```T``` | finite and non-negative | field amplitude | FEM/FDM CPU/GPU: IR; resolved field drive | ```amplitude``` |
-| ```direction``` | ```tuple[float,float,float]``` | ```required``` | ```1``` | finite non-zero; normalized | field direction | FEM/FDM CPU/GPU: IR; resolved field drive | ```direction``` |
-| ```spatial_profile``` | ```FieldProfile``` | ```required``` | ```1``` | typed profile | spatial envelope | FEM/FDM CPU/GPU: IR; resolved field drive | ```profile``` |
-| ```waveform``` | ```Waveform``` | ```required``` | ```1``` | typed waveform with to_ir | time envelope | FEM/FDM CPU/GPU: IR; resolved field drive | ```waveform``` |
-| ```time_origin``` | ```str``` | ```stage_local``` | ```1``` | stage_local or absolute | time origin | FEM/FDM CPU/GPU: IR; resolved field drive | ```time_origin``` |
-| ```activation``` | ```Activation or None``` | ```None``` | ```1``` | typed activation when supplied | activation window | FEM/FDM CPU/GPU: IR; resolved field drive | ```activation``` |
-| ```enabled``` | ```bool``` | ```True``` | ```1``` | boolean | activation flag | FEM/FDM CPU/GPU: IR; resolved field drive | ```enabled``` |
+| `id` | `str` | `required` | `1` | non-empty | stable drive ID | FEM/FDM CPU/GPU: IR; resolver-specific | `id` |
+| `name` | `str` | `required` | `1` | non-empty | display name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `target` | `FieldTarget` | `required` | `1` | typed global/object/region target | spatial target | FEM/FDM CPU/GPU: IR; resolved field drive | `target` |
+| `amplitude_B_T` | `float` | `required` | `T` | finite and non-negative | field amplitude | FEM/FDM CPU/GPU: IR; resolved field drive | `amplitude` |
+| `direction` | `tuple[float,float,float]` | `required` | `1` | finite non-zero; normalized | field direction | FEM/FDM CPU/GPU: IR; resolved field drive | `direction` |
+| `spatial_profile` | `FieldProfile` | `required` | `1` | typed profile | spatial envelope | FEM/FDM CPU/GPU: IR; resolved field drive | `profile` |
+| `waveform` | `Waveform` | `required` | `1` | typed waveform with to_ir | time envelope | FEM/FDM CPU/GPU: IR; resolved field drive | `waveform` |
+| `time_origin` | `str` | `stage_local` | `1` | stage_local or absolute | time origin | FEM/FDM CPU/GPU: IR; resolved field drive | `time_origin` |
+| `activation` | `Activation or None` | `None` | `1` | typed activation when supplied | activation window | FEM/FDM CPU/GPU: IR; resolved field drive | `activation` |
+| `enabled` | `bool` | `True` | `1` | boolean | activation flag | FEM/FDM CPU/GPU: IR; resolved field drive | `enabled` |
 
 ### Stage-first example
 

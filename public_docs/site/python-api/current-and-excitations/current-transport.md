@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object curren
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,13 +54,13 @@ fm.CurrentTransport(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | module identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
-| ```model``` | ```str``` | ```prescribed_density``` | ```1``` | prescribed_density, ohmic_poisson, or magnetoresistive_poisson | transport equation family | FEM/FDM CPU/GPU: IR; resolved module | ```model``` |
-| ```current_density``` | ```tuple[float,float,float] or None``` | ```None``` | ```A/m^2``` | required by prescribed; forbidden by ohmic | prescribed density | FEM/FDM CPU/GPU: IR; resolved module | ```current_density``` |
-| ```solve_region``` | ```str or None``` | ```None``` | ```1``` | non-empty when supplied | solution region | FEM/FDM CPU/GPU: IR; resolved module | ```solve_region``` |
-| ```conductivity_s_per_m``` | ```float or field``` | ```None``` | ```S/m``` | positive when supplied | conductivity | FEM/FDM CPU/GPU: IR; resolved module | ```conductivity``` |
-| ```coupling``` | ```str``` | ```one_way``` | ```1``` | one_way or bidirectional; bidirectional requires ohmic | coupling direction | FEM/FDM CPU/GPU: IR; resolved module | ```coupling``` |
-| ```domain/materials/boundaries/gauge/solver``` | ```typed values``` | ```empty/None``` | ```various``` | complete for ohmic_poisson | Poisson charge contract | FEM/FDM CPU/GPU: IR; resolved module | ```transport``` |
+| `name` | `str` | `required` | `1` | non-empty | module identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `model` | `str` | `prescribed_density` | `1` | prescribed_density, ohmic_poisson, or magnetoresistive_poisson | transport equation family | FEM/FDM CPU/GPU: IR; resolved module | `model` |
+| `current_density` | `tuple[float,float,float] or None` | `None` | `A/m^2` | required by prescribed; forbidden by ohmic | prescribed density | FEM/FDM CPU/GPU: IR; resolved module | `current_density` |
+| `solve_region` | `str or None` | `None` | `1` | non-empty when supplied | solution region | FEM/FDM CPU/GPU: IR; resolved module | `solve_region` |
+| `conductivity_s_per_m` | `float or field` | `None` | `S/m` | positive when supplied | conductivity | FEM/FDM CPU/GPU: IR; resolved module | `conductivity` |
+| `coupling` | `str` | `one_way` | `1` | one_way or bidirectional; bidirectional requires ohmic | coupling direction | FEM/FDM CPU/GPU: IR; resolved module | `coupling` |
+| `domain/materials/boundaries/gauge/solver` | `typed values` | `empty/None` | `various` | complete for ohmic_poisson | Poisson charge contract | FEM/FDM CPU/GPU: IR; resolved module | `transport` |
 
 ### Stage-first example
 

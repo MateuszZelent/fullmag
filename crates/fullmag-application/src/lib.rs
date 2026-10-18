@@ -6,6 +6,7 @@
 //! policy, so every entry point can use the same Create/Open/Save/Save As/
 //! Close semantics.
 
+mod antenna_inspection_bundle;
 mod application;
 mod batch_expansion;
 mod coordinator;
@@ -14,7 +15,10 @@ mod execution;
 mod execution_profile;
 mod execution_profile_binding;
 mod file_repository;
+mod legacy_live_execution;
 mod preparation;
+mod closed_loop_preparation;
+mod script_pipeline_acceptance;
 mod project;
 mod repository;
 mod run_intent_materialization;
@@ -27,6 +31,11 @@ mod study_artifact;
 mod study_execution_materialization;
 mod task_execution;
 
+pub use antenna_inspection_bundle::{
+    decode_antenna_inspection_bundle, encode_antenna_inspection_bundle, AntennaInspectionBundle,
+    ANTENNA_INSPECTION_BUNDLE_CODEC_ID, ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION,
+    ANTENNA_INSPECTION_BUNDLE_MAX_BYTES,
+};
 pub use application::{
     ActiveExecution, ActiveExecutionPolicy, ApplicationError, CloseRequest, CloseResult,
     CreateProjectRequest, DirtyClosePolicy, DocumentMode, DocumentView, OpenProjectResult,
@@ -54,14 +63,21 @@ pub use execution::{
     TaskClaim, TaskId, TaskLifecycle, TaskReadiness, TaskRecord, WorkerCommand,
     WorkerCommandEnvelope, WorkerCommandInbox, WorkerEvent, WorkerEventEnvelope,
     WorkerInboxCheckpoint, WorkerProtocolLedger, LEGACY_RESOLVED_TASK_INPUT_SCHEMA,
-    RESOLVED_TASK_INPUT_SCHEMA, RETRY_DECISION_SCHEMA, WORKER_INBOX_SCHEMA, WORKER_PROTOCOL_SCHEMA,
+    CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA, CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA, RESOLVED_TASK_INPUT_SCHEMA, RETRY_DECISION_SCHEMA, WORKER_INBOX_SCHEMA, WORKER_PROTOCOL_SCHEMA,
 };
 pub use execution_profile::{
     materialize_execution_request, materialize_referenced_execution,
     validate_execution_materialization,
 };
 pub use execution_profile_binding::bind_materialized_execution;
+pub use legacy_live_execution::{
+    legacy_live_execution_profile, migrate_legacy_live_execution,
+    LegacyLiveExecutionMigration, LEGACY_LIVE_EXECUTION_PROFILE_ID,
+    LEGACY_LIVE_EXECUTION_PROFILE_VERSION,
+};
 pub use file_repository::{FileProjectRepository, FileRepositoryError};
+pub use closed_loop_preparation::{AcceptedPreparationProof, AcceptedPreparationReceipt, ClosedLoopPreparationPlan, ClosedLoopPreparationReceipt, CLOSED_LOOP_PREPARATION_SCHEMA, CLOSED_LOOP_PREPARATION_BINDING_SCHEMA};
+pub use script_pipeline_acceptance::{compile_accepted_closed_loop_pipeline, validate_accepted_script_pipeline_source, validate_script_source_assets, AcceptedScriptPipeline, SCRIPT_PIPELINE_SOURCE_ASSET_ID, SCRIPT_PIPELINE_SOURCE_SCHEMA};
 pub use preparation::{
     materialize_antenna_external_lead_inspection_preparation_from_problem,
     materialize_fdm_preparation_from_problem, materialize_fem_preparation_from_problem,

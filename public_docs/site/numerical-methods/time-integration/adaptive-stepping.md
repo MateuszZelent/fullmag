@@ -10,202 +10,211 @@ source_of_truth: "AdaptiveTimestep and LLG validation, ProblemIR lowering, and l
 ---
 
 (public-docs-numerical-methods-time-integration-adaptive-stepping)=
-# Adaptive time stepping
+# Adaptive Time-Stepping and History PI Controller
 
-Adaptive stepping changes $Δt$ from one accepted step to the next using an embedded error
-estimate. It controls temporal truncation error; it does not estimate spatial error, certify
-physical accuracy, or remove the stability restriction imposed by the fastest resolved field.
-
+(numerical-methods-time-integration-adaptive-stepping-problem-statement)=
+<!-- (problem-statement)= -->
 ## Scope and purpose
 
-This page documents the public adaptive-step policy for accepted physical-time LLG stages. It
-specifies temporal error control and its provenance boundary; spatial discretization and executed
-device qualification remain separate concerns.
+This chapter specifies the canonical adaptive time-stepping contract (`0960`: `LLG-TD-POLICY-V1` through `LLG-TD-ATOMIC-V1`) used by Fullmag's embedded Runge–Kutta integrators (`rk23` and `rk45`). It defines the active-node mixed error norm, the order-aware proportional–integral (PI) step-size controller with memory of the previous accepted error ratio, optional spin-rotation and norm-drift guards, first-step selection, stiffness diagnostics, and atomic rollback on step rejection across FEM and FDM CPU/GPU realizations.
 
-(time-integration-adaptive-stepping-problem-statement)=
+(numerical-methods-time-integration-adaptive-stepping-governing-equations)=
+<!-- (governing-equations)= -->
 ## Scientific and numerical model
 
-For an embedded pair, two approximations of different order are computed from the same stage
-right-hand sides. The difference controls acceptance and the next proposed step. Rejected steps
-must not advance physical time or duplicate output artifacts.
+For an embedded Runge–Kutta pair of error order $p$ ($p=2$ for Bogacki–Shampine `rk23`, $p=4$ for Dormand–Prince `rk45`), let $\mathbf{m}_i^{\mathrm{old}}$ denote the accepted state at the beginning of attempted step $k$, $\mathbf{m}_i^{\mathrm{high}}$ the high-order candidate state before final renormalization, and $e_i = \Delta t_k \sum_{s=1}^{S}(b_s^{\mathrm{hi}} - b_s^{\mathrm{lo}})\mathbf{k}_{s,i}$ the local embedded 3-vector error at active magnetic cell or node $i \in \mathcal{A}$ ($M_{s,i} > 0$).
 
-(time-integration-adaptive-stepping-governing-equations)=
-## Governing equations
-
-The normalized error used by the adaptive policy is
+Each active degree of freedom is scaled by the mixed absolute/relative tolerance (`LLG-TD-MAX-ERR-V1`):
 
 ```{math}
 :label: eq-adaptive-normalized-error
-\eta_i=\frac{\lVert e_i\rVert_2}{a_{\mathrm{tol}}+r_{\mathrm{tol}}\max(\lVert m_i\rVert_2,1)}.
+\eta_i
+=
+\frac{\|e_i\|_2}{a_{\mathrm{tol}} + r_{\mathrm{tol}}\,\max\!\left(\|\mathbf{m}_i^{\mathrm{old}}\|_2,\;\|\mathbf{m}_i^{\mathrm{high}}\|_2\right)},
+\qquad
+i \in \mathcal{A}.
 ```
 
-The global decision metric is
+The global normalized error ratio for the attempted step is the active-set maximum norm:
 
 ```{math}
 :label: eq-adaptive-global-error
-\eta=\max_i\eta_i,
-\qquad \text{accept if }\eta\leq 1.
+\eta = \max_{i \in \mathcal{A}} \eta_i.
 ```
 
-For estimator order $q$, the unconstrained next step is
+An attempted step is accepted only when $\eta \le 1$, all stage states are finite, and any configured geometric guards (`max_spin_rotation` and `norm_tolerance`) are satisfied. Given the error-estimator order $p$ (so the local truncation error scales as $\mathcal{O}(\Delta t^q)$ with $q = p + 1$), safety factor $s \in (0, 1]$, current error ratio $\eta_k = \eta$, and previous accepted non-zero error ratio $\eta_{k-1}$, the backend-neutral decision policy (`decide_adaptive_step` in `native/include/fullmag_adaptive_step_decision.hpp`) proposes the next step size via the order-aware history PI controller (`LLG-TD-POLICY-V1`):
 
 ```{math}
 :label: eq-adaptive-controller
-\Delta t_{\mathrm{new}}=s\,\Delta t\,\eta^{-1/q},
+\Delta t_{\mathrm{new}}
+=
+\mathrm{clip}\!\left(\Delta t\,\mathrm{clip}\!\left(q_{\mathrm{raw}},\,\rho_{\mathrm{shrink}},\,\rho_{\mathrm{growth}}\right),\;\Delta t_{\min},\;\Delta t_{\max}\right),
 \qquad
-\Delta t_{\mathrm{new}}\in[\rho_{\mathrm{shrink}}\Delta t,\rho_{\mathrm{growth}}\Delta t].
+q_{\mathrm{raw}}
+=
+\begin{cases}
+\rho_{\mathrm{growth}}, & \eta_k = 0, \\[4pt]
+s\,\eta_k^{-1/q}, & \text{rejected attempt or no prior accepted }\eta_{k-1} > 0, \\[4pt]
+s\,\eta_k^{-0.7/q}\,\eta_{k-1}^{0.4/q}, & \text{accepted step with prior accepted }\eta_{k-1} > 0.
+\end{cases}
 ```
 
-(time-integration-adaptive-stepping-symbols-and-si-units)=
-## Symbols and SI units
+(numerical-methods-time-integration-adaptive-stepping-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+### Symbols and SI units
 
-| Symbol | Definition | SI unit |
-|---|---|---:|
+| Symbol | Meaning | SI unit |
+| --- | --- | --- |
 | $e_i$ | embedded error vector at active point i | $1$ |
 | $a_{\mathrm{tol}}$ | absolute tolerance | $1$ |
 | $r_{\mathrm{tol}}$ | relative tolerance | $1$ |
 | $\eta_i$ | local normalized error | $1$ |
 | $\eta$ | global normalized error metric | $1$ |
 | $m_i$ | reduced magnetization at active point i | $1$ |
+| $\Delta t$ | current time step | $\mathrm{s}$ |
 | $s$ | controller safety factor | $1$ |
 | $q$ | error-estimator order | $1$ |
-| $\Delta t$ | current time step | $\mathrm{s}$ |
 | $\rho_{\mathrm{shrink}}$ | lower step-ratio limit | $1$ |
 | $\rho_{\mathrm{growth}}$ | upper step-ratio limit | $1$ |
 
-(time-integration-adaptive-stepping-assumptions-and-validity)=
-## Assumptions and validity
+(numerical-methods-time-integration-adaptive-stepping-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+### Canonical adaptive solver invariants (`0960`)
 
-- The error estimate is a temporal estimator for the current spatial mesh and active physics.
-- Both tolerances are dimensionless because the reduced magnetization state is dimensionless.
-- `dt_min` is a hard lower bound. Hitting it while the error remains above one is a controlled
-  failure, not silent acceptance.
-- Rejected steps may evaluate fields, but they must not be reported as accepted physical states.
+- **First-step selection (`LLG-TD-FIRST-DT-V1`)**: When `dt_initial` is explicitly supplied, it must lie within $[\Delta t_{\min}, \Delta t_{\max}]$ and seeds attempt $k=0$ directly; otherwise the runtime derives a conservative initial step from the initial torque scale $\|\mathbf{f}(\mathbf{m}_0, t_0)\|_{\infty}$ clamped to $[\Delta t_{\min}, \Delta t_{\max}]$.
+- **Geometric and norm guards (`LLG-TD-MAX-ERR-V1`)**: When `max_spin_rotation` ($\theta_{\max}$, in radians) or `norm_tolerance` ($\varepsilon_{\mathrm{norm}}$) is set, the step is rejected if $\max_{i\in\mathcal{A}} \arccos(\mathbf{m}_i^{\mathrm{old}}\cdot\mathbf{m}_i^{\mathrm{new}}) > \theta_{\max}$ or $\max_{i\in\mathcal{A}} |\|\mathbf{m}_i^{\mathrm{high}}\|_2 - 1| > \varepsilon_{\mathrm{norm}}$, even if $\eta \le 1$.
+- **Atomic step rollback (`LLG-TD-ATOMIC-V1`)**: A rejected attempt restores the magnetization state, effective-field buffers, FSAL derivative cache, and simulation clock to their exact pre-attempt values before retrying with $\Delta t_{\mathrm{new}}$.
+- **Underflow and stiffness diagnostics (`LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`)**: If $\eta > 1$ at $\Delta t = \Delta t_{\min}$, the solver fails closed with a typed `dt_min` underflow diagnostic rather than accepting an inaccurate step. Persistent step rejections near the exchange stability ceiling are tracked in step statistics.
 
-(time-integration-adaptive-stepping-python-api)=
-## Python API
+(numerical-methods-time-integration-adaptive-stepping-discrete-realization)=
+<!-- (discrete-realization)= -->
+(numerical-methods-time-integration-adaptive-stepping-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+### Discrete realization and backend support matrix
 
-```python
-# %% Configure an adaptive physical-time study
-import fullmag as fm
-
-nm = 1.0e-9
-study = fm.study("adaptive_rk45")
-study.engine("fdm")
-study.device("gpu", precision="double")
-study.mode("strict")
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-body = study.geometry(fm.Box(80 * nm, 20 * nm, 5 * nm), name="film")
-body.Ms = 800.0e3
-body.Aex = 13.0e-12
-body.alpha = 0.02
-body.m = fm.texture.uniform(1.0, 0.0, 0.0)
-study.exchange()
-
-# %% Solver policy and ordered physical-time stage
-study.solver(
-    integrator="rk45",
-    adaptive_timestep=fm.AdaptiveTimestep(
-        atol=1.0e-7,
-        rtol=1.0e-3,
-        dt_min=1.0e-15,
-        dt_max=1.0e-12,
-    ),
-    gamma=2.211e5,
-)
-study.stages.add_run(until=2.0e-9)
-```
-
-The `study.solver(...)` call is the only user-facing solver configuration shown in this
-workflow. It lowers the adaptive policy into the canonical `llg` dynamics node; the resolved
-integrator, bounds, tolerances, and device remain part of execution provenance.
+| Solver | Device | Status | Realization notes |
+| --- | --- | --- | --- |
+| FEM | CPU | `documented` | Nodewise mixed error reduction (`compute_adaptive_error_norm`) and history PI step (`adaptive_pi_step`) in `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`. |
+| FEM | GPU | `source-backed` | Device block reduction (`adaptive_error_norm_blocks_kernel`) and host/device attempt loop (`gpu_rk_run_accepted_attempt_loop`); FEM device-lane parity requires executed managed evidence. |
+| FDM | CPU | `documented` | Active-cell error reduction (`max_error_norm_buf`) and history PI controller (`decide_adaptive_step`) in `crates/fullmag-engine/src/fdm/cpu/integrators.rs`. |
+| FDM | GPU | `source-backed` | Device-side reductions (`reduce_adaptive_error_policy`, `reduce_max_scalar_sqrt`) are contract-tested, but runtime qualification is separate. |
 
 ## Parameters
 
-The following rows are the public constructor and solver arguments used by the example. Defaults,
-validation and ProblemIR keys are mirrored by the adjacent source map.
-
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
+| Python surface | Type | Default | SI unit | Validation / constraints | Meaning | Backend support | `ProblemIR` path |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | `AdaptiveTimestep.atol` | `float` | `1e-6` | $1$ | non-negative; not both tolerances zero | absolute error component | RK23/RK45 lanes | `adaptive_timestep.atol` |
 | `AdaptiveTimestep.rtol` | `float` | `1e-3` | $1$ | non-negative; not both tolerances zero | relative error component | RK23/RK45 lanes | `adaptive_timestep.rtol` |
 | `AdaptiveTimestep.dt_initial` | `float \| None` | `None` | $\mathrm{s}$ | positive and within bounds when set | first proposed step | lane-dependent | `adaptive_timestep.dt_initial` |
 | `AdaptiveTimestep.dt_min` | `float` | `1e-15` | $\mathrm{s}$ | positive | minimum allowed step | RK23/RK45 lanes | `adaptive_timestep.dt_min` |
-| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and >= `dt_min` when set | maximum allowed step | RK23/RK45 lanes | `adaptive_timestep.dt_max` |
-| `AdaptiveTimestep.safety` | `float` | `0.9` | $1$ | safety factor in (0, 1] | conservative controller factor | RK23/RK45 lanes | `adaptive_timestep.safety` |
-| `AdaptiveTimestep.growth_limit` | `float` | `2.0` | $1$ | growth_limit > 1 | maximum step growth ratio | RK23/RK45 lanes | `adaptive_timestep.growth_limit` |
-| `AdaptiveTimestep.shrink_limit` | `float` | `0.2` | $1$ | shrink_limit in (0, 1) | minimum step ratio | RK23/RK45 lanes | `adaptive_timestep.shrink_limit` |
+| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and $\ge \Delta t_{\min}$ | maximum allowed step | RK23/RK45 lanes | `adaptive_timestep.dt_max` |
+| `AdaptiveTimestep.safety` | `float` | `0.9` | $1$ | safety factor in $(0, 1]$ | conservative controller factor | RK23/RK45 lanes | `adaptive_timestep.safety` |
+| `AdaptiveTimestep.growth_limit` | `float` | `2.0` | $1$ | `growth_limit` $> 1$ | maximum step growth ratio | RK23/RK45 lanes | `adaptive_timestep.growth_limit` |
+| `AdaptiveTimestep.shrink_limit` | `float` | `0.2` | $1$ | `shrink_limit` in $(0, 1)$ | minimum step ratio | RK23/RK45 lanes | `adaptive_timestep.shrink_limit` |
+| `AdaptiveTimestep.max_spin_rotation` | `float \| None` | `None` | $\mathrm{rad}$ | positive when set | per-step maximum spin-angle rotation guard | RK23/RK45 lanes | `adaptive_timestep.max_spin_rotation` |
+| `AdaptiveTimestep.norm_tolerance` | `float \| None` | `None` | $1$ | positive when set | pre-normalization unit-length drift guard | RK23/RK45 lanes | `adaptive_timestep.norm_tolerance` |
 
-(time-integration-adaptive-stepping-problem-ir)=
-## ProblemIR
+(numerical-methods-time-integration-adaptive-stepping-python-api)=
+<!-- (python-api)= -->
+## Python API
 
-The policy lowers to an `adaptive_timestep` object nested under the `llg` dynamics node. Defaults
-are materialized by the Python constructor, while omitted `dt_max`, `dt_initial`, spin-rotation,
-and norm controls remain `null`/absent according to the serializer. `rk23` and `rk45` are the
-only explicit adaptive method names accepted by the current `LLG` validator.
+```python
+# %%
+import fullmag as fm
 
-(time-integration-adaptive-stepping-round-trip-and-failure-semantics)=
-## Diagnostics and failure semantics
+world = fm.World(
+    dx=5e-9,
+    dy=5e-9,
+    dz=5e-9,
+    nx=16,
+    ny=4,
+    nz=1,
+    boundaries=fm.BoundaryConfig.open(method="fft"),
+)
+world.add_box(
+    "strip",
+    size=(80e-9, 20e-9, 5e-9),
+    material=fm.Material.permalloy(Ms=8.0e5, Aex=1.3e-11, alpha=0.02),
+    m_init=fm.VectorFieldSpec.uniform((1.0, 0.1, 0.0)),
+    demag=True,
+)
 
-Round-trip export preserves requested intent, requested tolerances, and bounds, then records resolved execution
-separately. Validation errors cover both zero tolerances, invalid bounds, invalid safety or
-growth/shrink ratios, and fixed/adaptive timestep conflicts. Unsupported combinations are
-reported by the planner; the runtime must not silently downgrade an adaptive request to a fixed
-step. A step that reaches `dt_min` without meeting the error policy is a failed execution state.
+study = fm.study(world, target="fdm", device="cpu", precision="fp64")
+study.solver(
+    integrator="rk45",
+    adaptive_timestep=fm.AdaptiveTimestep(
+        atol=1e-6,
+        rtol=1e-4,
+        dt_initial=1e-13,
+        dt_min=1e-15,
+        dt_max=2e-12,
+        safety=0.9,
+        growth_limit=2.0,
+        shrink_limit=0.2,
+        max_spin_rotation=0.35,
+        norm_tolerance=1e-3,
+    ),
+)
+study.stages.add_time(name="adaptive_pulse", duration=0.2e-9, By=8e-3, save_m_every=50e-12)
+```
 
-(time-integration-adaptive-stepping-discrete-realization)=
-## FDM/FEM and CPU/GPU realization
+(numerical-methods-time-integration-adaptive-stepping-problem-ir)=
+<!-- (problem-ir)= -->
+### `ProblemIR` excerpt
 
-| Lane | Realization | Status |
-|---|---|---|
-| FDM CPU | reference error decision over active structured-grid state | documented; order and rejection tests are required |
-| FDM GPU | device-side error reduction and controller inputs, avoiding host error vectors | source-backed; executed-device evidence required |
-| FEM CPU | error policy consumes FEM stage states and reusable RHS workspace | documented by FEM integrator contracts |
-| FEM GPU | source-facade/device workspace path | source-backed; universal parity is not claimed |
-
-The GPU distinction is material: error reductions and stage data can remain device-resident,
-whereas the CPU reference uses host-visible state. These are two realizations of the same
-accept/reject semantics, not two different tolerance meanings.
-
-(time-integration-adaptive-stepping-implementation-mapping)=
-## Where this is implemented
-
-`AdaptiveTimestep` owns public validation and IR serialization. FDM CUDA reductions provide the
-device-side error scalar and the integrator consumes it. FEM integrator modules own stage
-workspace and endpoint refresh policy.
-
-(time-integration-adaptive-stepping-validation)=
-## Validation
-
-The relevant checks are Python constructor tests, FDM adaptive error-reduction contracts, and
-FEM explicit-RK contracts. Runtime qualification must record accepted/rejected step counts,
-resolved `dt`, tolerance values, field-refresh policy, device identity, and final observable
-agreement. A green structural test is not a physical convergence proof.
-
-(time-integration-adaptive-stepping-limitations)=
-## Limitations
-
-Adaptive time stepping does not adapt mesh size, demagnetization accuracy, linear-solver `rtol`,
-or material parameters. The current policy does not expose a user-defined controller formula.
-Tolerances are dimensionless state tolerances, not SI field tolerances.
-
-(time-integration-adaptive-stepping-scientific-bibliography)=
-## Scientific bibliography
-
-- E. Hairer, S. P. Nørsett, G. Wanner, *Solving Ordinary Differential Equations I*, Springer, 1993, DOI: [10.1007/978-3-540-78862-1](https://doi.org/10.1007/978-3-540-78862-1).
-- J. R. Dormand, P. J. Prince, “A family of embedded Runge-Kutta formulae,” *Journal of Computational and Applied Mathematics* 6 (1980), DOI: [10.1016/0771-050X(80)90013-3](https://doi.org/10.1016/0771-050X(80)90013-3).
-
-(time-integration-adaptive-stepping-source-code-index)=
+```json
+{
+  "adaptive_timestep": {
+    "atol": 1e-06,
+    "rtol": 0.0001,
+    "dt_initial": 1e-13,
+    "dt_min": 1e-15,
+    "dt_max": 2e-12,
+    "safety": 0.9,
+    "growth_limit": 2.0,
+    "shrink_limit": 0.2,
+    "max_spin_rotation": 0.35,
+    "norm_tolerance": 0.001
+  }
+}
+```
 
 ## Control Room workflow
 
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+- **Solver Inspector**: Exposes `atol`, `rtol`, `dt_initial`, `dt_min`, `dt_max`, `safety`, `growth_limit`, `shrink_limit`, `max_spin_rotation`, and `norm_tolerance` whenever an adaptive integrator (`auto`, `rk45`, `rk23`) is selected.
+- **Diagnostics Panel**: Displays real-time $\Delta t_k$, normalized error $\eta_k$, accepted/rejected step counts, and stiffness indicators.
 
-## Source-code index
+(numerical-methods-time-integration-adaptive-stepping-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+(numerical-methods-time-integration-adaptive-stepping-validation)=
+<!-- (validation)= -->
+(numerical-methods-time-integration-adaptive-stepping-limitations)=
+<!-- (limitations)= -->
+## Diagnostics and failure semantics
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |
-|---|---|---|---|---|---|
-| Public adaptive policy | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class AdaptiveTimestep` | validates and serializes controller parameters | public lanes | Python tests |
-| LLG compatibility checks | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | rejects incompatible fixed/adaptive requests | public lanes | Python tests |
-| Device-side adaptive error policy | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_adaptive_error_policy` | computes the adaptive error decision input | FDM GPU | FDM CUDA contract tests |
-| Scalar reduction implementation | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_max_scalar_sqrt` | reduces error/state scalars on the CUDA path | FDM GPU | FDM CUDA contract tests |
+- **Requested intent and resolved execution**: `ProblemIR` records the full `AdaptiveTimestep` policy (`requested intent`), while runtime receipts record the resolved integrator, accepted/rejected attempt counts, and terminal $\Delta t$ (`resolved execution`).
+- **Validation errors**: Setting both `atol == 0` and `rtol == 0`, inverted step bounds (`dt_max < dt_min` or `dt_initial` outside `[dt_min, dt_max]`), `safety` outside `(0, 1]`, `growth_limit <= 1`, or `shrink_limit` outside `(0, 1)` raises immediate `ValueError` validation errors.
+- **Unsupported combinations**: Attaching `AdaptiveTimestep` to fixed-step integrators (`heun`, `rk4`, `abm3`, `coupled_imex_ark2`) is rejected as an unsupported combination at both Python construction and Rust planning boundaries.
+
+(numerical-methods-time-integration-adaptive-stepping-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
+### Scientific bibliography
+
+1. G. Söderlind, *Automatic control and adaptive time-stepping*, Numer. Algorithms **31**, 281–310 (2002).
+2. E. Hairer, S. P. Nørsett, and G. Wanner, *Solving Ordinary Differential Equations I: Nonstiff Problems*, 2nd ed., Springer (1993).
+
+(numerical-methods-time-integration-adaptive-stepping-source-code-index)=
+<!-- (source-code-index)= -->
+## Where this is implemented
+
+| Layer | File | Symbol | Responsibility |
+| --- | --- | --- | --- |
+| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L30) | [`class AdaptiveTimestep`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L30) | Public adaptive controller validation and IR |
+| Python DSL | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | Compatibility of integrator and adaptive policy |
+| Shared Native Header | [`native/include/fullmag_adaptive_step_decision.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/native/include/fullmag_adaptive_step_decision.hpp#L127) | [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/native/include/fullmag_adaptive_step_decision.hpp#L127) | Backend-neutral history-aware scalar accept/retry/dt-min policy |
+| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | [`compute_adaptive_error_norm`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L123) | Native FEM nodewise mixed error norm and fail-closed guards |
+| Native FEM CPU | [`backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L379) | [`adaptive_pi_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/integrators/adaptive_dt.cpp#L379) | Native FEM history-aware scalar controller and rejection accounting |
+| Native FEM GPU | [`backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | [`adaptive_error_norm_blocks_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu#L17) | Native FEM GPU device reduction of the nodewise error norm |
+| FDM CPU Engine | [`crates/fullmag-engine/src/fdm/cpu/integrators.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L20) | [`decide_adaptive_step`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/integrators.rs#L20) | FDM CPU history-aware bounded proposal and dt-min decision |
+| FDM GPU CUDA | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L963) | [`reduce_adaptive_error_policy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L963) | FDM GPU device-side adaptive error policy |
+| FDM GPU CUDA | [`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L918) | [`reduce_max_scalar_sqrt`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/runtime/reductions_fp64.cu#L918) | FDM GPU scalar reduction implementation |

@@ -31,7 +31,7 @@ use crate::{
 const INPUT_SCHEMA: &str = "fullmag.development-browser-native-input.v1";
 const COMMAND_SCHEMA: &str = "fullmag.development-browser-native-command.v1";
 const READY_SCHEMA: &str = "fullmag.development-browser-native-ready.v1";
-const RESTORED_SCHEMA: &str = "fullmag.development-browser-native-restored.v1";
+const RESTORED_SCHEMA: &str = "fullmag.development-browser-native-restored.v2";
 const RESULT_SCHEMA: &str = "fullmag.development-browser-native-result.v1";
 const MAX_INPUT_LINE_BYTES: usize = 16 * 1024;
 const MAX_COMMAND_LINE_BYTES: usize = 4 * 1024;
@@ -74,6 +74,10 @@ struct HelperProcessEvidence {
 }
 
 struct RestoredState {
+    request_id: String,
+    generation_id: String,
+    old_api_instance_id: String,
+    old_api_pid: u32,
     api_pid: u32,
     api_instance_id: String,
     old_api_exit_code: i32,
@@ -301,7 +305,10 @@ pub(super) fn verify() -> Result<()> {
                 },
             );
             collect_completed_readiness_helpers(&pump, &mut completed_readiness_helpers);
-            if pump_step.is_err() {
+            if let Err(error) = pump_step {
+                // Contexts identify the failed boundary; never dump the
+                // private owner request or transport credential payload.
+                eprintln!("[development browser proof] restart pump failed: {error:#}");
                 failure = Some(ProbeOutcome::Unknown("restart_pump_outcome_unconfirmed"));
                 break;
             }
@@ -980,6 +987,11 @@ fn observe_restored_restart(
     old_api_pid: u32,
     old_api_instance_id: &str,
 ) -> Result<RestoredState> {
+    use fullmag_session::development_restart_transport::{self as transport, RestartResultState};
+
+    if old_api_pid == 0 {
+        bail!("restart source API PID is invalid");
+    }
     let api_pid: u32 = execution["api_pid"]
         .as_u64()
         .context("restart execution has no replacement API PID")?
@@ -1018,9 +1030,48 @@ fn observe_restored_restart(
     if fullmag_session::repository_path::validate_store_id(&worktree).is_err() {
         bail!("restored workspace identity is invalid");
     }
+
+    let request = transport::read_pending_request(
+        expected_root,
+        expected_worktree,
+        old_api_instance_id,
+        expected_generation,
+    )?
+    .context("restored workspace has no authoritative restart request slot")?;
+    if request.old_api_instance_id != old_api_instance_id
+        || request.generation_id != expected_generation
+    {
+        bail!("restored workspace request is outside the expected source scope");
+    }
+    let result = transport::read_result(
+        expected_root,
+        expected_worktree,
+        &request.request_id,
+        &request.status_token_sha256,
+    )?
+    .context("restored workspace has no authenticated restart result")?;
+    if result.state != RestartResultState::Ready
+        || result.request_id != request.request_id
+        || result.old_api_instance_id != old_api_instance_id
+        || result.generation_id != expected_generation
+    {
+        bail!("restored workspace result is not ready in the expected source scope");
+    }
+    let result_api_instance_id = result
+        .new_api_instance_id
+        .as_deref()
+        .context("ready restart result has no replacement API pin")?;
+    if result_api_instance_id != api_instance_id {
+        bail!("ready restart result differs from the owned replacement API");
+    }
+
     Ok(RestoredState {
+        request_id: request.request_id,
+        generation_id: request.generation_id,
+        old_api_instance_id: request.old_api_instance_id,
+        old_api_pid,
         api_pid,
-        api_instance_id,
+        api_instance_id: result_api_instance_id.to_owned(),
         old_api_exit_code,
         helper_processes,
     })
@@ -1065,10 +1116,17 @@ fn parse_helper_processes(values: &[Value]) -> Result<Vec<HelperProcessEvidence>
     Ok(output)
 }
 
+/// Emit only the authenticated request/result identity and observed process
+/// custody. The status-token hash is used for verification but never enters
+/// this frame or any probe log.
 fn emit_restored(nonce: &str, restored: &RestoredState) -> Result<()> {
     emit_json_line(&json!({
         "schema": RESTORED_SCHEMA,
         "nonce": nonce,
+        "request_id": restored.request_id,
+        "generation_id": restored.generation_id,
+        "old_api_instance_id": restored.old_api_instance_id,
+        "old_api_pid": restored.old_api_pid,
         "new_api_instance_id": restored.api_instance_id,
         "api_pid": restored.api_pid,
         "old_api_exit_code": restored.old_api_exit_code,
@@ -1143,28 +1201,22 @@ fn cleanup_owned_scope(guard: &mut ControlRoomGuard, expected: &[(&str, u32)]) -
 }
 
 fn drain_pump_cancellation(
-    repo_root: &Path,
-    guard: &mut ControlRoomGuard,
+    _repo_root: &Path,
+    _guard: &mut ControlRoomGuard,
     pump: &mut NativeRestartPump,
-    runtime_attach: &mut Option<
+    _runtime_attach: &mut Option<
         fullmag_runtime_control::application_attach::BackgroundApplicationAttach,
     >,
-    scratch: &mut Option<crate::scratch_runtime::ScratchRuntimeHandle>,
+    _scratch: &mut Option<crate::scratch_runtime::ScratchRuntimeHandle>,
 ) -> bool {
     let deadline = Instant::now() + HELPER_CLEANUP_TIMEOUT;
     loop {
-        match pump.candidate_preparation_state_for_probe() {
-            Ok(None) => return true,
-            Ok(Some(_)) => {}
+        match pump.drain_candidate_preparation_for_probe() {
+            Ok(true) => return true,
+            Ok(false) => {}
             Err(_) => return false,
         }
         if Instant::now() >= deadline {
-            return false;
-        }
-        if pump
-            .step_observed(repo_root, guard, runtime_attach, scratch, |_| {})
-            .is_err()
-        {
             return false;
         }
         thread::sleep(Duration::from_millis(10));

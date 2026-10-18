@@ -1,6 +1,6 @@
 //! Quantity catalog endpoint under the canonical resource-first v1 contract.
 
-use axum::{extract::State, Json};
+use axum::{extract::{Query, State}, Json};
 use std::sync::Arc;
 
 use crate::schemas::quantities::QuantityCatalogResponse;
@@ -19,6 +19,7 @@ use super::resolved_spatial_field::{
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/data/quantities",
+    params(crate::schemas::fields::ArtifactFieldCatalogQuery),
     responses(
         (status = 200, description = "Quantity catalog", body = QuantityCatalogResponse),
     ),
@@ -26,8 +27,13 @@ use super::resolved_spatial_field::{
 )]
 pub async fn get_quantities_catalog(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<crate::schemas::fields::ArtifactFieldCatalogQuery>,
 ) -> Result<Json<QuantityCatalogResponse>, crate::error::ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
+    let artifact_fields = match query.stage_id.as_deref() {
+        Some(stage) => super::inspection_field_provider::catalog_fields_for_stage(&state, stage).await?,
+        None => Vec::new(),
+    };
     let mut response = QuantityCatalogResponse::build();
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -40,7 +46,25 @@ pub async fn get_quantities_catalog(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
+    for field in &artifact_fields {super::inspection_field_provider::ensure_observation(snapshot,field)?;}
     annotate_runtime_quantity_state(&mut response, snapshot);
+    if query.stage_id.is_some() {
+        response.quantities.retain(|entry| artifact_fields.iter().any(|field| field.quantity_id == entry.id));
+    }
+    for field in &artifact_fields {
+        let Some(entry)=response.quantities.iter_mut().find(|entry|entry.id==field.quantity_id) else {continue;};
+        let capability=super::inspection_field_provider::capability(field)?;
+        let renderable=capability.render==fullmag_runner::QuantityRenderCapability::Renderable;
+        let next:crate::schemas::quantities::ResolvedQuantityCapability=capability.into();
+        let already_artifact=entry.resolved_capability.as_ref().is_some_and(|old|old.lane=="artifact_inspection_read_only");
+        if already_artifact {entry.resolved_capability.as_mut().expect("artifact capability").carriers.extend(next.carriers);}
+        else {entry.resolved_capability=Some(next);}
+        entry.capability_state="supported".into();entry.requestable=true;entry.renderable=renderable;
+        entry.materializable=false;entry.materialization_state="stale_complete".into();
+        entry.materialization_reason_code=Some("historical_inspection_read_only".into());
+        // The solver capability remains the ordinary resolved-plan truth.
+        entry.location=super::inspection_field_provider::locator(field)?.indexing.as_str().into();
+    }
     Ok(Json(response))
 }
 

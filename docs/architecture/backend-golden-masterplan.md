@@ -284,6 +284,26 @@ Runner nie może zawierać:
 - produkcyjnych kerneli libCEED albo hypre-device,
 - zdublowanych GPU-resident state machines.
 
+### Accepted FEM GPU w Workspace
+
+[ADR 0060](../adr/0060-accepted-fem-gpu-docker-workspace.md) rozszerza
+orkiestrację accepted FEM o osobny GPU state producer. Adapter
+`accepted_fem_study_worker` zachowuje wspólny lifecycle workera i wywołuje
+natywnego runnera; nie przejmuje integratora ani operatorów MFEM. CPU i GPU
+mają oddzielne wersjonowane accepted-state carriers. GPU wiąże native values,
+node map, indexed geometry oraz typed native execution receipt z rzeczywistym
+UUID host allocation. Requested `auto` pozostaje authored intent, a resolved
+device wynika ze zweryfikowanego lease; GPU nie ma fallbacku CPU.
+
+Wdrożenie Docker wymaga natywnego probe, aktualnego inventory/topology,
+wspólnego ledgeru hosta i terminalnego release. Source implementation oraz
+obraz z CUDA nie kwalifikują wykonania przez Workspace. Pierwszy zakres to
+H1/P1 double strict time evolution i LLG-overdamped relaxation z typed
+`final_state` oraz opcjonalnym `total_energy`. Inne workloady zachowują
+kanoniczne ograniczenia plannera. Managed GPU/API, browser i kwalifikacja
+naukowa są oddzielnymi bramkami; bieżący etap pozostaje **NOT VERIFIED**
+runtime do uzyskania związanych ze źródłami receipts.
+
 ### LLG time-domain workflow ownership
 
 Contracts: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`,

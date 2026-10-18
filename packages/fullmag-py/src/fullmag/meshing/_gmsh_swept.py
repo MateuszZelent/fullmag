@@ -63,9 +63,12 @@ from ._gmsh_extraction import (
     certify_extracted_periodic_mesh,
 )
 from ._gmsh_fields import (
+    _PLANE_PROJECTED_UPPER_KINDS,
+    _add_exact_plane_projected_cap_field,
     _add_surface_threshold_field,
     _apply_mesh_options,
     _apply_post_mesh_options,
+    _exact_plane_cap_seed_points,
 )
 from ._gmsh_airbox import (
     _MIXED_SHARED_GMSH_VERSION,
@@ -445,6 +448,355 @@ def _add_source_face_lower_bound_fields(
     return field_ids
 
 
+_SOURCE_FACE_GRADED_KINDS = frozenset(
+    {
+        "ComponentRestrictedGradedBox",
+        "ComponentRestrictedGradedCylinder",
+        "ComponentRestrictedGradedSphere",
+    }
+)
+_SOURCE_FACE_PROJECTED_SEED_KINDS = frozenset(
+    {"ComponentRestrictedBox", *_SOURCE_FACE_GRADED_KINDS}
+)
+
+
+def _source_face_vector(
+    params: dict[str, Any],
+    key: str,
+    *,
+    kind: str,
+) -> list[float]:
+    values = params.get(key)
+    if not isinstance(values, (list, tuple)) or len(values) != 3:
+        raise ValueError(
+            f"source-face projection for {kind} requires a three-component {key}"
+        )
+    try:
+        result = [float(value) for value in values]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"source-face projection for {kind} requires numeric {key}"
+        ) from exc
+    if not all(math.isfinite(value) for value in result):
+        raise ValueError(
+            f"source-face projection for {kind} requires finite {key}"
+        )
+    return result
+
+
+def _source_face_owner_matches(
+    config: dict[str, Any],
+    *,
+    source_geometry_name: str | None,
+) -> bool:
+    """Validate and select a component field for the source geometry."""
+    kind = str(config.get("kind"))
+    params = config.get("params")
+    if not isinstance(params, dict):
+        raise ValueError(
+            f"source-face projection for {kind} requires an object params value"
+        )
+    owner = params.get("GeometryName")
+    if kind.startswith("ComponentRestrictedGraded"):
+        if not isinstance(owner, str) or not owner.strip():
+            raise ValueError(
+                f"source-face projection for {kind} requires GeometryName"
+            )
+        if source_geometry_name is None or not source_geometry_name.strip():
+            raise ValueError(
+                f"source-face projection for {kind} requires the source geometry owner"
+            )
+    if (
+        source_geometry_name is not None
+        and isinstance(owner, str)
+        and owner.strip()
+        and owner != source_geometry_name
+    ):
+        return False
+    return True
+
+
+def _localize_source_plane_seed_descriptor(
+    config: dict[str, Any],
+    *,
+    normal_axis: int,
+    face_axes: list[int],
+) -> dict[str, Any] | None:
+    """Project a supported component descriptor into source-plane coordinates.
+
+    The source face is meshed before its volume exists.  Graded component fields
+    therefore use the same exact-plane footprint data as the later cap helper,
+    while the full ``TransitionDistance`` descriptor remains intact for the
+    volume field created after extrusion.
+    """
+    kind = str(config.get("kind"))
+    params = config.get("params")
+    if kind not in _SOURCE_FACE_PROJECTED_SEED_KINDS:
+        return None
+    if not isinstance(params, dict):
+        raise ValueError(
+            f"source-face projection for {kind} requires an object params value"
+        )
+    if kind == "ComponentRestrictedBox":
+        try:
+            bounds_min = [float(params[f"{axis}Min"]) for axis in "XYZ"]
+            bounds_max = [float(params[f"{axis}Max"]) for axis in "XYZ"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "source-face projection for ComponentRestrictedBox requires finite bounds"
+            ) from exc
+        if not all(
+            math.isfinite(value)
+            for value in (*bounds_min, *bounds_max)
+        ) or any(
+            bounds_max[axis] <= bounds_min[axis] for axis in range(3)
+        ):
+            raise ValueError(
+                "source-face projection for ComponentRestrictedBox requires positive bounds"
+            )
+        center = [
+            0.5 * (bounds_min[axis] + bounds_max[axis])
+            for axis in range(3)
+        ]
+        size = [bounds_max[axis] - bounds_min[axis] for axis in range(3)]
+        return {
+            "kind": "ComponentRestrictedGradedBox",
+            "params": {
+                "VIn": float(params["VIn"]),
+                "VOut": float(params.get("VOut", params["VIn"])),
+                "Center": [
+                    center[face_axes[0]],
+                    center[face_axes[1]],
+                    center[normal_axis],
+                ],
+                "Size": [
+                    size[face_axes[0]],
+                    size[face_axes[1]],
+                    size[normal_axis],
+                ],
+            },
+        }
+
+    localized = dict(config)
+    localized_params = dict(params)
+    center = _source_face_vector(params, "Center", kind=kind)
+    localized_params["Center"] = [
+        center[face_axes[0]],
+        center[face_axes[1]],
+        center[normal_axis],
+    ]
+    if kind == "ComponentRestrictedGradedBox":
+        size = _source_face_vector(params, "Size", kind=kind)
+        if any(value <= 0.0 for value in size):
+            raise ValueError(
+                "source-face projection for ComponentRestrictedGradedBox requires positive Size"
+            )
+        localized_params["Size"] = [
+            size[face_axes[0]],
+            size[face_axes[1]],
+            size[normal_axis],
+        ]
+    elif kind == "ComponentRestrictedGradedCylinder":
+        axis_values = params.get("Axis", [0.0, 0.0, 1.0])
+        if not isinstance(axis_values, (list, tuple)) or len(axis_values) != 3:
+            raise ValueError(
+                f"source-face projection for {kind} requires a three-component Axis"
+            )
+        axis = _source_face_vector(
+            {"Axis": axis_values}, "Axis", kind=kind
+        )
+        axis_norm = math.sqrt(sum(value * value for value in axis))
+        if axis_norm <= 0.0:
+            raise ValueError(
+                "source-face projection for ComponentRestrictedGradedCylinder requires a non-zero Axis"
+            )
+        if abs(axis[normal_axis]) / axis_norm < 1.0 - 1.0e-9:
+            raise ValueError(
+                "source-face projection for ComponentRestrictedGradedCylinder requires an axis parallel to the source-face normal"
+            )
+        localized_params["Axis"] = [
+            axis[face_axes[0]],
+            axis[face_axes[1]],
+            axis[normal_axis],
+        ]
+    elif kind == "ComponentRestrictedGradedSphere":
+        radius = float(params.get("Radius"))
+        if not math.isfinite(radius) or radius <= 0.0:
+            raise ValueError(
+                "source-face projection for ComponentRestrictedGradedSphere requires a positive Radius"
+            )
+    localized["params"] = localized_params
+    return localized
+
+
+def _localize_source_plane_lower_bound(
+    config: dict[str, Any],
+    *,
+    normal_axis: int,
+    face_axes: list[int],
+) -> dict[str, Any]:
+    """Copy a lower-bound descriptor with its shape axes in plane order."""
+    localized = dict(config)
+    params = config.get("params")
+    if not isinstance(params, dict):
+        return localized
+    localized_params = dict(params)
+    for key in ("Center", "Size", "Axis"):
+        values = params.get(key)
+        if isinstance(values, (list, tuple)) and len(values) == 3:
+            values_float = [float(value) for value in values]
+            localized_params[key] = [
+                values_float[face_axes[0]],
+                values_float[face_axes[1]],
+                values_float[normal_axis],
+            ]
+    localized["params"] = localized_params
+    return localized
+
+
+def _embed_mixed_source_face_seed_points(
+    gmsh: Any,
+    *,
+    source_surface: int,
+    opts: MeshOptions,
+    hscale: float,
+    source_geometry_name: str | None,
+) -> None:
+    """Embed exact-plane targets for component fields before extrusion.
+
+    Component volume fields cannot be constructed until GEO extrusion has
+    created owner volumes.  The source face still needs deterministic 2-D
+    seeds, however, so graded box/cylinder/sphere footprints are localized to
+    the source plane and embedded after the CSG ``isInside`` check.  The full
+    graded descriptors (including ``TransitionDistance``) are applied later to
+    the owner volumes.
+    """
+    projected_configs = [
+        config
+        for config in opts.size_fields
+        if isinstance(config, dict)
+        and config.get("kind") in _SOURCE_FACE_PROJECTED_SEED_KINDS
+        and _source_face_owner_matches(
+            config, source_geometry_name=source_geometry_name
+        )
+    ]
+    if not projected_configs:
+        return
+
+    raw_bbox = gmsh.model.getBoundingBox(2, int(source_surface))
+    try:
+        bbox = tuple(float(value) for value in raw_bbox)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "mixed source-face seed embedding received a non-numeric "
+            "source-surface bounding-box"
+        ) from exc
+    if len(bbox) != 6:
+        raise RuntimeError(
+            "mixed source-face seed embedding requires six source-surface "
+            f"bounding-box values, got {len(bbox)}"
+        )
+    if not all(math.isfinite(value) for value in bbox):
+        raise RuntimeError(
+            "mixed source-face seed embedding requires finite source-surface "
+            "bounding-box values"
+        )
+    if any(bbox[3 + axis] < bbox[axis] for axis in range(3)):
+        raise RuntimeError(
+            "mixed source-face seed embedding received inverted source-surface "
+            "bounding-box bounds"
+        )
+    if not math.isfinite(hscale) or hscale <= 0.0:
+        raise ValueError("mixed source-face seed embedding requires a positive hscale")
+
+    spans = [bbox[3 + axis] - bbox[axis] for axis in range(3)]
+    normal_axis = min(range(3), key=lambda axis: spans[axis])
+    face_axes = [axis for axis in range(3) if axis != normal_axis]
+    normal_span_si = spans[normal_axis] / hscale
+    normal_si = 0.5 * (bbox[normal_axis] + bbox[3 + normal_axis]) / hscale
+    normal_tolerance = max(1.0e-15, 1.0e-9 * max(normal_span_si, 1.0e-12))
+
+    upper_descriptors: list[dict[str, Any]] = []
+    for config in projected_configs:
+        localized = _localize_source_plane_seed_descriptor(
+            config,
+            normal_axis=normal_axis,
+            face_axes=face_axes,
+        )
+        if localized is None:
+            continue
+        params = localized.get("params")
+        if not isinstance(params, dict):
+            continue
+        if localized["kind"] == "ComponentRestrictedGradedBox":
+            center = _source_face_vector(
+                params, "Center", kind=str(localized["kind"])
+            )
+            size = _source_face_vector(
+                params, "Size", kind=str(localized["kind"])
+            )
+            if (
+                normal_si < center[2] - 0.5 * size[2] - normal_tolerance
+                or normal_si > center[2] + 0.5 * size[2] + normal_tolerance
+            ):
+                continue
+        upper_descriptors.append(localized)
+    if not upper_descriptors:
+        return
+
+    lower_descriptors = []
+    for config in opts.lower_bound_fields:
+        if not isinstance(config, dict):
+            continue
+        params = config.get("params")
+        if not isinstance(params, dict):
+            continue
+        owner = params.get("GeometryName")
+        if not isinstance(owner, str) or not owner.strip():
+            continue
+        if source_geometry_name is not None and owner != source_geometry_name:
+            continue
+        lower_descriptors.append(
+            _localize_source_plane_lower_bound(
+                config,
+                normal_axis=normal_axis,
+                face_axes=face_axes,
+            )
+        )
+    bounds_xy = (
+        bbox[face_axes[0]] / hscale,
+        bbox[face_axes[1]] / hscale,
+        bbox[3 + face_axes[0]] / hscale,
+        bbox[3 + face_axes[1]] / hscale,
+    )
+    seed_points = _exact_plane_cap_seed_points(
+        size_fields=upper_descriptors,
+        lower_bound_fields=lower_descriptors,
+        layer_planes=[normal_si],
+        bounds_xy=bounds_xy,
+    )
+    is_inside = getattr(gmsh.model, "isInside", None)
+    if not callable(is_inside):
+        raise RuntimeError(
+            "mixed source-face seed embedding requires Gmsh model.isInside"
+        )
+    embedded: list[int] = []
+    for x, y, mesh_size in seed_points:
+        point = [0.0, 0.0, 0.0]
+        point[face_axes[0]] = x * hscale
+        point[face_axes[1]] = y * hscale
+        point[normal_axis] = normal_si * hscale
+        if int(is_inside(2, int(source_surface), point)) != 1:
+            continue
+        embedded.append(
+            int(gmsh.model.geo.addPoint(*point, float(mesh_size) * hscale))
+        )
+    if not embedded:
+        return
+    gmsh.model.geo.synchronize()
+    gmsh.model.mesh.embed(0, embedded, 2, int(source_surface))
+
+
 def _apply_mixed_source_face_mesh_options(
     gmsh: Any,
     *,
@@ -454,6 +806,7 @@ def _apply_mixed_source_face_mesh_options(
     opts: MeshOptions,
     hscale: float,
     include_source_hmax_as_upper: bool = False,
+    source_geometry_name: str | None = None,
 ) -> int:
     """Apply canonical film sizing only to the pre-extrusion source face."""
     source_field_ids: list[int] = []
@@ -470,6 +823,7 @@ def _apply_mixed_source_face_mesh_options(
         )
         gmsh.model.mesh.field.setNumber(source_default, "IncludeBoundary", 1)
         source_field_ids.append(int(source_default))
+    has_projected_source_field = False
     for config in opts.size_fields:
         params = config.get("params") if isinstance(config, dict) else None
         if not isinstance(params, dict):
@@ -479,7 +833,23 @@ def _apply_mixed_source_face_mesh_options(
         if isinstance(geometry_name, str):
             geometry_names.add(geometry_name)
         kind = config.get("kind")
+        if kind in _SOURCE_FACE_GRADED_KINDS:
+            _source_face_owner_matches(
+                config, source_geometry_name=source_geometry_name
+            )
+            has_projected_source_field = True
+            # These fields require owner volumes and are realized after GEO
+            # extrusion.  Their exact source-plane footprints are embedded by
+            # _embed_mixed_source_face_seed_points below.
+            continue
         if kind == "ComponentVolumeConstant":
+            if (
+                source_geometry_name is not None
+                and isinstance(geometry_name, str)
+                and geometry_name != source_geometry_name
+            ):
+                generic_fields.append(config)
+                continue
             field_id = gmsh.model.mesh.field.add("Constant")
             gmsh.model.mesh.field.setNumbers(field_id, "SurfacesList", [source_surface])
             gmsh.model.mesh.field.setNumber(
@@ -494,6 +864,13 @@ def _apply_mixed_source_face_mesh_options(
             config["_gmsh_field_id"] = int(field_id)
             continue
         if kind == "ComponentRestrictedBox":
+            if (
+                source_geometry_name is not None
+                and isinstance(geometry_name, str)
+                and geometry_name != source_geometry_name
+            ):
+                generic_fields.append(config)
+                continue
             field_id = gmsh.model.mesh.field.add("Box")
             for parameter in (
                 "VIn", "VOut", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"
@@ -507,23 +884,37 @@ def _apply_mixed_source_face_mesh_options(
             continue
         generic_fields.append(config)
 
+    source_lower_bound_fields: list[dict[str, Any]] = []
     for config in opts.lower_bound_fields:
         params = config.get("params") if isinstance(config, dict) else None
         if not isinstance(params, dict):
             raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
         geometry_name = params.get("GeometryName")
-        if isinstance(geometry_name, str) and geometry_name.strip():
-            geometry_names.add(geometry_name)
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            # A component lower bound has no safe global source-face meaning.
+            # The post-extrusion owner validator remains responsible for the
+            # definitive rejection; do not leak an unowned floor onto this cap.
+            continue
+        if source_geometry_name is not None and geometry_name != source_geometry_name:
+            continue
+        geometry_names.add(geometry_name)
+        source_lower_bound_fields.append(config)
     source_lower_bound_ids = _add_source_face_lower_bound_fields(
         gmsh,
-        lower_bound_fields=opts.lower_bound_fields,
+        lower_bound_fields=source_lower_bound_fields,
         source_surface=source_surface,
         hscale=hscale,
     )
-    if source_lower_bound_ids and not source_field_ids and not generic_fields:
+    if (
+        (source_lower_bound_ids and not source_field_ids and not generic_fields)
+        or (has_projected_source_field and not source_field_ids and not generic_fields)
+    ):
         # _apply_mesh_options receives Gmsh-scaled hmax here. Supply its base
         # upper target directly instead of asking its SI lower-only fallback
-        # to scale that already-scaled value a second time.
+        # to scale that already-scaled value a second time.  Graded component
+        # fields are installed after extrusion; this neutral cap only keeps
+        # the pre-extrusion 2-D source face bounded while embedded exact-plane
+        # seeds carry the local VIn target.
         source_default = gmsh.model.mesh.field.add("Constant")
         gmsh.model.mesh.field.setNumbers(
             source_default, "SurfacesList", [source_surface]
@@ -551,6 +942,13 @@ def _apply_mixed_source_face_mesh_options(
     gmsh.model.mesh.field.setNumber(restricted, "InField", source_field)
     gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", [source_surface])
     gmsh.model.mesh.field.setAsBackgroundMesh(restricted)
+    _embed_mixed_source_face_seed_points(
+        gmsh,
+        source_surface=source_surface,
+        opts=opts,
+        hscale=hscale,
+        source_geometry_name=source_geometry_name,
+    )
     return int(restricted)
 
 
@@ -579,6 +977,86 @@ def _apply_owner_wide_body_seed_mesh_options(
         opts=owner_seed_options,
         hscale=hscale,
         include_source_hmax_as_upper=True,
+        source_geometry_name=geometry_name,
+    )
+
+def _add_swept_exact_plane_cap_field(
+    gmsh: Any,
+    *,
+    opts: MeshOptions,
+    geometry_name: str | None,
+    body_volumes: list[int],
+    source_z: float,
+    thickness: float,
+    n_layers: int,
+    neutral_size: float,
+    hscale: float,
+    sweep_axis: int = 2,
+) -> int | None:
+    """Project scoped upper/lower targets onto every exact swept layer plane."""
+    projected_fields = [
+        config
+        for config in opts.size_fields
+        if isinstance(config, dict)
+        and config.get("kind") in _PLANE_PROJECTED_UPPER_KINDS
+    ]
+    if not projected_fields:
+        return None
+    owned_projected_fields = [
+        config
+        for config in projected_fields
+        if isinstance(config.get("params"), dict)
+        and isinstance(config["params"].get("GeometryName"), str)
+        and config["params"]["GeometryName"].strip()
+    ]
+    if not owned_projected_fields:
+        # An unowned generic Box remains a source-face field only; it has no
+        # safe volume-cap projection target.
+        return None
+    if not isinstance(geometry_name, str) or not geometry_name.strip():
+        raise ValueError(
+            "exact source-plane projection requires the component geometry owner"
+        )
+    if not body_volumes:
+        raise ValueError(
+            "exact source-plane projection requires exact component volumes"
+        )
+    if n_layers < 1 or not math.isfinite(thickness) or thickness <= 0.0:
+        raise ValueError(
+            "exact source-plane projection requires positive layer geometry"
+        )
+    if int(sweep_axis) != 2:
+        raise ValueError(
+            "exact source-plane projection currently requires a z-directed sweep"
+        )
+    owner_fields = [
+        config
+        for config in owned_projected_fields
+        if config["params"].get("GeometryName") == geometry_name
+    ]
+    if not owner_fields:
+        return None
+    owner_lower = [
+        config
+        for config in opts.lower_bound_fields
+        if isinstance(config, dict)
+        and isinstance(config.get("params"), dict)
+        and config["params"].get("GeometryName") == geometry_name
+    ]
+    layer_planes = [
+        float(source_z) + float(thickness) * index / int(n_layers)
+        for index in range(int(n_layers) + 1)
+    ]
+    return _add_exact_plane_projected_cap_field(
+        gmsh,
+        size_fields=owner_fields,
+        lower_bound_fields=owner_lower,
+        layer_planes=layer_planes,
+        source_z=float(source_z),
+        neutral_size=float(neutral_size),
+        geometry_name=geometry_name,
+        cap_volume_tags=body_volumes,
+        hscale=hscale,
     )
 
 
@@ -2944,7 +3422,7 @@ def _generate_coincident_ring_airbox_mesh(
         _configure_gmsh_threads(gmsh, requested_threads=1, honor_environment=False)
         gmsh.model.add("fullmag_swept_box_cylinder_ring_coincident_airbox")
         source_hmax_scaled = body_hmax_scaled
-        z_source = levels[0]
+        z_source = body_bottom
         outer_points = [
             gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)
             for x, y in (
@@ -3003,6 +3481,7 @@ def _generate_coincident_ring_airbox_mesh(
                         order=order,
                         opts=options,
                         hscale=SCALE,
+                        source_geometry_name=geometry.geometry_name,
                     )
                 )
             else:
@@ -3035,52 +3514,74 @@ def _generate_coincident_ring_airbox_mesh(
                 source_fields.append(owner_seed_field)
                 gmsh.model.mesh.generate(2)
 
-        annulus_volumes: list[int] = []
-        hole_volumes: list[int] = []
+        annulus_volumes_by_interval: dict[int, int] = {}
+        hole_volumes_by_interval: dict[int, int] = {}
         current_annulus = int(annulus_surface)
         current_hole = int(hole_surface) if hole_surface is not None else None
-        for level_index in range(len(levels) - 1):
-            step = float(levels[level_index + 1] - levels[level_index])
+        interval_midpoints = [
+            0.5 * (levels[level_index] + levels[level_index + 1])
+            for level_index in range(len(levels) - 1)
+        ]
+        magnetic_indices = [
+            level_index
+            for level_index, midpoint in enumerate(interval_midpoints)
+            if body_bottom < midpoint < body_top
+        ]
+        above_indices = [
+            level_index
+            for level_index, midpoint in enumerate(interval_midpoints)
+            if midpoint >= body_top
+        ]
+        below_indices = [
+            level_index
+            for level_index, midpoint in enumerate(interval_midpoints)
+            if midpoint <= body_bottom
+        ]
+        if len(magnetic_indices) + len(above_indices) + len(below_indices) != len(
+            interval_midpoints
+        ):
+            raise RuntimeError("coincident ring intervals do not partition the airbox")
+        ordered_indices = [*magnetic_indices, *above_indices, *reversed(below_indices)]
+        below_started = False
+        for level_index in ordered_indices:
+            is_below = level_index in below_indices
+            if is_below and not below_started:
+                current_annulus = int(annulus_surface)
+                current_hole = int(hole_surface) if hole_surface is not None else None
+                below_started = True
+            interval_step = float(levels[level_index + 1] - levels[level_index])
+            step = -interval_step if is_below else interval_step
+            target_z = float(
+                levels[level_index] if is_below else levels[level_index + 1]
+            )
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
             # Keep every requested z interval as a separate CAD volume. The
-            # scoped Box and Ring routes constrain one mesh layer per slab; their
-            # body and air fields must still resolve in-plane sizing independently
-            # when the final conforming 3D mesh is generated. The unscoped
-            # compatibility route still extrudes its premeshed source triangulation.
-            if scoped_layer_partitioning and isinstance(geometry, Box):
-                # Constrain this Box slab to one mesh layer between its exact
-                # CAD planes. The volume-scoped body/air fields remain
-                # installed before final 3D generation; actual density is
-                # measured by the existing Gmsh regressions.
-                extruded = gmsh.model.geo.extrude(
-                    source_entities,
-                    0.0,
-                    0.0,
-                    step,
-                    numElements=[1],
-                    heights=[1.0],
-                    # Avoid the global non-recombined Gmsh prism-to-tet pass.
-                    # The hosted regression verifies prism6 reaches the
-                    # coordinate-ranked Fullmag converter; the strict face
-                    # certificate remains decisive.
-                    recombine=True,
-                )
-            elif scoped_layer_partitioning:
-                # Match the Box layer constraint for each already-defined Ring
-                # slab. Recombined extrusion leaves prism/quad subdivision to
-                # the existing Fullmag converter; strict periodic recertification
-                # remains the acceptance check.
-                extruded = gmsh.model.geo.extrude(
-                    source_entities,
-                    0.0,
-                    0.0,
-                    step,
-                    numElements=[1],
-                    heights=[1.0],
-                    recombine=True,
-                )
+            # unscoped compatibility route still extrudes its premeshed
+            # source triangulation. Scoped air slabs remain geometry-only so
+            # the final conforming 3D mesh resolves magnetic-owner and air
+            # sizing independently. Magnetic intervals use one recombined
+            # prism layer; the existing coordinate-based converter then gives
+            # periodic copies the same deterministic tetrahedral split.
+            if scoped_layer_partitioning:
+                if body_bottom < 0.5 * (levels[level_index] + levels[level_index + 1]) < body_top:
+                    extruded = gmsh.model.geo.extrude(
+                        source_entities,
+                        0.0,
+                        0.0,
+                        step,
+                        numElements=[1],
+                        heights=[1.0],
+                        recombine=True,
+                    )
+                else:
+                    extruded = gmsh.model.geo.extrude(
+                        source_entities,
+                        0.0,
+                        0.0,
+                        step,
+                    )
             else:
                 extruded = gmsh.model.geo.extrude(
                     source_entities,
@@ -3106,15 +3607,15 @@ def _generate_coincident_ring_airbox_mesh(
                     hole_step.append(volume)
             if len(annulus_step) != 1 or len(hole_step) != (1 if tool is not None else 0):
                 raise RuntimeError("coincident ring extrusion volume identity is ambiguous")
-            annulus_volumes.append(annulus_step[0])
+            annulus_volumes_by_interval[level_index] = annulus_step[0]
             if hole_step:
-                hole_volumes.append(hole_step[0])
+                hole_volumes_by_interval[level_index] = hole_step[0]
             top_surfaces = []
             for dim, tag in extruded:
                 if int(dim) != 2:
                     continue
                 box = gmsh.model.getBoundingBox(2, int(tag))
-                if abs(float(box[2]) - levels[level_index + 1]) <= 1.0e-8 and abs(float(box[5]) - levels[level_index + 1]) <= 1.0e-8:
+                if abs(float(box[2]) - target_z) <= 1.0e-8 and abs(float(box[5]) - target_z) <= 1.0e-8:
                     top_surfaces.append((int(tag), float(box[3] - box[0])))
             next_annulus = [tag for tag, x_span in top_surfaces if math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
             next_hole = [tag for tag, x_span in top_surfaces if not math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
@@ -3122,6 +3623,20 @@ def _generate_coincident_ring_airbox_mesh(
                 raise RuntimeError("coincident ring extrusion top-face identity is ambiguous")
             current_annulus = next_annulus[0]
             current_hole = next_hole[0] if next_hole else None
+
+        expected_interval_indices = set(range(len(levels) - 1))
+        if set(annulus_volumes_by_interval) != expected_interval_indices:
+            raise RuntimeError("coincident ring realization lost an annulus interval volume")
+        if tool is not None and set(hole_volumes_by_interval) != expected_interval_indices:
+            raise RuntimeError("coincident ring realization lost a hole interval volume")
+        annulus_volumes = [
+            annulus_volumes_by_interval[index]
+            for index in range(len(levels) - 1)
+        ]
+        hole_volumes = [
+            hole_volumes_by_interval[index]
+            for index in sorted(hole_volumes_by_interval)
+        ]
 
         body_volumes = [volume for i, volume in enumerate(annulus_volumes)
                         if body_bottom < 0.5 * (levels[i] + levels[i + 1]) < body_top]
@@ -3214,6 +3729,15 @@ def _generate_coincident_ring_airbox_mesh(
                 airbox_shape="bbox",
                 air_volume_tags=air_volumes,
             )
+            if airbox_field is not None:
+                # Keep the graded air field active on the shared interface;
+                # the owner-volume Restrict field below provides the magnetic
+                # target without exporting its VOut into the air domain.
+                gmsh.model.mesh.field.setNumber(
+                    airbox_field,
+                    "IncludeBoundary",
+                    1 if h_inner_scaled <= body_hmax_scaled else 0,
+                )
 
         final_options = _dc_replace(
             options,
@@ -3240,7 +3764,46 @@ def _generate_coincident_ring_airbox_mesh(
             "VOut",
             max(body_hmax_scaled, h_outer_scaled),
         )
-        preexisting_fields = [*source_fields, int(body_upper_field)]
+        body_upper_restricted = gmsh.model.mesh.field.add("Restrict")
+        gmsh.model.mesh.field.setNumber(
+            body_upper_restricted, "InField", body_upper_field
+        )
+        gmsh.model.mesh.field.setNumbers(
+            body_upper_restricted, "VolumesList", body_volumes
+        )
+        gmsh.model.mesh.field.setNumber(
+            body_upper_restricted, "IncludeBoundary", 1
+        )
+        # The scoped route starts from a lower outer-air source face and
+        # extrudes that CAD face through the magnetic intervals.  A volume
+        # Restrict field constrains the 3-D owner scope, not the two-dimensional
+        # source face while it is meshed as the pre-3-D extrusion seed; the
+        # corresponding 3-D GEO owner volumes already exist at that point.
+        # Without an explicit source-surface target, a far-air cap can change
+        # the ring's source triangulation even when the resolved owner target is
+        # unchanged.  Pin both the annulus and complementary hole seed to the
+        # owner target.  The neutral VOut keeps this seed field from becoming
+        # an air-domain cap.
+        owner_source_seed = None
+        if scoped_layer_partitioning and hole_surface is not None:
+            owner_source_seed = gmsh.model.mesh.field.add("Constant")
+            owner_source_entities = [int(annulus_surface)]
+            if hole_surface is not None:
+                owner_source_entities.append(int(hole_surface))
+            gmsh.model.mesh.field.setNumbers(
+                owner_source_seed, "SurfacesList", owner_source_entities
+            )
+            gmsh.model.mesh.field.setNumber(
+                owner_source_seed, "VIn", body_hmax_scaled
+            )
+            gmsh.model.mesh.field.setNumber(
+                owner_source_seed, "VOut", 1.0e22
+            )
+            gmsh.model.mesh.field.setNumber(owner_source_seed, "IncludeBoundary", 1)
+
+        preexisting_fields = [*source_fields, int(body_upper_restricted)]
+        if owner_source_seed is not None:
+            preexisting_fields.append(int(owner_source_seed))
         if airbox_field is not None:
             preexisting_fields.append(int(airbox_field))
         _apply_mesh_options(
@@ -3594,6 +4157,7 @@ def generate_swept_box_cylinder_ring_mesh(
                     order=order,
                     opts=opts,
                     hscale=SCALE,
+                    source_geometry_name=geometry.geometry_name,
                 )
             )
         else:
@@ -3713,9 +4277,31 @@ def generate_swept_box_cylinder_ring_mesh(
 
         final_options = _dc_replace(
             opts,
-            size_fields=(list(opts.size_fields) if opts.lower_bound_fields else []),
+            size_fields=(
+                list(opts.size_fields)
+                if opts.lower_bound_fields
+                or any(
+                    isinstance(config, dict)
+                    and config.get("kind") in _PLANE_PROJECTED_UPPER_KINDS
+                    for config in opts.size_fields
+                )
+                else []
+            ),
         )
         preexisting_field_ids = list(source_field_ids)
+        cap_field = _add_swept_exact_plane_cap_field(
+            gmsh,
+            opts=final_options,
+            geometry_name=geometry.geometry_name,
+            body_volumes=[body_volume],
+            source_z=-0.5 * sz,
+            thickness=sz,
+            n_layers=n_layers,
+            neutral_size=hmax,
+            hscale=SCALE,
+        )
+        if cap_field is not None:
+            preexisting_field_ids.append(int(cap_field))
         if airbox_field_id is not None:
             preexisting_field_ids.append(int(airbox_field_id))
         _apply_mesh_options(
@@ -4198,6 +4784,9 @@ def generate_swept_box_mesh(
             "InterfaceShellThreshold",
             "TransitionShellThreshold",
             "ComponentRestrictedBox",
+            "ComponentRestrictedGradedBox",
+            "ComponentRestrictedGradedCylinder",
+            "ComponentRestrictedGradedSphere",
             "EdgeDistanceThreshold",
             "CornerDistanceThreshold",
         }
@@ -4358,6 +4947,7 @@ def generate_swept_box_mesh(
                 order=order,
                 opts=opts,
                 hscale=SCALE,
+                source_geometry_name=geometry_name,
             )
             gmsh.model.mesh.generate(2)
             _set_mixed_volume_mesh_size_options(
@@ -4465,7 +5055,11 @@ def generate_swept_box_mesh(
             )
             if field_id is not None
         ]
-        if opts.lower_bound_fields:
+        if opts.lower_bound_fields or any(
+            isinstance(config, dict)
+            and config.get("kind") in _PLANE_PROJECTED_UPPER_KINDS
+            for config in opts.size_fields
+        ):
             if domain_volume_entities is not None:
                 body_volumes = [int(domain_volume_entities[0])]
             else:
@@ -4493,6 +5087,20 @@ def generate_swept_box_mesh(
                         }
                     )
                 }
+            cap_field = _add_swept_exact_plane_cap_field(
+                gmsh,
+                opts=opts,
+                geometry_name=geometry_name,
+                body_volumes=body_volumes,
+                source_z=-0.5 * thickness,
+                thickness=thickness,
+                n_layers=n_layers,
+                neutral_size=hmax,
+                hscale=SCALE,
+                sweep_axis=thin_axis,
+            )
+            if cap_field is not None:
+                active_background_fields.append(int(cap_field))
             _apply_mesh_options(
                 gmsh,
                 hmax_scaled,

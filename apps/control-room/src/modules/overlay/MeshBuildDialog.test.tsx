@@ -66,6 +66,13 @@ describe("MeshBuildDialog", () => {
     ).toBe("unknown");
     expect(laneForActiveLane(null)).toBe("unknown");
 
+    // The caller projects session authoring intent before passing a lane here.
+    expect(resolveMeshBuildDialogLane("fem")).toBe("fem");
+    expect(resolveMeshBuildDialogLane("fdm")).toBe("fdm");
+    expect(resolveMeshBuildDialogLane({ resolved: { discretization: "fem" } })).toBe("unknown");
+    expect(resolveMeshBuildDialogLane("auto")).toBe("unknown");
+    expect(resolveMeshBuildDialogLane(null)).toBe("unknown");
+
     expect(shouldLoadMeshBuildDialogFemResources(false, "fem")).toBe(false);
     expect(shouldLoadMeshBuildDialogFemResources(true, "fem")).toBe(true);
     expect(shouldLoadMeshBuildDialogFemResources(true, "fdm")).toBe(false);

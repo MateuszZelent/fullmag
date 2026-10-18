@@ -5,9 +5,14 @@ import { Activity, Cpu, HardDrive, RefreshCw } from "lucide-react";
 import { Button } from "@/shared/ui/Button";
 
 import { formatTelemetrySampleTime } from "../model/computeTelemetry";
+import { ComputeNodeOverviewSummary } from "../ComputeNodeOverviewSummary";
+import { ComputeNodeInventoryDetails } from "../ComputeNodeInventoryDetails";
+import { ComputeNodeInventoryStatus } from "../ComputeNodeInventoryStatus";
 import type {
   ComputeEnvironment,
+  ComputeNodeInventorySummary,
   ComputeProbeState,
+  ComputeProbeController,
   GpuInfo,
   SolverKind,
 } from "../model/types";
@@ -28,6 +33,10 @@ const LANE_ORDER: readonly { readonly backend: SolverKind; readonly device: "CPU
 
 export interface ComputeEnvironmentSettingsProps {
   readonly compute: ComputeProbeState;
+  readonly nodeInventory?: ComputeNodeInventorySummary;
+  readonly canEditNodePolicy?: boolean;
+  readonly onUpdateNodePolicy?: ComputeProbeController["updateNodePolicy"];
+  readonly view?: "overview" | "resources";
   readonly refreshing?: boolean;
   readonly stale?: boolean;
   readonly error?: string | null;
@@ -36,11 +45,16 @@ export interface ComputeEnvironmentSettingsProps {
 
 export function ComputeEnvironmentSettings({
   compute,
+  nodeInventory,
+  canEditNodePolicy = false,
+  onUpdateNodePolicy,
+  view = "overview",
   refreshing = false,
   stale = false,
   error = null,
   onRefresh,
 }: ComputeEnvironmentSettingsProps) {
+  const overview = view === "overview";
   const sampleTime = formatTelemetrySampleTime(compute?.sampledAt);
   return (
     <section
@@ -51,15 +65,25 @@ export function ComputeEnvironmentSettings({
       <div className="fm-start-compute-settings__head">
         <div>
           <h2 className="fm-start-section__title" id="fm-start-compute-settings-title">
-            Compute environment
+            {overview ? "Compute environment" : "Compute resources"}
           </h2>
           <p className="fm-start-compute-settings__intro">
-            Devices, memory, and available solver runtimes on the compute host.
+            {overview
+              ? "Devices, memory, and available solver runtimes on the compute host."
+              : "Observed host inventory and operating-system resource constraints."}
           </p>
         </div>
         {onRefresh ? (
           <Button
-            aria-label={refreshing ? "Refreshing compute environment" : "Refresh compute environment"}
+            aria-label={
+              refreshing
+                ? view === "resources"
+                  ? "Refreshing host resources"
+                  : "Refreshing compute environment"
+                : view === "resources"
+                  ? "Refresh host resources"
+                  : "Refresh compute environment"
+            }
             disabled={refreshing}
             onClick={onRefresh}
             size="sm"
@@ -67,12 +91,22 @@ export function ComputeEnvironmentSettings({
             variant="secondary"
           >
             <RefreshCw aria-hidden="true" size={14} />
-            {refreshing ? "Refreshing…" : "Refresh"}
+            {refreshing ? "Refreshing…" : view === "resources" ? "Refresh inventory" : "Refresh"}
           </Button>
         ) : null}
       </div>
 
-      {compute === undefined ? (
+      {overview && nodeInventory ? (
+        <>
+          <ComputeNodeInventoryStatus
+            className="fm-start-compute-settings__policy"
+            summary={nodeInventory}
+          />
+          <ComputeNodeOverviewSummary summary={nodeInventory} />
+        </>
+      ) : null}
+
+      {overview && compute === undefined ? (
         <div aria-live="polite" className="fm-start-compute-settings__notice">
           <p>
             {error
@@ -87,11 +121,11 @@ export function ComputeEnvironmentSettings({
             </p>
           ) : null}
         </div>
-      ) : compute === null ? (
+      ) : overview && compute === null ? (
         <p className="fm-start-compute-settings__notice" role={error ? "alert" : undefined}>
           {error ? "The compute probe could not return a reading. Try refreshing the environment." : "No compute probe is available on this host."}
         </p>
-      ) : (
+      ) : overview && compute !== undefined && compute !== null ? (
         <>
           {sampleTime ? (
             <p className="fm-start-compute-settings__policy">
@@ -105,17 +139,42 @@ export function ComputeEnvironmentSettings({
           ) : null}
           <ComputeDetails compute={compute} />
         </>
-      )}
+      ) : null}
 
-      {error ? (
+      <div hidden={overview}>
+        {nodeInventory ? (
+          <>
+            <ComputeNodeInventoryStatus
+              className="fm-start-compute-settings__policy"
+              summary={nodeInventory}
+            />
+            <ComputeNodeInventoryDetails
+              canEditNodePolicy={canEditNodePolicy}
+              onUpdateNodePolicy={onUpdateNodePolicy}
+              summary={nodeInventory}
+            />
+          </>
+        ) : (
+          <p className="fm-start-compute-settings__notice" role="status">
+            No host inventory snapshot is available.
+          </p>
+        )}
+        <p className="fm-start-compute-settings__policy">
+          Hardware readings and solver availability remain separate from host admission policy. A concrete device is resolved when a run starts.
+        </p>
+      </div>
+
+      {overview && error ? (
         <p className="fm-start-compute-settings__error" role="alert">
           {error}
         </p>
       ) : null}
 
-      <p className="fm-start-compute-settings__policy">
-        Choose backend, device, and precision in each study&apos;s execution settings. A concrete device is resolved when a run starts.
-      </p>
+      {overview ? (
+        <p className="fm-start-compute-settings__policy">
+          Choose backend, device, and precision in each study&apos;s execution settings. A concrete device is resolved when a run starts.
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -228,7 +287,7 @@ function ComputeDetails({ compute }: { readonly compute: ComputeEnvironment }) {
           <h3 id="fm-start-compute-lanes-title">Solver runtime lanes</h3>
         </div>
         <p className="fm-start-compute-settings__lane-note">
-          Availability and precision reported by the runtime for each backend and device.
+          Availability and precision reported by the runtime for each backend and device. Experimental entries are diagnostic only and do not make a production lane selectable.
         </p>
         <div className="fm-start-compute-settings__lanes">
           {LANE_ORDER.map((lane) => (
@@ -308,19 +367,28 @@ function RuntimeLaneCard({
     (candidate) => candidate.backend === laneKey.backend && candidate.device === laneKey.device,
   );
   const availability = lane?.availability ?? "unknown";
+  const diagnostic = availability === "unknown" ? lane?.diagnostic : undefined;
   const status =
     availability === "available"
       ? "Available"
       : availability === "unavailable"
         ? "Unavailable"
-        : "Not reported";
+        : diagnostic?.state === "available"
+          ? "Experimental"
+          : diagnostic?.state === "unavailable"
+            ? "Experimental unavailable"
+            : "Not reported";
   const laneReason =
-    lane?.reason ??
-    (lane === undefined
-      ? "Runtime did not report this lane."
-      : availability === "unknown"
-        ? "Runtime did not determine availability."
-        : "No additional runtime reason was reported.");
+    diagnostic?.state === "unavailable"
+      ? diagnostic.reason ?? "Experimental runtime is unavailable."
+      : diagnostic?.state === "available"
+        ? "Experimental runtime is available for diagnostics only; production availability is not asserted."
+        : lane?.reason ??
+          (lane === undefined
+            ? "Runtime did not report this lane."
+            : availability === "unknown"
+              ? "Runtime did not determine availability."
+              : "No additional runtime reason was reported.");
 
   return (
     <article className="fm-start-compute-settings__lane" data-availability={availability}>
@@ -328,7 +396,11 @@ function RuntimeLaneCard({
         <h4>
           {laneKey.backend} · {laneKey.device}
         </h4>
-        <span className="fm-start-compute-settings__status" data-state={availability}>
+        <span
+          className="fm-start-compute-settings__status"
+          data-diagnostic-state={diagnostic?.state}
+          data-state={availability}
+        >
           {status}
         </span>
       </div>

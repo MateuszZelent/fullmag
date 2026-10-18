@@ -15,7 +15,7 @@ export function driveAmplitudeApm(drive: RegionalFieldDriveResource): number {
 }
 
 export function evaluateDriveWaveform(
-  drive: RegionalFieldDriveResource,
+  drive: Pick<RegionalFieldDriveResource, "waveform">,
   timeS: number,
 ): number {
   const waveform = drive.waveform;

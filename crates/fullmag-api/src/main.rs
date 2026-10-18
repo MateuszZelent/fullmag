@@ -19,7 +19,7 @@ use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +34,8 @@ use fullmag_runner::LivePreviewField;
 
 #[path = "accepted_fem_state.rs"]
 mod accepted_fem_state;
+#[path = "accepted_fem_gpu_state.rs"]
+mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
@@ -44,6 +46,7 @@ mod artifacts;
 mod assets;
 mod build_info;
 mod coordinator_persistence;
+pub(crate) mod compute_operator_env;
 mod development_handoff_validation;
 mod development_owner_control;
 mod development_consumer_readiness;
@@ -60,7 +63,10 @@ mod field_render_png;
 mod field_slice;
 mod field_store;
 mod live_command_journal;
+mod live_accepted_execution;
+mod live_accepted_projection;
 mod live_scene_preparation;
+mod docker_startup;
 mod openapi_v2;
 mod orientation_color;
 mod periodic_pairs_binary;
@@ -1505,7 +1511,7 @@ mod terminal_snapshot_route_tests {
         let app = Router::new()
             .route("/snapshot", post(sync_current_live_snapshot))
             .with_state(state.clone());
-        let body = json!({
+        let mut body = json!({
             "session_id": "terminal-session",
             "live_state": {
                 "status": "completed",
@@ -1539,6 +1545,11 @@ mod terminal_snapshot_route_tests {
                 "H_eff": { "values": [[0.0, 1.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } }
             }
         });
+
+        let bootstrap: CurrentLiveSnapshotRequest =
+            serde_json::from_value(body.clone()).expect("bootstrap request");
+        body["session"] = serde_json::to_value(default_current_live_state(&bootstrap).session)
+            .expect("full canonical bootstrap session");
 
         let response = app
             .oneshot(
@@ -1694,46 +1705,42 @@ mod scratch_session_lifecycle_tests {
         *state.current_live_realtime_before_send_hook.lock().await = Some(hook.clone());
         let mut events = state.current_live_realtime_events.subscribe();
 
+        let scope_header = {
+            let current = state.current_live_state.read().await;
+            current_live_publisher_scope_header(&state, current.as_ref().expect("current session"))
+        };
         let runner_state = state.clone();
         let runner_session_id = first.session_id.clone();
         let runner = tokio::spawn(async move {
-            sync_current_live_snapshot(
-                State(runner_state),
-                Json(CurrentLiveSnapshotRequest {
-                    frozen_spins_runtime_status: None,
-                    session_id: runner_session_id,
-                    session: None,
-                    session_status: None,
-                    metadata: None,
-                    mesh_workspace: None,
-                    stage_execution: None,
-                    simulation_preparation: None,
-                    run: None,
-                    live_state: None,
-                    coupled_checkpoint: None,
-                    latest_scalar_row: None,
-                    latest_fields: Some(
-                        serde_json::from_value(serde_json::json!({
-                            "H_eff": {
-                                "values": [[0.0, 1.0, 0.0]],
-                                "layout": { "grid_cells": [1, 1, 1] }
-                            }
-                        }))
-                        .expect("runner terminal field frame must deserialize"),
-                    ),
-                    replace_latest_fields: true,
-                    field_generation: Some(CurrentLiveFieldGeneration {
-                        run_id: "runner-test".to_string(),
-                        sequence: 1,
-                    }),
-                    preview_fields: None,
-                    clear_preview_cache: true,
-                    engine_log: None,
-                    solver_profile: None,
-                    fem_mesh: None,
-                }),
-            )
-            .await
+            use tower::ServiceExt;
+            let app = Router::new()
+                .route("/snapshot", post(sync_current_live_snapshot))
+                .route_layer(axum::middleware::from_fn(
+                    router_v2::middleware::session_scope::session_scope_middleware,
+                ))
+                .with_state(runner_state);
+            let body = json!({
+                "session_id": runner_session_id,
+                "latest_fields": {
+                    "H_eff": {
+                        "values": [[0.0, 1.0, 0.0]],
+                        "layout": { "grid_cells": [1, 1, 1] }
+                    }
+                },
+                "replace_latest_fields": true,
+                "field_generation": { "run_id": "runner-test", "sequence": 1 },
+                "clear_preview_cache": true,
+            });
+            let response = app.oneshot(axum::http::Request::post("/snapshot")
+                .header(CONTENT_TYPE, "application/json")
+                .header(router_v2::middleware::session_scope::HEADER_NAME, scope_header)
+                .body(axum::body::Body::from(serde_json::to_vec(&body).expect("request JSON")))
+                .expect("scoped runner request"))
+                .await;
+            if let Ok(response) = response.as_ref() {
+                assert_eq!(response.status(), StatusCode::OK);
+            }
+            response
         });
         tokio::time::timeout(std::time::Duration::from_secs(1), hook.admitted.notified())
             .await
@@ -2455,8 +2462,9 @@ async fn main() {
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
-        development_restart_transport: router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig::from_environment(),
+        development_restart_transport: router_v2::handlers::platform::development_transport::DevelopmentRestartTransportConfig::from_environment(),
         development_consumer_readiness: Default::default(),
+        local_compute_operator_token: router_v2::middleware::compute_operator_auth::local_compute_operator_token_from_environment().map(Arc::<str>::from),
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(
             &repo_root,
@@ -2510,6 +2518,8 @@ async fn main() {
         .await
         .expect("private development authoring restore must succeed before API startup");
 
+    live_accepted_projection::spawn(state.clone());
+
     let (owner_shutdown_tx, owner_shutdown_rx) = tokio::sync::oneshot::channel();
     let owner_control = development_owner_control::prepare(state.clone(), owner_shutdown_tx)
         .expect("private development owner configuration must be valid before API startup");
@@ -2520,6 +2530,10 @@ async fn main() {
         .route("/healthz", get(healthz))
         .route("/v2/platform/vision", get(vision))
         // ── Internal runner bridge (not part of the public browser contract) ──
+        .route(
+            docker_startup::STARTUP_ENDPOINT,
+            post(docker_startup::activate_current_live_startup),
+        )
         .route(
             "/v1/internal/live/current/display-selection",
             get(read_current_live_display_selection),
@@ -2564,6 +2578,9 @@ async fn main() {
             "/v1/internal/live/current/control/wait",
             get(wait_current_live_control),
         )
+        .route_layer(axum::middleware::from_fn(
+            router_v2::middleware::session_scope::session_scope_middleware,
+        ))
         // ── Diagnostics / feature flags ───────────────────────────────
         // ── Feature flags (diagnostics) ──────────────────────────────
         .route("/v2/platform/docs/physics", get(list_physics_docs))
@@ -2594,7 +2611,14 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8081);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let bind_ip = match std::env::var("FULLMAG_API_BIND_IP") {
+        Ok(value) => value
+            .parse::<IpAddr>()
+            .expect("FULLMAG_API_BIND_IP must be a valid IP address"),
+        Err(std::env::VarError::NotPresent) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        Err(error) => panic!("reading FULLMAG_API_BIND_IP failed: {error}"),
+    };
+    let addr = SocketAddr::new(bind_ip, port);
     info!(%addr, "starting fullmag-api");
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -2690,7 +2714,9 @@ async fn vision() -> Json<VisionResponse> {
 }
 
 pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
-    let output = Command::new("nvidia-smi")
+    let mut command = Command::new("nvidia-smi");
+    compute_operator_env::remove_local_compute_operator_token(&mut command);
+    let output = command
         .args([
             "--query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu",
             "--format=csv,noheader,nounits",
@@ -3242,7 +3268,20 @@ async fn sync_current_live_snapshot_impl(
     let preview_fields = req.preview_fields.clone();
     let clear_preview_cache = req.clear_preview_cache;
     let atomic_terminal_field_publish = req.replace_latest_fields;
+    // Preserve only a genuinely finished terminal replacement payload so the
+    // completed run remains inspectable. Initial replacement frames can still
+    // carry bootstrap fields and must use the large-grid filter.
+    let terminal_replacement = req.replace_latest_fields
+        && req
+            .live_state
+            .as_ref()
+            .is_some_and(|state| state.latest_step.finished);
+    let drop_live_magnetization =
+        state.feature_flags.disable_live_magnetization && !terminal_replacement;
     let session_id = req.session_id.clone();
+    if router_v2::middleware::session_scope::current_expected_session_scope().is_none()
+        && req.session.as_ref().map(|session| session.session_id.as_str()) != Some(session_id.as_str())
+    { return Err(ApiError::conflict("current_live_bootstrap_requires_full_snapshot")); }
     let owner_state = state.clone();
     sync_current_live_frame_update(
         &state,
@@ -3259,7 +3298,7 @@ async fn sync_current_live_snapshot_impl(
             if let Some(owner) = owner.as_ref() {
                 validate_terminal_snapshot_owner(&owner_state, next, &req, owner)?;
             }
-            apply_current_live_snapshot(next, req)
+            apply_current_live_snapshot_with_options(next, req, drop_live_magnetization)
         },
     )
     .await
@@ -3359,19 +3398,42 @@ async fn sync_current_live_heartbeat(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLiveHeartbeatRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    {
-        let current = state.current_live_state.read().await;
-        let snapshot = current
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        if snapshot.session.session_id != req.session_id {
-            return Err(ApiError::conflict(
-                "current_live_heartbeat_session_mismatch",
-            ));
-        }
+    let _transition = state.current_live_session_transition.lock().await;
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    if snapshot.session.session_id != req.session_id {
+        return Err(ApiError::conflict("current_live_heartbeat_session_mismatch"));
     }
+    require_current_live_publisher_scope(&state, snapshot)?;
+    let scope = current_live_publisher_scope(&state, snapshot);
+    let revision = snapshot.state_version;
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(&state).await;
-    Ok(Json(json!({ "accepted": true })))
+    Ok(Json(json!({ "accepted": true, "session_scope": scope, "revision": revision })))
+}
+
+pub(crate) fn current_live_publisher_scope(state: &AppState, snapshot: &SessionStateResponse) -> serde_json::Value {
+    json!({
+        "session_id": snapshot.session.session_id,
+        "session_epoch": router_v2::handlers::sessions::current_live_session_epoch(snapshot),
+        "request_scope_epoch": format!("{}:{}", state.request_scope_instance_id,
+            state.current_live_session_epoch.load(Ordering::Acquire)),
+    })
+}
+pub(crate) fn current_live_publisher_scope_header(state: &AppState, snapshot: &SessionStateResponse) -> String {
+    let encode = router_v2::middleware::session_scope::encode_uri_component;
+    format!("session={}&epoch={}&request_scope_epoch={}",
+        encode(&snapshot.session.session_id),
+        encode(&router_v2::handlers::sessions::current_live_session_epoch(snapshot)),
+        encode(&format!("{}:{}", state.request_scope_instance_id,
+            state.current_live_session_epoch.load(Ordering::Acquire))))
+}
+fn require_current_live_publisher_scope(state: &AppState, snapshot: &SessionStateResponse) -> Result<(), ApiError> {
+    if router_v2::middleware::session_scope::current_expected_session_scope().is_none() {
+        return Err(ApiError::conflict("current_live_publisher_scope_required"));
+    }
+    ensure_current_live_request_scope(snapshot, &format!("{}:{}", state.request_scope_instance_id,
+        state.current_live_session_epoch.load(Ordering::Acquire)))
 }
 
 async fn sync_current_live_session_frame(
@@ -3400,6 +3462,7 @@ async fn sync_current_live_runtime_frame(
     Json(frame): Json<CurrentLiveRuntimeFrameRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let session_id = frame.session_id.clone();
+    let drop_live_magnetization = state.feature_flags.disable_live_magnetization;
     sync_current_live_frame_update(
         &state,
         CurrentLiveSyncKind::Runtime,
@@ -3411,7 +3474,9 @@ async fn sync_current_live_runtime_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_runtime_frame(next, frame),
+        move |next| {
+            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization)
+        },
     )
     .await
 }
@@ -4193,11 +4258,16 @@ where
         let current = state.current_live_state.read().await;
         match current.as_ref() {
             Some(existing) if existing.session.session_id == session_id => {
+                require_current_live_publisher_scope(state, existing)?;
                 let previous_snapshot = existing.clone();
                 (previous_snapshot.clone(), Some(previous_snapshot))
             }
             Some(_) => return Err(ApiError::conflict("current_live_session_mismatch")),
-            _ => (
+            _ => {
+                if !matches!(kind, CurrentLiveSyncKind::Snapshot)
+                    || router_v2::middleware::session_scope::current_expected_session_scope().is_some()
+                { return Err(ApiError::conflict("current_live_publisher_bootstrap_scope_invalid")); }
+                (
                 default_current_live_state(&CurrentLiveSnapshotRequest {
                     frozen_spins_runtime_status: None,
                     session_id: session_id.to_string(),
@@ -4221,7 +4291,8 @@ where
                     fem_mesh: None,
                 }),
                 None,
-            ),
+                )
+            },
         }
     };
     // A legacy publisher may create the first session without going through
@@ -4377,6 +4448,8 @@ where
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
+    let accepted_revision = next.state_version;
+    let accepted_scope;
     if has_nonphysical_latest_step(&next) {
         // The transition lock also serializes delayed scalar flushes. Cancel
         // a pending physical sample before admitting diagnostic-only state.
@@ -4393,6 +4466,7 @@ where
                 .current_live_session_epoch
                 .store(epoch, Ordering::Release);
         }
+        accepted_scope = current_live_publisher_scope(state, &next);
         *current = Some(next);
     }
     if !matches!(kind, CurrentLiveSyncKind::AuthoringGridSnapshot) {
@@ -4434,7 +4508,7 @@ where
         );
     }
 
-    Ok(Json(serde_json::json!({ "status": "ok" })))
+    Ok(Json(serde_json::json!({ "status": "ok", "session_scope": accepted_scope, "revision": accepted_revision })))
 }
 
 #[allow(dead_code)]

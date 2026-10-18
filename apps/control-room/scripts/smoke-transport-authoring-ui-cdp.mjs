@@ -1346,12 +1346,12 @@ function regionListFixture() {
 function objectMetricsFixture(objectId) {
   return {
     energies: {
-      anisotropy: 0,
-      demag: 0,
-      dmi: 0,
-      exchange: 0,
-      total: 0,
-      zeeman: 0,
+      anisotropy: null,
+      demag: null,
+      dmi: null,
+      exchange: null,
+      total: null,
+      zeeman: null,
     },
     has_solver_sample: false,
     magnetization_average: { mx: 1, my: 0, mz: 0 },

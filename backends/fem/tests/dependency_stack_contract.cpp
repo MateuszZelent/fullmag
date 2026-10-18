@@ -13,8 +13,8 @@ void managed_fem_dependency_stack_uses_qualified_versions() {
         repo_root() / "docs" / "guides" / "mfem-host-parity-setup-ubuntu22.md");
 
     check(
-        dockerfile.find("ENV MFEM_REF=v4.9") != std::string::npos,
-        "managed FEM GPU image must pin MFEM v4.9");
+        dockerfile.find("ENV MFEM_REF=v4.10") != std::string::npos,
+        "managed FEM GPU image must pin MFEM v4.10");
     check(
         dockerfile.find("ENV HYPRE_REF=v3.1.0") != std::string::npos,
         "managed FEM GPU image must pin hypre v3.1.0");
@@ -66,8 +66,8 @@ void managed_fem_dependency_stack_uses_qualified_versions() {
             dockerfile.find("liblapack3", runtime_stage) != std::string::npos,
         "managed FEM GPU runtime image must provide PETSc BLAS/LAPACK dependencies");
     check(
-        guide.find("MFEM v4.9") != std::string::npos,
-        "host-parity guide must document MFEM v4.9");
+        guide.find("MFEM v4.10") != std::string::npos,
+        "host-parity guide must document MFEM v4.10");
     check(
         guide.find("hypre v3.1.0") != std::string::npos,
         "host-parity guide must document hypre v3.1.0");

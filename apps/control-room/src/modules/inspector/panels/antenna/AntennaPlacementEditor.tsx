@@ -28,12 +28,12 @@ interface Draft {
 
 interface Props {
   objectId: string;
-  scene: SceneResource | null;
+  scene: SceneResource | null; sceneScopeKey: string | null;
   status: string;
   refetch: () => void;
 }
 
-export function AntennaPlacementEditor({ objectId, scene, status, refetch }: Props) {
+export function AntennaPlacementEditor({ objectId, scene, sceneScopeKey, status, refetch }: Props) {
   const { api, resources, commands, authoringHistory, selection } = useKernel();
   const identity = useSessionResourceIdentity();
   const scope = sessionRequestScopeKey(identity);
@@ -64,7 +64,7 @@ export function AntennaPlacementEditor({ objectId, scene, status, refetch }: Pro
   let placement: ReturnType<typeof resolveAntennaPlacement> | null = null;
   let reason: string | null = null;
   try {
-    if (!scene || !scope || scene.scene?.id !== identity?.sessionId || status !== "ready" || realization.status !== "ready" || !realization.data) {
+    if (!scene || !scene.scene?.id?.trim() || !scope || sceneScopeKey !== scope || status !== "ready" || realization.status !== "ready" || !realization.data) {
       throw new Error("Current scene and session-scoped authoring bounds are required.");
     }
     if (!targetId) throw new Error("Select the magnetic target explicitly.");

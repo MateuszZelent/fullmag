@@ -33,7 +33,6 @@ const acceptanceDirectory =
 const ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY = "fm:analysis-view-preferences:v2";
 const DEFAULT_ANALYSIS_SURFACE = "dynamics";
 const SESSION_COLLECTION_PATH = "/v2/sessions";
-const DEVELOPMENT_BACKEND_FIXTURE_PATH = "/v2/platform/development-backend";
 const FIXTURE_SESSION_ID = "analysis-plots-fixture";
 const FIXTURE_SESSION_EPOCH = "00000000-0000-4000-8000-000000000017";
 const FIXTURE_REQUEST_SCOPE_EPOCH = "00000000-0000-4000-8000-000000000018";
@@ -3543,7 +3542,16 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
   const priorRenderedClick = await page.evaluate(() =>
     window.__FULLMAG_CHART_DIAGNOSTICS__?.lastRenderedClick ?? null,
   );
-  await page.mouse.click(coordinateTarget.x, coordinateTarget.y);
+  // Tooltip/layout work can move the canvas after the zoom measurement.
+  // Resolve the same rendered source row immediately before the single click.
+  const clickSpacing = await inspectFrequencyDomainPointSpacing(page, expected);
+  if (!clickSpacing.available || clickSpacing.nearestCompetitorDistancePx < 14) {
+    throw new Error(
+      `Rendered source row ${expected.rowId} is no longer isolated before click: ${JSON.stringify(clickSpacing)}`,
+    );
+  }
+  const clickTarget = clickSpacing.target;
+  await page.mouse.click(clickTarget.x, clickTarget.y);
   const request = await expectedModeRequest;
   const modeResponse = await expectedModeResponse;
   if (!request || !modeResponse) {
@@ -3583,6 +3591,7 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
       requestSeen: Boolean(request),
       responseSeen: Boolean(modeResponse),
       targetCoordinate: coordinateTarget,
+      clickTarget,
       zoomEvidence,
     };
     mkdirSync(acceptanceDirectory, { recursive: true });
@@ -3732,6 +3741,7 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
   }
   return {
     coordinateTarget,
+    clickTarget,
     zoomEvidence,
     expectedModePath,
     fieldId: expected.fieldId,
@@ -4136,47 +4146,6 @@ async function installAnalysisDatasetFixtureRoutes(
     table_id: datasetRef,
     total_rows: 256,
   };
-  await page.route(`**${DEVELOPMENT_BACKEND_FIXTURE_PATH}`, async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    const headers = {
-      "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "*",
-      "access-control-allow-methods": "GET, OPTIONS",
-      "access-control-allow-origin": "*",
-      "access-control-expose-headers": "x-api-contract-version",
-      "x-api-contract-version": "1.0.0",
-    };
-    if (url.pathname !== DEVELOPMENT_BACKEND_FIXTURE_PATH) {
-      await route.fulfill({ body: "", headers, status: 404 });
-      return;
-    }
-    if (request.method() === "OPTIONS") {
-      await route.fulfill({ body: "", headers, status: 204 });
-      return;
-    }
-    if (request.method() !== "GET") {
-      await route.fulfill({ body: "", headers, status: 405 });
-      return;
-    }
-    await route.fulfill({
-      body: JSON.stringify({
-        schema_version: "1.0.0",
-        configured: false,
-        revision: 0,
-        state: "disabled",
-        current_build: null,
-        ready_build: null,
-        build_available: false,
-        build_request_id: null,
-        workspace_identity: null,
-        restart_available: false,
-        reason: "disabled",
-      }),
-      contentType: "application/json",
-      headers,
-      status: 200,
-    });
-  });
   await page.route(`**${SESSION_COLLECTION_PATH}`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());

@@ -38,16 +38,6 @@
   "public_api": {
     "parameters": [
       {
-        "python": "---",
-        "type": "---",
-        "default": "---",
-        "si_unit": "1",
-        "validation": "---",
-        "meaning": "---",
-        "backend_support": "---",
-        "problem_ir": "---"
-      },
-      {
         "python": "study.engine(backend)",
         "type": "`str`",
         "default": "`\"auto\"`",

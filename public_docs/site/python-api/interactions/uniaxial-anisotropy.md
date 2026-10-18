@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object uniaxi
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,9 +54,9 @@ fm.UniaxialAnisotropy(ku1, ku2=0.0, axis=(0,0,1))
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```fm.UniaxialAnisotropy.ku1``` | ```float``` | ```required``` | ```J/m^3``` | finite | first anisotropy constant | FEM/FDM CPU/GPU: IR; resolved support required | ```ku1``` |
-| ```fm.UniaxialAnisotropy.ku2``` | ```float``` | ```0.0``` | ```J/m^3``` | finite | second anisotropy constant | FEM/FDM CPU/GPU: IR; resolved support required | ```ku2``` |
-| ```fm.UniaxialAnisotropy.axis``` | ```tuple[float,float,float]``` | ```(0,0,1)``` | ```1``` | finite non-zero; normalized | easy axis | FEM/FDM CPU/GPU: IR; resolved support required | ```axis``` |
+| `fm.UniaxialAnisotropy.ku1` | `float` | `required` | `J/m^3` | finite | first anisotropy constant | FEM/FDM CPU/GPU: IR; resolved support required | `ku1` |
+| `fm.UniaxialAnisotropy.ku2` | `float` | `0.0` | `J/m^3` | finite | second anisotropy constant | FEM/FDM CPU/GPU: IR; resolved support required | `ku2` |
+| `fm.UniaxialAnisotropy.axis` | `tuple[float,float,float]` | `(0,0,1)` | `1` | finite non-zero; normalized | easy axis | FEM/FDM CPU/GPU: IR; resolved support required | `axis` |
 
 ### Stage-first example
 

@@ -6,6 +6,10 @@ import { useId, useState } from "react";
 import { Button } from "@/shared/ui/Button";
 
 import {
+  executionAvailabilityFor,
+  type ExecutionAvailability,
+} from "../model/executionAvailability";
+import {
   DEFAULT_RUN_OPTIONS,
   preflightLines,
   receiptText,
@@ -57,13 +61,17 @@ interface ReadyProps {
   readonly preflight: ScriptPreflight;
   readonly baseId: string;
   readonly onRun: (options: ScriptRunOptions) => void;
+  readonly executionAvailability?: ExecutionAvailability;
 }
 
-function ReadyView({ preflight, baseId, onRun }: ReadyProps) {
+function ReadyView({ preflight, baseId, onRun, executionAvailability }: ReadyProps) {
   const [options, setOptions] = useState<ScriptRunOptions>(DEFAULT_RUN_OPTIONS);
+  const availability = executionAvailabilityFor(executionAvailability, "auto");
   const blocked = refusalOf(preflight);
   const nextToScript = options.results === "next_to_script";
   const needsConfirm = nextToScript && !options.confirmOverwrite;
+  const selectedGpuUnavailable = options.device === "gpu" && !availability.gpu.enabled;
+  const runBlocked = blocked !== null || needsConfirm || selectedGpuUnavailable;
   const lines = preflight.facts ? preflightLines(preflight.facts) : [];
   return (
     <>
@@ -95,12 +103,24 @@ function ReadyView({ preflight, baseId, onRun }: ReadyProps) {
             value={options.device}
           >
             {DEVICE_CHOICES.map((choice) => (
-              <option key={choice.value} value={choice.value}>
-                {choice.label}
+              <option
+                disabled={choice.value === "gpu" && !availability.gpu.enabled}
+                key={choice.value}
+                title={choice.value === "gpu" && !availability.gpu.enabled ? availability.gpu.reason : undefined}
+                value={choice.value}
+              >
+                {choice.value === "gpu" && !availability.gpu.enabled
+                  ? `${choice.label} (unavailable)`
+                  : choice.label}
               </option>
             ))}
           </select>
         </label>
+        {!availability.gpu.enabled ? (
+          <p className="fm-start-inspector__note" role="status">
+            GPU is unavailable: {availability.gpu.reason}
+          </p>
+        ) : null}
         <label className="fm-start-run-check">
           <input
             checked={options.waitForSolve}
@@ -151,10 +171,19 @@ function ReadyView({ preflight, baseId, onRun }: ReadyProps) {
       <Button
         aria-describedby={`${baseId}-consent`}
         data-action="confirm-run"
-        disabled={blocked !== null || needsConfirm}
-        onClick={() => onRun(options)}
+        disabled={runBlocked}
+        onClick={() => {
+          if (runBlocked) return;
+          onRun(options);
+        }}
         size="sm"
-        title={needsConfirm ? "Tick the box to write results next to the script" : undefined}
+        title={
+          selectedGpuUnavailable
+            ? availability.gpu.reason
+            : needsConfirm
+              ? "Tick the box to write results next to the script"
+              : undefined
+        }
         type="button"
         variant="primary"
       >
@@ -166,6 +195,7 @@ function ReadyView({ preflight, baseId, onRun }: ReadyProps) {
 
 export interface ScriptRunPanelProps {
   readonly controller: ScriptRunController;
+  readonly executionAvailability?: ExecutionAvailability;
 }
 
 /**
@@ -173,7 +203,7 @@ export interface ScriptRunPanelProps {
  * come first; the consent itself is a native window the host opens, so nothing
  * on this page can answer it.
  */
-export function ScriptRunPanel({ controller }: ScriptRunPanelProps) {
+export function ScriptRunPanel({ controller, executionAvailability }: ScriptRunPanelProps) {
   const baseId = useId();
   const { phase } = controller;
   if (phase.kind === "idle") return null;
@@ -182,7 +212,12 @@ export function ScriptRunPanel({ controller }: ScriptRunPanelProps) {
       <h3 className="fm-start-kv__title" id={`${baseId}-title`}>
         Run in new window
       </h3>
-      <PhaseBody baseId={baseId} controller={controller} phase={phase} />
+      <PhaseBody
+        baseId={baseId}
+        controller={controller}
+        executionAvailability={executionAvailability}
+        phase={phase}
+      />
     </section>
   );
 }
@@ -190,11 +225,13 @@ export function ScriptRunPanel({ controller }: ScriptRunPanelProps) {
 function PhaseBody({
   baseId,
   controller,
+  executionAvailability,
   phase,
 }: {
   readonly baseId: string;
   readonly controller: ScriptRunController;
   readonly phase: RunPhase;
+  readonly executionAvailability?: ExecutionAvailability;
 }) {
   switch (phase.kind) {
     case "idle":
@@ -212,6 +249,7 @@ function PhaseBody({
             baseId={baseId}
             onRun={(options) => void controller.run(options)}
             preflight={phase.preflight}
+            executionAvailability={executionAvailability}
           />
           <Button
             data-action="cancel-run"

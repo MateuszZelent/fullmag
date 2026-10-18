@@ -49,6 +49,32 @@ Bezpośredni proces usługi poza service-ensure nie jest objęty tą serializacj
 Generator ofert i podłączenie tej metody do domyślnego packaged startup
 pozostają do implementacji; runtime konkurencji i awarii jest NOT VERIFIED.
 
+### Źródło konfiguracji w recovery
+
+Jawna konfiguracja operatora przekazana do recovery pozostaje źródłem
+konfiguracji usługi. Ścieżka `prepare_application_config(Some(...))` czyta
+przypięte surowe bajty i nie tworzy `runtime-services/APPLICATION.json`;
+recovery nie może wprowadzać drugiego, ukrytego źródła konfiguracji.
+
+Manifest `runtime_service_recovery_archive.v1` zawiera pole
+`application_binding` z dokładnie dwoma kluczami:
+
+```json
+{"mode":"external_only|persisted","raw_sha256":"<64 lowercase hex>"}
+```
+
+`external_only` oznacza, że `raw_sha256` jest równy `config_sha256` receiptu,
+a `APPLICATION.json` ma pozostać nieobecny. Replay odrzuca obecność tego pliku.
+`persisted` oznacza regularny, bezpiecznie odczytany `APPLICATION.json`, którego
+surowe bajty mają dokładnie wskazany hash. Oba warianty są sprawdzane pod
+pełnym zestawem recovery locków, przed utworzeniem archiwum lub prepared intent.
+
+Manifest bez `application_binding` zachowuje historyczny, bardziej restrykcyjny
+kontrakt i wymaga obecnego `APPLICATION.json`. Brak tego pola zachowuje 12
+obowiązkowych wpisów `archived_files` oraz dopuszcza wyłącznie istniejące logi
+listy producerów opisanej niżej; jego integralność obejmuje istniejący
+`archived_evidence_sha256`. Walidacja konfiguracji i replay pozostają fail-closed.
+
 ## Własność i kolejność
 
 Jedna blokada runtime-services/OWNER.lock obejmuje cały store. Jest stabilnym
@@ -178,7 +204,30 @@ przejściowy zachowuje politykę ponawiania z tym samym pin. Close unieważnia
 oczekujący preflight i zapobiega otwarciu socketu po unmount.
 
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
-się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,
+się według supervisor/lease/receipt. Wyczerpanie 5-sekundowego retry dla
+konkretnego `StoreWriterBusy` podczas okresowego uzgadniania host ledgeru
+odracza discovery, recovery adoption i nowe admission w tej iteracji. Nie
+zwalnia rezerwacji, nie omija dowodów ani nie kończy procesu schedulera.
+Już nadzorowane workery zachowują własny nadzór; pętla nadal odbiera ich
+zakończenia i obsługuje drain. Kolejna iteracja ponawia idempotentne
+uzgadnianie. Odroczenie nie zużywa limitu pustych iteracji schedulera.
+Inne błędy uzgadniania pozostają fatalne; nie są zamieniane w pusty ledger
+ani zgodę na nowe obliczenia. Ten wyjątek nie obejmuje błędów zapisów
+checkpointu lub zakończenia aktywnego workera.
+
+W fazie pracy cykliczny sampler zachowuje istniejący lease inventory także
+przy błędzie próbkowania. Wyłącznie typowany konflikt `StoreWriterBusy` może
+pominąć najwyżej pięć kolejnych cykli; szósty kończy się dotychczasową ścieżką
+Unknown/drain. Pierwsza próbka wymagana do startu pozostaje fail-closed.
+Odmowa admission przez ledger lub typowany konflikt przy jej obserwacji
+może być tolerowany przez najwyżej 60 sekund czasu monotonicznego. Nie
+przedłuża to ważności snapshotu: ledger nadal odmawia nowych rezerwacji na
+podstawie starej lub niezgodnej próbki. Błędy schematu, danych i generacji
+zwracane jako błędy pozostają fatalne. Wznowienie poprawnej obserwacji zeruje
+budżet odroczenia. Drain i błędy kanału sterowania nadal wymagają dołączenia
+trwającego samplera przed zakończeniem pętli.
+
+Błąd jednego schedulera drenuje drugi,
 lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.
 
 ## Eksport i dowody
@@ -251,3 +300,144 @@ transaction SessionStore. Drained wymaga istniejących pul o zgodnym ID, generac
 i pełnym zestawie zasobów. Znany brak/mismatch daje failed, błąd obserwacji daje
 unknown; oba stany kończą proces usługi błędem. Status dziecka unknown oznacza
 brak potwierdzonej obserwacji i nie jest deklaracją running ani exited.
+
+## Kontrolowane recovery pustego store — wymagany kontrakt
+
+Stan 16.10.2026: wymaganie implementacyjne; runtime NOT VERIFIED. Jawna lokalna
+komenda `fullmag runtime service-recover` ma osobny zakres od `service-ensure`.
+Nie wolno wywoływać jej automatycznie po timeout ani błędzie healthchecka.
+
+Operacja przypina dokładny SHA-256 konfiguracji i oryginalnych bajtów
+`OWNER.json`, owner token, process-start token, target, historyczny commit,
+snapshot oraz obie tożsamości i generacje pul. Wymaga zgodnego poprzedniego
+zapisu launch, a nowy lub niepewny launch blokuje odzyskanie. Tożsamość programu
+wykonującego recovery jest odnotowana osobno od tożsamości starego ownera.
+
+Kolejność blokad musi być zgodna z istniejącymi startup/launch/store/host-ledger
+transakcjami. Pod nimi trzeba potwierdzić jednocześnie:
+
+- wolną stabilną natywną blokadę starego ownera; nie wystarcza brak PID ani
+  stary heartbeat;
+- dokładnie dwa zgodne schedulery compute/preparation z terminalnym
+  `exited_success` oraz ograniczonymi, przypiętymi journalami `stdin-v1 drained`;
+- brak runów, batch intentów (również bez utworzonych runów), zadań recovery,
+  kolejek, manifestów, pinów i aktywnych lease;
+- zgodność aktualnych pul z przypiętymi generacjami;
+- brak aktywnego host inventory writera oraz brak niezwolnionych rezerwacji
+  hosta, również tentative, committed i quarantined; odmowa nie zwalnia ich
+  automatycznie. Historyczne rekordy `released` mogą pozostać wyłącznie po
+  walidacji przypiętych, trwałych dowodów zwolnienia. Cała historia pozostaje
+  niezmieniona, a host writer jest trzymany od walidacji do końca recovery.
+
+Przed publikacją zachowujemy niezmienione bytes konfiguracji, ownera, launch
+oraz dowodów quiescence w operacyjnym namespace `runtime-services`. Nie są
+one naukowym CAS ani nowym store. Trwały intent wiąże digest żądania ze starymi
+pinami i oczekiwanym terminalnym wynikiem. Publikacja zmienia wyłącznie stan
+potwierdzonego starego ownera na `Failed` i zachowuje jego tożsamość. Nie kasuje
+ani nie zastępuje owner locka i nie tworzy nowej puli CPU/GPU.
+
+Powtórzenie identycznego żądania jest idempotentne. Po niepewnej publikacji
+odczyt pod tymi samymi blokadami rozstrzyga wyłącznie zgodny intent i dokładny
+oczekiwany wynik; każdy inny owner, config, launch lub digest blokuje operację.
+Udane recovery nie jest readiness: dopiero osobny zwykły start może utworzyć
+nowego ownera i wykonać rzeczywisty probe dla jego generacji.
+
+Wymagane dowody obejmują: odmowę przy aktywnych blokadach i pracy, mismatch
+pinów, brak lub niezgodność journali, awarie przed i po publikacji ownera,
+identyczny replay, zachowanie wszystkich starych dowodów oraz rzeczywisty
+start i wykonanie GPU po odzyskaniu. Zielony source check nie potwierdza tych
+bramek runtime.
+
+Jawny interfejs CLI (implementacja i runtime nadal wymagają kwalifikacji):
+
+```text
+fullmag runtime service-recover --config <absolute-config> \
+  --request <readonly-request.json> --request-sha256 <raw-sha256>
+```
+
+Żądanie `runtime_service_recovery_request.v1` zawiera `request_id`,
+`config_sha256`, `owner_sha256`, `launch_sha256` oraz pełny typowany
+`expected_owner`. Digesty przypinają oryginalne bajty plików; porównanie
+semantyczne konfiguracji jest dodatkowym warunkiem, nie zamiennikiem tego pinu.
+
+Publiczny receipt `runtime_service_recovery.v1` wiąże `request_id`,
+`request_sha256`, `config_sha256`, `target_id`, `status=recovered`,
+`outcome=failed`, `owner_sha256_before`, `owner_state_after=failed` oraz
+`owner_sha256_after`. `archived_evidence_path` i `archived_evidence_sha256`
+przypinają manifest archiwum, a `archived_files` mapuje ograniczony zestaw
+oryginalnych plików na ich raw SHA-256. Logiczny inventory ma 12 obowiązkowych wpisów:
+`OWNER.json`, stabilny owner lock, `LAUNCH.json`, launch lock, startup gate,
+journale stdout obu schedulerów, cztery dokumenty zasobów/stanu przypiętych
+pul oraz `configuration.json`. Jeżeli scheduler zakończył się z
+`status=drained`, `shutdown_requested=true` i `pool_checkpoint_sequence=0`,
+checkpoint może nie istnieć: dokładna ścieżka trafia wtedy do
+`archived_absent_sources` z powodem `scheduler_checkpoint_not_published`,
+bez tworzenia pliku lub syntetycznego hasha. Natywna walidacja wiąże tę
+nieobecność z właściwym journalem i odrzuca brak po opublikowaniu checkpointu;
+suma `archived_files` i `archived_absent_sources` nadal musi pokrywać cały
+logiczny inventory. Archiwum może zawierać także wyłącznie rzeczywiście
+istniejące pliki z zamkniętej listy producerów: stdout i stderr publisherów
+`compute-publisher` i `preparation-publisher` oraz stderr obu schedulerów.
+Każdy taki plik jest regularny, bounded, odczytany bez podążania za linkiem i
+zachowany z raw SHA-256; wildcard ani nieznane nazwy są odrzucane. Klucze
+dokumentów runtime pozostają ścieżkami względem SessionStore; zarezerwowany
+`configuration.json` oznacza wyłącznie plik w archiwum, zawierający dokładne
+bajty zewnętrznej konfiguracji.
+Manifest wymaga `config_sha256` zgodnego z requestem i tym plikiem. Brakujący,
+dodatkowy lub zmieniony wpis odrzuca również replay. Archiwalny owner zawsze
+ma digest `owner_sha256_before`, a jego bieżący odpowiednik może przejść tylko
+do dokładnie przypiętego `owner_sha256_after`.
+
+Osobne pola
+`historical_build_commit`/`historical_build_snapshot` oraz
+`executor_build_commit`/`executor_build_snapshot` zachowują rozdział starego
+ownera i programu odzyskującego. `created_at` i `completed_at` opisują operację.
+Stan `prepared` jest wyłącznie trwałym etapem wewnętrznego intentu; helper
+Docker nie uznaje go za zakończone recovery.
+
+Autoryzacja hosta `fullmag.docker-runtime-recovery-authorization.v1` dodaje
+piny runu, dokładnych kontenerów i obrazów, certyfikatu storage i attestation
+mountów. Natywna komenda nie interpretuje pochodzenia Docker: pozostaje jedynym
+właścicielem blokad i mutacji SessionStore. Tylko jawny tryb
+`recreate --recover-idle-failure <authorization.json>` przekazuje ten request;
+zwykły start i `service-ensure` nie wykonują recovery.
+
+## Boot-relative ordering of compute-node samples
+
+Kolejność próbek tego samego node i bootu korzysta dodatkowo z prywatnego
+`boot_monotonic_ns`, pobieranego z zegara monotonicznego względem uruchomienia
+systemu. Wartość nie trafia do JSON snapshotu: v4 ledger zapisuje ją w
+niemutowalnym, content-addressed rekordzie `compute_node_sample_order.v2` pod
+`runtime-state/cas/snapshot-order-v2`,
+opublikowanym przed wskazaniem snapshotu jako bieżącego, a ten sam bounded GC
+usuwa wyłącznie nieosiągalne rekordy. Rekord wiąże digest pełnego snapshotu,
+`node_id` i `boot_id`; wcześniejsza walidacja snapshotu wiąże również jego
+owner stamp. Konflikt bytes dla tego samego digestu jest odrzucany.
+
+`collected_at` pozostaje czasem UTC używanym do freshness i admission. Brak
+rekordu oznacza snapshot zapisany przez starszego writera i zachowuje ścisłe
+porównanie UTC; starszy rekord z poprzedniego katalogu `snapshot-order` jest
+celowo ignorowany. Istniejący v2 uszkodzony, podlinkowany albo niedopasowany rekord
+zamyka ledger błędem; system nie tworzy syntetycznego watermarku ani nie
+porównuje zegarów między różnymi `boot_id`.
+
+Dowód bieżącej ścieżki Docker dotyczy Linux `CLOCK_BOOTTIME`. Native Windows
+boot identity i tick-source pozostają osobną kwalifikacją; ten kontrakt nie
+ogłasza ich równoważności bez takiego dowodu.
+
+## Kontrolowane odzyskanie po utracie exit receiptu workera
+
+Decyzja [ADR 0062](../adr/0062-worker-orphan-namespace-teardown.md) dodaje dwa
+jawne polecenia operatora: `--prepare-orphan-teardown --config <absolute>
+--request <absolute>` oraz `--recover-orphan-after-teardown --config <absolute>
+--request <absolute> --attestation <absolute>`. Nie są częścią zwykłego startu,
+restartu ani `service-ensure`. Korzystają z istniejących startup/launch/owner
+blokad, bounded no-follow odczytów i dokładnych raw pinów owner/config/launch.
+Native host ledger jest jedynym właścicielem zmian rezerwacji i SessionStore;
+Docker Engine teardown poświadcza osobno hostowy adapter.
+
+Zakończenie zwalnia zasób z osobnym proofem i zachowuje Consumed oraz nieznany
+wynik, bez worker exit receiptu, ponowienia Solve i uruchomienia schedulerów.
+Ścieżka nie zastępuje idle-owner recovery ani no-spawn cancellation. Szczegóły
+protokołu i bramek zawiera sekcja 13.31 specyfikacji compute-resource-execution.
+Runtime tej nowej ścieżki pozostaje **NOT VERIFIED**.

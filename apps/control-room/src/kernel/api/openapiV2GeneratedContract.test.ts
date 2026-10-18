@@ -21,6 +21,9 @@ describe("generated OpenAPI v2 transport", () => {
       ].get.responses["200"].headers;
     const expected = {
       "x-fullmag-artifact-generation-id": "string",
+      "x-fullmag-carrier-digest": "string",
+      "x-fullmag-carrier-id": "string",
+      "x-fullmag-carrier-revision": "string",
       "x-fullmag-component": "string",
       "x-fullmag-domain-generation-id": "string",
       "x-fullmag-encoding": "string",

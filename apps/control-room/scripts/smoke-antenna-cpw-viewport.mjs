@@ -86,6 +86,29 @@ try {
   }
   checks.push("three layer mount/unmount cycles release tracked geometry with active WebGL");
   await shot("cpw-restored");
+  const beforeCircuit = await read();
+  await page.getByRole("button", { name: "Toggle closed microstrip", exact: true }).click();
+  await wait(() => window.__antennaCpwViewport.read().meshes.some(mesh => mesh.parts?.length === 4));
+  await nextFrame(beforeCircuit.frames);
+  const closed = await read(), conductor = closed.meshes.find(mesh => mesh.id === "cpw-preview-source");
+  assert.equal(closed.contextLost, false); assert.ok(closed.width > 0 && closed.height > 0);
+  assert.equal(conductor.vertices, 64); assert.equal(conductor.indices, 336);
+  assert.deepEqual(conductor.parts.map(part => part.id), ["signal-custom", "return-custom", "inlet-custom", "outlet-custom"]);
+  assert.equal(conductor.color, closed.expectedGold);
+  // The inner rotation maps the 1.4 µm trace and two 0.2 µm end bridges to world Y.
+  close(conductor.max[1] - conductor.min[1], Math.fround(0.9e-6) - Math.fround(-0.9e-6));
+  const circuitPixels = await page.evaluate(() => window.__antennaCpwViewport.pixels());
+  assert.ok(circuitPixels.gold > 200, "Closed microstrip must remain visibly rendered");
+  await shot("microstrip-closed-circuit");
+  await page.waitForTimeout(600); assert.equal((await read()).frames, closed.frames, "Closed circuit redraws while idle");
+  evidence.push({ closed, circuitPixels }); checks.push("closed microstrip: four production preview parts, bridge-inclusive bounds, gold pixels, active WebGL and idle");
+  await page.getByRole("button", { name: "Toggle layer", exact: true }).click();
+  await wait(() => !window.__antennaCpwViewport.read().mounted && window.__antennaCpwViewport.read().geometries === 0 && window.__antennaCpwViewport.read().meshes.length === 0);
+  assert.equal((await read()).contextLost, false);
+  await page.getByRole("button", { name: "Toggle layer", exact: true }).click();
+  await wait(() => window.__antennaCpwViewport.read().mounted && window.__antennaCpwViewport.read().meshes.some(mesh => mesh.parts?.length === 4));
+  assert.equal((await read()).geometries, closed.geometries); assert.equal((await read()).contextLost, false);
+  checks.push("closed microstrip layer releases and restores tracked geometry without WebGL context loss");
   assert.deepEqual(errors, []);
 } catch (error) {
   failure = { message: error.message, stack: error.stack };

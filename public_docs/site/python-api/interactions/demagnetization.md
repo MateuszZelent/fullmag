@@ -34,7 +34,7 @@ The physical term or constraint is represented by the canonical IR object demag.
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
+| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
@@ -54,9 +54,9 @@ fm.Demag(model=None, variant=None, realization=None)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```fm.Demag.model``` | ```str or None``` | ```None``` | ```1``` | airbox, bem, fredkin_koehler, or fmm when supplied | demagnetization model | FEM/FDM CPU/GPU: IR; resolved support required | ```realization``` |
-| ```fm.Demag.variant``` | ```str or None``` | ```None``` | ```1``` | airbox variant auto, dirichlet, or robin; only with model=airbox | airbox boundary variant | FEM/FDM CPU/GPU: IR; resolved support required | ```realization.variant``` |
-| ```fm.Demag.realization``` | ```str or None``` | ```None``` | ```1``` | mutually exclusive with model | pre-resolved realization label | FEM/FDM CPU/GPU: IR; resolved support required | ```realization``` |
+| `fm.Demag.model` | `str or None` | `None` | `1` | airbox, bem, fredkin_koehler, or fmm when supplied | demagnetization model | FEM/FDM CPU/GPU: IR; resolved support required | `realization` |
+| `fm.Demag.variant` | `str or None` | `None` | `1` | airbox variant auto, dirichlet, or robin; only with model=airbox | airbox boundary variant | FEM/FDM CPU/GPU: IR; resolved support required | `realization.variant` |
+| `fm.Demag.realization` | `str or None` | `None` | `1` | mutually exclusive with model | pre-resolved realization label | FEM/FDM CPU/GPU: IR; resolved support required | `realization` |
 
 ### Stage-first example
 

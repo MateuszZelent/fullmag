@@ -19,6 +19,7 @@ import {
 } from "../api/codecs/savedSupportCodec";
 import {
   canonicalSavedGeometryJson,
+  isSavedOwnedSampleGeometry,
 } from "../api/savedGeometryIdentity";
 import {
   savedGeometryBinaryResourceKey,
@@ -118,8 +119,17 @@ export function resolveSavedFieldViewportEligibility(
     return unavailable("Saved geometry representation evidence is unsupported.");
   }
 
+  const ownedSamples = isSavedOwnedSampleGeometry(geometry);
   const descriptor = dataset.field.descriptor;
   const coverage = dataset.field.coverage;
+  if (ownedSamples && (
+    canonicalSavedGeometryJson(descriptor) !== canonicalSavedGeometryJson(geometry.dataset.descriptor)
+    || dataset.field.producer_id !== geometry.producer_id
+    || dataset.field.producer_version !== geometry.producer_version
+    || dataset.field.accepted_state != null || dataset.field.tensor_artifact.accepted_state != null
+  )) {
+    return unavailable("Saved inspection samples differ from their exact dataset producer or descriptor.");
+  }
   if (
     dataset.integrity !== "verified" ||
     dataset.field.plane !== "values" ||
@@ -154,9 +164,8 @@ export function resolveSavedFieldViewportEligibility(
   if (
     coverage.endian !== "little" ||
     (coverage.dtype !== "f32" && coverage.dtype !== "f64") ||
-    componentCount !== BigInt(3) ||
-    descriptor.quantity_id !== "m" ||
-    descriptor.unit !== "1" ||
+    (ownedSamples ? componentCount !== BigInt(descriptor.quantity_id === "V_electric" ? 1 : 3)
+      : componentCount !== BigInt(3) || descriptor.quantity_id !== "m" || descriptor.unit !== "1") ||
     totalElements === ZERO ||
     totalBytes === ZERO ||
     totalBytes > BigInt(SAVED_VIEWPORT_FIELD_MAX_BYTES) ||
@@ -165,7 +174,7 @@ export function resolveSavedFieldViewportEligibility(
     descriptor.function_space?.vector_dimension !== coverage.component_count
   ) {
     return unavailable(
-      "Saved viewport currently accepts only a real nodal m vector with unit 1.",
+      "Saved viewport requires a supported real field with matching units and sample components.",
     );
   }
 
@@ -181,7 +190,7 @@ export function resolveSavedFieldViewportEligibility(
     topology.positions.length !== topology.nodeCount * 3 ||
     support.nodeCount !== topology.nodeCount ||
     descriptor.layout_digest !== geometry.layout_digest ||
-    descriptor.topology_id !== geometry.topology_fingerprint ||
+    (!ownedSamples && descriptor.topology_id !== geometry.topology_fingerprint) ||
     descriptor.active_support.support_fingerprint !== geometry.support_fingerprint
   ) {
     return unavailable("Saved geometry, support, topology and field identities differ.");

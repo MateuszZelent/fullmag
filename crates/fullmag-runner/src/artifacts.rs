@@ -502,6 +502,9 @@ fn effective_execution_request(
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> ExecutionRequestProvenance {
     let device = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => {
+            normalize_execution_device(runtime_device(problem).unwrap_or("auto"))
+        }
         BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
             match inspection.requested_execution.device {
                 fullmag_ir::ExecutionDevice::Auto => "auto".to_string(),
@@ -798,6 +801,18 @@ fn count_periodic_pairs_by_id<T>(
 
 fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(antenna) => serde_json::json!({
+            "backend": "antenna_field_only",
+            "stage_id": antenna.stage_id,
+            "port_mode_id": antenna.port_mode_id,
+            "source_object_id": antenna.source_object_id,
+            "source_mesh_name": antenna.source_mesh.mesh_name,
+            "source_topology_fingerprint": antenna.source_mesh.topology_fingerprint_v6(),
+            "source_node_count": antenna.source_mesh.nodes.len(),
+            "source_element_count": antenna.source_mesh.cell_count(),
+            "field_sampling": antenna.field_sampling,
+            "magnetic_state_present": false,
+        }),
         BackendPlanIR::Fdm(fdm) => serde_json::json!({
             "backend": "fdm",
             "requested_periodicity": fdm.periodicity,
@@ -4320,6 +4335,7 @@ fn static_pbc_demag_pair_diagnostics(
 
 fn periodic_mesh(plan: &fullmag_ir::ExecutionPlanIR) -> Option<&fullmag_ir::MeshIR> {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => None,
         BackendPlanIR::Fem(fem) => Some(&fem.mesh),
         BackendPlanIR::FemEigen(fem) => Some(&fem.mesh),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(&fem.mesh),
@@ -4338,6 +4354,7 @@ fn periodic_material_fields(
     Option<&[f64]>,
 ) {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => (None, None, None, None),
         BackendPlanIR::Fem(fem) => (
             fem.ms_element_field.as_deref(),
             fem.a_element_field.as_deref(),
@@ -5678,6 +5695,18 @@ fn sanitize_layer_id(id: &str) -> String {
 
 pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(antenna) => serde_json::json!({
+            "backend": "antenna_field_only",
+            "stage_id": antenna.stage_id,
+            "port_mode_id": antenna.port_mode_id,
+            "source_object_id": antenna.source_object_id,
+            "source_mesh_name": antenna.source_mesh.mesh_name,
+            "source_topology_fingerprint": antenna.source_mesh.topology_fingerprint_v6(),
+            "source_node_count": antenna.source_mesh.nodes.len(),
+            "source_element_count": antenna.source_mesh.cell_count(),
+            "field_sampling": antenna.field_sampling,
+            "magnetic_state_present": false,
+        }),
         BackendPlanIR::AntennaExternalLeadInspection(inspection) => serde_json::json!({
             "backend": "antenna_external_lead_inspection",
             "stage_id": inspection.input.stage.id,

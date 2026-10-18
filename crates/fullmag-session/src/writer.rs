@@ -22,6 +22,30 @@ const OWNER_RECORD_PATH: &str = "WRITER.owner.json";
 #[derive(Debug)]
 pub struct StoreWriterBusy;
 
+#[derive(Debug, Clone, Copy)]
+enum WriterBusyConflict {
+    NativeDescriptor,
+    InProcessOtherThread,
+    DepthZero,
+}
+
+impl std::fmt::Display for WriterBusyConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::NativeDescriptor => "native descriptor",
+            Self::InProcessOtherThread => "inprocess otherthread",
+            Self::DepthZero => "depthzero",
+        })
+    }
+}
+
+fn writer_busy_error(root: &Path, conflict: WriterBusyConflict) -> anyhow::Error {
+    anyhow::Error::new(StoreWriterBusy).context(format!(
+        "session store writer is busy: root=`{}`, conflict={conflict}",
+        root.display()
+    ))
+}
+
 impl std::fmt::Display for StoreWriterBusy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("session store writer is busy")
@@ -45,12 +69,23 @@ struct OwnerRecord {
 // Owns only a successfully acquired native lock, including admission failures.
 struct NativeLock {
     file: File,
+    locked: bool,
+}
+
+impl NativeLock {
+    fn unlock(&mut self) -> std::io::Result<()> {
+        if self.locked {
+            self.file.unlock()?;
+            self.locked = false;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for NativeLock {
     fn drop(&mut self) {
         // dup/fork may keep the open file description alive after our close.
-        if let Err(error) = File::unlock(&self.file) {
+        if let Err(error) = self.unlock() {
             tracing::error!(%error, "could not release native writer lock");
         }
     }
@@ -91,10 +126,13 @@ impl Writer {
             if active.depth == 0 {
                 // A failed explicit unlock leaves a depth-zero sentinel and
                 // keeps the native descriptor open until this Writer drops.
-                return Err(StoreWriterBusy.into());
+                return Err(writer_busy_error(&self.root, WriterBusyConflict::DepthZero));
             }
             if active.thread != std::thread::current().id() {
-                return Err(StoreWriterBusy.into());
+                return Err(writer_busy_error(
+                    &self.root,
+                    WriterBusyConflict::InProcessOtherThread,
+                ));
             }
             let mut record = active.record.clone();
             record.heartbeat_at = chrono::Utc::now();
@@ -175,7 +213,7 @@ impl Drop for WriteTransaction {
             }
             // Unlock the shared open-file-description lock before closing our
             // descriptor. Cloned/inherited descriptors can outlive this token.
-            if let Err(error) = active.lock.file.unlock() {
+            if let Err(error) = active.lock.unlock() {
                 tracing::error!(%error, "could not unlock native writer descriptor; retaining it fail-closed");
                 return;
             }
@@ -201,13 +239,18 @@ fn open_lock_descriptor(root: &Path) -> Result<NativeLock> {
 
     match file.try_lock() {
         Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return Err(StoreWriterBusy.into()),
+        Err(TryLockError::WouldBlock) => {
+            return Err(writer_busy_error(
+                root,
+                WriterBusyConflict::NativeDescriptor,
+            ))
+        }
         Err(TryLockError::Error(error)) => {
             return Err(error).context("acquiring native session writer lock");
         }
     }
 
-    let mut lock = NativeLock { file };
+    let mut lock = NativeLock { file, locked: true };
     let mut descriptor = Vec::new();
     lock.file.read_to_end(&mut descriptor)?;
     if descriptor.is_empty() {
@@ -271,6 +314,7 @@ pub(crate) enum LocalFilesystemKind {
     LinuxBtrfs,
     LinuxTmpfs,
     LinuxOverlay,
+    DockerDesktopWindowsFolder,
     WindowsLocal,
 }
 
@@ -322,6 +366,13 @@ fn classify_local_filesystem(root: &Path) -> Result<LocalFilesystemKind> {
             0x9123_683e => Ok(LocalFilesystemKind::LinuxBtrfs),
             0x0102_1994 => Ok(LocalFilesystemKind::LinuxTmpfs),
             0x794c_7630 => Ok(LocalFilesystemKind::LinuxOverlay),
+            // Docker Desktop exposes an explicitly attested Windows folder as
+            // 9p.  Never admit 9p by filesystem name; the scoped adapter
+            // requires the profile, host evidence, and current mount grant.
+            0x0102_1997 => {
+                crate::docker_desktop_storage::admit(root)?;
+                Ok(LocalFilesystemKind::DockerDesktopWindowsFolder)
+            }
             _ => bail!(
                 "filesystem type 0x{kind:x} is not in the supported local filesystem set; power-loss durability is unverified"
             ),
@@ -345,6 +396,7 @@ fn classify_local_filesystem(root: &Path) -> Result<LocalFilesystemKind> {
         if !matches!(unsafe { GetDriveTypeW(volume.as_ptr()) }, 2 | 3 | 6) {
             bail!("non-local or unknown volume is not qualified for session writes");
         }
+        crate::docker_desktop_storage::reject_docker_owned_windows_root(&existing)?;
         return Ok(LocalFilesystemKind::WindowsLocal);
     }
     #[cfg(not(any(target_os = "linux", windows)))]

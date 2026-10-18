@@ -34,6 +34,14 @@ pub(crate) fn runtime_device_override(problem: &ProblemIR) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+fn effective_fdm_runtime_device(problem: &ProblemIR) -> Option<&str> {
+    let authored_device = runtime_device(problem);
+    if matches!(authored_device, Some("gpu") | Some("cuda")) {
+        return authored_device;
+    }
+    runtime_device_override(problem).or(authored_device)
+}
+
 pub(crate) fn runtime_precision(problem: &ProblemIR) -> &str {
     runtime_selection(problem)
         .and_then(|selection| selection.get("precision"))
@@ -48,7 +56,10 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     match std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref() {
         Some("cpu") => "cpu".to_string(),
         Some("cuda") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
+        Some("auto") => runtime_device(problem)
+            .unwrap_or("auto")
+            .replace("cuda", "gpu"),
+        None => effective_fdm_runtime_device(problem)
             .unwrap_or("auto")
             .replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
@@ -247,7 +258,7 @@ fn runtime_device_index(problem: &ProblemIR) -> Option<u32> {
 }
 
 pub(crate) fn runtime_fdm_policy(problem: &ProblemIR) -> &'static str {
-    match runtime_device(problem) {
+    match effective_fdm_runtime_device(problem) {
         Some("cpu") => "cpu",
         Some("cuda") | Some("gpu") => "cuda",
         _ => "auto",
@@ -509,8 +520,8 @@ mod tests {
     use super::{
         effective_fem_device_request_from_snapshot, effective_fem_device_request_from_sources,
         normalize_fdm_execution_policy, public_fdm_gpu_charge_device_request_from_sources,
-        require_public_fdm_gpu_charge_runtime_selection, resolve_fdm_engine_with_trail,
-        FemSelectionEnvSnapshot,
+        requested_registry_device_for_fdm, require_public_fdm_gpu_charge_runtime_selection,
+        resolve_fdm_engine_with_trail, runtime_device, runtime_fdm_policy, FemSelectionEnvSnapshot,
     };
     use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
     use fullmag_ir::{
@@ -731,6 +742,64 @@ mod tests {
             .fallback
             .expect("unavailable CUDA must remain visible for auto FDM");
         assert_eq!(fallback.reason, "fdm_cuda_unavailable");
+    }
+
+    #[test]
+    fn managed_cpu_override_resolves_cpu_without_fallback_while_script_stays_auto() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto"}),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+
+        let resolution = resolve_fdm_engine_with_trail(&problem)
+            .expect("managed CPU override should select the CPU engine");
+
+        assert_eq!(resolution.engine, FdmEngine::CpuReference);
+        assert!(resolution.fallback.is_none());
+        assert_eq!(runtime_device(&problem), Some("auto"));
+        assert_eq!(requested_registry_device_for_fdm(&problem), "cpu");
+        assert_eq!(runtime_fdm_policy(&problem), "cpu");
+    }
+
+    #[test]
+    fn managed_cpu_override_cannot_weaken_authored_gpu_request() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "gpu"}),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+
+        let resolution = resolve_fdm_engine_with_trail(&problem);
+        if super::native_fdm::is_cuda_available() {
+            let resolution = resolution
+                .expect("an authored GPU request must remain on CUDA when CUDA is available");
+            assert_eq!(resolution.engine, FdmEngine::CudaFdm);
+            assert!(resolution.fallback.is_none());
+        } else {
+            let error =
+                resolution.expect_err("an authored GPU request must not fall back to managed CPU");
+            assert!(error.message.contains("CUDA backend is not available"));
+        }
+        assert_eq!(runtime_device(&problem), Some("gpu"));
+        assert_eq!(requested_registry_device_for_fdm(&problem), "gpu");
+        assert_eq!(runtime_fdm_policy(&problem), "cuda");
     }
 
     #[test]

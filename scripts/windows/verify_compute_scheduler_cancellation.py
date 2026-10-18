@@ -21,6 +21,8 @@ from windows.verify_compute_cancellation_api import (
     _run_store_initializer,
     _task,
     _utc_now,
+    _valid_api_instance_id,
+    _valid_platform_health,
 )
 from windows.verify_compute_host_initialization import (
     _canonical_windows_path,
@@ -201,7 +203,7 @@ def _ensure_api(api: Path, repo: Path, environment: dict[str, str], port: int,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         record["pid"] = child.pid
-        health_path = "/v2/platform/development-backend"
+        health_path = "/v2/platform/health"
         deadline = time.monotonic() + API_START_TIMEOUT_SECONDS
         while True:
             if child.poll() is not None:
@@ -209,7 +211,9 @@ def _ensure_api(api: Path, repo: Path, environment: dict[str, str], port: int,
             try:
                 request = urllib.request.Request(f"http://127.0.0.1:{port}{health_path}")
                 with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-                    if response.status == 200:
+                    instance_id = response.headers.get("x-fullmag-api-instance")
+                    if response.status == 200 and _valid_api_instance_id(instance_id):
+                        evidence["api_instance_id"] = instance_id
                         break
             except (OSError, urllib.error.URLError):
                 if time.monotonic() >= deadline:
@@ -218,10 +222,12 @@ def _ensure_api(api: Path, repo: Path, environment: dict[str, str], port: int,
         status, body = _http_json(port, health_path, evidence, evidence_path)
         _check(
             "owned-api-ready",
-            status == 200 and isinstance(body, dict),
+            status == 200 and _valid_platform_health(body)
+            and _valid_api_instance_id(evidence.get("api_instance_id")),
             evidence, evidence_path, receipt,
             {"status": status, "body": body},
         )
+        record["api_instance_id"] = evidence["api_instance_id"]
         return child, record
     except BaseException as error:
         if child is not None:

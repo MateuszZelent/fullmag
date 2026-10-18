@@ -20,8 +20,40 @@ describe("bounded binary transport body", () => {
       },
       cancel() { cancelled = true; },
     }));
-    await expect(boundedBinaryResponse(response, 3).arrayBuffer()).rejects.toThrow(/budget/);
+    await expect(boundedBinaryResponse(response, 3).arrayBuffer()).rejects.toThrow("Binary response exceeds its streaming byte budget.");
     expect(cancelled).toBe(true);
+  });
+
+  it("preserves an upstream error rather than inventing a byte-budget failure", async () => {
+    const failure = new Error("upstream body failed");
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.error(failure); },
+    }));
+    await expect(boundedBinaryResponse(response, 3).arrayBuffer()).rejects.toBe(failure);
+  });
+
+  it("preserves an upstream AbortError identity", async () => {
+    const failure = new DOMException("owned abort", "AbortError");
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.error(failure); },
+    }));
+    await expect(boundedBinaryResponse(response, 3).arrayBuffer()).rejects.toBe(failure);
+  });
+
+  it("preserves the same budget cause for a direct stream consumer", async () => {
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(4)); },
+    }));
+    await expect(boundedBinaryResponse(response, 3).body!.getReader().read())
+      .rejects.toThrow("Binary response exceeds its streaming byte budget.");
+  });
+
+  it("keeps the native consumed-body failure on a second read", async () => {
+    const bounded = boundedBinaryResponse(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(4)); },
+    })), 3);
+    await expect(bounded.arrayBuffer()).rejects.toThrow("streaming byte budget");
+    await expect(bounded.arrayBuffer()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("rejects a body shorter than its declared length", async () => {

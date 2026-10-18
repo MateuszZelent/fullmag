@@ -18,6 +18,7 @@ import {
   runChip,
 } from "../model/scriptRowModel";
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
+import type { ExecutionAvailability } from "../model/executionAvailability";
 import { NEEDS_DESKTOP } from "../model/workspaceSource";
 import { useScriptRun } from "../model/useScriptRun";
 import { useScriptHistory, type ScriptHistoryState } from "../model/useWorkspaceScripts";
@@ -84,6 +85,7 @@ export interface ScriptInspectorProps {
   readonly thumbnailUrl?: (id: string) => string;
   /** The tab shown first (a deep link, or a test); Overview by default. */
   readonly initialTab?: ScriptTab;
+  readonly executionAvailability?: ExecutionAvailability;
 }
 
 function scriptDetailOf(detail: WorkspaceItemDetailState): ScriptDetail | undefined {
@@ -281,6 +283,7 @@ export function ScriptInspector({
   onSelectResult,
   thumbnailUrl,
   initialTab = "overview",
+  executionAvailability,
 }: ScriptInspectorProps) {
   const baseId = useId();
   const [tab, setTab] = useState<ScriptTab>(initialTab);
@@ -405,7 +408,7 @@ export function ScriptInspector({
       <InspectorTabs baseId={baseId} label="Script sections" onChange={setTab} tabs={TABS} value={tab} />
 
       <InspectorPanel baseId={baseId} tab={tab}>
-        {showRunNote ? <ScriptRunPanel controller={runner} /> : null}
+        {showRunNote ? <ScriptRunPanel controller={runner} executionAvailability={executionAvailability} /> : null}
 
         {tab === "overview" ? (
           <>

@@ -16,6 +16,10 @@ import type { ResourceInvalidationController } from "./ResourceInvalidationContr
 import type { ResourceKey } from "./resourceTypes";
 
 import { useResource } from "./useResource";
+import { useSceneResource, useMeshSharedDomainManifestResource } from "./geometryLifecycleResources";
+import { useGeometryRealizationResource } from "./useGeometryRealizationResource";
+import type { DecodedTopology } from "../api/codecs/types";
+import type { MeshRegionMembershipResource, MeshSharedDomainManifestResource } from "../api/apiTypes";
 import { PHYSICS_GRAPH_RESOURCE_KEY } from "./physicsGraphResources";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 
@@ -69,7 +73,7 @@ export function useCurrentTransportsResource(options: ResourceHookOptions = {}) 
     [api],
   );
   return useResource<CurrentTransportListResource>({
-    enabled: options.enabled && sessionIdentity !== null,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
     resourceKey,
@@ -86,7 +90,7 @@ export function useSpinTorquesResource(options: ResourceHookOptions = {}) {
     [api],
   );
   return useResource<SpinTorqueListResource>({
-    enabled: options.enabled && sessionIdentity !== null,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
     resourceKey,
@@ -103,7 +107,7 @@ export function useSpinTransportsResource(options: ResourceHookOptions = {}) {
     [api],
   );
   return useResource<SpinTransportListResource>({
-    enabled: options.enabled && sessionIdentity !== null,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
     resourceKey,
@@ -120,7 +124,7 @@ export function useSpinInterfacesResource(options: ResourceHookOptions = {}) {
     [api],
   );
   return useResource<SpinInterfaceListResource>({
-    enabled: options.enabled && sessionIdentity !== null,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
     resourceKey,
@@ -137,9 +141,51 @@ export function useOerstedFieldsResource(options: ResourceHookOptions = {}) {
     [api],
   );
   return useResource<OerstedFieldListResource>({
-    enabled: options.enabled && sessionIdentity !== null,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
     resourceKey,
+  });
+}
+
+export function useSpinAuthoringGeometryResource(options: ResourceHookOptions = {}) {
+  return useSceneResource(options);
+}
+
+export interface SpinInterfaceMeshEvidenceCarrier {
+  manifest: MeshSharedDomainManifestResource;
+  topology: DecodedTopology;
+  sideA: MeshRegionMembershipResource;
+  sideB: MeshRegionMembershipResource;
+  geometryRealizationRevision: number;
+}
+/** One revision-scoped owner fetches the existing binary topology and both certified memberships. */
+export function useSpinInterfaceMeshEvidenceResource(sideA: { objectId: string; regionId: string }, sideB: { objectId: string; regionId: string }) {
+  const { api } = useKernel();
+  const manifest = useMeshSharedDomainManifestResource();
+  const geometry = useGeometryRealizationResource(true);
+  const geometryPin = geometry.status === "ready" ? geometry.data : null;
+  const pin = manifest.status === "ready" && geometryPin && manifest.data?.geometry_realization_revision === geometryPin.realization_revision ? manifest.data : null;
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(JSON.stringify([
+    "spin-interface.mesh-evidence", geometryPin?.realization_revision ?? null, pin?.generation_id ?? null, pin?.topology_fingerprint ?? null, pin?.revision ?? null,
+    sideA.objectId, sideA.regionId, sideB.objectId, sideB.regionId,
+  ]));
+  const load = useCallback(async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }): Promise<SpinInterfaceMeshEvidenceCarrier | null> => {
+    if (!pin || !geometryPin || !sideA.objectId || !sideA.regionId || !sideB.objectId || !sideB.regionId) return null;
+    const options = { sessionScopeKey, signal };
+    const [topology, a, b] = await Promise.all([
+      api.meshing.sharedDomain.topology({ ...options, maxResponseBytes: 256 * 1024 * 1024 }),
+      api.data.meshRegionMembership(sideA.objectId, sideA.regionId, options),
+      api.data.meshRegionMembership(sideB.objectId, sideB.regionId, options),
+    ]);
+    if (topology.status !== "ready" || !a || !b) throw new Error("Accepted mesh topology and both region memberships are required.");
+    // This exact strong ETag token is authored by get_mesh_shared_domain_topology.
+    const expected = JSON.stringify(`mesh-shared-domain-topology:${pin.generation_id ?? "no-generation"}:${pin.topology_fingerprint}:${pin.revision}`);
+    if (topology.etag !== expected) throw new Error("Topology response belongs to a different mesh generation or revision.");
+    return { manifest: pin, topology: topology.data, sideA: a, sideB: b, geometryRealizationRevision: geometryPin.realization_revision };
+  }, [api, pin, geometryPin, sideA.objectId, sideA.regionId, sideB.objectId, sideB.regionId]);
+  return useResource<SpinInterfaceMeshEvidenceCarrier | null>({
+    enabled: sessionIdentity !== null && Boolean(pin && sideA.objectId && sideA.regionId && sideB.objectId && sideB.regionId),
+    load, resourceKey, resolveRevision: (carrier) => carrier?.manifest.revision ?? null,
   });
 }

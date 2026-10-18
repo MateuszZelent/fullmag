@@ -21,7 +21,8 @@ import { AntennaStudyStageComposer } from "./AntennaStudyStageComposer";
 
 function fixture(): SceneResource {
   return {
-    scene: { id: "A", name: "fixture", authoring_schema: "fixture", source_of_truth: "fixture" }, revision: 7,
+    scene: { id: "restored-model", name: "fixture", authoring_schema: "fixture", source_of_truth: "fixture" }, revision: 7,
+    objects: [{ id: "source", role: "antenna" }],
     antenna_field_solve_stages: [{
       id: "solve", source_object_id: "source", current_transport_id: "current",
       port_mode_ids: ["port-2"], model: "quasistatic_conduction_biot_savart3d",
@@ -47,7 +48,7 @@ describe("antenna Study composer scoped command and stable controls", () => {
     const root = createRoot(container as unknown as Element);
     try {
       const scene = fixture();
-      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" scene={scene} status="ready" />));
+      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" sceneScopeKey={sessionRequestScopeKey(mocks.identity)} scene={scene} status="ready" />));
       const pick = findElement(container, (element) => element.tagName === "SELECT", "port selector");
       const button = findElement(container, (element) => element.tagName === "BUTTON" && element.textContent === "Add Field Solve to Study", "enqueue button");
       expect(button.disabled).toBe(false);
@@ -60,7 +61,7 @@ describe("antenna Study composer scoped command and stable controls", () => {
       }));
       expect(pick.disabled).toBe(false);
       expect(button.disabled).toBe(true);
-      await act(async () => { root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" scene={{ ...scene, revision: 8 }} status="ready" />); });
+      await act(async () => { root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" sceneScopeKey={sessionRequestScopeKey(mocks.identity)} scene={{ ...scene, revision: 8 }} status="ready" />); });
       expect(findElement(container, (element) => element.tagName === "SELECT", "port selector")).toBe(pick);
       expect(pick.value).toBe("port-2");
       await act(async () => { finish({ status: "completed", message: "Reference added" }); });
@@ -69,7 +70,7 @@ describe("antenna Study composer scoped command and stable controls", () => {
       expect(container.textContent).toContain("Reference added");
       const unsupported = structuredClone(scene);
       unsupported.antenna_field_solve_stages![0].port_mode_ids = ["port-1", "port-2"];
-      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" scene={unsupported} status="ready" />));
+      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" sceneScopeKey={sessionRequestScopeKey(mocks.identity)} scene={unsupported} status="ready" />));
       expect(findElement(container, (element) => element.tagName === "SELECT", "port selector")).toBe(pick);
       expect(container.textContent).toContain("exactly one port mode");
       expect(container.textContent).not.toContain("Reference added");
@@ -86,12 +87,13 @@ describe("antenna Study composer scoped command and stable controls", () => {
     try {
       const scene = fixture();
       scene.antenna_field_solve_stages![0].port_mode_ids = ["port-1"];
-      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" scene={scene} status="ready" />));
+      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" sceneScopeKey={sessionRequestScopeKey(mocks.identity)} scene={scene} status="ready" />));
       const button = findElement(container, (element) => element.tagName === "BUTTON" && element.textContent === "Add Field Solve to Study", "enqueue button");
       await act(async () => { button.dispatchEvent(new TestEvent("click", { bubbles: true })); });
       const context = mocks.execute.mock.calls[0][1] as CommandContext;
+      const previousSceneScope = sessionRequestScopeKey(mocks.identity);
       mocks.identity = { sessionId: "B", sessionEpoch: "5", requestScopeEpoch: "5" };
-      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" scene={fixture()} status="ready" />));
+      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" sceneScopeKey={previousSceneScope} scene={fixture()} status="ready" />));
       expect(context.isCurrentSessionScope!()).toBe(false);
       await act(async () => { finish({ status: "completed", message: "Old session ACK" }); });
       expect(container.textContent).not.toContain("Old session ACK");
@@ -109,7 +111,7 @@ describe("antenna Study composer scoped command and stable controls", () => {
       const scene = fixture();
       scene.antenna_field_solve_stages![0].port_mode_ids = ["port-1", "port-2"];
       const before = structuredClone(scene);
-      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" scene={scene} status="ready" />));
+      await act(async () => root.render(<AntennaStudyStageComposer objectId="source" stageId="solve" sceneScopeKey={sessionRequestScopeKey(mocks.identity)} scene={scene} status="ready" />));
       const pick = findElement(container, (element) => element.tagName === "SELECT", "port selector");
       const button = findElement(container, (element) => element.tagName === "BUTTON" && element.textContent === "Add Field Solve to Study", "enqueue button");
       expect(container.textContent).toContain("exactly one port mode");

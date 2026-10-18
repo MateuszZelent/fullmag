@@ -129,11 +129,11 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | State persistence | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.save_state` | Public save entrypoint | Ownership test |
-| Serialization formats | `packages/fullmag-py/src/fullmag/init/state_io.py` | `save_magnetization`, `load_magnetization` | JSON/Zarr/HDF5 round-trip | Read/write tests |
+| Serialization formats | [`packages/fullmag-py/src/fullmag/init/state_io.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77) | [`save_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77), `load_magnetization` | JSON/Zarr/HDF5 round-trip | Read/write tests |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Runtime artifact access and state persistence entrypoint. | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Runtime artifact access and state persistence entrypoint. | Source-map validator and focused API tests |
-| Magnetization artifact serialization. | `packages/fullmag-py/src/fullmag/init/state_io.py` | `save_magnetization` | Magnetization artifact serialization. | Source-map validator and focused API tests |
+| Runtime artifact access and state persistence entrypoint. | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Runtime artifact access and state persistence entrypoint. | Source-map validator and focused API tests |
+| Magnetization artifact serialization. | [`packages/fullmag-py/src/fullmag/init/state_io.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77) | [`save_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77) | Magnetization artifact serialization. | Source-map validator and focused API tests |

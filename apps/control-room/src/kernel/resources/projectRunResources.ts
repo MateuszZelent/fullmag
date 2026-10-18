@@ -2,7 +2,13 @@
 
 import { useCallback, useRef } from "react";
 
-import type { ProjectRunListResource, ProjectRunResource, ProjectRunTaskCancellationRequest } from "../api/apiTypes";
+import type {
+  ProjectRunListResource,
+  ProjectRunMaterializationResource,
+  ProjectRunResource,
+  ProjectRunTaskCancellationRequest,
+  ProjectRunTaskRetryRequest,
+} from "../api/apiTypes";
 import { assertSolutionSetRunId, ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
 import { useResource } from "./useResource";
@@ -90,6 +96,22 @@ export function useProjectRunResource(projectId: string, runId: string | null) {
   });
 }
 
+export function useMaterializeProjectRun(projectId: string) {
+  const { api, resources } = useKernel();
+
+  return useCallback(
+    async (runId: string): Promise<ProjectRunMaterializationResource> => {
+      const materialization = await api.persistence.projects.materializeRun(projectId, runId);
+      const revision = materialization.catalog_revision;
+      resources.invalidate(projectRunResourceKey(projectId, runId), revision);
+      resources.invalidatePrefix(`project-runs:${encodeURIComponent(projectId)}:`, revision);
+      resources.invalidatePrefix(`project-batch-cases:${encodeURIComponent(projectId)}:`, revision);
+      return materialization;
+    },
+    [api, projectId, resources],
+  );
+}
+
 export function useCancelProjectRunTask(
   projectId: string,
   runId: string | null,
@@ -147,5 +169,76 @@ export function useCancelProjectRunTask(
       return cancellation;
     },
     [api, cursor, projectId, resources, runId],
+  );
+}
+
+export function useCancelProjectRunTaskById(projectId: string) {
+  const { api, resources } = useKernel();
+
+  return useCallback(
+    async (
+      runId: string,
+      taskId: string,
+      request: ProjectRunTaskCancellationRequest,
+    ) => {
+      const cancellation = await api.persistence.projects.cancelRunTask(
+        projectId,
+        runId,
+        taskId,
+        request,
+      );
+      resources.invalidate(
+        projectRunResourceKey(projectId, runId),
+        cancellation.catalog_revision,
+      );
+      resources.invalidatePrefix(
+        `project-runs:${encodeURIComponent(projectId)}:`,
+        cancellation.catalog_revision,
+      );
+      return cancellation;
+    },
+    [api, projectId, resources],
+  );
+}
+
+export function useRetryProjectRunTask(projectId: string) {
+  const { api, resources } = useKernel();
+  const requests = useRef(new Map<string, ProjectRunTaskRetryRequest>());
+
+  return useCallback(
+    async (runId: string, taskId: string, expectedCatalogRevision: number) => {
+      if (!Number.isSafeInteger(expectedCatalogRevision) || expectedCatalogRevision < 1) {
+        throw new Error("Refresh run details before retrying this task.");
+      }
+      const key = `${projectId}:${runId}:${taskId}`;
+      const previous = requests.current.get(key);
+      const request = previous ?? {
+        retry_id: crypto.randomUUID(),
+        expected_catalog_revision: expectedCatalogRevision,
+      };
+      requests.current.set(key, request);
+
+      try {
+        const retry = await api.persistence.projects.retryRunTask(
+          projectId,
+          runId,
+          taskId,
+          request,
+        );
+        requests.current.delete(key);
+        resources.invalidate(projectRunResourceKey(projectId, runId), retry.catalog_revision);
+        resources.invalidatePrefix(`project-runs:${encodeURIComponent(projectId)}:`, retry.catalog_revision);
+        resources.invalidatePrefix(`project-batch-cases:${encodeURIComponent(projectId)}:`, retry.catalog_revision);
+        return retry;
+      } catch (error) {
+        if (error instanceof ControlRoomApiError && error.code === "run_task_retry_revision_conflict") {
+          // This response proves that the new retry decision was not published.
+          requests.current.delete(key);
+        }
+        // Preserve the exact ID after transport or post-publication failures.
+        throw error;
+      }
+    },
+    [api, projectId, resources],
   );
 }

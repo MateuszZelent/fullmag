@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   normalizeOpenApiBuildIdentity,
+  validateDockerOpenApiReceipt,
   validateManagedOpenApiIdentity,
   validateManagedSnapshotOpenApiReceipt,
   validateNativeOpenApiReceipt,
@@ -19,14 +20,26 @@ const { values } = parseArgs({
     "expected-snapshot": { type: "string" },
     "native-receipt": { type: "string" },
     "managed-snapshot-receipt": { type: "string" },
+    "docker-assembly": { type: "string" },
+    "docker-export-receipt": { type: "string" },
     "expected-source-digest": { type: "string" },
   },
   allowPositionals: false,
 });
 let document;
 const snapshotReceipt = values["managed-snapshot-receipt"];
-if (snapshotReceipt !== undefined && values["native-receipt"] !== undefined) {
-  throw new Error("Native and managed snapshot receipts are mutually exclusive");
+const dockerAssembly = values["docker-assembly"];
+const dockerExportReceipt = values["docker-export-receipt"];
+if ((dockerAssembly === undefined) !== (dockerExportReceipt === undefined)) {
+  throw new Error("Docker assembly and export receipt are mutually required");
+}
+const receiptModeCount = [
+  values["native-receipt"] !== undefined,
+  snapshotReceipt !== undefined,
+  dockerAssembly !== undefined,
+].filter(Boolean).length;
+if (receiptModeCount > 1) {
+  throw new Error("Native, managed snapshot, and Docker export receipts are mutually exclusive");
 }
 if (snapshotReceipt !== undefined && values.input === undefined) {
   throw new Error("A managed snapshot receipt requires --input; Cargo fallback is not allowed");
@@ -34,11 +47,18 @@ if (snapshotReceipt !== undefined && values.input === undefined) {
 if (snapshotReceipt !== undefined && values["expected-source-digest"] === undefined) {
   throw new Error("A managed snapshot receipt requires an expected source digest");
 }
-if (values["expected-source-digest"] !== undefined && snapshotReceipt === undefined) {
+if (dockerAssembly !== undefined && values["expected-source-digest"] === undefined) {
+  throw new Error("A Docker export receipt requires an expected source digest");
+}
+if (values["expected-source-digest"] !== undefined &&
+    snapshotReceipt === undefined && dockerAssembly === undefined) {
   throw new Error("An expected source digest requires a managed snapshot receipt; no Cargo fallback");
 }
 if (values["native-receipt"] !== undefined && values.input === undefined) {
   throw new Error("A native receipt requires --input; Cargo fallback is not allowed");
+}
+if (dockerAssembly !== undefined && values.input === undefined) {
+  throw new Error("A Docker export receipt requires --input; Cargo fallback is not allowed");
 }
 if (values.input !== undefined) {
   if (!isAbsolute(values.input) || !values["expected-commit"] || !values["expected-snapshot"]) {
@@ -50,7 +70,58 @@ if (values.input !== undefined) {
     "Managed OpenAPI input",
   );
   document = JSON.parse(bytes.toString("utf8"));
-  if (snapshotReceipt !== undefined) {
+  const inputSha256 = createHash("sha256").update(bytes).digest("hex");
+  if (dockerAssembly !== undefined) {
+    if (!isAbsolute(dockerAssembly) || !isAbsolute(dockerExportReceipt)) {
+      throw new Error("Docker assembly and export receipt paths must be absolute");
+    }
+    const assemblyPath = resolve(dockerAssembly);
+    const proofPath = resolve(dockerExportReceipt);
+    if (resolve(values.input) !== resolve(dirname(proofPath), "stdout.raw.json")) {
+      throw new Error("Docker export input must be receipt-parent/stdout.raw.json");
+    }
+    const assemblyBytes = readBoundedRegularFile(
+      assemblyPath,
+      16 * 1024 * 1024,
+      "Docker assembly",
+    );
+    const proofBytes = readBoundedRegularFile(
+      proofPath,
+      16 * 1024 * 1024,
+      "Docker export receipt",
+    );
+    const packageRoot = resolve(dirname(assemblyPath), "package");
+    const apiBinaryPath = join(packageRoot, "bin", "fullmag-api");
+    const backendBuildReceiptPath = join(packageRoot, "backend-build-receipt.json");
+    const apiBinarySha256 = hashBoundedRegularFile(
+      apiBinaryPath,
+      512 * 1024 * 1024,
+      "Docker package fullmag-api",
+    );
+    const backendBuildReceiptBytes = readBoundedRegularFile(
+      backendBuildReceiptPath,
+      16 * 1024 * 1024,
+      "Docker backend build receipt",
+    );
+    validateDockerOpenApiReceipt(
+      document,
+      JSON.parse(assemblyBytes.toString("utf8")),
+      JSON.parse(proofBytes.toString("utf8")),
+      {
+        expectedCommit: values["expected-commit"],
+        expectedSnapshot: values["expected-snapshot"],
+        expectedSourceDigest: values["expected-source-digest"],
+        inputSha256,
+        inputByteLength: bytes.length,
+        inputPath: resolve(values.input),
+        assemblyPath,
+        packageRoot,
+        backendBuildReceiptPath,
+        apiBinarySha256,
+        backendBuildReceiptSha256: createHash("sha256").update(backendBuildReceiptBytes).digest("hex"),
+      },
+    );
+  } else if (snapshotReceipt !== undefined) {
     if (!isAbsolute(snapshotReceipt)) {
       throw new Error("Managed snapshot receipt path must be absolute");
     }
@@ -66,7 +137,7 @@ if (values.input !== undefined) {
         expectedCommit: values["expected-commit"],
         expectedSnapshot: values["expected-snapshot"],
         expectedSourceDigest: values["expected-source-digest"],
-        inputSha256: createHash("sha256").update(bytes).digest("hex"),
+        inputSha256,
         inputByteLength: bytes.length,
         receiptSha256: createHash("sha256").update(receiptBytes).digest("hex"),
       });
@@ -86,7 +157,6 @@ if (values.input !== undefined) {
       "Native OpenAPI receipt",
     );
     const receipt = JSON.parse(receiptBytes.toString("utf8"));
-    const inputSha256 = createHash("sha256").update(bytes).digest("hex");
     validateNativeOpenApiReceipt(
       document,
       receipt,
@@ -147,4 +217,43 @@ function readBoundedRegularFile(path, limit, label) {
   } finally {
     closeSync(handle);
   }
+}
+
+function hashBoundedRegularFile(path, limit, label) {
+  if (!isAbsolute(path)) throw new Error(`${label} path must be absolute`);
+  const metadata = lstatSync(path);
+  if (!metadata.isFile() || metadata.size > limit) {
+    throw new Error(`${label} must be a bounded regular file`);
+  }
+  const handle = openSync(path, constants.O_RDONLY |
+    (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = fstatSync(handle);
+    if (!sameFileMetadata(metadata, opened)) {
+      throw new Error(`${label} changed or is not a bounded regular file`);
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let remaining = opened.size;
+    while (remaining > 0) {
+      const count = readSync(handle, buffer, 0, Math.min(buffer.length, remaining), null);
+      if (count === 0) throw new Error(`${label} changed during read`);
+      hash.update(buffer.subarray(0, count));
+      remaining -= count;
+    }
+    const finished = fstatSync(handle);
+    const current = lstatSync(path);
+    if (!sameFileMetadata(opened, finished) || !sameFileMetadata(metadata, current)) {
+      throw new Error(`${label} changed during read`);
+    }
+    return hash.digest("hex");
+  } finally {
+    closeSync(handle);
+  }
+}
+
+function sameFileMetadata(left, right) {
+  return left.isFile() && right.isFile() &&
+    left.size === right.size && left.dev === right.dev && left.ino === right.ino &&
+    left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }

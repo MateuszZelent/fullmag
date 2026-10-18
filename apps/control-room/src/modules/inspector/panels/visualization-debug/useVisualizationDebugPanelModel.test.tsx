@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -90,6 +91,7 @@ describe("useVisualizationDebugPanelModel", () => {
     const observations: unknown[] = [];
     const kernel = {
       api: {
+        resourceCacheScope: randomUUID(),
         visualization: { acks: async () => ({ entries: [], revision: 0 }) },
       },
       bus: {},
@@ -471,13 +473,19 @@ describe("useVisualizationDebugPanelModel", () => {
     expect(meta).toHaveBeenCalledWith(
       "m",
       {
+        carrier_id: null,
+        expected_carrier_revision: null,
+        view: null,
         component: "full",
         scope_id: "magnet",
         scope_kind: "object",
         snapshot_id: "snapshot-4",
         stage_id: "relax",
       },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        sessionScopeKey: "session=session-17&epoch=epoch-17&request_scope_epoch=test-api%3A17",
+        signal: expect.any(AbortSignal),
+      }),
     );
     const latest = observations.at(-1)!;
     const observation = latest.viewports[0]?.carriers[0]?.observations[0];
@@ -725,6 +733,7 @@ function makeMountedKernel({
   const resources = new ResourceInvalidationController(bus);
   return {
     api: {
+      resourceCacheScope: randomUUID(),
       data: { fields: { meta } },
       sessions: {
         list: async () => ({

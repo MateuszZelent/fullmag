@@ -266,7 +266,7 @@ describe("StudyInspectorPanelModel", () => {
       run_id: "run-1",
       session_id: "session-1",
       session_epoch: "session-1@1",
-      request_scope_epoch: "api-instance:session-1",
+      request_scope_epoch: "test-api:1",
     };
     const scope = (
       resourceStatus: StageExecutionScope["resourceStatus"],
@@ -348,6 +348,12 @@ describe("StudyInspectorPanelModel", () => {
       }
     }
 
+    // Legacy runtime payloads use null when a session has no current run, even
+    // though the generated v2 resource type requires a string run_id.
+    const noCurrentRun = {
+      ...stageExecution,
+      run_id: null,
+    } as unknown as StageExecutionResource;
     for (const resourceStatus of ["ready", "stale", "error"] as const) {
       expect(
         stageExecutionForCurrentScope(

@@ -16,10 +16,16 @@ use std::sync::atomic::AtomicBool;
 
 pub(super) const STAGE_OUTPUT_NAME: &str = "antenna_external_lead_stage_output.v1.json";
 mod carrier;
-pub(super) use carrier::plan_carrier;
+pub(super) use carrier::{plan_carrier, plan_closed_loop_carrier};
 
 pub(super) fn is_carrier(plan: &fullmag_ir::ExecutionPlanIR) -> bool {
     matches!(plan.backend_plan, BackendPlanIR::AntennaExternalLeadInspection(_))
+        || plan.provenance
+        .notes
+        .iter()
+        .any(|note| matches!(note.as_str(),
+            "antenna_external_lead_inspection_carrier_only:no_llg_execution"
+            | "antenna_closed_loop_inspection_carrier_only:no_llg_execution"))
 }
 
 /// Real magnetic continuation is retained by the orchestrator for later stages,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import math
+
+import numpy as np
 from typing import Any
 
 from fullmag.model.geometry import (
@@ -121,6 +123,7 @@ def add_antenna_layout_parts_to_occ(
     geometry: MicrostripAntennaLayout | CPWAntennaLayout,
     *,
     scale: float = 1.0,
+    source_cut_offset_m: float | None = None,
 ) -> dict[str, list[tuple[int, int]]]:
     """Create OCC loft solids while preserving conductor-part ownership."""
     sections = geometry._sections()
@@ -154,6 +157,48 @@ def add_antenna_layout_parts_to_occ(
                 "has no OCC solid"
             )
         result[part_id] = part_tags
+    if isinstance(geometry, MicrostripAntennaLayout) and geometry.closed_loop:
+        for side in ("inlet", "outlet"):
+            part_id = getattr(geometry, f"{side}_connection_part_id")
+            length = getattr(geometry, f"{side}_connection_length_m")
+            width = getattr(geometry, f"{side}_connection_width_m")
+            offset = getattr(geometry, f"{side}_connection_offset_v_m")
+            u0 = -length if side == "inlet" else geometry.length_m
+            w0 = -1.5 * geometry.thickness_m - geometry.return_offset_m
+            w1 = geometry.thickness_m / 2
+            levels = [w0, w1]
+            if side == "inlet" and source_cut_offset_m is not None:
+                if not -geometry.thickness_m / 2 - geometry.return_offset_m < source_cut_offset_m < -geometry.thickness_m / 2:
+                    raise ValueError("source cut must lie strictly between signal and return")
+                levels.insert(1, source_cut_offset_m)
+            part_tags = []
+            for bottom, top in zip(levels, levels[1:]):
+                tag = gmsh.model.occ.addBox(u0 * scale, (offset - width / 2) * scale,
+                                          bottom * scale, length * scale, width * scale,
+                                          (top - bottom) * scale)
+                rotation = geometry.transform.rotation_matrix
+                translation = geometry.transform.translation_m
+                matrix = [value for row in range(3)
+                          for value in (*rotation[row], translation[row] * scale)] + [0, 0, 0, 1]
+                if matrix != [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]:
+                    gmsh.model.occ.affineTransform([(3, tag)], matrix)
+                part_tags.append((3, tag))
+            result[part_id] = part_tags
+        solids = [tag for tags in result.values() for tag in tags]
+        _, maps = gmsh.model.occ.fragment([solids[0]], solids[1:])
+        owners = {}
+        position = 0
+        for part_id, tags in result.items():
+            fragments = sorted({(int(dim), int(tag)) for mapping in maps[position:position + len(tags)]
+                                for dim, tag in mapping if int(dim) == 3})
+            position += len(tags)
+            if not fragments:
+                raise ValueError("loop fragmentation lost a conductor part")
+            for fragment in fragments:
+                if fragment in owners:
+                    raise ValueError("loop conductors overlap in volume")
+                owners[fragment] = part_id
+            result[part_id] = fragments
     if not result:
         raise ValueError(f"antenna layout '{geometry.geometry_name}' has no conductor solids")
     return result
@@ -193,6 +238,47 @@ def add_antenna_layout_terminal_physical_groups(
     one terminal face.  Overlapping part ownership or missing terminal caps is
     rejected before mesh generation.
     """
+    if isinstance(geometry, MicrostripAntennaLayout) and geometry.closed_loop:
+        parts = (geometry.signal_part_id, geometry.return_part_id,
+                 geometry.inlet_connection_part_id, geometry.outlet_connection_part_id)
+        for marker, part_id in enumerate(parts, 1):
+            gmsh.model.addPhysicalGroup(3, [tag for dim, tag in part_tags_by_id[part_id]], tag=marker)
+            gmsh.model.setPhysicalName(3, marker, part_id)
+        solids = [tag for tags in part_tags_by_id.values() for tag in tags]
+        surfaces = [abs(tag) for dim, tag in gmsh.model.getBoundary(solids, combined=True, oriented=False)
+                    if dim == 2]
+        gmsh.model.addPhysicalGroup(2, surfaces, tag=1)
+        gmsh.model.setPhysicalName(2, 1, "loop_exterior")
+        markers = {}
+        inverse = np.linalg.inv(geometry.transform.rotation_matrix)
+        origin = [value * scale for value in geometry.transform.translation_m]
+        tolerance = max(geometry.length_m * scale, 1.0) * 1e-12
+        for part_id in geometry.conductor_part_ids:
+            part_surfaces = {abs(tag) for dim, tag in gmsh.model.getBoundary(
+                part_tags_by_id[part_id], combined=True, oriented=False) if dim == 2}
+            for selector, side, plane in (("local_u_min", "inlet", 0.0),
+                                          ("local_u_max", "outlet", geometry.length_m * scale)):
+                bridge_surfaces = {abs(tag) for dim, tag in gmsh.model.getBoundary(
+                    part_tags_by_id[getattr(geometry, f"{side}_connection_part_id")],
+                    combined=True, oriented=False) if dim == 2}
+                selected = sorted(part_surfaces & bridge_surfaces)
+                if not selected:
+                    raise ValueError(f"loop has no actual {part_id}/{side} contact interface")
+                for surface in selected:
+                    vertices = gmsh.model.getBoundary([(2, surface)], recursive=True, oriented=False)
+                    points = [gmsh.model.getValue(0, abs(tag), []) for dim, tag in vertices if dim == 0]
+                    if not points or any(abs(sum(inverse[0][i] * (point[i] - origin[i])
+                                                   for i in range(3)) - plane) > tolerance for point in points):
+                        raise ValueError("loop contact interface is not on the authored local-u plane")
+                    if gmsh.model.occ.getMass(2, surface) <= 0.0:
+                        raise ValueError("loop contact interface must have positive area")
+                marker = antenna_terminal_marker(object_id or geometry.geometry_name, part_id, selector)
+                if marker in {1, 2} or marker in markers.values():
+                    raise ValueError("loop terminal marker collision")
+                gmsh.model.addPhysicalGroup(2, selected, tag=marker)
+                gmsh.model.setPhysicalName(2, marker, f"antenna_terminal:{part_id}:{selector}")
+                markers[(part_id, selector)] = marker
+        return markers
     all_volume_tags = [
         int(tag)
         for part_tags in part_tags_by_id.values()

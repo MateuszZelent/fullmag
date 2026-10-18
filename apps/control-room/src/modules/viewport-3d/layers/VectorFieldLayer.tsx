@@ -551,12 +551,12 @@ function useTrackedVectorGlyphResources({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          depthWrite: depthPolicy.depthWrite,
-          depthTest: depthPolicy.depthTest,
+          depthWrite: glyphPolicy.depthWrite,
+          depthTest: glyphPolicy.depthTest,
           side: glyphPolicy.side,
         }),
       ),
-    [depthPolicy.depthTest, depthPolicy.depthWrite, glyphPolicy, tracker],
+    [glyphPolicy, tracker],
   );
 
   useEffect(
@@ -572,7 +572,7 @@ function useTrackedVectorGlyphResources({
     [material, tracker],
   );
 
-  return { glyphPolicy, headGeometry, material, shaftGeometry };
+  return { depthPolicy, glyphPolicy, headGeometry, material, shaftGeometry };
 }
 
 function useVectorGlyphMaterialSync({
@@ -1232,7 +1232,7 @@ export function VectorFieldLayer({
     () => resolveVectorGlyphCapacity(glyphCount),
     [glyphCount],
   );
-  const { glyphPolicy, headGeometry, material, shaftGeometry } =
+  const { depthPolicy, glyphPolicy, headGeometry, material, shaftGeometry } =
     useTrackedVectorGlyphResources({ renderOnTop, tracker });
   const instanceColorAttr = useVectorGlyphInstanceColorAttribute(capacity);
   const instanceColorAuditContext = useMemo<Viewport3DInstanceColorAuditContext>(
@@ -1366,6 +1366,8 @@ export function VectorFieldLayer({
     <>
       <instancedMesh
         args={[shaftGeometry, material, capacity]}
+        material-depthTest={depthPolicy.depthTest}
+        material-depthWrite={depthPolicy.depthWrite}
         frustumCulled={false}
         key={`vector-shaft-${capacity}`}
         ref={shaftRef}
@@ -1373,6 +1375,8 @@ export function VectorFieldLayer({
       />
       <instancedMesh
         args={[headGeometry, material, capacity]}
+        material-depthTest={depthPolicy.depthTest}
+        material-depthWrite={depthPolicy.depthWrite}
         frustumCulled={false}
         key={`vector-head-${capacity}`}
         ref={headRef}

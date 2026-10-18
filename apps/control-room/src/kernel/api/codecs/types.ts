@@ -2,7 +2,12 @@ export type DecodedFieldVectorIndexing =
   | "explicit_node_indices"
   | "full_domain"
   | "legacy_count_only"
-  | "sampled_node_indices";
+  | "sampled_node_indices"
+  | "source_nodes"
+  | "sample_nodes"
+  | "point_samples"
+  | "tet4_cell_local_nodes"
+  | "cell_centers";
 
 export type DecodedFieldVectorScopeKind =
   | "airbox"
@@ -14,18 +19,28 @@ export type DecodedFieldVectorScopeKind =
   | "region"
   | "selection";
 
-export type DecodedFieldVectorSourceKind = "live" | "observation_frame";
+export type DecodedFieldVectorSourceKind = "live" | "observation_frame" | "artifact_inspection";
+
+export interface DecodedArtifactFieldMapping {
+  indexing: "source_nodes" | "sample_nodes" | "point_samples" | "tet4_cell_local_nodes" | "cell_centers";
+  identityIds: BigUint64Array;
+  elementOrdinals: BigUint64Array | null;
+  localVertexIndices: Uint8Array | null;
+}
 
 export interface DecodedFieldVector {
   dtype: "float64";
   domainGenerationId?: string | null;
   fieldGenerationId?: string | null;
-  formatVersion?: 2 | 3 | 4 | 5;
+  formatVersion?: 2 | 3 | 4 | 5 | 6;
+  artifactMapping?: DecodedArtifactFieldMapping | null;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;
   meshTopologyHash?: string | null;
   meshTopologyRevision?: string | null;
   nComp: number;
+  /** Explicit presentation projection; raw transport does not assign one. */
+  projectionToken?: string;
   nodeIndices?: readonly number[] | Uint32Array | null;
   pointCount: number;
   quantityId: string;
@@ -43,7 +58,8 @@ export interface DecodedComplexFieldVector {
   dtype: "complex128";
   domainGenerationId?: string | null;
   fieldGenerationId?: string | null;
-  formatVersion?: 2 | 3 | 4 | 5;
+  formatVersion?: 2 | 3 | 4 | 5 | 6;
+  artifactMapping?: DecodedArtifactFieldMapping | null;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;
   meshTopologyHash?: string | null;
