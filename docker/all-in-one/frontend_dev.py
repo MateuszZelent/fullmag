@@ -632,7 +632,9 @@ def _volume_identity(inputs: DevelopmentInputs) -> dict[str, Any]:
     return value
 
 
-def _validate_volume_owner(inputs: DevelopmentInputs) -> dict[str, Any]:
+def _validate_volume_owner(
+    inputs: DevelopmentInputs, *, allow_missing_freeze_root: bool = False
+) -> dict[str, Any]:
     identity = _volume_identity(inputs)
     _assert_no_links(VOLUME_OWNER_MARKER, "frontend volume owner marker")
     info = VOLUME_OWNER_MARKER.lstat()
@@ -657,7 +659,13 @@ def _validate_volume_owner(inputs: DevelopmentInputs) -> dict[str, Any]:
     }
     if marker != expected:
         _fail("frontend volume marker does not match the manifest identity")
-    if not VOLUME_FREEZE_ROOT.is_dir() or VOLUME_FREEZE_ROOT.is_symlink():
+    try:
+        freeze_root = VOLUME_FREEZE_ROOT.lstat()
+    except FileNotFoundError:
+        if allow_missing_freeze_root:
+            return identity
+        _fail("volume-owned frozen input directory is missing or unsafe")
+    if not stat.S_ISDIR(freeze_root.st_mode) or stat.S_ISLNK(freeze_root.st_mode):
         _fail("volume-owned frozen input directory is missing or unsafe")
     return identity
 
@@ -2167,7 +2175,7 @@ def start(stopping_event: Any) -> FrontendHandle:
     volume_only = inputs.manifest.get("storage_mode") == "docker_named_volume_v1"
     if volume_only:
         # Reject a missing or mismatched owner marker before creating any state.
-        _validate_volume_owner(inputs)
+        _validate_volume_owner(inputs, allow_missing_freeze_root=True)
     previous = _load_receipt()
     _reject_existing_owner(previous)
     allow_generated = _generated_gate(previous)
@@ -2175,6 +2183,8 @@ def start(stopping_event: Any) -> FrontendHandle:
     runtime_lock = _acquire_runtime_lock() if volume_only else None
     try:
         _prepare_state_directories()
+        if volume_only:
+            _ensure_directory(VOLUME_FREEZE_ROOT, "volume-owned frozen input directory")
         _validate_live_directories(inputs)
         _freeze_inputs(inputs, allow_generated=allow_generated)
     except Exception:
