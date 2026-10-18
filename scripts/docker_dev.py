@@ -1892,9 +1892,12 @@ def up(args: argparse.Namespace) -> None:
     # per-cache lease and terminal receipt govern that operation.  If Docker
     # later reports an unknown result, leave the owned containers and receipt
     # for explicit inspection instead of holding a host lease or retrying.
+    # A fresh-host control helper may itself need the canonical build lock.
+    # Resolve it before entering application preparation, never recursively.
+    run_id, run_root = _new_run_root(layout)
     with _direct_heavy_lock(layout):
         backend_start, _backend_input_root = _backend_start_inputs(
-            args, heavy_lock_held=True
+            args, run_root=run_root, run_id=run_id, heavy_lock_held=True
         )
     _assert_no_running_fullmag(compose_project, source_identity)
     # Keep startup_script opaque to this launcher.  The existing startup helper

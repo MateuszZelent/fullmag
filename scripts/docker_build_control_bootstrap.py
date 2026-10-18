@@ -268,12 +268,19 @@ def _heavy_build_lock(layout, storage_root, lock_factory=None):
             wait_timeout_seconds=BUILD_LOCK_WAIT_SECONDS,
         )
     try:
-        with lock_factory():
-            yield
+        lock_context = lock_factory()
+        lock_context.__enter__()
     except ControlHelperError:
         raise
     except Exception as error:
         raise ControlHelperError("Cannot acquire the canonical host heavy-build lock") from error
+    try:
+        yield
+    except BaseException as error:
+        if not lock_context.__exit__(type(error), error, error.__traceback__):
+            raise
+    else:
+        lock_context.__exit__(None, None, None)
 
 
 def _compose_document(project, worktree_id, context, reference, dockerfile_sha256, build_key):

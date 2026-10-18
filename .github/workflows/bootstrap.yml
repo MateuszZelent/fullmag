@@ -1090,12 +1090,20 @@ jobs:
 
       - name: Run Docker development volume contract tests
         run: |
-          python -B scripts/test_docker_build_control.py
-          python -B scripts/test_docker_build_volume_io.py
-          python -B scripts/test_docker_build_control_bootstrap.py
-          python -B scripts/test_docker_frontend_volume_cache.py
-          python -B scripts/test_docker_build_mount_audit.py
-          python -B scripts/test_docker_frontend_dev.py
-          python -B scripts/test_docker_backend_volume_cache.py
-          python -B scripts/test_fullmag_docker_runtime.py
-          python -B scripts/test_docker_host_ledger.py
+          failed=0
+          for test_file in \
+            scripts/test_docker_build_control.py \
+            scripts/test_docker_build_volume_io.py \
+            scripts/test_docker_build_control_bootstrap.py \
+            scripts/test_docker_frontend_volume_cache.py \
+            scripts/test_docker_build_mount_audit.py \
+            scripts/test_docker_frontend_dev.py \
+            scripts/test_docker_backend_volume_cache.py \
+            scripts/test_fullmag_docker_runtime.py \
+            scripts/test_docker_host_ledger.py \
+            scripts/test_docker_dev_volume_contracts.py; do
+            echo "::group::$test_file"
+            python -B "$test_file" || failed=1
+            echo "::endgroup::"
+          done
+          exit "$failed"

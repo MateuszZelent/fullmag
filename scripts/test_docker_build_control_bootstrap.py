@@ -362,6 +362,7 @@ class DockerBuildControlBootstrapTests(unittest.TestCase):
     def test_dockerfile_change_during_build_is_not_published(self):
         docker = FakeDocker()
         real_build = helper._build_with_compose
+        reference, _labels, _key = self._derived_identity()
 
         @contextmanager
         def tracked_lock():
@@ -382,7 +383,10 @@ class DockerBuildControlBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(helper.ControlHelperError, "changed while BuildKit was building"):
                 self._call()
         self.assertEqual(len(docker.popen_calls), 1)
-        self.assertEqual(len(docker.inspect_calls), 2)
+        self.assertEqual(
+            [call[0][5] for call in docker.inspect_calls],
+            [helper.DEVELOPMENT_BASE_REFERENCE, reference, reference],
+        )
         self.assertEqual(docker.processes[0].wait_calls, 1)
 
     def test_console_render_failure_does_not_stop_build_output_drain(self):
@@ -424,14 +428,27 @@ class DockerBuildControlBootstrapTests(unittest.TestCase):
 
     def test_terminal_build_failure_is_not_resubmitted(self):
         docker = FakeDocker(build_exit=17)
+
+        @contextmanager
+        def tracked_lock(*_args, **_kwargs):
+            docker.lock_held = True
+            try:
+                yield
+            finally:
+                docker.lock_held = False
+
+        import fullmag_storage
+
         with patch.dict(os.environ, {}, clear=True), \
                 patch.object(helper.subprocess, "run", side_effect=docker.run), \
-                patch.object(helper.subprocess, "Popen", side_effect=docker.popen):
+                patch.object(helper.subprocess, "Popen", side_effect=docker.popen), \
+                patch.object(fullmag_storage, "file_lock", side_effect=tracked_lock):
             with self.assertRaises(helper.ControlHelperTerminalError) as caught:
                 self._call()
         self.assertEqual(caught.exception.exit_code, 17)
         self.assertEqual(len(docker.popen_calls), 1)
         self.assertEqual(docker.processes[0].wait_calls, 1)
+        self.assertFalse(docker.lock_held)
 
 
 if __name__ == "__main__":
