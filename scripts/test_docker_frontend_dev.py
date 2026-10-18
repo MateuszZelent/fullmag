@@ -1009,6 +1009,40 @@ else:
                 )
 
                 parsed = self.module.read_inputs()
+                generated_config = {
+                    "compilerOptions": {},
+                    "include": [
+                        ".next-control-room-8080/types/**/*.ts",
+                        ".next-control-room-8080/dev/types/**/*.ts",
+                    ],
+                }
+                config_path = volume_root / "workspace/apps/control-room/tsconfig.json"
+                config_bytes = (json.dumps(generated_config, indent=2) + "\n").encode()
+                config_path.write_bytes(config_bytes)
+                generated_env = (
+                    '/// <reference types="next" />\r\n'
+                    '/// <reference types="next/image-types/global" />\r\n'
+                    'import "./.next-control-room-8080/dev/types/routes.d.ts";\r\n'
+                    'import "./.next-control-room-8080/dev/types/root-params.d.ts";\r\n'
+                    '\r\n'
+                    '// NOTE: This file should not be edited\r\n'
+                    '// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.\r\n'
+                ).encode()
+                env_path = volume_root / "workspace/apps/control-room/next-env.d.ts"
+                env_path.write_bytes(generated_env)
+                # Exercise the same repeat validation as check(handle), after
+                # the real Next writer has added its fixed dev type paths.
+                self.module._freeze_inputs(parsed, allow_generated=True)
+                self.module._freeze_inputs(parsed, allow_generated=True)
+                altered = dict(generated_config, compilerOptions={"strict": False})
+                config_path.write_text(json.dumps(altered, indent=2) + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(self.module.FrontendDevError, "unknown form"):
+                    self.module._freeze_inputs(parsed, allow_generated=True)
+                config_path.write_bytes(config_bytes)
+                env_path.write_bytes(generated_env + b"export const injected = true;\n")
+                with self.assertRaisesRegex(self.module.FrontendDevError, "unknown form"):
+                    self.module._freeze_inputs(parsed, allow_generated=True)
+                env_path.write_bytes(generated_env)
                 first_lock = self.module._acquire_runtime_lock(volume_inputs=parsed)
                 try:
                     with self.assertRaisesRegex(

@@ -685,6 +685,41 @@ def _volume_state_files(value: Any, label: str) -> dict[str, str]:
     return result
 
 
+def _next_generated_seed_variants(relative: str, frozen: bytes) -> tuple[bytes, ...]:
+    """Admit only the pinned Next dev writer's changes to generated inputs."""
+
+    if relative == "apps/control-room/tsconfig.json":
+        try:
+            document = json.loads(frozen)
+        except (ValueError, UnicodeError):
+            return ()
+        if not isinstance(document, dict):
+            return ()
+        includes = document.get("include", [])
+        if not isinstance(includes, list) or not all(isinstance(item, str) for item in includes):
+            return ()
+        includes = list(includes)
+        for entry in (f"{NEXT_DIST_DIR}/types/**/*.ts", f"{NEXT_DIST_DIR}/dev/types/**/*.ts"):
+            if entry not in includes:
+                includes.append(entry)
+        # Keep every compiler option and all other source configuration intact.
+        document["include"] = includes
+        output = (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode()
+    elif relative == "apps/control-room/next-env.d.ts":
+        output = (
+            '/// <reference types="next" />\n'
+            '/// <reference types="next/image-types/global" />\n'
+            f'import "./{NEXT_DIST_DIR}/dev/types/routes.d.ts";\n'
+            f'import "./{NEXT_DIST_DIR}/dev/types/root-params.d.ts";\n'
+            '\n'
+            '// NOTE: This file should not be edited\n'
+            '// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.\n'
+        ).encode()
+    else:
+        return ()
+    return (output, output.replace(b"\n", b"\r\n"))
+
+
 def _materialize_volume_seed(inputs: DevelopmentInputs, *, allow_generated: bool) -> None:
     """Refresh only files recorded as frontend seeds inside the owned volume."""
 
