@@ -10734,7 +10734,7 @@ mod tests {
         let error = legacy.reserve(&request).unwrap_err();
         assert!(error
             .to_string()
-            .contains("v2 host admission requires a v4 runtime generation"));
+            .contains("runtime-readiness host admission requires a v4 runtime generation"));
     }
 
     #[test]
@@ -10786,7 +10786,7 @@ mod tests {
         let error = legacy.reserve(&request).unwrap_err();
         assert!(error
             .to_string()
-            .contains("v2 host admission requires a v4 runtime generation"));
+            .contains("runtime-readiness host admission requires a v4 runtime generation"));
         assert!(legacy.read().unwrap().reservations.is_empty());
     }
 
