@@ -70,13 +70,25 @@ class FakeDocker:
                 "name": "fullmag-host-ledger-test",
                 "services": {
                     "backend": {
-                        "image": "incomplete-backend",
+                        "command": None,
+                        "entrypoint": None,
                         "environment": {
+                            "FULLMAG_DOCKER_HOST_EXECUTION": "1",
                             "FULLMAG_DOCKER_HOST_ID": environment["FULLMAG_DOCKER_HOST_ID"],
+                            "FULLMAG_HOST_LEDGER_ROOT": "/host-ledger/ledger",
+                            **{name: environment[name] for name in expected_names[:9]},
                         },
+                        "networks": {"default": None},
+                        "volumes": [{
+                            "type": "bind",
+                            "source": environment["FULLMAG_HOST_LEDGER_MOUNT_ROOT"],
+                            "target": ledger.MOUNT_TARGET,
+                            "bind": {"create_host_path": False},
+                        }],
                     },
                     "host-ledger-maintenance": maintenance,
                 },
+                "networks": {"default": {"name": "fullmag-host-ledger-test_default"}},
             })
         if args[0] == "run":
             name = args[args.index("--name") + 1]
@@ -260,21 +272,85 @@ class HostLedgerTests(unittest.TestCase):
 
     def test_overlay_passes_daemon_identity_to_backend(self):
         digest = "c" * 64
-        environment = {"FULLMAG_DOCKER_HOST_ID": digest}
-        document = {
-            "services": {
-                "backend": {"environment": {"FULLMAG_DOCKER_HOST_ID": digest}},
-                "host-ledger-maintenance": {},
-            }
+        environment = {
+            "FULLMAG_DOCKER_HOST_ID": digest,
+            "FULLMAG_HOST_LEDGER_PROFILE": ledger.PROFILE,
+            "FULLMAG_HOST_LEDGER_PROJECT_ID": "fullmag-test",
+            "FULLMAG_HOST_LEDGER_STORAGE_ROOT": "/var/lib/fullmag/storage",
+            "FULLMAG_HOST_LEDGER_BACKING_IMAGE": "/var/lib/fullmag/storage/build-volumes/host-ledger.img",
+            "FULLMAG_HOST_LEDGER_MOUNT_ROOT": "/mnt/fullmag-host-ledger-test",
+            "FULLMAG_HOST_LEDGER_LOCK_PATH": "/var/lib/fullmag/host-ledger.lock",
+            "FULLMAG_HOST_LEDGER_OWNER_MARKER": "/var/lib/fullmag/host-ledger.owner.json",
+            "FULLMAG_HOST_LEDGER_SIZE_BYTES": str(ledger.IMAGE_SIZE_BYTES),
+            "FULLMAG_HOST_LEDGER_MOUNT_TARGET": ledger.MOUNT_TARGET,
         }
-        ledger._validate_overlay_config(document, environment)
-        for backend_environment in (
-            {},
-            {"FULLMAG_DOCKER_HOST_ID": "d" * 64},
+        backend_environment = {
+            "FULLMAG_DOCKER_HOST_EXECUTION": "1",
+            "FULLMAG_DOCKER_HOST_ID": digest,
+            "FULLMAG_HOST_LEDGER_PROFILE": ledger.PROFILE,
+            "FULLMAG_HOST_LEDGER_PROJECT_ID": "fullmag-test",
+            "FULLMAG_HOST_LEDGER_STORAGE_ROOT": "/var/lib/fullmag/storage",
+            "FULLMAG_HOST_LEDGER_BACKING_IMAGE": "/var/lib/fullmag/storage/build-volumes/host-ledger.img",
+            "FULLMAG_HOST_LEDGER_MOUNT_ROOT": "/mnt/fullmag-host-ledger-test",
+            "FULLMAG_HOST_LEDGER_LOCK_PATH": "/var/lib/fullmag/host-ledger.lock",
+            "FULLMAG_HOST_LEDGER_OWNER_MARKER": "/var/lib/fullmag/host-ledger.owner.json",
+            "FULLMAG_HOST_LEDGER_SIZE_BYTES": str(ledger.IMAGE_SIZE_BYTES),
+            "FULLMAG_HOST_LEDGER_MOUNT_TARGET": ledger.MOUNT_TARGET,
+            "FULLMAG_HOST_LEDGER_ROOT": ledger.LEDGER_ROOT,
+        }
+        volume = {
+            "type": "bind",
+            "source": "/mnt/fullmag-host-ledger-test",
+            "target": ledger.MOUNT_TARGET,
+            "bind": {"create_host_path": False},
+        }
+        document = {
+            "name": "fullmag-test",
+            "services": {
+                "backend": {
+                    "command": None,
+                    "entrypoint": None,
+                    "environment": backend_environment,
+                    "networks": {"default": None},
+                    "volumes": [volume],
+                },
+                "host-ledger-maintenance": {},
+            },
+            "networks": {"default": {"name": "fullmag-test_default"}},
+        }
+        safe_overlay = ledger._validate_overlay_config(document, environment)
+        self.assertEqual(safe_overlay, {
+            "services": {"backend": {
+                "environment": backend_environment,
+                "volumes": [{**volume, "read_only": False}],
+            }}
+        })
+
+        invalid_overlays = []
+        for field, value in (
+            ("command", ["/bin/sh"]),
+            ("entrypoint", ["/bin/sh"]),
+            ("profiles", ["host-ledger-maintenance"]),
+            ("networks", {"custom": None}),
         ):
-            document["services"]["backend"]["environment"] = backend_environment
+            candidate = json.loads(json.dumps(document))
+            candidate["services"]["backend"][field] = value
+            invalid_overlays.append(candidate)
+        candidate = json.loads(json.dumps(document))
+        candidate["services"]["backend"]["environment"]["UNRELATED"] = "1"
+        invalid_overlays.append(candidate)
+        candidate = json.loads(json.dumps(document))
+        candidate["services"]["backend"]["volumes"].append(volume)
+        invalid_overlays.append(candidate)
+        candidate = json.loads(json.dumps(document))
+        candidate["services"]["backend"]["volumes"][0]["read_only"] = True
+        invalid_overlays.append(candidate)
+        candidate = json.loads(json.dumps(document))
+        candidate["networks"]["custom"] = {"name": "custom_default"}
+        invalid_overlays.append(candidate)
+        for candidate in invalid_overlays:
             with self.assertRaises(ledger.HostLedgerError):
-                ledger._validate_overlay_config(document, environment)
+                ledger._validate_overlay_config(candidate, environment)
 
         compose = Path(ledger.__file__).parents[1] / "compose.host-ledger.yaml"
         compose_source = compose.read_text(encoding="utf-8")

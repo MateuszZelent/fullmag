@@ -681,22 +681,97 @@ def _validate_maintenance_service(
         raise HostLedgerError("maintenance bind mount set is incomplete")
 
 
-def _validate_overlay_config(document: Mapping[str, Any], environment: Mapping[str, str]) -> None:
-    """Require the backend to carry the daemon identity used by the receipt."""
+def _validate_overlay_config(
+    document: Mapping[str, Any], environment: Mapping[str, str]
+) -> dict[str, Any]:
+    """Return only the explicitly owned, merge-safe backend overlay fields."""
     services = document.get("services")
     if not isinstance(services, Mapping):
         raise HostLedgerError("resolved host-ledger overlay has no services mapping")
     backend = services.get("backend")
     if not isinstance(backend, Mapping):
         raise HostLedgerError("resolved host-ledger overlay has no backend service")
+    allowed_backend_keys = {"command", "entrypoint", "environment", "networks", "volumes"}
+    if set(backend) - allowed_backend_keys:
+        raise HostLedgerError("resolved host-ledger backend has an unsupported Compose field")
+    if any(backend.get(key) is not None for key in ("command", "entrypoint")):
+        raise HostLedgerError("host-ledger backend cannot override the application command or entrypoint")
+
+    service_networks = backend.get("networks")
+    if service_networks is not None and service_networks not in (
+        {"default": None}, {"default": {}},
+    ):
+        raise HostLedgerError("host-ledger backend has a non-default network override")
+    networks = document.get("networks")
+    if networks is not None:
+        if not isinstance(networks, Mapping) or set(networks) - {"default"}:
+            raise HostLedgerError("host-ledger overlay has an unsupported network definition")
+        default_network = networks.get("default")
+        if default_network is not None:
+            if not isinstance(default_network, Mapping) or set(default_network) - {"name", "driver"}:
+                raise HostLedgerError("host-ledger default network has unexpected fields")
+            if default_network.get("driver", "bridge") != "bridge":
+                raise HostLedgerError("host-ledger default network driver is not the Compose default")
+            network_name = default_network.get("name")
+            if network_name is not None and (
+                not isinstance(network_name, str) or not network_name.endswith("_default")
+            ):
+                raise HostLedgerError("host-ledger default network name is not Compose-generated")
+    top_level_volumes = document.get("volumes")
+    if top_level_volumes not in (None, {}):
+        raise HostLedgerError("host-ledger overlay has an unsupported named volume")
+
     backend_environment = backend.get("environment")
     if not isinstance(backend_environment, Mapping):
         raise HostLedgerError("host-ledger backend environment is not a mapping")
-    expected = environment.get("FULLMAG_DOCKER_HOST_ID")
-    if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+    expected_host_id = environment.get("FULLMAG_DOCKER_HOST_ID")
+    if not isinstance(expected_host_id, str) or re.fullmatch(r"[0-9a-f]{64}", expected_host_id) is None:
         raise HostLedgerError("resolved Docker daemon identity is not a SHA-256 digest")
-    if backend_environment.get("FULLMAG_DOCKER_HOST_ID") != expected:
-        raise HostLedgerError("host-ledger backend Docker daemon identity differs from the resolved daemon")
+    environment_names = (
+        "FULLMAG_HOST_LEDGER_PROFILE", "FULLMAG_HOST_LEDGER_PROJECT_ID",
+        "FULLMAG_HOST_LEDGER_STORAGE_ROOT", "FULLMAG_HOST_LEDGER_BACKING_IMAGE",
+        "FULLMAG_HOST_LEDGER_MOUNT_ROOT", "FULLMAG_HOST_LEDGER_LOCK_PATH",
+        "FULLMAG_HOST_LEDGER_OWNER_MARKER", "FULLMAG_HOST_LEDGER_SIZE_BYTES",
+        "FULLMAG_HOST_LEDGER_MOUNT_TARGET",
+    )
+    expected_environment = {
+        "FULLMAG_DOCKER_HOST_EXECUTION": "1",
+        "FULLMAG_DOCKER_HOST_ID": expected_host_id,
+        "FULLMAG_HOST_LEDGER_ROOT": LEDGER_ROOT,
+    }
+    for name in environment_names:
+        value = environment.get(name)
+        if not isinstance(value, str) or not value:
+            raise HostLedgerError(f"resolved host-ledger backend environment is incomplete at {name}")
+        expected_environment[name] = value
+    if dict(backend_environment) != expected_environment:
+        raise HostLedgerError("host-ledger backend environment differs from the resolved contract")
+
+    expected_mount = {
+        "type": "bind",
+        "source": environment["FULLMAG_HOST_LEDGER_MOUNT_ROOT"],
+        "target": MOUNT_TARGET,
+        "read_only": False,
+        "bind": {"create_host_path": False},
+    }
+    volumes = backend.get("volumes")
+    if not isinstance(volumes, list) or len(volumes) != 1 or not isinstance(volumes[0], Mapping):
+        raise HostLedgerError("host-ledger backend must have exactly one controlled bind mount")
+    volume = volumes[0]
+    expected_volume_fields = set(expected_mount)
+    if set(volume) not in (expected_volume_fields, expected_volume_fields - {"read_only"}):
+        raise HostLedgerError("host-ledger backend bind mount has unexpected fields")
+    if (volume.get("type") != "bind"
+            or not _same_daemon_path(volume.get("source"), expected_mount["source"])
+            or volume.get("target") != expected_mount["target"]
+            or volume.get("read_only", False) is not False
+            or volume.get("bind") != expected_mount["bind"]):
+        raise HostLedgerError("host-ledger backend bind mount differs from the resolved contract")
+
+    return {"services": {"backend": {
+        "environment": expected_environment,
+        "volumes": [expected_mount],
+    }}}
 
 
 
@@ -709,7 +784,7 @@ def _render_maintenance(
     docker_callable: Callable[..., Any],
     compose_capture_runner: Callable[..., str] | None = None,
 ) -> dict[str, Any]:
-    """Resolve the versioned overlay with Compose, then retain maintenance only.
+    """Resolve the versioned overlay, freeze maintenance, and return safe backend fields.
 
     The source deliberately contains an incomplete backend service.  Compose is
     therefore the only supported resolver for interpolation, short syntax and
@@ -742,7 +817,7 @@ def _render_maintenance(
     services = document["services"]
     if set(services) != {"backend", "host-ledger-maintenance"}:
         raise HostLedgerError("host-ledger overlay service topology changed")
-    _validate_overlay_config(document, values)
+    backend_overlay = _validate_overlay_config(document, values)
     maintenance = services["host-ledger-maintenance"]
     if not isinstance(maintenance, dict):
         raise HostLedgerError("resolved maintenance service is not an object")
@@ -787,7 +862,7 @@ def _render_maintenance(
             environment=values,
             timeout=60,
         )
-    return document
+    return backend_overlay
 
 
 def _container_name(prefix: str, run_root: Path) -> str:

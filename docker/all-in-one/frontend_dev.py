@@ -467,7 +467,12 @@ def read_inputs(path: Path | None = None) -> DevelopmentInputs:
             "profile": volume_manifest["profile"],
             "role": volume_manifest["role"],
         }
-        owner_id = _hash_bytes(_canonical_json(identity_seed))
+        # The host volume planner hashes canonical JSON without the manifest LF.
+        owner_id = _hash_bytes(
+            json.dumps(
+                identity_seed, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode()
+        )
         if (
             volume_manifest["owner_id"] != owner_id
             or volume_manifest["volume_name"] != "fullmag-frontend-dev-v1-" + owner_id[:32]

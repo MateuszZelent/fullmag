@@ -2882,11 +2882,41 @@ class DockerRuntimeContract(unittest.TestCase):
             source.write_text("services: {}\n", encoding="utf-8")
             destination = MemoryDocument()
             image_id = "sha256:" + "a" * 64
+            environment = {
+                "FULLMAG_DOCKER_HOST_ID": "c" * 64,
+                "FULLMAG_HOST_LEDGER_PROFILE": host_ledger.PROFILE,
+                "FULLMAG_HOST_LEDGER_PROJECT_ID": "fullmag-runtime-test",
+                "FULLMAG_HOST_LEDGER_STORAGE_ROOT": "/var/lib/fullmag/storage",
+                "FULLMAG_HOST_LEDGER_BACKING_IMAGE": "/var/lib/fullmag/storage/build-volumes/host-ledger.img",
+                "FULLMAG_HOST_LEDGER_MOUNT_ROOT": "/mnt/fullmag-host-ledger-runtime-test",
+                "FULLMAG_HOST_LEDGER_LOCK_PATH": "/var/lib/fullmag/host-ledger.lock",
+                "FULLMAG_HOST_LEDGER_OWNER_MARKER": "/var/lib/fullmag/host-ledger.owner.json",
+                "FULLMAG_HOST_LEDGER_SIZE_BYTES": str(host_ledger.IMAGE_SIZE_BYTES),
+                "FULLMAG_HOST_LEDGER_MOUNT_TARGET": host_ledger.MOUNT_TARGET,
+            }
+            backend_environment = {
+                "FULLMAG_DOCKER_HOST_EXECUTION": "1",
+                "FULLMAG_HOST_LEDGER_ROOT": "/host-ledger/ledger",
+                **environment,
+            }
             rendered = {
+                "name": "fullmag-runtime-test",
                 "services": {
-                    "backend": {"environment": {}},
+                    "backend": {
+                        "command": None,
+                        "entrypoint": None,
+                        "environment": backend_environment,
+                        "networks": {"default": None},
+                        "volumes": [{
+                            "type": "bind",
+                            "source": environment["FULLMAG_HOST_LEDGER_MOUNT_ROOT"],
+                            "target": host_ledger.MOUNT_TARGET,
+                            "bind": {"create_host_path": False},
+                        }],
+                    },
                     "host-ledger-maintenance": {"image": image_id},
                 },
+                "networks": {"default": {"name": "fullmag-runtime-test_default"}},
                 "volumes": {},
             }
             captured = []
@@ -2898,13 +2928,11 @@ class DockerRuntimeContract(unittest.TestCase):
             with patch.object(
                 host_ledger, "_invoke",
                 return_value=(json.dumps(rendered), "", json.dumps(rendered)),
-            ), patch.object(host_ledger, "_validate_overlay_config"), patch.object(
-                host_ledger, "_validate_maintenance_service"
-            ):
-                result = host_ledger._render_maintenance(
+            ), patch.object(host_ledger, "_validate_maintenance_service"):
+                overlay = host_ledger._render_maintenance(
                     source,
                     destination,
-                    environment={"FULLMAG_HOST_LEDGER_PROFILE": host_ledger.PROFILE},
+                    environment=environment,
                     image_id=image_id,
                     docker_callable=lambda *args, **kwargs: self.fail(
                         "volume-only maintenance validation must use Compose stdin"
@@ -2912,7 +2940,18 @@ class DockerRuntimeContract(unittest.TestCase):
                     compose_capture_runner=compose_capture_runner,
                 )
 
-            self.assertEqual(result, rendered)
+            self.assertEqual(overlay, {
+                "services": {"backend": {
+                    "environment": backend_environment,
+                    "volumes": [{
+                        "type": "bind",
+                        "source": environment["FULLMAG_HOST_LEDGER_MOUNT_ROOT"],
+                        "target": host_ledger.MOUNT_TARGET,
+                        "read_only": False,
+                        "bind": {"create_host_path": False},
+                    }],
+                }}
+            })
             expected_document = {"services": {"host-ledger-maintenance": {"image": image_id}}}
             self.assertEqual(destination.value, expected_document)
             self.assertEqual(len(captured), 1)
@@ -2922,6 +2961,34 @@ class DockerRuntimeContract(unittest.TestCase):
                 ["--profile", "host-ledger-maintenance", "config", "--quiet"],
             )
             self.assertEqual(captured[0][3], 60)
+
+            canonical_command = ["start", "--source-root", "/opt/fullmag/source"]
+            canonical_entrypoint = ["/usr/local/bin/python3", "/opt/fullmag/backend_dev.py"]
+            app_document = {
+                "services": {
+                    "backend": {
+                        "command": canonical_command,
+                        "entrypoint": canonical_entrypoint,
+                        "networks": {"app": {"aliases": ["backend"]}},
+                        "environment": {"FULLMAG_DOCKER_ROLE": "backend"},
+                        "volumes": [],
+                    }
+                },
+                "networks": {"app": {"driver": "bridge"}},
+            }
+            merged = runtime._merge_compose_document(app_document, overlay)
+            backend = merged["services"]["backend"]
+            self.assertEqual(backend["command"], canonical_command)
+            self.assertEqual(backend["entrypoint"], canonical_entrypoint)
+            self.assertEqual(backend["networks"], {"app": {"aliases": ["backend"]}})
+            self.assertEqual(backend["environment"]["FULLMAG_DOCKER_ROLE"], "backend")
+            self.assertEqual(
+                backend["environment"],
+                backend_environment
+                | {"FULLMAG_DOCKER_ROLE": "backend"},
+            )
+            self.assertEqual(len(backend["volumes"]), 1)
+            self.assertEqual(backend["volumes"][0]["target"], host_ledger.MOUNT_TARGET)
 
     def test_volume_only_host_ledger_run_keeps_owner_inspection_on_docker_client(self):
         with tempfile.TemporaryDirectory() as directory:

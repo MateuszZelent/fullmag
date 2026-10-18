@@ -49,6 +49,19 @@ def load_healthcheck_module() -> ModuleType:
     return module
 
 
+def load_frontend_volume_module() -> ModuleType:
+    scripts_root = MODULE_PATH.parents[2] / "scripts"
+    path = scripts_root / "docker_frontend_volume_cache.py"
+    spec = importlib.util.spec_from_file_location("fullmag_frontend_volume_cache_test", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load docker_frontend_volume_cache.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    with patch.object(sys, "path", [str(scripts_root), *sys.path]):
+        spec.loader.exec_module(module)
+    return module
+
+
 class _DeadProcess:
     pid = 49152
 
@@ -758,6 +771,44 @@ else:
             changed_inputs = self.module.read_inputs(self.module.INPUTS_PATH)
             with self.assertRaisesRegex(self.module.FrontendDevError, "configuration or source identity changed"):
                 self.module._freeze_inputs(changed_inputs, allow_generated=False)
+
+    def test_host_volume_plan_owner_id_is_accepted_by_guest(self):
+        host = load_frontend_volume_module()
+        with isolated(self.module) as (root, _workspace, inputs):
+            compose_identity = {
+                "project_name": "fullmag-worktree-test",
+                "project_id": "project-test",
+                "worktree_id": "worktree-test",
+                "source_root": str(root),
+            }
+            with patch.object(host, "compose_project_identity", return_value=compose_identity):
+                plan = host.plan(
+                    {"repo_root": str(root), "worktree_id": "worktree-test"},
+                    root,
+                    "sha256:" + "a" * 64,
+                )
+
+            manifest = dict(inputs.manifest)
+            manifest.update(
+                storage_mode="docker_named_volume_v1",
+                source_mount=plan["source_mount"]["target"],
+                dependency_seed_sha256="d" * 64,
+                toolpins_sha256="e" * 64,
+                frontend_volume={
+                    **plan["identity"],
+                    "creation_id": "c" * 32,
+                },
+            )
+            self.module.INPUTS_PATH.write_text(json.dumps(manifest), encoding="utf-8")
+            parsed = self.module.read_inputs(self.module.INPUTS_PATH)
+            self.assertEqual(
+                parsed.manifest["frontend_volume"]["owner_id"],
+                plan["identity"]["owner_id"],
+            )
+            self.assertEqual(
+                parsed.manifest["frontend_volume"]["volume_name"],
+                plan["identity"]["volume_name"],
+            )
 
     def test_host_mount_descriptors_are_bound_to_the_fixed_workspace_targets(self):
         with isolated(self.module) as (root, workspace, inputs):
