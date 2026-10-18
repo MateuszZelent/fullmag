@@ -88,7 +88,7 @@ class FakeDocker:
                     },
                     "host-ledger-maintenance": maintenance,
                 },
-                "networks": {"default": {"name": "fullmag-host-ledger-test_default"}},
+                "networks": {"default": {"name": "fullmag-host-ledger-test_default", "ipam": {}}},
             })
         if args[0] == "run":
             name = args[args.index("--name") + 1]
@@ -316,7 +316,7 @@ class HostLedgerTests(unittest.TestCase):
                 },
                 "host-ledger-maintenance": {},
             },
-            "networks": {"default": {"name": "fullmag-test_default"}},
+            "networks": {"default": {"name": "fullmag-test_default", "ipam": {}}},
         }
         safe_overlay = ledger._validate_overlay_config(document, environment)
         self.assertEqual(safe_overlay, {
@@ -347,6 +347,9 @@ class HostLedgerTests(unittest.TestCase):
         invalid_overlays.append(candidate)
         candidate = json.loads(json.dumps(document))
         candidate["networks"]["custom"] = {"name": "custom_default"}
+        invalid_overlays.append(candidate)
+        candidate = json.loads(json.dumps(document))
+        candidate["networks"]["default"]["ipam"] = {"config": [{"subnet": "10.90.0.0/16"}]}
         invalid_overlays.append(candidate)
         for candidate in invalid_overlays:
             with self.assertRaises(ledger.HostLedgerError):

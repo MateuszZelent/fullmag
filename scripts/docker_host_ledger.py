@@ -708,10 +708,13 @@ def _validate_overlay_config(
             raise HostLedgerError("host-ledger overlay has an unsupported network definition")
         default_network = networks.get("default")
         if default_network is not None:
-            if not isinstance(default_network, Mapping) or set(default_network) - {"name", "driver"}:
+            if not isinstance(default_network, Mapping) or set(default_network) - {"name", "driver", "ipam"}:
                 raise HostLedgerError("host-ledger default network has unexpected fields")
             if default_network.get("driver", "bridge") != "bridge":
                 raise HostLedgerError("host-ledger default network driver is not the Compose default")
+            # Compose 5.x emits an empty IPAM object for its implicit network.
+            if default_network.get("ipam") not in (None, {}):
+                raise HostLedgerError("host-ledger default network has a custom IPAM configuration")
             network_name = default_network.get("name")
             if network_name is not None and (
                 not isinstance(network_name, str) or not network_name.endswith("_default")
