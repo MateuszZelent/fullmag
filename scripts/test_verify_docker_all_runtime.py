@@ -73,6 +73,12 @@ class DockerAllRuntimeVerifierTests(unittest.TestCase):
             "FULLMAG_HOST_LEDGER_BACKING_IMAGE": backing_image,
             "FULLMAG_HOST_LEDGER_PROJECT_ID": "fullmag-test",
             "FULLMAG_DOCKER_HOST_ID": "c" * 64,
+            # This verifier fixture represents the explicitly Windows-only
+            # runtime path.  Keep the launcher's pinned service identity in
+            # the receipt so source-only tests on Linux do not substitute the
+            # test runner's host UID/GID for the managed container owner.
+            "FULLMAG_HOST_LEDGER_RUNTIME_UID": "65532",
+            "FULLMAG_HOST_LEDGER_RUNTIME_GID": "65532",
         }
         adapter_path = run_root / "host-ledger-adapter-receipt.json"
         adapter = {

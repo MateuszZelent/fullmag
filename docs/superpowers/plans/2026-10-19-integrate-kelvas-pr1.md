@@ -224,6 +224,34 @@ pokryć oba przypadki. Nie zatrzymujemy ani nie rekonfigurujemy peerów.
   Probe potwierdza euid/egid oraz niezmieniony daemon po zakończeniu.
 - Niezależne review zmian merge, obu poprawek zgodności i activate/recovery:
   bez otwartych ustaleń. To dowód źródeł, nie rzeczywistego wykonania Dockera.
-- Żadnego buildu aplikacji ani kompilacji testów jednostkowych nie wykonano.
+- Lokalnie nie wykonano buildu aplikacji ani kompilacji testów jednostkowych.
   Nie uruchomiono grupy Compose tego worktree. Brak ciężkich danych tego
   etapu do kwalifikowanego usunięcia; cudze grupy i cache zachowano.
+## PR i automatyczne CI
+
+- Draft: https://github.com/MateuszZelent/fullmag/pull/201. Źródłowy merge
+  `a45b7f0cb78b9611e19564bb9114edd1cc20b50a`; GitHub potwierdził brak konfliktów
+  z bazą master `377f3ced6d314ecfc46bc63211563dca4483765f`.
+- Otwarcie PR automatycznie uruchomiło bootstrap i dispersion-artifact-consumers,
+  zawierające kompilację testów jednostkowych. Trigger powinien był zostać
+  sprawdzony przed publikacją. Oba runy anulowano po wykryciu konfliktu z zakazem:
+  `39301560727` i `39301560778`, końcowy stan `cancelled`.
+- Przed anulowaniem job `native-modal-cabi-contract` zakończył się sukcesem,
+  w tym kroki kompilacji i wykonania kontraktów C++/native ABI. Rust unit step
+  był w toku przy anulowaniu. Nie przedstawiamy tego jako kwalifikacji DEV,
+  runtime Linux ani pełnego CI; nie usuwano logów/artefaktów tego incydentu.
+- CI źródeł ujawniło dwa fixture Windows dziedziczące UID/GID runnera Linux.
+  Poprawki pozostają w testach: jawny Windows owner dla starego namespace cache
+  i scoped Windows-verifier ledger oraz osobna regresja Linux cache key/labels.
+  Metadane komendy w trzech source-only fixture są mockowane, bez zależności
+  od rzeczywistego Docker CLI. Produkcyjna walidacja ownership nie została osłabiona.
+- Po poprawkach Ubuntu2: `test_docker_volume_receipts.py` 17/17 PASS,
+  `test_verify_docker_all_runtime.py` 13/13 PASS.
+- `contract-guard` dla a45b7f0 zakończył się sukcesem. Następny commit używa
+  `[skip ci]`, żeby nie ponowić zabronionej kompilacji przez automatyczny trigger.
+  Pominięcie workflow nie jest zaliczeniem wymaganej bramki; pełne CI pozostaje
+  blokadą integracji do rozstrzygnięcia zakresu czasowego zakazu.
+- Główny checkout przy HEAD 377f3ced6 ma cudze staged/dirty i nierozstrzygnięte
+  ścieżki docker_startup.rs, docker_volume_dev.py oraz docker_volume_stop_failed.py.
+  Nie próbowano lokalnego ff ani ich rozwiązywania. Worktree zadania pozostaje
+  zachowane do kwalifikacji, merge i bezpiecznego zamknięcia cyklu.

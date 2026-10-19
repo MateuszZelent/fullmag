@@ -206,23 +206,65 @@ class VolumeReceiptTests(unittest.TestCase):
                 dev._assert_private_restart_network(actual, ids, 'owned')
         inspect.assert_not_called()
 
-    def test_frontend_volume_keeps_its_existing_ownership_labels(self):
+    @mock.patch("docker_build_control._docker_prefix", return_value=['docker', '--context', 'desktop-linux'])
+    def test_frontend_volume_keeps_its_existing_ownership_labels(self, _prefix):
         import json
         from subprocess import CompletedProcess
         import docker_volume_dev as dev
-        control = BuildControl({'project_name': 'fullmag-master', 'worktree_id': 'owned', 'project_id': 'test-project', 'checkout_kind': 'master'}, 'sha256:' + 'a' * 64)
-        key = 'b' * 64
-        name = 'fullmag-dev-frontend-v1-' + key[:24]
-        labels = {k: v for k, v in control.labels.items() if k.startswith('org.fullmag.')}
-        labels.update({'org.fullmag.build.role': 'frontend', 'org.fullmag.build.cache-key': key})
-        volume = {'Name': name, 'Driver': 'local', 'Options': None, 'Labels': labels}
-        with mock.patch.object(dev, 'docker_capture', return_value=CompletedProcess([], 0, json.dumps([volume]).encode(), b'')) as docker, \
-             mock.patch.object(dev, 'consumers', return_value=[]), \
-             mock.patch.object(dev, 'bounded_capture', return_value=CompletedProcess([], 0, b'', b'')):
-            self.assertEqual(dev._owned_volume(control, 'frontend', key), name)
-            docker.assert_called_once_with('volume', 'inspect', name, allow_failure=True)
+        import docker_platform
 
-    def test_build_control_accepts_canonical_bootstrap_labels_and_rejects_foreign_project(self):
+        windows_identity = {
+            'profile': docker_platform.WINDOWS_PROFILE,
+            'uid': docker_platform.WINDOWS_RUNTIME_UID,
+            'gid': docker_platform.WINDOWS_RUNTIME_GID,
+        }
+        key = 'b' * 64
+        with mock.patch.object(docker_platform, 'runtime_identity_record', return_value=windows_identity):
+            control = BuildControl({'project_name': 'fullmag-master', 'worktree_id': 'owned', 'project_id': 'test-project', 'checkout_kind': 'master'}, 'sha256:' + 'a' * 64)
+            name = 'fullmag-dev-frontend-v1-' + key[:24]
+            labels = {k: v for k, v in control.labels.items() if k.startswith('org.fullmag.')}
+            labels.update({'org.fullmag.build.role': 'frontend', 'org.fullmag.build.cache-key': key})
+            volume = {'Name': name, 'Driver': 'local', 'Options': None, 'Labels': labels}
+            with mock.patch.object(dev, 'docker_capture', return_value=CompletedProcess([], 0, json.dumps([volume]).encode(), b'')) as docker, \
+                 mock.patch.object(dev, 'consumers', return_value=[]), \
+                 mock.patch.object(dev, 'bounded_capture', return_value=CompletedProcess([], 0, b'', b'')):
+                self.assertEqual(dev._owned_volume(control, 'frontend', key), name)
+                docker.assert_called_once_with('volume', 'inspect', name, allow_failure=True)
+
+    @mock.patch("docker_build_control._docker_prefix", return_value=['docker', '--host', 'unix:///fixture-docker.sock'])
+    def test_linux_frontend_volume_scopes_its_key_and_labels_to_runtime_identity(self, _prefix):
+        import hashlib
+        import json
+        from subprocess import CompletedProcess
+        import docker_platform
+        import docker_volume_dev as dev
+
+        runtime_identity = {'profile': 'linux-native-v1', 'uid': 123456, 'gid': 234567}
+        source_key = 'c' * 64
+        scoped_key = hashlib.sha256(dev.canonical({
+            'key': source_key,
+            'runtime': runtime_identity,
+        })).hexdigest()
+        name = 'fullmag-dev-frontend-v1-' + scoped_key[:24]
+        with mock.patch.object(docker_platform, 'runtime_identity_record', return_value=runtime_identity):
+            control = BuildControl({'project_name': 'fullmag-master', 'worktree_id': 'owned', 'project_id': 'test-project', 'checkout_kind': 'master'}, 'sha256:' + 'a' * 64)
+            labels = {k: v for k, v in control.labels.items() if k.startswith('org.fullmag.')}
+            labels.update({
+                'org.fullmag.build.role': 'frontend',
+                'org.fullmag.build.cache-key': scoped_key,
+                'org.fullmag.build.runtime-profile': 'linux-native-v1',
+                'org.fullmag.build.runtime-uid': '123456',
+                'org.fullmag.build.runtime-gid': '234567',
+            })
+            volume = {'Name': name, 'Driver': 'local', 'Options': None, 'Labels': labels}
+            with mock.patch.object(dev, 'docker_capture', return_value=CompletedProcess([], 0, json.dumps([volume]).encode(), b'')) as docker, \
+                 mock.patch.object(dev, 'consumers', return_value=[]), \
+                 mock.patch.object(dev, 'bounded_capture', return_value=CompletedProcess([], 0, b'', b'')):
+                self.assertEqual(dev._owned_volume(control, 'frontend', source_key), name)
+                docker.assert_called_once_with('volume', 'inspect', name, allow_failure=True)
+
+    @mock.patch("docker_build_control._docker_prefix", return_value=['docker', '--host', 'unix:///fixture-docker.sock'])
+    def test_build_control_accepts_canonical_bootstrap_labels_and_rejects_foreign_project(self, _prefix):
         identity = {'project_name': 'fullmag-master', 'worktree_id': 'test-worktree', 'project_id': 'test-project', 'checkout_kind': 'master'}
         control = BuildControl(identity, 'sha256:' + 'a' * 64)
         volume = {'Name': control.volume, 'Driver': 'local', 'Options': None,
