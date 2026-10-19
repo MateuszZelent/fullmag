@@ -13,6 +13,10 @@ socketu Dockera ani hostowego Pythona podczas uruchomienia. Tryb developerski
 ma osobny kontrakt dwóch usług i korzysta z readonly bindów wybranego checkoutu,
 opisanych niżej.
 
+Zakres admission storage Linux/WSL i brak kwalifikacji codziennego DEV opisuje
+[`linux-native-v1`](docker-wsl.md). Poniższy opis atestacji NTFS/ReFS i 9p
+dotyczy trasy Windows `windows-folder-v1`.
+
 ## Główna ścieżka developerska
 
 Dla głównego checkoutu, gdy `FULLMAG_SOURCE_ROOT` jest puste lub nieustawione,

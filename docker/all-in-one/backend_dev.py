@@ -71,9 +71,12 @@ PROVENANCE_PATH = BACKEND_CONTROL_ROOT / "runtime-provenance.json"
 CACHE_RECEIPT_PATH = BACKEND_CONTROL_ROOT / PACKAGE_CACHE_RECEIPT_NAME
 HOST_ATTESTATION_PATH = Path("/run/fullmag/windows-folder-host.json")
 WINDOWS_FOLDER_OWNER_PATH = Path("/state/.fullmag-windows-folder-owner.json")
+LINUX_NATIVE_HOST_PATH = Path("/run/fullmag/host-admission/linux-native-host.json")
+LINUX_NATIVE_OWNER_PATH = Path("/state/.fullmag-linux-native-owner.json")
 WINDOWS_FOLDER_HOST_SCHEMA = "fullmag.windows-folder-host.v1"
 WINDOWS_FOLDER_DEVELOPMENT_SCHEMA = "fullmag.windows-folder-development-build.v1"
 WINDOWS_FOLDER_STORAGE_PROFILE = "windows-folder-v1"
+LINUX_NATIVE_STORAGE_PROFILE = "linux-native-v1"
 WINDOWS_FOLDER_GATE_TIMEOUT_SECONDS = 120.0
 WINDOWS_FOLDER_GATE_POLL_SECONDS = 0.25
 PACKAGE_DEVELOPMENT_SCHEMA = "fullmag.direct-compose.package-development.v1"
@@ -3265,6 +3268,222 @@ def _read_optional_storage_attestation(path: Path, name: str) -> dict[str, Any] 
     return value
 
 
+def _read_optional_linux_attestation(path: Path, name: str) -> tuple[dict[str, Any] | None, bytes | None]:
+    """Read a private Linux certificate through pinned, no-follow paths."""
+    try:
+        parent = path.parent
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=parent_fd,
+            )
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or (metadata.st_uid, metadata.st_gid) != (os.getuid(), os.getgid())
+                    or stat.S_IMODE(metadata.st_mode) & 0o077
+                    or metadata.st_size > 1024 * 1024
+                ):
+                    _fail(f"{name} is not a private owned regular file")
+                chunks = []
+                size = 0
+                while True:
+                    chunk = os.read(descriptor, min(65536, 1024 * 1024 + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size > 1024 * 1024:
+                        _fail(f"{name} is oversized")
+                raw = b"".join(chunks)
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent_fd)
+    except FileNotFoundError:
+        return None, None
+    except BackendBuildError:
+        raise
+    except OSError as error:
+        _fail(f"cannot safely read {name}: {error}")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        if not raw:
+            return None, raw
+        _fail(f"{name} is not valid JSON: {error}")
+    if not isinstance(value, dict):
+        _fail(f"{name} must contain a JSON object")
+    return value, raw
+
+
+def _validate_linux_native_attestation(
+    host: Mapping[str, Any] | None,
+    owner: Mapping[str, Any] | None,
+    host_bytes: bytes | None,
+    owner_bytes: bytes | None,
+    provenance: Mapping[str, Any],
+    receipt_sha256: str,
+) -> str:
+    if host is None or owner is None or host_bytes is None or owner_bytes is None:
+        return "pending"
+    try:
+        from entrypoint import _validate_linux_host_certificate
+
+        _validate_linux_host_certificate(host, os.environ.get("FULLMAG_RUNTIME_IMAGE_ID", ""))
+        _validate_linux_host_certificate(owner, os.environ.get("FULLMAG_RUNTIME_IMAGE_ID", ""))
+    except (ImportError, RuntimeError) as error:
+        _fail(f"Linux-native host certificate is invalid: {error}")
+    if host_bytes != owner_bytes or host != owner:
+        if _linux_native_restart_publication_pending(host, owner):
+            return "pending"
+        if _linux_native_development_refresh_publication_pending(
+            host, owner, provenance, receipt_sha256
+        ):
+            return "pending"
+        _fail("Linux-native host certificate and owner marker differ")
+    if host.get("restart_verified") is not True:
+        return "pending"
+    if (
+        host.get("source_commit") != provenance.get("commit")
+        or host.get("binary_hashes") != provenance.get("binary_hashes")
+        or host.get("artifact_receipt_sha256") != receipt_sha256
+    ):
+        _fail("Linux-native certificate differs from the package provenance or receipt")
+    delegation = host.get("development_build")
+    if not isinstance(delegation, dict):
+        _fail("Linux-native development build delegation is missing")
+    if (
+        provenance.get("schema") != "fullmag.docker-all-image.v1"
+        or provenance.get("state") != "succeeded"
+        or provenance.get("cargo_profile") != BACKEND_CARGO_PROFILE
+        or provenance.get("toolchain_image_id") != delegation.get("toolchain_image_id")
+        or provenance.get("package_root") != str(PACKAGE_ROOT)
+    ):
+        _fail("Linux-native runtime provenance does not match its development delegation")
+    return "ready"
+
+
+def _linux_native_restart_publication_pending(
+    host: Mapping[str, Any], owner: Mapping[str, Any]
+) -> bool:
+    """Accept only the host-first restart readback flag update window."""
+
+    if host.get("restart_verified") is not True or owner.get("restart_verified") is not False:
+        return False
+    host_without_restart = {
+        key: value for key, value in host.items() if key != "restart_verified"
+    }
+    owner_without_restart = {
+        key: value for key, value in owner.items() if key != "restart_verified"
+    }
+    return host_without_restart == owner_without_restart
+
+
+def _linux_native_development_refresh_publication_pending(
+    host: Mapping[str, Any],
+    owner: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+    receipt_sha256: str,
+) -> bool:
+    """Accept a host-first live build audit refresh only for this package."""
+
+    if host.get("restart_verified") is not False or owner.get("restart_verified") is not False:
+        return False
+    image_id = os.environ.get("FULLMAG_RUNTIME_IMAGE_ID", "")
+    toolchain_image_id = os.environ.get("FULLMAG_TOOLCHAIN_IMAGE_ID", "")
+    group_identity = os.environ.get("FULLMAG_COMPOSE_PROJECT", "")
+    expected_fields = {
+        "schema", "cargo_profile", "toolchain_image_id", "package_root",
+        "provenance_path", "group_identity", "source_identity",
+    }
+    allowed_audit_fields = {
+        "source_commit", "binary_hashes", "artifact_receipt_sha256",
+    }
+    normalized: list[dict[str, Any]] = []
+    for document in (host, owner):
+        delegation = document.get("development_build")
+        if (
+            not isinstance(delegation, dict)
+            or set(delegation) != expected_fields
+            or delegation.get("schema") != "fullmag.linux-native-development-build.v1"
+            or delegation.get("cargo_profile") != BACKEND_CARGO_PROFILE
+            or delegation.get("toolchain_image_id") != toolchain_image_id
+            or delegation.get("package_root") != str(PACKAGE_ROOT)
+            or delegation.get("provenance_path") != str(PROVENANCE_PATH)
+            or delegation.get("group_identity") != group_identity
+            or not group_identity
+        ):
+            return False
+        source_identity = delegation.get("source_identity")
+        if (
+            not isinstance(source_identity, dict)
+            or set(source_identity) != {
+                "commit", "source_digest", "source_snapshot_sha256",
+                "native_source_identity_sha256",
+            }
+            or not isinstance(source_identity.get("commit"), str)
+            or not GIT_OBJECT_RE.fullmatch(source_identity["commit"])
+            or any(
+                not isinstance(source_identity.get(field), str)
+                or not SHA256_RE.fullmatch(source_identity[field])
+                for field in (
+                    "source_digest", "source_snapshot_sha256",
+                    "native_source_identity_sha256",
+                )
+            )
+        ):
+            return False
+        stable = dict(document)
+        for field in allowed_audit_fields:
+            stable.pop(field, None)
+        stable_delegation = dict(delegation)
+        stable_delegation.pop("source_identity")
+        stable["development_build"] = stable_delegation
+        normalized.append(stable)
+    if normalized[0] != normalized[1]:
+        return False
+    if not any(host.get(field) != owner.get(field) for field in allowed_audit_fields):
+        return False
+    return (
+        host.get("source_commit") == provenance.get("commit")
+        and host.get("binary_hashes") == provenance.get("binary_hashes")
+        and host.get("artifact_receipt_sha256") == receipt_sha256
+        and provenance.get("cargo_profile") == BACKEND_CARGO_PROFILE
+        and provenance.get("toolchain_image_id") == toolchain_image_id
+        and provenance.get("package_root") == str(PACKAGE_ROOT)
+        and host.get("image_id") == image_id
+    )
+
+
+def _wait_for_linux_native_attestation(
+    provenance: Mapping[str, Any], receipt_sha256: str
+) -> None:
+    deadline = time.monotonic() + WINDOWS_FOLDER_GATE_TIMEOUT_SECONDS
+    while True:
+        host, host_bytes = _read_optional_linux_attestation(
+            LINUX_NATIVE_HOST_PATH, "Linux-native host certificate"
+        )
+        owner, owner_bytes = _read_optional_linux_attestation(
+            LINUX_NATIVE_OWNER_PATH, "Linux-native owner marker"
+        )
+        if _validate_linux_native_attestation(
+            host, owner, host_bytes, owner_bytes, provenance, receipt_sha256
+        ) == "ready":
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _fail(
+                "timed out waiting for a matching Linux-native host certificate "
+                f"after {WINDOWS_FOLDER_GATE_TIMEOUT_SECONDS:g} seconds"
+            )
+        time.sleep(min(WINDOWS_FOLDER_GATE_POLL_SECONDS, remaining))
+
+
 def _validate_development_source_identity(value: object) -> dict[str, str]:
     if not isinstance(value, dict) or set(value) != {
         "commit",
@@ -3501,15 +3720,19 @@ def _serve(extra: list[str]) -> int:
         duration_ms=round((time.monotonic() - package_started) * 1000),
     )
     receipt_sha256 = _sha256_bytes(receipt_bytes)
-    if os.environ.get("FULLMAG_SESSION_STORAGE_PROFILE") == WINDOWS_FOLDER_STORAGE_PROFILE:
-        _log_phase("gate", "start", profile=WINDOWS_FOLDER_STORAGE_PROFILE)
+    profile = os.environ.get("FULLMAG_SESSION_STORAGE_PROFILE")
+    if profile in {WINDOWS_FOLDER_STORAGE_PROFILE, LINUX_NATIVE_STORAGE_PROFILE}:
+        _log_phase("gate", "start", profile=profile)
         provenance, _ = _read_json(PROVENANCE_PATH, "runtime provenance", 8 * 1024 * 1024)
         try:
-            _wait_for_windows_folder_attestation(provenance, receipt_sha256)
+            if profile == LINUX_NATIVE_STORAGE_PROFILE:
+                _wait_for_linux_native_attestation(provenance, receipt_sha256)
+            else:
+                _wait_for_windows_folder_attestation(provenance, receipt_sha256)
         except (BackendBuildError, OSError) as error:
             _log_phase("gate", "failed", error=type(error).__name__)
             raise
-        _log_phase("gate", "complete", profile=WINDOWS_FOLDER_STORAGE_PROFILE)
+        _log_phase("gate", "complete", profile=profile)
     else:
         _log_phase("gate", "skipped", reason="storage-profile")
     environment = dict(os.environ)

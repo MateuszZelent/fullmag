@@ -47,6 +47,7 @@ services:
     read_only: false
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    user: "${FULLMAG_RUNTIME_UID:-65532}:${FULLMAG_RUNTIME_GID:-65532}"
     environment:
       FULLMAG_CONTROL_ROOT: /opt/fullmag/control
     volumes:

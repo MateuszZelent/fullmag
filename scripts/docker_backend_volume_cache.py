@@ -76,6 +76,9 @@ LABEL_TOOLCHAIN = "com.fullmag.backend-cache.toolchain-image-id"
 LABEL_CARGO_PROFILE = "com.fullmag.backend-cache.cargo-profile"
 LABEL_OWNER = "com.fullmag.backend-cache.owner-id"
 LABEL_ROLE = "com.fullmag.backend-cache.volume-role"
+LABEL_RUNTIME_PROFILE = "com.fullmag.backend-cache.runtime-profile"
+LABEL_RUNTIME_UID = "com.fullmag.backend-cache.runtime-uid"
+LABEL_RUNTIME_GID = "com.fullmag.backend-cache.runtime-gid"
 _LABEL_PREFIX = "com.fullmag.backend-cache."
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -159,6 +162,28 @@ def _source_root(value: str | os.PathLike[str]) -> str:
     return str(resolved)
 
 
+def _runtime_identity_record(value: tuple[int, int] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if (not isinstance(value, tuple) or len(value) != 2
+            or any(isinstance(item, bool) or not isinstance(item, int) or item <= 0
+                   for item in value)):
+        raise BackendVolumeCacheError("runtime_identity must be a nonzero numeric (uid, gid) pair")
+    return {"profile": "linux-native-v1", "uid": value[0], "gid": value[1]}
+
+
+def _owner_ids(profile: Mapping[str, Any]) -> tuple[int, int]:
+    identity = profile.get("runtime_identity")
+    if identity is None:
+        return 65532, 65532
+    if (not isinstance(identity, Mapping) or identity.get("profile") != "linux-native-v1"
+            or any(isinstance(identity.get(field), bool)
+                   or not isinstance(identity.get(field), int) or identity[field] <= 0
+                   for field in ("uid", "gid"))):
+        raise BackendVolumeCacheError("runtime identity profile is malformed")
+    return identity["uid"], identity["gid"]
+
+
 def _safe_project_id(layout: Mapping[str, Any]) -> str:
     value = layout.get("project_id")
     if value is None:
@@ -187,6 +212,8 @@ def cache_key(
     worktree_id: str,
     toolchain_image: str,
     cargo_profile: str = "backend-dev",
+    *,
+    runtime_identity: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Derive a stable cache identity without the mutable runtime image.
 
@@ -209,6 +236,9 @@ def cache_key(
         "toolchain_image_id": toolchain,
         "cargo_profile": cargo_profile,
     }
+    runtime = _runtime_identity_record(runtime_identity)
+    if runtime is not None:
+        inputs["runtime_identity"] = runtime
     return {
         "schema": KEY_SCHEMA,
         "key": _sha256({"schema": KEY_SCHEMA, **inputs}),
@@ -250,7 +280,7 @@ def volume_labels(profile: Mapping[str, Any], role: str) -> dict[str, str]:
         raise BackendVolumeCacheError(f"unknown volume role: {role}")
     if role == CONTROL_VOLUME_ROLE:
         return _control_volume_labels(profile)
-    return {
+    labels = {
         LABEL_SCHEMA: SCHEMA,
         LABEL_PROFILE: PROFILE,
         LABEL_PROJECT: str(profile["project_id"]),
@@ -262,6 +292,14 @@ def volume_labels(profile: Mapping[str, Any], role: str) -> dict[str, str]:
         LABEL_OWNER: str(profile["owner_id"]),
         LABEL_ROLE: role,
     }
+    runtime = profile.get("runtime_identity")
+    if isinstance(runtime, Mapping):
+        labels.update({
+            LABEL_RUNTIME_PROFILE: str(runtime["profile"]),
+            LABEL_RUNTIME_UID: str(runtime["uid"]),
+            LABEL_RUNTIME_GID: str(runtime["gid"]),
+        })
+    return labels
 
 
 # Keep internal callers explicit while exposing the label contract to consumers.
@@ -326,7 +364,7 @@ def _cache_environment(profile: Mapping[str, Any]) -> dict[str, str]:
 def _container_labels(profile: Mapping[str, Any]) -> dict[str, str]:
     """Return the cache identity labels shared by runtime and maintenance."""
 
-    return {
+    labels = {
         LABEL_SCHEMA: SCHEMA,
         LABEL_PROFILE: PROFILE,
         LABEL_PROJECT: str(profile["project_id"]),
@@ -337,6 +375,14 @@ def _container_labels(profile: Mapping[str, Any]) -> dict[str, str]:
         LABEL_CARGO_PROFILE: str(profile["cargo_profile"]),
         LABEL_OWNER: str(profile["owner_id"]),
     }
+    runtime = profile.get("runtime_identity")
+    if isinstance(runtime, Mapping):
+        labels.update({
+            LABEL_RUNTIME_PROFILE: str(runtime["profile"]),
+            LABEL_RUNTIME_UID: str(runtime["uid"]),
+            LABEL_RUNTIME_GID: str(runtime["gid"]),
+        })
+    return labels
 
 
 def _volume_declarations(profile: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -357,12 +403,13 @@ def _volume_declarations(profile: Mapping[str, Any]) -> dict[str, dict[str, Any]
 
 
 def _maintenance_service(profile: Mapping[str, Any]) -> dict[str, Any]:
+    uid, gid = _owner_ids(profile)
     environment = {
         **_cache_environment(profile),
         "FULLMAG_BACKEND_CACHE_MAINTENANCE_PROFILE": MAINTENANCE_PROFILE,
         "FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION": "ensure",
-        "FULLMAG_BACKEND_CACHE_OWNER_UID": "65532",
-        "FULLMAG_BACKEND_CACHE_OWNER_GID": "65532",
+        "FULLMAG_BACKEND_CACHE_OWNER_UID": str(uid),
+        "FULLMAG_BACKEND_CACHE_OWNER_GID": str(gid),
     }
     return {
         "image": profile["runtime_image_id"],
@@ -393,6 +440,7 @@ def _plan(
     toolchain_image: str,
     cargo_profile: str,
     control_volume_name: str,
+    runtime_identity: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     repo_path = Path(repo)
     if not repo_path.is_absolute() or repo_path.is_symlink() or not repo_path.is_dir():
@@ -404,7 +452,9 @@ def _plan(
     control_project = layout.get("compose_project")
     if control_project is not None:
         control_project = _require_identifier(str(control_project), "compose_project")
-    identity = cache_key(source_root, worktree_id, toolchain_image, cargo_profile)
+    runtime = _runtime_identity_record(runtime_identity)
+    identity = cache_key(source_root, worktree_id, toolchain_image, cargo_profile,
+                         runtime_identity=runtime_identity)
     unit_key = _sha256({
         "schema": SCHEMA,
         "project_id": project_id,
@@ -429,6 +479,7 @@ def _plan(
         "runtime_image_id": image,
         "toolchain_image_id": toolchain_image,
         "control_project": control_project,
+        "runtime_identity": runtime,
         "volume_names": volume_names,
         "volume_roles": {
             BUILD_VOLUME_ROLE: {"target": BUILD_TARGET, "labels": _labels({
@@ -481,6 +532,7 @@ def prepare(
     toolchain_image: str,
     cargo_profile: str = "backend-dev",
     control_volume_name: str | None = None,
+    runtime_identity: tuple[int, int] | None = None,
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
 ) -> dict[str, Any]:
@@ -498,6 +550,7 @@ def prepare(
         layout, repo, image, runroot, source_root=source_root,
         toolchain_image=toolchain_image, cargo_profile=cargo_profile,
         control_volume_name=control_volume_name,
+        runtime_identity=runtime_identity,
     )
     if docker is not None:
         profile["volume_documents"] = ensure_volume_pair(
@@ -518,6 +571,7 @@ def prepare_ready(
     toolchain_image: str,
     cargo_profile: str = "backend-dev",
     control_volume_name: str | None = None,
+    runtime_identity: tuple[int, int] | None = None,
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
 ) -> dict[str, Any]:
@@ -539,6 +593,7 @@ def prepare_ready(
         toolchain_image=toolchain_image,
         cargo_profile=cargo_profile,
         control_volume_name=control_volume_name,
+        runtime_identity=runtime_identity,
         active_consumers=active_consumers,
     )
     if not isinstance(profile.get("volume_documents"), Mapping):
@@ -869,6 +924,7 @@ def _validate_marker(marker: Any, profile: Mapping[str, Any], role: str) -> None
         if any(marker.get(key) != value for key, value in expected.items()):
             raise BackendVolumeCacheError("shared control owner marker is foreign or incomplete")
         return
+    uid, gid = _owner_ids(profile)
     expected = {
         "schema": OWNER_SCHEMA,
         "state": "owned",
@@ -876,8 +932,8 @@ def _validate_marker(marker: Any, profile: Mapping[str, Any], role: str) -> None
         "owner_id": profile["owner_id"],
         "role": role,
         "volume_name": profile["volume_names"][role],
-        "uid": 65532,
-        "gid": 65532,
+        "uid": uid,
+        "gid": gid,
     }
     if any(marker.get(key) != value for key, value in expected.items()):
         raise BackendVolumeCacheError("maintenance owner marker is foreign or incomplete")
@@ -916,11 +972,12 @@ def _validate_maintenance_receipt(
     for role in VOLUME_ROLES:
         _validate_marker(markers[role], profile, role)
     probe = receipt["probe"]
+    owner_uid, owner_gid = _owner_ids(profile)
     if (not isinstance(probe, Mapping)
             or probe.get("schema") != PROBE_SCHEMA
             or probe.get("state") != "passed"
-            or probe.get("owner_uid") != 65532
-            or probe.get("owner_gid") != 65532):
+            or probe.get("owner_uid") != owner_uid
+            or probe.get("owner_gid") != owner_gid):
         raise BackendVolumeCacheError("maintenance readback probe did not pass")
     probes = probe.get("volumes")
     if not isinstance(probes, Mapping) or set(probes) != set(VOLUME_ROLES):
@@ -988,6 +1045,8 @@ def validate(
         "receipt_storage": "docker-named-volume",
         "host_receipt_path": None,
     }
+    if profile.get("runtime_identity") is not None:
+        receipt["runtime_identity"] = dict(profile["runtime_identity"])
     result = dict(profile)
     result.update({
         "state": "ready",
@@ -1103,8 +1162,8 @@ def validate_maintenance_overlay(document: Mapping[str, Any], profile: Mapping[s
     expected_maintenance = {
         "FULLMAG_BACKEND_CACHE_MAINTENANCE_PROFILE": MAINTENANCE_PROFILE,
         "FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION": "ensure",
-        "FULLMAG_BACKEND_CACHE_OWNER_UID": "65532",
-        "FULLMAG_BACKEND_CACHE_OWNER_GID": "65532",
+        "FULLMAG_BACKEND_CACHE_OWNER_UID": str(_owner_ids(profile)[0]),
+        "FULLMAG_BACKEND_CACHE_OWNER_GID": str(_owner_ids(profile)[1]),
     }
     for key, value in expected_maintenance.items():
         if maintenance_environment.get(key) != value:
@@ -1142,7 +1201,10 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
     config = document.get("Config")
     if not isinstance(config, Mapping):
         raise BackendVolumeCacheError("backend container has no config")
-    if config.get("User") not in {"65532", "65532:65532"}:
+    uid, gid = _owner_ids(profile)
+    expected_users = ({"65532", "65532:65532"} if profile.get("runtime_identity") is None
+                      else {f"{uid}:{gid}"})
+    if config.get("User") not in expected_users:
         raise BackendVolumeCacheError("backend container is not unprivileged")
     host_config = document.get("HostConfig")
     if not isinstance(host_config, Mapping):

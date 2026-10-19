@@ -24,7 +24,7 @@ class DeviceAccessBoundaryTests(unittest.TestCase):
             with patch.object(entrypoint, "CUDA_COMPATIBILITY_ROOT", compat), \
                     patch.dict(os.environ, {
                         "FULLMAG_DOCKER_DEVICE_ACCESS": "cpu",
-                        "LD_LIBRARY_PATH": "/opt/fullmag/lib:/usr/local/cuda/lib64",
+                        "LD_LIBRARY_PATH": os.pathsep.join(("/opt/fullmag/lib", "/usr/local/cuda/lib64")),
                     }, clear=True):
                 self.assertEqual(entrypoint._configure_device_access(), "cpu")
                 self.assertEqual(
@@ -46,8 +46,15 @@ class DeviceAccessBoundaryTests(unittest.TestCase):
                     return 7
 
             with patch.object(entrypoint, "CUDA_COMPATIBILITY_ROOT", compat), \
-                    patch.dict(os.environ, {"FULLMAG_DOCKER_DEVICE_ACCESS": "cpu"}, clear=True), \
+                    patch.dict(os.environ, {
+                        "FULLMAG_DOCKER_DEVICE_ACCESS": "cpu",
+                        "FULLMAG_SESSION_STORAGE_PROFILE": "linux-native-v1",
+                    }, clear=True), \
                     patch.object(entrypoint.subprocess, "check_output", return_value="ef53\n"), \
+                    patch.object(entrypoint, "linux_storage_probe") as admission, \
+                    patch.object(entrypoint, "technical_paths", return_value=(
+                        compat / "control", compat / "mesh", compat / "cuda"
+                    )), \
                     patch.object(entrypoint.ctypes, "CDLL") as cuda, \
                     patch.object(entrypoint.Path, "mkdir"), \
                     patch.object(entrypoint.Path, "open", return_value=ProbeStream()) as open_file, \
@@ -55,6 +62,7 @@ class DeviceAccessBoundaryTests(unittest.TestCase):
                     patch.object(entrypoint.os, "fsync"):
                 entrypoint.preflight()
                 cuda.assert_not_called()
+                admission.assert_called_once_with(require_restart=True)
                 open_file.assert_called_once()
 
     def test_invalid_or_missing_cpu_compatibility_fails_closed(self):
@@ -74,13 +82,18 @@ class DeviceAccessBoundaryTests(unittest.TestCase):
             compat = Path(directory)
             (compat / "libcuda.so.1").write_bytes(b"image-owned-compatibility")
             with patch.object(entrypoint, "CUDA_COMPATIBILITY_ROOT", compat), \
-                    patch.dict(os.environ, {"FULLMAG_DOCKER_DEVICE_ACCESS": "cpu"}, clear=True), \
+                    patch.dict(os.environ, {
+                        "FULLMAG_DOCKER_DEVICE_ACCESS": "cpu",
+                        "FULLMAG_SESSION_STORAGE_PROFILE": "linux-native-v1",
+                    }, clear=True), \
                     patch.object(entrypoint.subprocess, "check_output", return_value="deadbeef\n"), \
+                    patch.object(entrypoint, "linux_storage_probe") as admission, \
                     patch.object(entrypoint.ctypes, "CDLL") as cuda, \
                     patch.object(entrypoint.Path, "mkdir") as mkdir:
-                with self.assertRaisesRegex(RuntimeError, "Unsupported durable session filesystem"):
+                with self.assertRaisesRegex(RuntimeError, "Unsupported native Linux durable filesystem"):
                     entrypoint.preflight()
                 cuda.assert_not_called()
+                admission.assert_not_called()
                 mkdir.assert_not_called()
 
     def test_gpu_access_keeps_existing_cuda_preflight_mode(self):

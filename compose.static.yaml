@@ -14,7 +14,7 @@ services:
     image: ${FULLMAG_RELEASE_IMAGE:?Assemble the managed release image first}
     pull_policy: never
     init: true
-    user: "65532:65532"
+    user: "${FULLMAG_RUNTIME_UID:-65532}:${FULLMAG_RUNTIME_GID:-65532}"
     read_only: true
     gpus: all
     cpus: 4
@@ -26,7 +26,10 @@ services:
     hostname: ${FULLMAG_BACKEND_HOSTNAME:?Managed run hostname is required}
     environment:
       FULLMAG_DOCKER_ROLE: backend
-      FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1
+      FULLMAG_SESSION_STORAGE_PROFILE: ${FULLMAG_SESSION_STORAGE_PROFILE:-windows-folder-v1}
+      FULLMAG_BACKEND_CARGO_PROFILE: release
+      FULLMAG_RUNTIME_UID: ${FULLMAG_RUNTIME_UID:-65532}
+      FULLMAG_RUNTIME_GID: ${FULLMAG_RUNTIME_GID:-65532}
       FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_RELEASE_IMAGE}
       # Durable workspace metadata is isolated per Compose source group.
       FULLMAG_WORKSPACE_STATE_DIR: /user-data
@@ -39,12 +42,12 @@ services:
         target: /user-data
         bind: {create_host_path: false}
       - type: bind
-        source: ${FULLMAG_STATE_ROOT:?Managed Windows storage namespace is required}
+        source: ${FULLMAG_STATE_ROOT:?Managed host storage namespace is required}
         target: /state
         bind: {create_host_path: false}
       - type: bind
-        source: ${FULLMAG_HOST_CERTIFICATE:?Windows storage admission is required}
-        target: /run/fullmag/windows-folder-host.json
+        source: ${FULLMAG_HOST_CERTIFICATE_DIR:-${FULLMAG_HOST_CERTIFICATE:?Host storage admission is required}}
+        target: ${FULLMAG_HOST_CERTIFICATE_TARGET:-/run/fullmag/windows-folder-host.json}
         read_only: true
         bind: {create_host_path: false}
     tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]

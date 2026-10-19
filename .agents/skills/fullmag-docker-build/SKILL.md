@@ -17,7 +17,7 @@ cache. Aplikację buduje i uruchamia ten sam `backend`; Next/HMR działa w
   builda. Używaj jawnych trwałych named volumes oraz magazynu obrazów/BuildKit.
   Hostowe `storage`, checkout i duże hostowe katalogi tymczasowe nie są
   alternatywnym miejscem zapisu tych danych.
-- **Dane użytkownika nadal na Windows:** sesje, wyniki, projekty, ustawienia i
+- **Dane użytkownika w storage hosta:** na Windows NTFS/ReFS, na Linux/WSL lokalny ext4/XFS/Btrfs; sesje, wyniki, projekty, ustawienia i
   historia ostatnich projektów. Zachowaj ich dotychczasowy kontrakt/mounty;
   polecenie dotyczące builda nie autoryzuje przeniesienia ich do Dockera.
 - Cache ma przetrwać restart i zmianę źródeł. Nie usuwaj go dla zwykłego buildu.
@@ -99,3 +99,12 @@ odwrotnie. Sprawdź bieżące źródła i wynik konkretnej próby.
 Odróżniaj: plan, audyt źródeł, strukturalny test mountów, build, API, HMR,
 wykonanie symulacji i pomiar odzyskanych bajtów. Brak dowodu oznacza
 `NOT VERIFIED`. Nie nazywaj dokumentacji wdrożoną automatyką sprzątania.
+
+## Linux/WSL (decyzja użytkownika 19.10.2026)
+
+Ten sam launcher i projekt Compose obsługują nie-rootowy Linux/WSL z lokalnym
+Docker Linux. Checkout i storage wymagają ext4/XFS/Btrfs; UID/GID muszą być
+spójne z cache i runtime. Windows zachowuje dotychczasową atestację.
+Dane użytkownika pozostają w storage wybranego hosta, build w named volumes.
+Nie wracaj do dawnego runnera ani chmod0777. Stosuj [przewodnik Linux/WSL](../../../docs/guides/docker-wsl.md)
+i zachowaj NOT VERIFIED dla brakujących dowodów runtime.

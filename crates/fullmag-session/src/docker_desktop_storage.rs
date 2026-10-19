@@ -1174,19 +1174,52 @@ fn initialize_store_under(parent: &Path, relative: &str) -> Result<(PathBuf, boo
     Ok((root, created))
 }
 
-/// Bootstrap only the fixed Docker accepted store after full Windows-folder
-/// admission. This is internal launcher plumbing, not a general initializer.
+/// Native Docker storage uses the normal Linux writer, with a stricter durable
+/// filesystem boundary for this fixed-layout bootstrap. It never grants 9p.
+#[cfg(target_os = "linux")]
+fn admit_native_container_root(root: &Path, state: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    let pinned = canonical_candidate(root, state)?;
+    let state_metadata = pinned.state_file.metadata()?;
+    if !state_metadata.is_dir()
+        || !pinned.candidate.starts_with(&pinned.state_path)
+        || pinned.existing_file.metadata()?.dev() != state_metadata.dev()
+    {
+        bail!("native Docker session root must remain on its state mount");
+    }
+    let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    if unsafe { libc::fstatfs(pinned.state_file.as_raw_fd(), filesystem.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("checking native Docker state filesystem");
+    }
+    let kind = unsafe { filesystem.assume_init() }.f_type as u64;
+    if !matches!(kind, 0xef53 | 0x5846_5342 | 0x9123_683e) {
+        bail!("native Docker state requires ext4, XFS or Btrfs; observed filesystem 0x{kind:x}");
+    }
+    Ok(())
+}
+
+/// Bootstrap only the fixed Docker accepted store after host-profile admission.
+/// This is internal launcher plumbing, not a general initializer.
 #[doc(hidden)]
 pub fn initialize_attested_docker_accepted_store() -> Result<(PathBuf, bool)> {
     #[cfg(target_os = "linux")]
     {
         let parent = Path::new("/state/runs/docker-all");
-        admit(parent)?;
+        match env::var("FULLMAG_SESSION_STORAGE_PROFILE").ok().as_deref() {
+            Some("windows-folder-v1") => admit(parent)?,
+            Some("linux-native-v1") => {
+                admit_native_container_root(parent, Path::new(CONTAINER_ROOT))?;
+            }
+            _ => bail!("Docker accepted-store bootstrap requires an explicit supported host profile"),
+        }
         initialize_store_under(parent, "session-store")
     }
     #[cfg(not(target_os = "linux"))]
     {
-        bail!("Docker Windows-folder bootstrap requires the attested Linux container");
+        bail!("Docker accepted-store bootstrap requires the Linux container");
     }
 }
 

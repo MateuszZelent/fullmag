@@ -17,7 +17,7 @@ backendu, który buduje kod i następnie uruchamia aplikację.
 W trybie dev dokładnie dwie stałe usługi aplikacji należą do projektu
 `fullmag-master` lub `fullmag-worktree-<worktree_id>`:
 
-- `frontend` uruchamia Next.js dev i HMR z wybranego checkoutu Windows;
+- `frontend` uruchamia Next.js dev i HMR z wybranego checkoutu hosta (Windows lub Linux/WSL; rozszerzenie: ADR 0064);
 - `backend` przy starcie wykonuje zweryfikowany, przyrostowy build, a następnie
   w tym samym kontenerze uruchamia API i nadzorowany native runtime.
 

@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 import re
 import sys
 import time
+import uuid
 
 import fullmag_storage as storage
 from docker_build_control import (BuildControl, BuildControlError, canonical, docker_capture,
@@ -162,15 +163,329 @@ def docker_text(*args, timeout=90, combined=False):
     return (result.stdout + (result.stderr if combined else b"")).decode("utf-8", "replace")
 
 
+def _linux_runtime_identity():
+    from docker_platform import host_profile, runtime_identity
+
+    return runtime_identity() if host_profile() == "linux-native-v1" else None
+
+
+def _docker_process_environment(environment=None):
+    from docker_platform import docker_environment
+
+    return docker_environment(environment)
+
+
+def _host_certificate_paths(state, profile):
+    if profile == "linux-native-v1":
+        from docker_platform import certificate_directory
+
+        directory = certificate_directory(state)
+        return (directory / "linux-native-host.json",
+                Path(state) / ".fullmag-linux-native-owner.json")
+    return (Path(state) / "windows-folder-host.json",
+            Path(state) / ".fullmag-windows-folder-owner.json")
+
+
+def _path_contains(parent, child):
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _assert_linux_certificate_mount_isolated(document, certificate_directory):
+    """Require one RO certificate bind and reject every writable alias of it."""
+    from docker_platform import LINUX_CERTIFICATE_DIRECTORY_TARGET
+
+    certificate_directory = Path(certificate_directory).resolve(strict=False)
+    services = document.get("services") if isinstance(document, Mapping) else None
+    if not isinstance(services, Mapping):
+        raise BuildControlError("Rendered Compose document has no services")
+    admissions = 0
+    for service_name in ("backend", "frontend"):
+        service = services.get(service_name)
+        if not isinstance(service, Mapping):
+            raise BuildControlError("Rendered Compose document is missing " + service_name)
+        mounts = service.get("volumes")
+        if not isinstance(mounts, list):
+            raise BuildControlError("Rendered Compose mounts are malformed for " + service_name)
+        for mount in mounts:
+            if not isinstance(mount, Mapping):
+                raise BuildControlError("Rendered Compose contains a malformed mount")
+            if mount.get("type") != "bind":
+                continue
+            source = mount.get("source")
+            if not isinstance(source, str) or not source:
+                raise BuildControlError("Rendered bind mount has no host source")
+            source_path = Path(source).resolve(strict=False)
+            target = mount.get("target")
+            read_only = mount.get("read_only") is True
+            exact_admission = (
+                service_name == "backend"
+                and source_path == certificate_directory
+                and target == LINUX_CERTIFICATE_DIRECTORY_TARGET
+                and read_only
+            )
+            if exact_admission:
+                admissions += 1
+                continue
+            if (_path_contains(source_path, certificate_directory)
+                    or _path_contains(certificate_directory, source_path)):
+                raise BuildControlError(
+                    "Host certificate directory is exposed through a non-dedicated Compose bind"
+                )
+    if admissions != 1:
+        raise BuildControlError(
+            "Rendered Linux backend must have exactly one dedicated readonly host-certificate bind"
+        )
+
+
+def _read_host_certificate(certificate_path, owner_path):
+    from docker_platform import read_owned_regular
+
+    certificate_bytes = read_owned_regular(certificate_path, maximum=1024 * 1024)
+    owner_bytes = read_owned_regular(owner_path, maximum=1024 * 1024)
+    if certificate_bytes != owner_bytes:
+        raise BuildControlError("Retained storage owner marker and host certificate differ")
+    try:
+        certificate = json.loads(certificate_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Retained host certificate is invalid") from error
+    if not isinstance(certificate, dict):
+        raise BuildControlError("Retained host certificate is malformed")
+    return certificate
+
+
+def _current_docker_host():
+    import docker_platform
+
+    if docker_platform.host_profile() == "linux-native-v1":
+        return docker_platform.require_local_linux_engine(lambda *args: docker_text(*args))
+    result = docker_platform.target_record()
+    result["daemon_id"] = docker_text("info", "--format", "{{.ID}}").strip()
+    return result
+
+
+def _assert_ledger_peer_documents(documents, expected):
+    """Refuse a second active Linux host-ledger identity on this daemon."""
+    for document in documents:
+        if not isinstance(document, Mapping):
+            raise BuildControlError("Docker returned an invalid active-container record")
+        config = document.get("Config") or {}
+        labels = config.get("Labels") or {}
+        environment = {}
+        for item in config.get("Env", []) or []:
+            if isinstance(item, str) and "=" in item:
+                key, value = item.split("=", 1)
+                environment[key] = value
+        is_managed_backend = (
+            environment.get("FULLMAG_DOCKER_ROLE") == "backend"
+            or labels.get("com.docker.compose.service") == "backend"
+            or (labels.get("org.fullmag.compose.project") and
+                labels.get("org.fullmag.compose.role") == "backend")
+        )
+        if not is_managed_backend:
+            continue
+        profile = environment.get("FULLMAG_HOST_LEDGER_PROFILE")
+        ledger_values = (
+            profile,
+            environment.get("FULLMAG_HOST_LEDGER_PROJECT_ID"),
+            environment.get("FULLMAG_HOST_LEDGER_MOUNT_ROOT"),
+            environment.get("FULLMAG_HOST_LEDGER_BACKING_IMAGE"),
+            environment.get("FULLMAG_DOCKER_HOST_ID"),
+        )
+        if ledger_values != expected:
+            name = config.get("Hostname") or document.get("Name") or document.get("Id") or "unknown"
+            raise BuildControlError(
+                "Active Fullmag backend peer " + str(name)[:128]
+                + " uses a different or unproven host-ledger identity on this Docker daemon; "
+                "coordinate the canonical storage/ledger settings before starting another DEV group"
+            )
+
+
+def _assert_linux_ledger_peers(layout):
+    """Check running Fullmag backends before this checkout allocates its group."""
+    import docker_host_ledger as ledger
+    from docker_platform import host_profile
+
+    if host_profile() != "linux-native-v1":
+        return
+    values = ledger._resolve_values(layout)
+    daemon = ledger._daemon_info(docker_text)
+    identifiers = docker_text("ps", "--quiet", "--no-trunc").split()
+    if not identifiers:
+        return
+    documents = json.loads(docker_text("inspect", *identifiers))
+    if not isinstance(documents, list):
+        raise BuildControlError("Cannot inspect active Fullmag backend peers safely")
+    expected = (
+        ledger.PROFILE,
+        values["project_id"],
+        values["mount_root"],
+        ledger._daemon_path(values["backing_image"], "backing image"),
+        daemon["id_sha256"],
+    )
+    _assert_ledger_peer_documents(documents, expected)
+
+
+def _verify_linux_certificate_owner(certificate, state, image, docker_host, volume):
+    uid, gid = _linux_runtime_identity()
+    owner_token = certificate.get("owner_token")
+    expected_restart = hashlib.sha256((str(owner_token) + ":" + str(image)).encode("ascii")).hexdigest()
+    if (certificate.get("schema") != "fullmag.linux-native-host-certificate.v1"
+            or certificate.get("storage_profile") != "linux-native-v1"
+            or certificate.get("role") != "session"
+            or certificate.get("owner_scope") != "docker-local-unix"
+            or certificate.get("image_id") != image
+            or certificate.get("host_root") != str(Path(state).resolve(strict=True))
+            or certificate.get("filesystem") != volume.get("filesystem")
+            or certificate.get("device") != volume.get("device")
+            or certificate.get("runtime_uid") != uid
+            or certificate.get("runtime_gid") != gid
+            or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", str(owner_token))
+            or certificate.get("restart_expected_sha256") != expected_restart
+            or certificate.get("docker_host") != docker_host
+            or certificate.get("engine_id") != docker_host.get("daemon_id")):
+        raise BuildControlError("Linux host certificate differs from current owner, filesystem, image, or Docker endpoint")
+
+
+def _publish_linux_certificate(certificate_path, owner_path, certificate):
+    from docker_platform import publish_evidence
+
+    publish_evidence(certificate_path, certificate)
+    publish_evidence(owner_path, certificate)
+
+
+def _new_linux_host_certificate(state, image, runtime_identity, docker_host,
+                                volume, assembly, binary_hashes, delegation,
+                                owner_token=None):
+    owner_token = owner_token or str(uuid.uuid4())
+    # Owner tokens are UUIDs, not arbitrary cache or service identifiers.
+    owner_token = str(uuid.UUID(owner_token))
+    return {
+        "schema": "fullmag.linux-native-host-certificate.v1",
+        "storage_profile": "linux-native-v1",
+        "role": "session",
+        "owner_scope": "docker-local-unix",
+        "owner_token": owner_token,
+        "engine_id": docker_host["daemon_id"],
+        "docker_host": dict(docker_host),
+        "host_root": str(Path(state).resolve(strict=True)),
+        "filesystem": volume["filesystem"],
+        "device": volume["device"],
+        "runtime_uid": runtime_identity[0],
+        "runtime_gid": runtime_identity[1],
+        "image_id": image,
+        "source_commit": assembly["commit"],
+        "binary_hashes": dict(binary_hashes),
+        "artifact_receipt_sha256": assembly["build_receipt_sha256"],
+        "restart_expected_sha256": hashlib.sha256(
+            (owner_token + ":" + image).encode("ascii")
+        ).hexdigest(),
+        "restart_verified": False,
+        "development_build": dict(delegation),
+    }
+
+
+def _linux_probe_snapshot(container_id):
+    script = r'''import hashlib,json,os,stat
+def read(path):
+ fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0))
+ try:
+  info=os.fstat(fd)
+  if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_uid!=os.geteuid() or info.st_gid!=os.getegid() or info.st_size>65536:
+   raise RuntimeError('Linux storage probe record is not a bounded owned regular file')
+  data=os.read(fd,65537)
+  if len(data)>65536: raise RuntimeError('Linux storage probe record exceeded its byte limit')
+  return data
+ finally: os.close(fd)
+probe=json.loads(read('/state/.fullmag-linux-native-probe.json'))
+restart=read('/state/.linux-native-restart')
+print(json.dumps({'probe':probe,'restart_sha256':hashlib.sha256(restart).hexdigest()}))
+'''
+    raw = docker_text("exec", container_id, "/usr/local/bin/python3", "-B", "-c", script)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise BuildControlError("Linux guest storage probe returned invalid JSON") from error
+    if not isinstance(value, dict) or not isinstance(value.get("probe"), dict):
+        raise BuildControlError("Linux guest storage probe result is incomplete")
+    return value
+
+
+def _run_linux_storage_preflight(control, operation, backend_id, state,
+                                 certificate_path, owner_path, certificate,
+                                 assembly=None, inputs=None):
+    """Verify guest durability, rotate the owner certificate, and verify restart."""
+    import docker_platform
+    import fullmag_docker_runtime as runtime
+
+    local = docker_platform.admit_storage_path(state)
+    current = _current_docker_host()
+    if certificate.get("restart_verified") is not True:
+        if assembly is None or inputs is None:
+            raise BuildControlError("Initial Linux admission requires a matching backend build receipt")
+        certificate = runtime._refresh_development_certificate(certificate, assembly, inputs)
+        _publish_linux_certificate(certificate_path, owner_path, certificate)
+    _verify_linux_certificate_owner(certificate, state, certificate.get("image_id"), current, local)
+    first = docker_text("exec", backend_id, "/usr/local/bin/python3", "/opt/fullmag/entrypoint.py",
+                        "--storage-probe", timeout=120, combined=True)
+    control.write(operation["root"] + "/storage-probe-first-log.json", {"log": first})
+    snapshot = _linux_probe_snapshot(backend_id)
+    probe = snapshot["probe"]
+    required = ("file_sync", "directory_sync", "atomic_replace", "process_lock", "sqlite_transactions")
+    if (probe.get("schema") != "fullmag.linux-native-probe.v1"
+            or probe.get("storage_profile") != "linux-native-v1"
+            or probe.get("image_id") != certificate.get("image_id")
+            or probe.get("owner_token") != certificate.get("owner_token")
+            or probe.get("restart_expected_sha256") != certificate.get("restart_expected_sha256")
+            or not isinstance(probe.get("checks"), Mapping)
+            or any(probe["checks"].get(name) is not True for name in required)
+            or snapshot.get("restart_sha256") != certificate.get("restart_expected_sha256")):
+        raise BuildControlError("Initial Linux storage durability or restart readback probe failed")
+    if certificate.get("restart_verified") is not True:
+        certificate = dict(certificate)
+        certificate["restart_verified"] = True
+        _publish_linux_certificate(certificate_path, owner_path, certificate)
+    _verify_linux_certificate_owner(certificate, state, certificate.get("image_id"), current, local)
+    second = docker_text("exec", backend_id, "/usr/local/bin/python3", "/opt/fullmag/entrypoint.py",
+                         "--storage-probe", timeout=120, combined=True)
+    control.write(operation["root"] + "/storage-probe-restart-log.json", {"log": second})
+    final = _linux_probe_snapshot(backend_id)
+    final_probe = final["probe"]
+    if (final_probe.get("checks", {}).get("restart_readback") is not True
+            or final_probe.get("image_id") != certificate.get("image_id")
+            or final_probe.get("owner_token") != certificate.get("owner_token")
+            or final_probe.get("restart_expected_sha256") != certificate.get("restart_expected_sha256")
+            or final.get("restart_sha256") != certificate.get("restart_expected_sha256")
+            or any(final_probe.get("checks", {}).get(name) is not True
+                   for name in (*required, "restart_readback"))):
+        raise BuildControlError("Restarted Linux storage durability probe failed")
+    control.write(operation["root"] + "/linux-storage-probe-receipt.json", final_probe)
+    return certificate, final_probe
+
+
 def consumers():
     ids = docker_text("ps", "--quiet", "--no-trunc").split()
     return json.loads(docker_text("inspect", *ids)) if ids else []
 
 
 def _owned_volume(control, role, key):
+    from docker_platform import runtime_identity_record
+
+    runtime = runtime_identity_record()
+    if runtime["profile"] == "linux-native-v1":
+        key = hashlib.sha256(canonical({"key": key, "runtime": runtime})).hexdigest()
     name = "fullmag-dev-" + role + "-v1-" + key[:24]
     labels = {**{k: v for k, v in control.labels.items() if k.startswith("org.fullmag.")},
               "org.fullmag.build.role": role, "org.fullmag.build.cache-key": key}
+    if runtime["profile"] == "linux-native-v1":
+        labels.update({
+            "org.fullmag.build.runtime-profile": runtime["profile"],
+            "org.fullmag.build.runtime-uid": str(runtime["uid"]),
+            "org.fullmag.build.runtime-gid": str(runtime["gid"]),
+        })
     found = docker_capture("volume", "inspect", name, allow_failure=True)
     if found.returncode:
         names = docker_text("volume", "ls", "--format", "{{.Name}}").splitlines()
@@ -191,10 +506,17 @@ def _owned_volume(control, role, key):
         raise BuildControlError("Build-data volume ownership differs; retained")
     if any(m.get("Name") == name for c in consumers() for m in c.get("Mounts", [])):
         raise BuildControlError("Cannot initialize a build-data volume with active consumers")
-    script = "test $(stat -c %u /data) = 0 -o $(stat -c %u /data) = 65532; chown 65532:65532 /data; chmod 0750 /data"
+    if runtime["profile"] == "linux-native-v1":
+        uid, gid = runtime["uid"], runtime["gid"]
+        script = (f"if test $(stat -c %u:%g /data) = {uid}:{gid}; then test $(stat -c %a /data) = 750; "
+                  f"elif test $(stat -c %u:%g /data) = 0:0; then "
+                  "test -z \"$(find /data -mindepth 1 -maxdepth 1 -print -quit)\"; "
+                  f"chown {uid}:{gid} /data; chmod 0750 /data; else exit 41; fi")
+    else:
+        script = "test $(stat -c %u /data) = 0 -o $(stat -c %u /data) = 65532; chown 65532:65532 /data; chmod 0750 /data"
     args = control.helper_args(script, initialize=True)
     args[args.index("--entrypoint"):args.index("--entrypoint")] = ["--mount", "type=volume,src=" + name + ",dst=/data,volume-nocopy"]
-    result = bounded_capture(args, data=b"", timeout=90)
+    result = bounded_capture(args, data=b"", timeout=90, env=_docker_process_environment())
     if result.returncode:
         raise BuildControlError(result.stderr.decode("utf-8", "replace"))
     return name
@@ -275,7 +597,7 @@ print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':reques
     args = control.helper_args("exec /usr/local/bin/python3 -I -c " + __import__('shlex').quote(script))
     args[args.index("--entrypoint"):args.index("--entrypoint")] = ["--mount", "type=volume,src=" + volume + ",dst=/data,volume-nocopy"]
     args[args.index(control.image)] = image
-    result = bounded_capture(args, data=request, timeout=120)
+    result = bounded_capture(args, data=request, timeout=120, env=_docker_process_environment())
     if result.returncode:
         raise BuildControlError(result.stderr.decode("utf-8", "replace"))
     seeded = json.loads(result.stdout)
@@ -287,6 +609,7 @@ print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':reques
 
 def _backend_cache(control, operation, layout, selected, image, toolchain):
     import docker_backend_volume_cache as cache
+    runtime_identity = _linux_runtime_identity()
     def volume_docker(*args):
         result = docker_capture(*args, allow_failure=True)
         if result.returncode:
@@ -298,7 +621,7 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
     layout = {**layout, "compose_project": control.project}
     profile = cache.prepare(layout, selected, image, layout["storage_root"], volume_docker,
         source_root=selected, toolchain_image=toolchain, active_consumers=consumers,
-        control_volume_name=control.volume)
+        control_volume_name=control.volume, runtime_identity=runtime_identity)
     overlay = cache.maintenance_overlay(profile)
     overlay["name"] = control.project
     control.write(operation["root"] + "/cache-maintenance-compose.json", overlay)
@@ -315,7 +638,11 @@ def _host_ledger(control, operation, layout, selected, image):
     daemon = ledger._daemon_info(docker_text)
     ledger._image_attestation(image, docker_text)
     helper = selected / "scripts/lib/docker_host_ledger.sh"
-    from windows_folder_host import read_owned_regular
+    from docker_platform import (
+        host_profile,
+        read_owned_regular,
+        runtime_identity as host_runtime_identity,
+    )
     helper_bytes = read_owned_regular(helper, maximum=ledger.MAX_HELPER_BYTES)
     helper_hash = hashlib.sha256(helper_bytes).hexdigest()
     helper_relative = operation["root"] + "/docker_host_ledger.sh"
@@ -335,14 +662,16 @@ def _host_ledger(control, operation, layout, selected, image):
         "FULLMAG_HOST_LEDGER_HELPER_PATH": ledger._daemon_path(helper, "readonly helper source"),
         "FULLMAG_HOST_LEDGER_HELPER_IMAGE": image,
         "FULLMAG_HOST_LEDGER_HOST_PID": "1",
-        "FULLMAG_HOST_LEDGER_RUNTIME_UID": "65532", "FULLMAG_HOST_LEDGER_RUNTIME_GID": "65532",
+        "FULLMAG_HOST_LEDGER_RUNTIME_UID": str(host_runtime_identity()[0]) if host_profile() == "linux-native-v1" else "65532",
+        "FULLMAG_HOST_LEDGER_RUNTIME_GID": str(host_runtime_identity()[1]) if host_profile() == "linux-native-v1" else "65532",
         "FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS": "120", "FULLMAG_DOCKER_HOST_ID": daemon["id_sha256"],
     }
-    command = ["docker", "--context", "desktop-linux", "compose", "--project-name", control.project,
+    from docker_platform import docker_cli_prefix
+    command = [*docker_cli_prefix(), "compose", "--project-name", control.project,
                "-f", "-", "-f", str(selected / "compose.host-ledger.yaml"), "--profile", "host-ledger-maintenance", "config", "--format", "json"]
     result = bounded_capture(command, data=canonical({"name": control.project,
         "services": {"backend": {"image": image}}}),
-        env={**os.environ, **env}, timeout=90)
+        env=_docker_process_environment({**os.environ, **env}), timeout=90)
     if result.returncode or len(result.stdout) > 1024 * 1024:
         raise BuildControlError("Host-ledger Compose rendering failed: " + result.stderr.decode("utf-8", "replace"))
     rendered = json.loads(result.stdout)
@@ -387,7 +716,7 @@ def _startup_helper(control, selected, image):
     command = "sha256sum " + " ".join("/opt/fullmag/" + name for name in names)
     arguments = control.helper_args(command)
     arguments[arguments.index(control.image)] = image
-    result = bounded_capture(arguments, data=b"", timeout=90)
+    result = bounded_capture(arguments, data=b"", timeout=90, env=_docker_process_environment())
     if result.returncode:
         raise BuildControlError("Image startup-helper attestation failed")
     hashes = {}
@@ -637,19 +966,21 @@ def _precreate_new_windows_runtime_state(state):
 
 def start(args, *, reuse_state=None, control=None, operation=None, prepared=None,
           recovery_environment=None, recovery_metadata=None):
-    from docker_dev import (_require_native_windows, _select_source, _compose_identity,
+    from docker_dev import (_require_managed_dev_host, _select_source, _compose_identity,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
     import fullmag_docker_runtime as runtime
-    from windows_folder_host import attest, publish_evidence, local_volume
+    import docker_platform
     provided_control = control
     provided_operation = operation
     if (provided_control is None) != (provided_operation is None):
         raise BuildControlError("Recovery start requires both control and operation")
     validated_recovery_environment = _validate_recovery_environment(recovery_environment)
     validated_recovery_metadata = _validate_recovery_metadata(recovery_metadata)
-    _require_native_windows()
+    _require_managed_dev_host()
+    host_profile = docker_platform.host_profile()
     selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root or args.repo_root)
+    _assert_linux_ledger_peers(layout)
     identity = _compose_identity(layout)
     admission_context = {}
     if provided_operation is not None:
@@ -712,56 +1043,94 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         token = operation["receipt"]["attempt"]
         if reuse_state is None:
             state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
-                                          layout["storage_root"], "Windows session storage")
-            state.mkdir(parents=True, exist_ok=False)
-            operation["receipt"]["windows_runtime_directories"] = list(
-                _precreate_new_windows_runtime_state(state)
-            )
-            operation["receipt"]["windows_runtime_write_probe"] = "PASS"
-            certificate_path = state / "windows-folder-host.json"
-            certificate_path.touch(exist_ok=False)
+                                          layout["storage_root"], "DEV session storage")
+            state.parent.mkdir(parents=True, exist_ok=True)
+            state.mkdir(mode=0o700, exist_ok=False)
+            if host_profile == "linux-native-v1":
+                os.chmod(state, 0o700)
+                certificate_path, owner_marker = _host_certificate_paths(state, host_profile)
+                certificate_path.parent.mkdir(mode=0o700, exist_ok=False)
+                os.chmod(certificate_path.parent, 0o700)
+            else:
+                operation["receipt"]["windows_runtime_directories"] = list(
+                    _precreate_new_windows_runtime_state(state)
+                )
+                operation["receipt"]["windows_runtime_write_probe"] = "PASS"
+                certificate_path, owner_marker = _host_certificate_paths(state, host_profile)
+                certificate_path.touch(exist_ok=False)
         else:
             try:
                 state = storage.validate_path(
                     Path(reuse_state["state"]),
                     Path(layout["runtime_root"]),
-                    "retained Windows sessions",
+                    "retained DEV sessions",
                 )
-                certificate_path = storage.validate_path(
-                    Path(reuse_state["host_certificate"]),
-                    state,
-                    "retained Windows session certificate",
-                )
-                owner_marker = storage.validate_path(
-                    Path(reuse_state["owner_marker"]),
-                    state,
-                    "retained Windows session owner marker",
-                )
+                certificate_path, owner_marker = _host_certificate_paths(state, host_profile)
+                expected_certificate = storage.validate_path(
+                    certificate_path, Path(layout["runtime_root"]),
+                    "retained DEV session certificate")
+                expected_owner = storage.validate_path(owner_marker, state,
+                    "retained DEV session owner marker")
+                if (Path(reuse_state["host_certificate"]).resolve(strict=False) != expected_certificate
+                        or Path(reuse_state["owner_marker"]).resolve(strict=False) != expected_owner):
+                    raise BuildControlError("Retained host certificate paths differ from the selected profile")
             except (KeyError, TypeError, ValueError, storage.StorageError) as error:
                 raise BuildControlError(
-                    "Retained Windows session paths are outside the selected runtime root"
+                    "Retained DEV session paths are outside the selected runtime root"
                 ) from error
             reuse_state = dict(reuse_state)
             reuse_state["state"] = state
             reuse_state["host_certificate"] = certificate_path
             reuse_state["owner_marker"] = owner_marker
         operation["receipt"]["state_root"] = str(state)
-        local_volume(state)
+        volume_identity = docker_platform.admit_storage_path(state)
+        docker_host = _current_docker_host()
+        runtime_identity = docker_platform.runtime_identity() if host_profile == "linux-native-v1" else None
+        operation["receipt"]["docker_host"] = docker_host
+        operation["receipt"]["storage_profile"] = host_profile
+        retained_certificate = None
+        if host_profile == "linux-native-v1" and reuse_state is not None:
+            retained_certificate = _read_host_certificate(certificate_path, owner_marker)
+            _verify_linux_certificate_owner(retained_certificate, state,
+                retained_certificate.get("image_id"), docker_host, volume_identity)
+            if (retained_certificate.get("image_id") != image
+                    or retained_certificate.get("restart_verified") is not True):
+                raise BuildControlError(
+                    "Retained Linux state is not admitted for this backend image; preserve it and use explicit fresh-state recovery"
+                )
         cache = _backend_cache(control, operation, layout, selected, image, toolchain["image_id"])
         operation["receipt"]["backend_volumes"] = cache["volume_names"]
         frontend_inputs, frontend_volume = _frontend(control, operation, selected, state, args.port, image)
         ledger_backend, ledger_profile = _host_ledger(control, operation, layout, selected, image)
         inputs = {"image_id": image, "toolchain_image_id": toolchain["image_id"],
                   "guest_provenance_path": "/opt/fullmag/control/backend/runtime-provenance.json"}
-        provisional, hashes, delegation = runtime._provisional_development_certificate(inputs, identity)
-        provisional["binary_hashes"] = hashes
-        engine_id = docker_text("info", "--format", "{{.ID}}").strip()
-        if reuse_state is None:
-            certificate = attest(state, provisional, engine_id, hashes, development_build=delegation)
-            publish_evidence(certificate_path, certificate)
+        assembly, hashes, delegation = runtime._provisional_development_certificate(
+            inputs, identity, storage_profile=host_profile
+        )
+        if host_profile == "linux-native-v1":
+            certificate = _new_linux_host_certificate(
+                state, image, runtime_identity, docker_host, volume_identity,
+                assembly, hashes, delegation,
+                owner_token=(retained_certificate or {}).get("owner_token"),
+            )
+            _publish_linux_certificate(certificate_path, owner_marker, certificate)
+            operation["receipt"].update(
+                storage_profile=host_profile,
+                owner_token=certificate["owner_token"],
+                host_certificate_sha256=hashlib.sha256(
+                    docker_platform.read_owned_regular(certificate_path, maximum=1024 * 1024)
+                ).hexdigest(),
+            )
         else:
-            certificate = runtime._reuse_host_certificate(reuse_state, provisional, engine_id,
-                                                         development_build=delegation)
+            from windows_folder_host import attest, publish_evidence
+            if reuse_state is None:
+                certificate = attest(state, assembly, docker_host["daemon_id"], hashes,
+                                     development_build=delegation)
+                publish_evidence(certificate_path, certificate)
+            else:
+                certificate = runtime._reuse_host_certificate(
+                    reuse_state, assembly, docker_host["daemon_id"], development_build=delegation
+                )
         startup = None
         if args.script is not None:
             startup_helper, startup_hashes = _startup_helper(control, selected, image)
@@ -773,7 +1142,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                        "provenance_sha256": startup_digest, "helper_hashes": startup_hashes}
         user_data = _workspace_state_root(layout, control.project)
         git_common = _source_git_common_directory(selected)
-        environment = {**os.environ, "FULLMAG_COMPOSE_PROJECT": control.project,
+        environment = {**docker_platform.runtime_environment(os.environ),
+            "FULLMAG_COMPOSE_PROJECT": control.project,
             "FULLMAG_COMPOSE_NETWORK": identity["network_name"],
             "FULLMAG_DOCKER_DEVICE_ACCESS": device_access,
             "FULLMAG_BUILD_CONTROL_VOLUME": control.volume,
@@ -790,6 +1160,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             "FULLMAG_SOURCE_PROJECT_ID": identity["project_id"],
             "FULLMAG_SOURCE_WORKTREE_ID": identity["worktree_id"],
             "FULLMAG_SOURCE_CHECKOUT_KIND": identity["checkout_kind"]}
+        if host_profile == "linux-native-v1":
+            environment["FULLMAG_HOST_CERTIFICATE_DIR"] = str(certificate_path.parent)
+            operation["receipt"]["runtime_identity"] = {
+                "uid": runtime_identity[0], "gid": runtime_identity[1]
+            }
         # Only the two validated controls are carried into Compose.  The
         # digest is explicit so later cache/ledger overlays cannot silently
         # replace the operator's requested probe mode.
@@ -797,9 +1172,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         environment["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"] = operator_probe_record[
             "operator_probe_environment_sha256"
         ]
-        configured = bounded_capture(["docker", "--context", "desktop-linux", "compose",
+        configured = bounded_capture([*docker_platform.docker_cli_prefix(), "compose",
             "--project-name", control.project, "-f", str(selected / "compose.dev.yaml"),
-            "config", "--format", "json"], env=environment, timeout=90)
+            "config", "--format", "json"],
+            env=_docker_process_environment(environment), timeout=90)
         if configured.returncode or len(configured.stdout) > 1024 * 1024:
             raise BuildControlError("DEV Compose render failed: " + configured.stderr.decode("utf-8", "replace"))
         document = json.loads(configured.stdout)
@@ -839,6 +1215,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         _reassert_operator_probe_environment(document, operator_probe_record)
         for service in (backend, frontend):
             service["logging"] = {"driver": "local", "options": {"max-size": "10m", "max-file": "3"}}
+        if host_profile == "linux-native-v1":
+            _assert_linux_certificate_mount_isolated(document, certificate_path.parent)
         # All writable bind destinations are runtime/user stores, never build data.
         for service in (backend, frontend):
             for mount in service["volumes"]:
@@ -903,6 +1281,7 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400):
 def _finish(control, operation, document, backend_id, frontend_id, selected, state,
             certificate_path, certificate, cache, toolchain, image, git_common, ledger_profile, port):
     import fullmag_docker_runtime as runtime
+    import docker_platform
     token = operation["receipt"]["attempt"]
     operator_probe_record = _operator_probe_record_from_retained(operation["receipt"], document)
     inputs = {"image_id": image, "toolchain_image_id": toolchain["image_id"],
@@ -912,8 +1291,9 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
     control.write(operation["root"] + "/backend-build-receipt.json", receipt)
     control.write(operation["root"] + "/provenance.json", provenance)
     operation["receipt"]["config_sha256"] = hashlib.sha256(canonical(document)).hexdigest()
-    operation["receipt"]["windows_storage_delegation_reused"] = certificate.get("restart_verified") is True
-    # Use the existing source/binary validation before rotating Windows admission.
+    operation["receipt"]["storage_profile"] = certificate.get("storage_profile")
+    operation["receipt"]["storage_delegation_reused"] = certificate.get("restart_verified") is True
+    # Use the existing source/binary validation before rotating host admission.
     inputs.update(device_access=document["services"]["backend"]["environment"]["FULLMAG_DOCKER_DEVICE_ACCESS"],
         gpu_preflight="PASS" if document["services"]["backend"]["environment"]["FULLMAG_DOCKER_DEVICE_ACCESS"] == "gpu" else "NOT_REQUIRED",
         backend_cache=cache, package_root="/opt/fullmag/package", run_id=token,
@@ -926,11 +1306,32 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
     assembly = runtime._assembly_from_backend_start(inputs, receipt, provenance, container_id=backend_id)
     # An admitted delegation intentionally permits subsequent live builds.
     # Rotating it back to unverified after handoff races the serving process.
-    if certificate.get("restart_verified") is not True:
-        certificate = runtime._refresh_development_certificate(certificate, assembly, inputs)
-        runtime._publish_bound_development_certificate(certificate_path, state / ".fullmag-windows-folder-owner.json", certificate)
-    runtime._complete_backend_storage_preflight(docker_text, backend_id, state, certificate_path, certificate, None,
-        log_writer=lambda output: control.write(operation["root"] + "/storage-probe-log.json", {"log": output}))
+    if certificate.get("storage_profile") == "linux-native-v1":
+        owner_marker = Path(state) / ".fullmag-linux-native-owner.json"
+        certificate, probe = _run_linux_storage_preflight(
+            control, operation, backend_id, state, certificate_path, owner_marker,
+            certificate, assembly=assembly, inputs=inputs,
+        )
+        operation["receipt"]["linux_native_storage_probe"] = probe
+        operation["receipt"]["owner_token"] = certificate["owner_token"]
+        operation["receipt"]["host_certificate_sha256"] = hashlib.sha256(
+            docker_platform.read_owned_regular(certificate_path, maximum=1024 * 1024)
+        ).hexdigest()
+        operation["receipt"]["linux_native_certificate_sha256"] = hashlib.sha256(
+            canonical(certificate)
+        ).hexdigest()
+    else:
+        if certificate.get("restart_verified") is not True:
+            certificate = runtime._refresh_development_certificate(certificate, assembly, inputs)
+            runtime._publish_bound_development_certificate(
+                certificate_path, state / ".fullmag-windows-folder-owner.json", certificate
+            )
+        runtime._complete_backend_storage_preflight(
+            docker_text, backend_id, state, certificate_path, certificate, None,
+            log_writer=lambda output: control.write(
+                operation["root"] + "/storage-probe-log.json", {"log": output}
+            ),
+        )
     import docker_host_ledger as ledger
     verify_spec = ledger_profile["maintenance_document"]
     verify_name = "fullmag-ledger-verify-" + token
@@ -989,7 +1390,7 @@ else:
         raise BuildControlError("API/frontend readiness timed out; services and Docker data retained")
     startup_environment = document["services"]["backend"]["environment"]
     if startup_environment.get("FULLMAG_STARTUP_ENABLED") == "1":
-        from windows_folder_host import read_owned_regular
+        from docker_platform import read_owned_regular
         startup_path = state / "startup-provenance.json"
         data = read_owned_regular(startup_path, maximum=256 * 1024)
         if hashlib.sha256(data).hexdigest() != startup_environment["FULLMAG_STARTUP_PROVENANCE_SHA256"]:
@@ -1051,6 +1452,54 @@ def _validate_retained_service(document, actual, service, image_config, *, expec
             raise BuildControlError("Retained source/runtime bind differs: " + mount["target"])
 
 
+def _load_retained_storage(layout, previous, profile, image, docker_host):
+    import docker_platform
+
+    state = storage.validate_path(
+        Path(previous["state_root"]), layout["runtime_root"], "retained DEV session"
+    )
+    certificate_path, owner_path = _host_certificate_paths(state, profile)
+    certificate = _read_host_certificate(certificate_path, owner_path)
+    if certificate.get("image_id") != image:
+        raise BuildControlError("Retained host certificate belongs to another backend image")
+    if profile == "linux-native-v1":
+        volume = docker_platform.admit_storage_path(state)
+        _verify_linux_certificate_owner(certificate, state, image, docker_host, volume)
+        if previous.get("storage_profile") != profile:
+            raise BuildControlError("Retained Linux storage profile differs from its pinned receipt")
+        if previous.get("docker_host") != docker_host:
+            raise BuildControlError("Retained Linux operation selected another Docker endpoint or context")
+        if previous.get("owner_token") != certificate.get("owner_token"):
+            raise BuildControlError("Retained Linux owner token differs from its pinned receipt")
+        identity = docker_platform.runtime_identity_record()
+        if previous.get("runtime_identity") != {"uid": identity["uid"], "gid": identity["gid"]}:
+            raise BuildControlError("Retained Linux runtime UID/GID differs from its pinned receipt")
+        certificate_digest = hashlib.sha256(
+            docker_platform.read_owned_regular(certificate_path, maximum=1024 * 1024)
+        ).hexdigest()
+        if previous.get("host_certificate_sha256") != certificate_digest:
+            raise BuildControlError("Retained Linux certificate bytes differ from the pinned receipt")
+    return state, certificate_path, owner_path, certificate
+
+
+def _retained_identity_receipt(profile, docker_host, certificate_path, certificate):
+    import docker_platform
+
+    identity = {"storage_profile": profile, "docker_host": dict(docker_host)}
+    if profile == "linux-native-v1":
+        runtime = docker_platform.runtime_identity_record()
+        identity.update(
+            runtime_identity={"uid": runtime["uid"], "gid": runtime["gid"]},
+            owner_token=certificate["owner_token"],
+            host_certificate_sha256=hashlib.sha256(
+                docker_platform.read_owned_regular(
+                    certificate_path, maximum=1024 * 1024
+                )
+            ).hexdigest(),
+        )
+    return identity
+
+
 def _assert_private_restart_network(actual, ids, project):
     """Only the pinned frontend may expose this backend to browser commands."""
     backend = actual["backend"]
@@ -1080,10 +1529,12 @@ def resume(args):
 
 def _retained_operation(args, *, recreate_services, restart_idle_service=False):
     """Resume observation/admission of one exact failed start; never restart the backend."""
-    from docker_dev import _require_native_windows, _select_source, _compose_identity
-    from windows_folder_host import read_owned_regular
-    _require_native_windows()
+    from docker_dev import _require_managed_dev_host, _select_source, _compose_identity
+    import docker_platform
+    _require_managed_dev_host()
+    host_profile = docker_platform.host_profile()
     selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root)
+    _assert_linux_ledger_peers(layout)
     identity = _compose_identity(layout)
     from docker_build_control import toolchain_configuration
     configured = toolchain_configuration(selected, identity)
@@ -1103,6 +1554,17 @@ def _retained_operation(args, *, recreate_services, restart_idle_service=False):
     image = previous["inputs"]["image_id"]
     if previous["inputs"]["source_root"] != str(selected):
         raise BuildControlError("Resume source selection differs")
+    docker_host = _current_docker_host()
+    if previous.get("docker_host") is not None and previous.get("docker_host") != docker_host:
+        raise BuildControlError("Retained operation selected another Docker endpoint or context")
+    state, certificate_path, owner_marker, certificate = _load_retained_storage(
+        layout, previous, host_profile, image, docker_host
+    )
+    retained_identity = _retained_identity_receipt(
+        host_profile, docker_host, certificate_path, certificate
+    )
+    if host_profile == "linux-native-v1":
+        _assert_linux_certificate_mount_isolated(document, certificate_path.parent)
     ids = {service: compose_capture(document, "ps", "--all", "--quiet", service).decode().strip()
            for service in ("backend", "frontend")}
     actual = {}
@@ -1125,11 +1587,6 @@ def _retained_operation(args, *, recreate_services, restart_idle_service=False):
         if (not actual["backend"]["State"]["Running"]
                 or actual["backend"]["State"].get("Health", {}).get("Status") != "healthy"):
             raise BuildControlError("Idle restart requires a healthy backend; an active build is never interrupted")
-        state = storage.validate_path(Path(previous["state_root"]), layout["runtime_root"], "retained Windows sessions")
-        certificate_path = state / "windows-folder-host.json"
-        certificate = json.loads(read_owned_regular(certificate_path))
-        if json.loads(read_owned_regular(state / ".fullmag-windows-folder-owner.json")) != certificate:
-            raise BuildControlError("Retained Windows owner/certificate differs")
         environment = document["services"]["backend"]["environment"]
         if environment.get("FULLMAG_STARTUP_ENABLED") == "1":
             raise BuildControlError("Startup activation requires dedicated recovery; idle restart will not repeat Solve")
@@ -1146,6 +1603,7 @@ def _retained_operation(args, *, recreate_services, restart_idle_service=False):
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             **operator_probe_record}) as operation:
             operation["receipt"].update(operator_probe_record)
+            operation["receipt"].update(retained_identity)
             _assert_private_restart_network(actual, ids, control.project)
             operation["daemon_pending"] = True
             docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)
@@ -1187,12 +1645,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
         if document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1":
             raise BuildControlError("Retained startup activation requires its dedicated recovery; recreation will not repeat Solve")
-        state = storage.validate_path(Path(previous["state_root"]), layout["runtime_root"], "retained Windows sessions")
-        certificate_path = state / "windows-folder-host.json"
-        certificate = json.loads(read_owned_regular(certificate_path))
-        owner_path = state / ".fullmag-windows-folder-owner.json"
-        if json.loads(read_owned_regular(owner_path)) != certificate or certificate.get("image_id") != image:
-            raise BuildControlError("Retained Windows storage owner/certificate differs")
+        if certificate.get("image_id") != image:
+            raise BuildControlError("Retained storage certificate belongs to another image")
         fresh_state = bool(getattr(args, "fresh_state", False))
         if not fresh_state and not certificate.get("restart_verified"):
             raise BuildControlError("Unadmitted storage cannot rotate as an admitted runtime; use explicit --fresh-state to preserve the old root")
@@ -1211,6 +1665,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         with control.operation("recreate-services", {"attempt": args.attempt, "config_sha256": args.config_sha256,
                                                       **operator_probe_record}) as operation:
             operation["receipt"].update(operator_probe_record)
+            operation["receipt"].update(retained_identity)
             control.write(operation["root"] + "/retained-containers.json", actual)
             operation["receipt"].update(state="stopping-owned-frontend", previous_state_root=str(state),
                                         fresh_state=fresh_state)
@@ -1227,7 +1682,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             operation["receipt"].update(state="succeeded", removed_containers=list(ids.values()),
                                         retained_volumes=previous["backend_volumes"], retained_frontend_volume=previous["frontend_volume"])
         reuse = None if fresh_state else {"state": state, "host_certificate": certificate_path,
-            "owner_marker": owner_path, "receipt": {"image_id": image},
+            "owner_marker": owner_marker, "receipt": {"image_id": image},
             "operator_probe_environment_record": operator_probe_record}
         return start(args, reuse_state=reuse)
     restart_backend = bool(getattr(args, "restart_backend", False))
@@ -1236,9 +1691,6 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             raise BuildControlError("Starting the retained backend requires it to be stopped; active runtime is never interrupted")
     elif not actual["backend"]["State"]["Running"] or actual["frontend"]["State"]["Running"]:
         raise BuildControlError("Resume requires the retained backend running and frontend stopped")
-    state = storage.validate_path(Path(previous["state_root"]), layout["runtime_root"], "retained Windows sessions")
-    certificate_path = state / "windows-folder-host.json"
-    certificate = json.loads(read_owned_regular(certificate_path))
     cache = control.read(previous_root + "/backend-cache.json")
     import docker_backend_volume_cache as cache_adapter
     cache_adapter.validate_container(actual["backend"], cache)
@@ -1252,6 +1704,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     with control.operation("resume", {"attempt": args.attempt, "config_sha256": args.config_sha256,
                                        **operator_probe_record}) as operation:
         operation["receipt"].update(operator_probe_record)
+        operation["receipt"].update(retained_identity)
         operation["receipt"].update(state="resuming-observation", state_root=str(state),
             backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
         if not actual["frontend"]["State"]["Running"]:

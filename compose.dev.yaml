@@ -1,6 +1,6 @@
-# Fullmag development on Docker Desktop. Sources stay in the selected checkout.
+# Fullmag development on local Linux Docker. Sources stay in the selected checkout.
 # The direct development launcher resolves paths, builds inside the backend
-# service at each start, checks Windows storage and records the resolved config.
+# service at each start, checks native storage and records the resolved config.
 # Compose project identity is injected by the managed launcher.  The default
 # keeps direct config inspection deterministic; selected worktrees override it.
 name: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
@@ -78,6 +78,8 @@ services:
       FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION: ${FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION:-}
       FULLMAG_BACKEND_CACHE_OWNER_UID: ${FULLMAG_BACKEND_CACHE_OWNER_UID:-65532}
       FULLMAG_BACKEND_CACHE_OWNER_GID: ${FULLMAG_BACKEND_CACHE_OWNER_GID:-65532}
+      FULLMAG_RUNTIME_UID: ${FULLMAG_RUNTIME_UID:-65532}
+      FULLMAG_RUNTIME_GID: ${FULLMAG_RUNTIME_GID:-65532}
     volumes:
       - type: volume
         source: backend-cache-build
@@ -108,7 +110,7 @@ services:
         FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA: ${FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA:-pending}
     pull_policy: never
     init: true
-    user: "65532:65532"
+    user: "${FULLMAG_RUNTIME_UID:-65532}:${FULLMAG_RUNTIME_GID:-65532}"
     read_only: true
     cpus: 4
     mem_limit: 8g
@@ -137,9 +139,11 @@ services:
     environment:
       FULLMAG_DOCKER_ROLE: backend
       FULLMAG_COMPOSE_PROJECT: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
-      FULLMAG_SOURCE_HOST_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
-      FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1
+      FULLMAG_SOURCE_HOST_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the registered source checkout}
+      FULLMAG_SESSION_STORAGE_PROFILE: ${FULLMAG_SESSION_STORAGE_PROFILE:?Resolve the host storage profile}
       FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_DEV_IMAGE}
+      FULLMAG_RUNTIME_UID: ${FULLMAG_RUNTIME_UID:-65532}
+      FULLMAG_RUNTIME_GID: ${FULLMAG_RUNTIME_GID:-65532}
       FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the toolchain identity}
       FULLMAG_BACKEND_CARGO_PROFILE: ${FULLMAG_BACKEND_CARGO_PROFILE:-backend-dev}
       FULLMAG_DOCKER_DEVICE_ACCESS: ${FULLMAG_DOCKER_DEVICE_ACCESS:?Resolved device access is required}
@@ -167,7 +171,7 @@ services:
     volumes:
       # One source selection for both services: the main checkout or a worktree.
       - type: bind
-        source: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
+        source: ${FULLMAG_SOURCE_ROOT:?Select the registered source checkout}
         target: /opt/fullmag/source
         read_only: true
         bind: {create_host_path: false}
@@ -195,7 +199,7 @@ services:
       # Runtime ownership, recovery, and process receipts stay in the group's
       # control volume. The same runtime-services subpath is mounted over its
       # native SessionStore compatibility location so sessions/results remain
-      # in the Windows-backed /state tree.
+      # in the host-backed /state tree.
       - type: volume
         source: fullmag-build-control
         target: /opt/fullmag/runtime-control
@@ -210,15 +214,15 @@ services:
         source: ${FULLMAG_WORKSPACE_STATE_ROOT:?Managed group user-data namespace is required}
         target: /user-data
         bind: {create_host_path: false}
-      # Real Windows storage: sessions and simulation results. Build logs,
+      # Native host storage: sessions and simulation results. Build logs,
       # runtime ownership records, compiler caches and provenance live in Docker volumes.
       - type: bind
-        source: ${FULLMAG_STATE_ROOT:?Managed Windows storage namespace is required}
+        source: ${FULLMAG_STATE_ROOT:?Managed host storage namespace is required}
         target: /state
         bind: {create_host_path: false}
       - type: bind
-        source: ${FULLMAG_HOST_CERTIFICATE:?Windows storage admission is required}
-        target: /run/fullmag/windows-folder-host.json
+        source: ${FULLMAG_HOST_CERTIFICATE_DIR:-${FULLMAG_HOST_CERTIFICATE:?Host storage admission is required}}
+        target: ${FULLMAG_HOST_CERTIFICATE_TARGET:-/run/fullmag/windows-folder-host.json}
         read_only: true
         bind: {create_host_path: false}
     tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]
@@ -240,7 +244,7 @@ services:
     image: ${FULLMAG_DEV_IMAGE}
     pull_policy: never
     init: true
-    user: "65532:65532"
+    user: "${FULLMAG_RUNTIME_UID:-65532}:${FULLMAG_RUNTIME_GID:-65532}"
     read_only: true
     cpus: 2
     mem_limit: 6g
@@ -255,9 +259,11 @@ services:
     environment:
       FULLMAG_DOCKER_ROLE: frontend
       FULLMAG_DOCKER_FRONTEND: dev
+      FULLMAG_RUNTIME_UID: ${FULLMAG_RUNTIME_UID:-65532}
+      FULLMAG_RUNTIME_GID: ${FULLMAG_RUNTIME_GID:-65532}
       FULLMAG_API_PROXY_TARGET: http://backend:8081
       FULLMAG_WATCHPACK_POLLING_MS: ${FULLMAG_WATCHPACK_POLLING_MS:-5000}
-      FULLMAG_SOURCE_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
+      FULLMAG_SOURCE_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the registered source checkout}
       FULLMAG_SOURCE_WORKTREE_ID: ${FULLMAG_SOURCE_WORKTREE_ID:?Select a registered source worktree}
       FULLMAG_SOURCE_COMMIT: ${FULLMAG_SOURCE_COMMIT:?Resolve the selected checkout commit}
       FULLMAG_FRONTEND_HOST_PORT: ${FULLMAG_HTTP_PORT:-3197}
@@ -268,7 +274,7 @@ services:
     ports: ["127.0.0.1:${FULLMAG_HTTP_PORT:-3197}:8080"]
     volumes:
       - type: bind
-        source: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
+        source: ${FULLMAG_SOURCE_ROOT:?Select the registered source checkout}
         target: /opt/fullmag/source
         read_only: true
         bind: {create_host_path: false}

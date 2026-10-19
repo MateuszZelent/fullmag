@@ -246,6 +246,31 @@ class ToolchainBootstrapTests(unittest.TestCase):
         initialize.assert_not_called()
         self.assertEqual(probes, [target])
 
+    @unittest.skipUnless(os.name == "nt", "fresh-host enrollment is Windows-only")
+    def test_build_uses_platform_storage_admission_before_managed_setup(self):
+        import docker_platform
+
+        layout = {"storage_root": str(self.storage), "worktree_id": "main-123",
+                  "env": {"FULLMAG_PROJECT_ID": "fullmag-test"}}
+        stop_before_volume_or_build = bootstrap.BootstrapError("stop before Docker build")
+        with mock.patch.object(bootstrap.storage, "resolve_layout", return_value=layout), \
+                mock.patch.object(bootstrap, "compose_project", return_value="fullmag-master"), \
+                mock.patch.object(docker_platform, "admit_storage_path",
+                                  return_value={"filesystem": "ntfs", "device": "test-volume"}) as admit, \
+                mock.patch.object(docker_platform, "require_local_linux_engine",
+                                  return_value={"profile": "windows-folder-v1"}), \
+                mock.patch.object(docker_platform, "runtime_identity_record",
+                                  return_value={"profile": "windows-folder-v1", "uid": 65532, "gid": 65532}), \
+                mock.patch.object(bootstrap, "ensure_control_volume",
+                                  side_effect=stop_before_volume_or_build), \
+                mock.patch.object(bootstrap, "docker") as docker:
+            with self.assertRaisesRegex(bootstrap.BootstrapError, "stop before Docker build"):
+                bootstrap.build(self.repo, direct_development=False)
+
+        self.assertEqual([Path(call.args[0]).resolve() for call in admit.call_args_list],
+                         [self.repo.resolve(), self.storage.resolve(), self.storage.resolve()])
+        docker.assert_not_called()
+
     def test_failed_parent_volume_admission_does_not_create_storage(self):
         target = self.root / "not-created" / "storage"
         with mock.patch.object(bootstrap.storage, "initialize") as initialize:

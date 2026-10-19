@@ -52,6 +52,7 @@ CONTROL_OWNER_SCHEMA = "fullmag.docker-toolchain-control-owner.v1"
 CONTROL_NAMESPACE_SCHEMA = "fullmag.docker-toolchain-control-namespace.v1"
 DEFAULT_OWNER_UID = 65532
 DEFAULT_OWNER_GID = 65532
+MAX_RUNTIME_ID = 2**31 - 1
 MAX_MARKER_BYTES = 16 * 1024
 MAX_READBACK_BYTES = 16 * 1024
 
@@ -61,6 +62,25 @@ _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 class MaintenanceError(RuntimeError):
     """The guest cache pair could not be proven exact and writable."""
+
+
+def _requested_runtime_identity(environment: Mapping[str, str] | None = None) -> tuple[int, int] | None:
+    values = os.environ if environment is None else environment
+    raw_uid = values.get("FULLMAG_RUNTIME_UID")
+    raw_gid = values.get("FULLMAG_RUNTIME_GID")
+    if raw_uid is None and raw_gid is None:
+        return None
+    if raw_uid is None or raw_gid is None:
+        raise MaintenanceError("runtime owner UID and GID must be supplied together")
+    parsed = []
+    for name, raw in (("FULLMAG_RUNTIME_UID", raw_uid), ("FULLMAG_RUNTIME_GID", raw_gid)):
+        if not isinstance(raw, str) or not raw.isascii() or not raw.isdecimal() or raw.startswith("0"):
+            raise MaintenanceError(f"runtime owner identity is invalid: {name}")
+        value = int(raw, 10)
+        if value <= 0 or value > MAX_RUNTIME_ID:
+            raise MaintenanceError(f"runtime owner identity is invalid: {name}")
+        parsed.append(value)
+    return parsed[0], parsed[1]
 
 
 def _canonical(value: Any) -> bytes:
@@ -226,6 +246,13 @@ def _open_guest_root(path: str | os.PathLike[str], uid: int, gid: int) -> int:
         owner = (metadata.st_uid, metadata.st_gid)
         if owner not in {(0, 0), (uid, gid)}:
             raise MaintenanceError("cache maintenance root has a foreign owner")
+        if owner == (0, 0) and _requested_runtime_identity() is not None:
+            try:
+                populated = os.listdir(directory)
+            except OSError as error:
+                raise MaintenanceError("cannot inspect fresh Linux runtime volume") from error
+            if populated:
+                raise MaintenanceError("root-owned Linux runtime volume is not empty")
         if os.geteuid() == 0 and owner == (uid, gid):
             # Keep the directory writable while records are opened. The final
             # ownership transfer happens only after all record checks pass.
@@ -918,11 +945,13 @@ def _frontend_owner(environment: Mapping[str, str]) -> tuple[int, int]:
             parsed = int(value, 10)
         except ValueError as error:
             raise MaintenanceError(f"frontend state maintenance owner id is invalid: {name}") from error
-        if parsed < 0 or parsed > 65535:
+        if parsed <= 0 or parsed > MAX_RUNTIME_ID or str(parsed) != value:
             raise MaintenanceError(f"frontend state maintenance owner id is invalid: {name}")
         values.append(parsed)
-    if tuple(values) != (DEFAULT_OWNER_UID, DEFAULT_OWNER_GID):
-        raise MaintenanceError("frontend state maintenance must target uid/gid 65532")
+    requested = _requested_runtime_identity(environment)
+    expected = requested or (DEFAULT_OWNER_UID, DEFAULT_OWNER_GID)
+    if tuple(values) != expected:
+        raise MaintenanceError("frontend state owner must match the selected non-root runtime identity")
     return values[0], values[1]
 
 
@@ -1132,18 +1161,24 @@ def _record_environment(environment: Mapping[str, str]) -> dict[str, Any]:
 
     def positive(name: str) -> int:
         value = required(name)
+        if not value.isascii() or not value.isdecimal() or value.startswith("0"):
+            raise MaintenanceError(f"cache maintenance owner id is invalid: {name}")
         try:
             parsed = int(value, 10)
         except ValueError as error:
             raise MaintenanceError(f"cache maintenance owner id is invalid: {name}") from error
-        if parsed < 0 or parsed > 65535:
+        if parsed <= 0 or parsed > MAX_RUNTIME_ID:
             raise MaintenanceError(f"cache maintenance owner id is invalid: {name}")
         return parsed
 
     uid = positive("FULLMAG_BACKEND_CACHE_OWNER_UID")
     gid = positive("FULLMAG_BACKEND_CACHE_OWNER_GID")
-    if (uid, gid) != (DEFAULT_OWNER_UID, DEFAULT_OWNER_GID):
-        raise MaintenanceError("cache maintenance must target backend uid/gid 65532")
+    if uid <= 0 or gid <= 0 or uid > MAX_RUNTIME_ID or gid > MAX_RUNTIME_ID:
+        raise MaintenanceError("cache maintenance runtime owner identity is out of range")
+    requested = _requested_runtime_identity(environment)
+    expected_owner = requested or (DEFAULT_OWNER_UID, DEFAULT_OWNER_GID)
+    if (uid, gid) != expected_owner:
+        raise MaintenanceError("cache maintenance owner must match the selected non-root runtime identity")
     control_volume = required("FULLMAG_BUILD_CONTROL_VOLUME")
     if required("FULLMAG_BACKEND_CACHE_CONTROL_VOLUME") != control_volume:
         raise MaintenanceError("cache maintenance control volume identities differ")

@@ -7,7 +7,7 @@ Nie powstaje trzecia usługa aplikacyjna ani hostowy katalog kompilacji.
 
 ## Uruchomienie
 
-Użyj natywnego PowerShell, Pythona oraz Docker Desktop z silnikiem Linux.
+Na Windows użyj natywnego PowerShell, Pythona i Docker Desktop z silnikiem Linux. Na Linux/WSL użyj powłoki Linux, lokalnego Docker Engine, nie-rootowego użytkownika oraz checkoutu i storage na ext4/XFS/Btrfs; szczegóły i granice kwalifikacji opisuje [przewodnik Linux/WSL](docker-wsl.md).
 Najpierw skonfiguruj `.env` głównego checkoutu przez `scripts/setup_docker.py`.
 Worktree korzysta z konfiguracji przez resolver; nie kopiuj do niego `.env`.
 Przeczytaj skill `.agents/skills/fullmag-docker-build/SKILL.md`.
@@ -46,7 +46,7 @@ Nie kopiuj tych plików do hostowego `storage/builds`.
 sprawdza dokładny kontener, obraz, polecenie, etykiety i mounty oraz wymaga
 zdrowego API bez aktywnej sesji. Na czas kontroli zamyka jedyne wejście HTTP przez zatrzymanie własnego frontendu,
 sprawdza prywatną sieć bez obcych konsumentów, restartuje backend i ponownie
-uruchamia ten sam frontend. Zachowuje cache oraz Windows storage. Nie jest komendą do przerywania obliczeń. Wymaga wyłącznego okna operatorskiego,
+uruchamia ten sam frontend. Zachowuje cache oraz storage użytkownika wybranego hosta. Nie jest komendą do przerywania obliczeń. Wymaga wyłącznego okna operatorskiego,
 bez równoległych klientów wysyłających polecenia do tej grupy; odczyt health
 nie jest dowodem opróżnienia wszystkich kolejek aplikacji.
 Frontend obserwuje katalogi `app`, `src`, `public`, `scripts` i aktualizuje UI
@@ -138,7 +138,7 @@ pakietu a gotowością API również przerywa obserwację.
 | pnpm, Next, metadata workspace, next.log | frontend named volume |
 | Konfiguracje, provenance, receipty, manifesty, logi BuildKit i dowody kontroli | build-control named volume |
 | Warstwy zależności/helperów | Docker image store / BuildKit |
-| Sesje, wyniki, ustawienia, historia, ledger | dotychczasowy Windows storage |
+| Sesje, wyniki, ustawienia, historia, ledger | skonfigurowany trwały storage hosta |
 
 Źródła są readonly. Krótkie helpery utrzymania należą do tej samej grupy;
 nie budują ani nie uruchamiają aplikacji i nie mają Docker socketu.

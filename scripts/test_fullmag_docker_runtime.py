@@ -14,6 +14,8 @@ from contextlib import nullcontext
 
 import fullmag_docker_runtime as runtime
 import run_managed_browser as managed
+import docker_platform
+import linux_docker_host
 import docker_backend_volume_cache as volume_cache
 from test_docker_backend_volume_cache import (
     DockerVolumeFixture,
@@ -319,8 +321,8 @@ class DockerRuntimeContract(unittest.TestCase):
                 "source_project_id": "project-test",
                 "source_worktree_id": "worktree-test",
                 "source_checkout_kind": "worktree",
-                "source_root": "/checkout",
-                "git_common_dir": "/git-common",
+                "source_root": str(root / "checkout"),
+                "git_common_dir": str(root / ".git-common"),
                 "provenance_path": runtime.BACKEND_PROVENANCE_PATH,
                 "helper_context": "/opt/fullmag/control/docker-dev/backend-start/" + "e" * 32 + "-helpers.json",
                 "backend_start_receipt": "/opt/fullmag/control/docker-dev/backend-start/" + "e" * 32 + ".json",
@@ -341,16 +343,18 @@ class DockerRuntimeContract(unittest.TestCase):
                 runtime._validate_backend_volume_cache(cache)
 
     def test_live_compose_rejects_non_mapping_start_inputs_before_docker(self):
-        with patch.object(runtime, "docker") as docker_call:
-            with self.assertRaisesRegex(ValueError, "Backend start inputs must be an object"):
-                runtime.compose_spec(
-                    "sha256:" + "a" * 64, Path("/state-host"), 3197,
-                    host_certificate=Path("/host-certificate.json"),
-                    workspace_state_root=Path("/user-data"),
-                    package="/mnt/cache/package", provenance=Path("/provenance.json"),
-                    inputs_path=Path("/inputs.json"), backend_start=[],
-                )
-            docker_call.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(runtime, "docker") as docker_call:
+                with self.assertRaisesRegex(ValueError, "Backend start inputs must be an object"):
+                    runtime.compose_spec(
+                        "sha256:" + "a" * 64, root / "state", 3197,
+                        host_certificate=root / "host-certificate.json",
+                        workspace_state_root=root / "user-data",
+                        package=str(root / "package"), provenance=root / "provenance.json",
+                        inputs_path=root / "inputs.json", backend_start=[],
+                    )
+                docker_call.assert_not_called()
 
     def test_development_backend_package_does_not_require_static_frontend(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1102,6 +1106,7 @@ class DockerRuntimeContract(unittest.TestCase):
                 path.mkdir()
             records = [{"worktree": str(main)}, {"worktree": str(task)}]
             with patch("docker_development_inputs.main_checkout", return_value=main), \
+                    patch("docker_development_inputs.local_volume"), \
                     patch.object(runtime.storage, "worktree_records", return_value=records), \
                     patch("docker_development_inputs.local_volume"), \
                     patch.dict(os.environ, {"FULLMAG_SOURCE_ROOT": ""}):
@@ -2613,6 +2618,116 @@ class DockerRuntimeContract(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "Guest did not expose"):
                     guest.run(True)
 
+    @unittest.skipUnless(os.environ.get("FULLMAG_TEST_COMPOSE_CONFIG") == "1", "Read-only Compose CLI integration gate")
+    def test_linux_compose_uses_native_profile_and_certificate_for_both_modes(self):
+        for development in (False, True):
+            options = {"inputs": {"source_root": "/checkout"}, "inputs_path": Path("/owned/inputs.json"),
+                       "package": Path("/owned/package"), "provenance": Path("/owned/assembly.json")} if development else {}
+            spec = runtime.compose_spec("sha256:" + "a" * 64, Path("/owned/state"), 3197,
+                                        Path("/owned/host-admission/linux-native-host.json"),
+                                        storage_profile="linux-native-v1", **options)
+            backend = spec["services"]["backend"]
+            self.assertEqual(backend["environment"]["FULLMAG_SESSION_STORAGE_PROFILE"], "linux-native-v1")
+            self.assertEqual(backend["environment"]["FULLMAG_HOST_CERTIFICATE_TARGET"],
+                             "/run/fullmag/host-admission")
+            certificate = next(m for m in backend["volumes"] if m["target"] == "/run/fullmag/host-admission")
+            self.assertEqual(certificate["source"], "/owned/host-admission")
+            self.assertTrue(certificate["read_only"])
+            self.assertFalse(certificate["bind"]["create_host_path"])
+            self.assertNotIn("/run/fullmag/windows-folder-host.json", [m["target"] for m in backend["volumes"]])
+
+    def test_linux_certificate_bind_source_is_outside_writable_state_bind(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "run" / "state"
+            state.mkdir(parents=True)
+            certificate = docker_platform.certificate_directory(state) / "linux-native-host.json"
+            with patch.object(linux_docker_host, "runtime_identity", return_value=(1000, 1000)), \
+                    patch.object(runtime, "docker", return_value=json.dumps({"services": {"backend": {}}})) as compose:
+                rendered = runtime.compose_spec(
+                    "sha256:" + "a" * 64,
+                    state,
+                    3197,
+                    certificate,
+                    workspace_state_root=Path(directory) / "workspace-user-data",
+                    storage_profile="linux-native-v1",
+                )
+            self.assertEqual(set(rendered["services"]), {"backend"})
+            environment = compose.call_args.kwargs["environment"]
+            state_source = Path(environment["FULLMAG_STATE_ROOT"]).resolve()
+            certificate_source = Path(environment["FULLMAG_HOST_CERTIFICATE_DIR"]).resolve()
+            self.assertEqual(certificate_source, state_source.with_name(state_source.name + "-host-admission"))
+            self.assertEqual(environment["FULLMAG_HOST_CERTIFICATE_TARGET"], "/run/fullmag/host-admission")
+            self.assertNotEqual(certificate_source, state_source)
+            for template_name in ("compose.static.yaml", "compose.dev.yaml"):
+                template = (Path(__file__).resolve().parents[1] / template_name).read_text(encoding="utf-8")
+                lines = template.splitlines()
+                source_index = next(
+                    index for index, line in enumerate(lines)
+                    if "source: ${FULLMAG_HOST_CERTIFICATE_DIR" in line
+                )
+                certificate_bind = lines[source_index - 1:source_index + 4]
+                self.assertIn("type: bind", certificate_bind[0])
+                self.assertIn("FULLMAG_HOST_CERTIFICATE_DIR", certificate_bind[1])
+                self.assertIn("target: ${FULLMAG_HOST_CERTIFICATE_TARGET", certificate_bind[2])
+                self.assertIn("read_only: true", certificate_bind[3])
+
+    @unittest.skipIf(os.name == "nt", "Legacy packaged-runtime route is Windows-only")
+    def test_retained_packaged_runtime_rejects_linux_before_mutating_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "Windows-only"):
+                runtime.start(root, None, 3197)
+            self.assertEqual(list(root.iterdir()), [])
+
+    @unittest.skipIf(os.name == "nt", "Native Linux workspace permissions")
+    def test_seed_is_usable_by_container_uid_under_private_host_umask(self):
+        import docker_development_inputs
+        from docker_development_inputs import seed
+        repo = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            previous = os.umask(0o077)
+            try:
+                # This assertion covers metadata permissions only. The selected
+                # checkout is read-only input, and /mnt/c may be 9p in WSL; its
+                # native-filesystem admission is covered by the host helper tests.
+                # WSL cannot resolve the Windows worktree's .git pointer, so this
+                # fixture also pins a stable commit identity without Git access.
+                with patch.object(docker_development_inputs, "local_volume",
+                                  return_value={"filesystem": "ext4", "device": 1}), \
+                        patch.object(docker_development_inputs.storage, "git",
+                                     return_value="a" * 40):
+                    inputs = seed(repo, state, 3197)
+            finally:
+                os.umask(previous)
+            self.assertEqual(inputs["source_selection"], "live_linux_selected_checkout")
+            workspace = state / "development/workspace"
+            for path in (state / "development", workspace, *workspace.rglob("*")):
+                metadata = path.stat()
+                self.assertEqual(metadata.st_uid, os.getuid(), str(path))
+                self.assertEqual(metadata.st_gid, os.getgid(), str(path))
+                self.assertEqual(metadata.st_mode & 0o077, 0, str(path))
+                if path.is_dir():
+                    self.assertEqual(metadata.st_mode & 0o700, 0o700, str(path))
+                else:
+                    self.assertEqual(metadata.st_mode & 0o600, 0o600, str(path))
+            self.assertTrue(
+                (workspace / "apps/control-room/tsconfig.json").stat().st_mode & 0o200
+            )
+
+    def test_linux_owned_read_rejects_symlinks_and_oversized_files(self):
+        import linux_docker_host
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            target.write_bytes(b"owned")
+            self.assertEqual(linux_docker_host.read_owned_regular(target), b"owned")
+            with self.assertRaises(ValueError):
+                linux_docker_host.read_owned_regular(target, maximum=2)
+            link = target.with_name("link")
+            link.symlink_to(target)
+            with self.assertRaises((ValueError, runtime.storage.StorageError, OSError)):
+                linux_docker_host.read_owned_regular(link)
+
     def test_rejects_mutable_image_and_invalid_port(self):
         for image, port in (("fullmag:latest", 3197), ("sha256:" + "a" * 64, 80)):
             with self.assertRaises(ValueError):
@@ -2846,6 +2961,7 @@ class DockerRuntimeContract(unittest.TestCase):
                     patch.object(runtime.storage, "initialize"), \
                     patch.object(runtime.storage, "build_lock", return_value=nullcontext()), \
                     patch("docker_development_inputs.main_checkout", return_value=main), \
+                    patch("docker_development_inputs.local_volume"), \
                     patch.object(runtime.storage, "worktree_records", return_value=[{"worktree": str(main)}]), \
                     patch("local_runner.build_executor.configured_build",
                           return_value={"image_digest": "sha256:" + "e" * 64}), \
@@ -2877,10 +2993,11 @@ class DockerRuntimeContract(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("all_docker_entrypoint", path)
         entry = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(entry)
-        with patch.object(entry.subprocess, "check_output", return_value="1021997\n"), \
+        with patch.dict(os.environ, {"FULLMAG_SESSION_STORAGE_PROFILE": "linux-native-v1"}), \
+                patch.object(entry.subprocess, "check_output", return_value="1021997\n"), \
                 patch.object(entry.ctypes, "CDLL") as load, \
                 patch.object(entry.Path, "mkdir") as mkdir:
-            with self.assertRaisesRegex(RuntimeError, "Unsupported durable session filesystem"):
+            with self.assertRaisesRegex(RuntimeError, "Unsupported native Linux durable filesystem"):
                 entry.preflight()
             load.assert_not_called()
             mkdir.assert_not_called()

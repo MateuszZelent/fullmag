@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Build the pinned dependency image on a fresh Windows Docker host.
+"""Build the pinned dependency image through the managed Docker route.
 
-The default operation is first enrollment. Explicit direct-development mode
-shares the host heavy-work lock without enrolling or submitting to the old
-runner. Application sources are absent from the frozen dependency context.
+The default operation is first enrollment on Windows. Explicit
+direct-development mode supports the current volume-based DEV route on
+Windows and native Linux/WSL, sharing its host heavy-work lock without
+enrolling or submitting to the old runner. Application sources are absent
+from the frozen dependency context.
 """
 from __future__ import annotations
 
@@ -239,9 +241,11 @@ def bounded_command(command, *, maximum=2 * 1024 * 1024, timeout=90,
 
 
 def docker(*args, environment=None, input_data=None):
+    from docker_platform import docker_cli_prefix, docker_environment
+
     return bounded_command(
-        ["docker", "--context", "desktop-linux", *args],
-        environment=environment,
+        [*docker_cli_prefix(), *args],
+        environment=docker_environment(environment),
         input_data=input_data,
     )
 
@@ -258,7 +262,9 @@ def docker_live(command, *, environment=None, timeout=4 * 60 * 60,
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env=None if environment is None else {**os.environ, **dict(environment)},
+        env=__import__("docker_platform").docker_environment(
+            None if environment is None else {**os.environ, **dict(environment)}
+        ),
         text=False,
         bufsize=0,
     )
@@ -325,8 +331,17 @@ def control_volume_name(project):
     """Return the stable control volume for one Compose project."""
     if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
         raise BootstrapError("Invalid Compose project for toolchain control volume")
-    suffix = hashlib.sha256(project.encode("utf-8")).hexdigest()[:16]
-    return f"{CONTROL_VOLUME_PREFIX}{project[:180]}-{suffix}"
+    from docker_platform import host_profile, runtime_identity
+
+    profile = host_profile()
+    identity_suffix = ""
+    if profile == "linux-native-v1":
+        uid, gid = runtime_identity()
+        identity_suffix = f"-linux-u{uid}-g{gid}"
+    suffix = hashlib.sha256((project + identity_suffix).encode("utf-8")).hexdigest()[:16]
+    project_segment = (project[:180] if not identity_suffix else
+                       project[: max(1, 200 - len(CONTROL_VOLUME_PREFIX) - len(identity_suffix) - 17)])
+    return f"{CONTROL_VOLUME_PREFIX}{project_segment}{identity_suffix}-{suffix}"
 
 
 def toolchain_image_reference(project):
@@ -350,7 +365,10 @@ def _control_environment(project):
 def _compose_environment(repo, project):
     # Compose interpolates every service, including inactive profiles, before
     # running the control helper. Receipt I/O needs the build inputs as well.
+    from docker_platform import runtime_environment
+
     return {
+        **runtime_environment(os.environ),
         **_control_environment(project),
         "FULLMAG_TOOLCHAIN_CONTEXT": str(Path(repo).resolve(strict=True)),
         "FULLMAG_TOOLCHAIN_IMAGE": toolchain_image_reference(project),
@@ -417,6 +435,20 @@ def _validate_control_mount(configured, expected_volume):
 
 def ensure_control_volume(project):
     volume = control_volume_name(project)
+    from docker_platform import runtime_identity_record
+    runtime = runtime_identity_record()
+    volume_labels = {
+        "com.fullmag.compose.project": project,
+        "com.fullmag.toolchain.control.schema": CONTROL_VOLUME_SCHEMA,
+        "com.fullmag.toolchain.control.project": project,
+        "com.fullmag.toolchain.control.mount": CONTROL_ROOT,
+    }
+    if runtime["profile"] == "linux-native-v1":
+        volume_labels.update({
+            "com.fullmag.toolchain.control.runtime-profile": "linux-native-v1",
+            "com.fullmag.toolchain.control.runtime-uid": str(runtime["uid"]),
+            "com.fullmag.toolchain.control.runtime-gid": str(runtime["gid"]),
+        })
     try:
         raw = docker("volume", "inspect", volume)
         value = json.loads(raw)
@@ -425,14 +457,11 @@ def ensure_control_volume(project):
     except BootstrapError as error:
         if "no such volume" not in str(error).lower() and "volume not found" not in str(error).lower():
             raise
-        docker(
-            "volume", "create",
-            "--label", f"com.fullmag.compose.project={project}",
-            "--label", f"com.fullmag.toolchain.control.schema={CONTROL_VOLUME_SCHEMA}",
-            "--label", f"com.fullmag.toolchain.control.project={project}",
-            "--label", f"com.fullmag.toolchain.control.mount={CONTROL_ROOT}",
-            volume,
-        )
+        arguments = ["volume", "create"]
+        for label, value in volume_labels.items():
+            arguments.extend(["--label", f"{label}={value}"])
+        arguments.append(volume)
+        docker(*arguments)
         value = json.loads(docker("volume", "inspect", volume))
     document = value[0]
     if not isinstance(document, dict):
@@ -450,6 +479,13 @@ def ensure_control_volume(project):
             or labels.get("com.fullmag.toolchain.control.project") != project
             or labels.get("com.fullmag.toolchain.control.mount") != CONTROL_ROOT):
         raise BootstrapError("Toolchain control volume belongs to another Compose project")
+    from docker_platform import host_profile, runtime_identity
+    if host_profile() == "linux-native-v1":
+        uid, gid = runtime_identity()
+        if (labels.get("com.fullmag.toolchain.control.runtime-profile") != "linux-native-v1"
+                or labels.get("com.fullmag.toolchain.control.runtime-uid") != str(uid)
+                or labels.get("com.fullmag.toolchain.control.runtime-gid") != str(gid)):
+            raise BootstrapError("Toolchain control volume belongs to another Linux runtime identity")
     return volume
 
 
@@ -490,7 +526,7 @@ def read_control(repo, project, relative):
 
 
 def initialize_host_storage(layout, volume_probe):
-    """Admit an already configured Windows storage root without creating build data."""
+    """Admit an already configured user-data root without creating build data."""
     root = Path(layout["storage_root"])
     if not root.is_dir():
         raise BootstrapError(
@@ -515,11 +551,18 @@ def build(repo, *, direct_development=False):
     repo = Path(repo).resolve(strict=True)
     layout = storage.resolve_layout(repo, PROFILE)
     project_name = compose_project(layout, direct_development=direct_development)
-    from windows_folder_host import local_volume
-    local_volume(repo)
-    if docker("info", "--format", "{{.OSType}}").strip() != "linux":
-        raise BootstrapError("Docker Desktop must use the Linux engine")
-    initialize_host_storage(layout, local_volume)
+    from docker_platform import (
+        DockerPlatformError, admit_storage_path, require_local_linux_engine,
+        runtime_identity_record,
+    )
+    try:
+        admit_storage_path(repo)
+        admit_storage_path(layout["storage_root"])
+        docker_host = require_local_linux_engine(lambda *args: docker(*args))
+        runtime_identity = runtime_identity_record()
+    except DockerPlatformError as error:
+        raise BootstrapError(str(error)) from error
+    initialize_host_storage(layout, admit_storage_path)
     root = Path(layout["storage_root"])
     control_volume = ensure_control_volume(project_name)
     previous = None
@@ -578,6 +621,8 @@ def build(repo, *, direct_development=False):
             "qualification": "NOT VERIFIED",
             "build_route": "direct-development" if direct_development else "fresh-host-enrollment",
             "compose_project": project_name,
+            "docker_host": docker_host,
+            "runtime_identity": runtime_identity,
             "source_inputs": manifest,
         }
         try:
@@ -598,7 +643,7 @@ def build(repo, *, direct_development=False):
                 write_control(repo, project_name, CONTROL_BUILD_LOG, data)
 
             build_command = [
-                "docker", "--context", "desktop-linux", *definitions,
+                *__import__("docker_platform").docker_cli_prefix(), *definitions,
                 "build", "--pull=false", "--progress=plain", SERVICE,
             ]
             code, _build_output = docker_live(
@@ -677,9 +722,9 @@ def main(argv=None):
         if args.prepare_development_images and not args.direct_development:
             raise BootstrapError("Development wrappers require --direct-development")
         if args.direct_development:
-            from docker_dev import _require_native_windows
+            from docker_dev import _require_managed_dev_host
             from docker_dev_defaults import resolve_defaults
-            _require_native_windows()
+            _require_managed_dev_host()
             args.repo_root = resolve_defaults(args.repo_root).source_root
         receipt = build(args.repo_root, direct_development=args.direct_development)
         if args.prepare_development_images:

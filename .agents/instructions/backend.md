@@ -366,3 +366,12 @@ and similar commands are debugging tools, not default user guidance.
 - For SP4 mixed-prism qualification, preserve the stricter relaxation threshold `tolT=1e-6 T` (`tolA=0.7957747154594767 A/m`); do not restore the legacy `7.957747 A/m` threshold during tolerance-unit migrations.
 - FDM GPU launcher resolution must honor `runtime_device_override` and route to the managed CUDA runtime when local FDM CUDA is unavailable; never report or execute a silent CPU fallback for a forced GPU request.
 - Never instantiate the internal FDM `Context` from a public contract executable unless that target uses exactly the same CUDA feature macros as `fullmag_fdm`; prefer a typed public ABI getter for runtime identity tests.
+
+### Host Linux/WSL dla codziennego Docker DEV (19.10.2026)
+
+Decyzja użytkownika rozszerza ten sam launcher wolumenowy o nie-rootowy Linux/WSL.
+Używaj lokalnego Docker Linux, checkoutu i storage na ext4/XFS/Btrfs oraz jawnego
+UID/GID zgodnego z Compose, cache, ledgerem i receiptami. Build nadal wykonuje
+stały backend w swojej grupie Compose; artefakty techniczne pozostają w named
+volumes/BuildKit. WSL nie jest ukrytym fallbackiem trasy Windows. Szczegóły
+i granice kwalifikacji: [Docker w WSL](../../docs/guides/docker-wsl.md).

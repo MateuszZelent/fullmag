@@ -58,7 +58,11 @@ class DockerVolumeFixture:
         raise AssertionError(f"unexpected Docker call: {args!r}")
 
 
-def _profile(tmp: str, image: str = IMAGE):
+def _profile(
+    tmp: str,
+    image: str = IMAGE,
+    runtime_identity: tuple[int, int] | None = None,
+):
     root = Path(tmp)
     source = root / "source"
     repo = root / "repo"
@@ -81,6 +85,7 @@ def _profile(tmp: str, image: str = IMAGE):
         source_root=source,
         toolchain_image=TOOLCHAIN,
         control_volume_name="fullmag-build-control-fullmag-worktree-docker-all-master-integration-20261017",
+        runtime_identity=runtime_identity,
     )
     return profile, layout, source, repo, runroot
 
@@ -89,6 +94,7 @@ def _maintenance_receipt(profile):
     markers = {}
     probes = {}
     for role in cache.VOLUME_ROLES:
+        uid, gid = cache._owner_ids(profile)
         markers[role] = (
             {
                 "schema": "fullmag.docker-toolchain-control-owner.v1",
@@ -106,8 +112,8 @@ def _maintenance_receipt(profile):
                 "owner_id": profile["owner_id"],
                 "role": role,
                 "volume_name": profile["volume_names"][role],
-                "uid": 65532,
-                "gid": 65532,
+                "uid": uid,
+                "gid": gid,
             }
         )
         probes[role] = {
@@ -132,8 +138,8 @@ def _maintenance_receipt(profile):
         "probe": {
             "schema": cache.PROBE_SCHEMA,
             "state": "passed",
-            "owner_uid": 65532,
-            "owner_gid": 65532,
+            "owner_uid": cache._owner_ids(profile)[0],
+            "owner_gid": cache._owner_ids(profile)[1],
             "volumes": probes,
         },
     }
@@ -167,20 +173,14 @@ def _container(profile, *, socket=False):
             "Destination": "/var/run/docker.sock",
             "RW": True,
         })
-    labels = {
-        cache.LABEL_SCHEMA: cache.SCHEMA,
-        cache.LABEL_PROFILE: cache.PROFILE,
-        cache.LABEL_PROJECT: profile["project_id"],
-        cache.LABEL_CACHE_KEY: profile["cache_key"],
-        cache.LABEL_UNIT: profile["unit_key"],
-        cache.LABEL_WORKTREE: profile["worktree_id"],
-        cache.LABEL_TOOLCHAIN: profile["toolchain_image_id"],
-        cache.LABEL_CARGO_PROFILE: profile["cargo_profile"],
-        cache.LABEL_OWNER: profile["owner_id"],
-    }
+    labels = cache._container_labels(profile)
     return {
         "Config": {
-            "User": "65532:65532",
+            "User": (
+                f"{profile['runtime_identity']['uid']}:{profile['runtime_identity']['gid']}"
+                if profile.get("runtime_identity") is not None
+                else "65532:65532"
+            ),
             "Env": [f"{key}={value}" for key, value in profile["environment"].items()],
             "Labels": labels,
         },
@@ -216,6 +216,39 @@ class BackendVolumeCacheTests(unittest.TestCase):
                 labels = cache.volume_labels(first, role)
                 self.assertNotIn(cache.LABEL_ROLE.replace("volume-role", "runtime-image"), labels)
                 self.assertNotIn(REFRESHED_IMAGE, json.dumps(labels))
+
+    def test_linux_runtime_identity_is_part_of_volume_key_and_container_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first, layout, source, repo, runroot = _profile(
+                tmp, runtime_identity=(1234, 2345)
+            )
+            second = cache.prepare(
+                layout,
+                repo,
+                IMAGE,
+                runroot,
+                source_root=source,
+                toolchain_image=TOOLCHAIN,
+                control_volume_name=first["volume_names"][cache.CONTROL_VOLUME_ROLE],
+                runtime_identity=(1235, 2345),
+            )
+            self.assertNotEqual(first["cache_key"], second["cache_key"])
+            self.assertNotEqual(first["volume_names"], second["volume_names"])
+            labels = cache.volume_labels(first, cache.BUILD_VOLUME_ROLE)
+            self.assertEqual(labels[cache.LABEL_RUNTIME_UID], "1234")
+            self.assertEqual(labels[cache.LABEL_RUNTIME_GID], "2345")
+
+            ready = dict(first)
+            ready["state"] = "ready"
+            container = _container(ready)
+            self.assertEqual(
+                cache.validate_container(container, ready)["state"], "attested"
+            )
+            container["Config"]["User"] = "65532:65532"
+            with self.assertRaisesRegex(
+                cache.BackendVolumeCacheError, "not unprivileged"
+            ):
+                cache.validate_container(container, ready)
 
     def test_prepare_creates_only_exact_pair_without_driver_options(self):
         with tempfile.TemporaryDirectory() as tmp:

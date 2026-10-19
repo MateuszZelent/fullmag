@@ -53,6 +53,7 @@ def _docker_environment() -> dict[str, str]:
         "FULLMAG_REPO_ROOT": "/opt/fullmag/source",
         "FULLMAG_RUNTIME_ROOT": "/opt/fullmag/package",
         "FULLMAG_RUNTIME_PROVENANCE": "/opt/fullmag/control/backend/runtime-provenance.json",
+        "FULLMAG_PACKAGE_PROVENANCE": "/opt/fullmag/control/backend/runtime-provenance.json",
         "FULLMAG_WORKTREE_ID": "docker-all",
     }
 

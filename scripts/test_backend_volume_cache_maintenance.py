@@ -29,6 +29,12 @@ import backend_dev as backend  # noqa: E402
 
 class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
     @staticmethod
+    def _linux_test_owner() -> tuple[int, int]:
+        if os.geteuid() == 0:
+            return 123456, 234567
+        return os.getuid(), os.getgid()
+
+    @staticmethod
     def _test_owner() -> tuple[int, int]:
         # The production service is root + CAP_CHOWN. A non-root interpreted
         # test cannot chown to 65532, so it exercises the same contract with
@@ -98,6 +104,50 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
         control = package.parent / "control"
         control.mkdir(exist_ok=True)
         return helper.ensure(build, package, control_root=control, **kwargs)
+
+    def test_linux_runtime_identity_selects_volume_owners_and_refuses_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build = root / "build"
+            package = root / "package"
+            build.mkdir()
+            package.mkdir()
+            uid, gid = self._linux_test_owner()
+            environment = self._environment()
+            environment.update({
+                "FULLMAG_RUNTIME_UID": str(uid),
+                "FULLMAG_RUNTIME_GID": str(gid),
+                "FULLMAG_BACKEND_CACHE_OWNER_UID": str(uid),
+                "FULLMAG_BACKEND_CACHE_OWNER_GID": str(gid),
+            })
+            with mock.patch.dict(
+                os.environ,
+                {"FULLMAG_RUNTIME_UID": str(uid), "FULLMAG_RUNTIME_GID": str(gid)},
+            ):
+                receipt = self._ensure(
+                    build,
+                    package,
+                    environment=environment,
+                    owner_uid=uid,
+                    owner_gid=gid,
+                )
+            self.assertEqual(receipt["probe"]["owner_uid"], uid)
+            self.assertEqual(receipt["probe"]["owner_gid"], gid)
+            for marker_root in (
+                build,
+                package / backend.PACKAGE_DEVELOPMENT_DIRNAME / backend.PACKAGE_CACHE_CONTROL_DIRNAME,
+                root / "control" / "backend",
+            ):
+                marker = json.loads((marker_root / helper.MARKER_NAME).read_text())
+                if "uid" in marker:
+                    self.assertEqual((marker["uid"], marker["gid"]), (uid, gid))
+
+            mismatched = dict(environment)
+            mismatched["FULLMAG_BACKEND_CACHE_OWNER_UID"] = str(uid + 1)
+            with self.assertRaisesRegex(
+                helper.MaintenanceError, "selected non-root runtime identity"
+            ):
+                helper._record_environment(mismatched)
 
     def test_fresh_and_reopen_prove_marker_readback_pair_without_host_path(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -632,7 +682,8 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             self.assertEqual(live_file.read_bytes(), b"source\n")
             self.assertEqual((live_file.stat().st_uid, live_file.stat().st_gid), (0, 0))
 
-    def test_frontend_environment_requires_fixed_production_owner(self):
+    def test_frontend_environment_accepts_only_the_selected_runtime_owner(self):
+        uid, gid = self._linux_test_owner()
         environment = {
             "FULLMAG_FRONTEND_STATE_SCHEMA": helper.FRONTEND_STATE_SCHEMA,
             "FULLMAG_FRONTEND_STATE_PROFILE": helper.FRONTEND_STATE_PROFILE,
@@ -642,15 +693,45 @@ class BackendVolumeCacheMaintenanceTests(unittest.TestCase):
             "FULLMAG_FRONTEND_STATE_PROJECT_ID": "fullmag-worktree-demo",
             "FULLMAG_FRONTEND_STATE_CACHE_KEY": "a" * 64,
             "FULLMAG_FRONTEND_STATE_VOLUME": "fullmag-worktree-demo-frontend-dev-v2-" + "a" * 32,
-            "FULLMAG_FRONTEND_STATE_OWNER_UID": "65532",
-            "FULLMAG_FRONTEND_STATE_OWNER_GID": "65532",
+            "FULLMAG_FRONTEND_STATE_OWNER_UID": str(uid),
+            "FULLMAG_FRONTEND_STATE_OWNER_GID": str(gid),
+            "FULLMAG_RUNTIME_UID": str(uid),
+            "FULLMAG_RUNTIME_GID": str(gid),
         }
         identity = helper._frontend_environment(environment)
-        self.assertEqual(identity["uid"], helper.DEFAULT_OWNER_UID)
-        environment["FULLMAG_FRONTEND_STATE_OWNER_UID"] = str(os.getuid())
-        if os.getuid() != helper.DEFAULT_OWNER_UID:
-            with self.assertRaises(helper.MaintenanceError):
-                helper._frontend_environment(environment)
+        self.assertEqual((identity["uid"], identity["gid"]), (uid, gid))
+        environment["FULLMAG_FRONTEND_STATE_OWNER_UID"] = str(uid + 1)
+        with self.assertRaisesRegex(helper.MaintenanceError, "selected non-root runtime identity"):
+            helper._frontend_environment(environment)
+
+    def test_frontend_public_maintenance_preserves_selected_owner_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            uid, gid = self._linux_test_owner()
+            environment = {
+                "FULLMAG_FRONTEND_STATE_SCHEMA": helper.FRONTEND_STATE_SCHEMA,
+                "FULLMAG_FRONTEND_STATE_PROFILE": helper.FRONTEND_STATE_PROFILE,
+                "FULLMAG_FRONTEND_STATE_MAINTENANCE_PROFILE": helper.FRONTEND_STATE_MAINTENANCE_PROFILE,
+                "FULLMAG_FRONTEND_STATE_MAINTENANCE_ACTION": "ensure",
+                "FULLMAG_FRONTEND_STATE_ROOT": helper.FRONTEND_STATE_ROOT,
+                "FULLMAG_FRONTEND_STATE_PROJECT_ID": "fullmag-worktree-demo",
+                "FULLMAG_FRONTEND_STATE_CACHE_KEY": "a" * 64,
+                "FULLMAG_FRONTEND_STATE_VOLUME": "fullmag-worktree-demo-frontend-dev-v2-" + "a" * 32,
+                "FULLMAG_FRONTEND_STATE_OWNER_UID": str(uid),
+                "FULLMAG_FRONTEND_STATE_OWNER_GID": str(gid),
+                "FULLMAG_RUNTIME_UID": str(uid),
+                "FULLMAG_RUNTIME_GID": str(gid),
+            }
+            state = Path(temporary) / "state"
+            state.mkdir()
+            with mock.patch.dict(
+                os.environ,
+                {"FULLMAG_RUNTIME_UID": str(uid), "FULLMAG_RUNTIME_GID": str(gid)},
+            ):
+                receipt = helper.ensure_frontend_state(state, environment=environment)
+            self.assertEqual((receipt["owner_uid"], receipt["owner_gid"]), (uid, gid))
+            self.assertFalse(receipt["probe"]["recursive_chown"])
+            marker = json.loads((state / helper.FRONTEND_STATE_MARKER_NAME).read_text())
+            self.assertEqual((marker["uid"], marker["gid"]), (uid, gid))
 
     def test_production_contract_keeps_uid_and_fixed_guest_roots(self):
         self.assertEqual(helper.DEFAULT_OWNER_UID, 65532)

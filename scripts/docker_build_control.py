@@ -1,8 +1,9 @@
 """Docker-managed build control: no build files or logs are written on the host.
 
-The Windows process only observes Git/configuration and invokes Docker. Short
-image-owned helpers belong to the selected Compose project; they have no
-network, Docker socket, host writes, or application execution responsibility.
+The host process only observes Git/configuration and invokes the pinned Docker
+endpoint. Short image-owned helpers belong to the selected Compose project;
+they have no network, Docker socket, host writes, or application execution
+responsibility.
 """
 from __future__ import annotations
 
@@ -94,8 +95,21 @@ def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOC
     return subprocess.CompletedProcess(command, process.returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"]))
 
 
+def _docker_prefix():
+    from docker_platform import docker_cli_prefix
+
+    return docker_cli_prefix()
+
+
+def _docker_environment(environment=None):
+    from docker_platform import docker_environment
+
+    return docker_environment(environment)
+
+
 def docker_capture(*args, data=None, timeout=90, allow_failure=False, env=None):
-    result = bounded_capture(["docker", "--context", "desktop-linux", *args], data=data, timeout=timeout, env=env)
+    result = bounded_capture([*_docker_prefix(), *args], data=data, timeout=timeout,
+                             env=_docker_environment(env))
     if result.returncode and not allow_failure:
         raise BuildControlError(result.stderr.decode("utf-8", "replace").strip()
                                 or result.stdout.decode("utf-8", "replace").strip())
@@ -124,6 +138,9 @@ class BuildControl:
         if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}", helper_image):
             raise BuildControlError("Build control requires an immutable helper image")
         self.image = helper_image
+        from docker_platform import runtime_identity_record
+
+        self.runtime_identity = runtime_identity_record()
         from bootstrap_docker_toolchain import control_volume_name
         self.volume = control_volume_name(self.project)
         self.labels = {
@@ -136,6 +153,12 @@ class BuildControl:
             "com.fullmag.toolchain.control.project": self.project,
             "com.fullmag.toolchain.control.mount": "/opt/fullmag/control",
         }
+        if self.runtime_identity["profile"] == "linux-native-v1":
+            self.labels.update({
+                "com.fullmag.toolchain.control.runtime-profile": "linux-native-v1",
+                "com.fullmag.toolchain.control.runtime-uid": str(self.runtime_identity["uid"]),
+                "com.fullmag.toolchain.control.runtime-gid": str(self.runtime_identity["gid"]),
+            })
 
     @property
     def shared_labels(self):
@@ -164,14 +187,27 @@ class BuildControl:
                 or volume.get("Options") or any((volume.get("Labels") or {}).get(k) != v
                                                 for k, v in self.shared_labels.items())):
             raise BuildControlError("Control volume ownership/driver differs; existing data retained")
-        initialize = ("test $(stat -c %u /control) = 0 -o $(stat -c %u /control) = 65532; "
-            "chown 65532:65532 /control; chmod 0750 /control; "
-            "for namespace in toolchain image-dev image-backend development iteration recreate-services resume verification frontend; do "
-            "p=/control/$namespace; test ! -L \"$p\"; "
-            "if test -e \"$p\"; then test -d \"$p\"; "
-            "test $(stat -c %u \"$p\") = 0 -o $(stat -c %u \"$p\") = 65532; "
-            "chown 65532:65532 \"$p\"; chmod 0750 \"$p\"; fi; done")
-        result = bounded_capture(self.helper_args(initialize, initialize=True), data=b"", timeout=90)
+        if self.runtime_identity["profile"] == "linux-native-v1":
+            uid, gid = self.runtime_identity["uid"], self.runtime_identity["gid"]
+            initialize = (
+                f"if test $(stat -c %u:%g /control) = {uid}:{gid}; then "
+                "test $(stat -c %a /control) = 750; "
+                f"elif test $(stat -c %u:%g /control) = 0:0; then "
+                "test -z \"$(find /control -mindepth 1 -maxdepth 1 -print -quit)\"; "
+                f"chown {uid}:{gid} /control; chmod 0750 /control; "
+                "else exit 41; fi; "
+                f"test -z \"$(find /control -xdev -mindepth 1 \\( ! -uid {uid} -o ! -gid {gid} \\) -print -quit)\""
+            )
+        else:
+            initialize = ("test $(stat -c %u /control) = 0 -o $(stat -c %u /control) = 65532; "
+                "chown 65532:65532 /control; chmod 0750 /control; "
+                "for namespace in toolchain image-dev image-backend development iteration recreate-services resume verification frontend; do "
+                "p=/control/$namespace; test ! -L \"$p\"; "
+                "if test -e \"$p\"; then test -d \"$p\"; "
+                "test $(stat -c %u \"$p\") = 0 -o $(stat -c %u \"$p\") = 65532; "
+                "chown 65532:65532 \"$p\"; chmod 0750 \"$p\"; fi; done")
+        result = bounded_capture(self.helper_args(initialize, initialize=True), data=b"", timeout=90,
+                                 env=_docker_environment())
         if result.returncode:
             raise BuildControlError("Control-volume permission initialization failed: " + result.stderr.decode("utf-8", "replace"))
         space = self.space()
@@ -180,7 +216,8 @@ class BuildControl:
         return volume
 
     def space(self):
-        result = bounded_capture(self.helper_args("df -Pk /control"), data=b"", timeout=60)
+        result = bounded_capture(self.helper_args("df -Pk /control"), data=b"", timeout=60,
+                                 env=_docker_environment())
         if result.returncode:
             raise BuildControlError("Cannot measure Docker build filesystem")
         fields = result.stdout.decode("utf-8").strip().splitlines()[-1].split()
@@ -218,14 +255,14 @@ class BuildControl:
         args = self.helper_args("du -x -sk /measure")
         args[args.index("--entrypoint"):args.index("--entrypoint")] = ["--mount",
             "type=volume,src=" + name + ",dst=/measure,readonly,volume-nocopy"]
-        measured = bounded_capture(args, data=b"", timeout=120)
+        measured = bounded_capture(args, data=b"", timeout=120, env=_docker_environment())
         if measured.returncode:
             raise BuildControlError("Volume usage measurement failed")
         return {"name": name, "allocated_bytes": int(measured.stdout.split()[0]) * 1024,
                 "driver": observed[0]["Driver"], "labels": labels, "measured_at": time.time()}
 
     def helper_args(self, script, *, name=None, initialize=False):
-        args = ["docker", "--context", "desktop-linux", "run", "--rm", "-i",
+        args = [*_docker_prefix(), "run", "--rm", "-i",
                 "--pull", "never", "--network", "none", "--runtime", "runc",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
                 "--pids-limit", "32", "--memory", "64m", "--cpus", "0.25",
@@ -233,7 +270,8 @@ class BuildControl:
                 "--mount", "type=volume,src=" + self.volume + ",dst=/control,volume-nocopy",
                 "--label", "com.docker.compose.project=" + self.project,
                 "--label", "com.docker.compose.service=build-control"]
-        args.extend(["--user", "0:0" if initialize else "65532:65532"])
+        runtime = f"{self.runtime_identity['uid']}:{self.runtime_identity['gid']}"
+        args.extend(["--user", "0:0" if initialize else runtime])
         if initialize:
             args.extend(["--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE"])
         # Source labels authenticate this short-lived helper as part of the
@@ -270,7 +308,8 @@ class BuildControl:
                   f"t=$(mktemp '{parent}/.publish.XXXXXXXX'); "
                   "trap 'rm -f -- \"$t\"' EXIT; cat > \"$t\"; sync \"$t\"; "
                   f"mv -T -- \"$t\" '{path}'; sync '{parent}'")
-        result = bounded_capture(self.helper_args(script), data=data, timeout=90)
+        result = bounded_capture(self.helper_args(script), data=data, timeout=90,
+                                 env=_docker_environment())
         if result.returncode:
             raise BuildControlError(result.stderr.decode("utf-8", "replace"))
 
@@ -281,7 +320,8 @@ class BuildControl:
                   f"test \"$(readlink -f '{parent}')\" = '{parent}'; "
                   f"test -f '{path}'; test ! -L '{path}'; test $(stat -c %h '{path}') = 1; "
                   f"head -c {MAX_DOCUMENT_BYTES + 1} '{path}'")
-        result = bounded_capture(self.helper_args(script), data=b"", timeout=90)
+        result = bounded_capture(self.helper_args(script), data=b"", timeout=90,
+                                 env=_docker_environment())
         if optional and result.returncode == 44:
             return None
         if result.returncode:
@@ -329,11 +369,13 @@ class BuildControl:
         if min(space_before["available_bytes"], space_before.get("windows_backing_volume", {}).get("available_bytes", space_before["available_bytes"])) < MIN_FREE_BUILD_BYTES:
             raise BuildControlError("Docker build filesystem has less than 32 GiB free; admission refused")
         logger = subprocess.Popen(self.helper_args(script, name=name), stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  env=_docker_environment())
         receipt = {"schema": "fullmag.docker-build-operation.v1", "phase": phase,
                    "state": "starting", "attempt": token, "compose_project": self.project,
                    "control_volume": self.volume, "helper_container": name,
                    "inputs": inputs, "started_at": time.time(),
+                   "docker_host": __import__("docker_platform").target_record(),
                    "log_byte_limit": MAX_LOG_BYTES, "attempt_limit": MAX_ATTEMPTS,
                    "build_data_qualification": "NOT VERIFIED",
                    "filesystem_before": space_before}
@@ -376,11 +418,11 @@ class BuildControl:
             print(json.dumps(summary, indent=2, ensure_ascii=False), flush=True)
 
     def build(self, operation, document, service):
-        command = ["docker", "--context", "desktop-linux", "compose", "--project-name",
+        command = [*_docker_prefix(), "compose", "--project-name",
                    self.project, "-f", "-", "build", service]
         operation["daemon_pending"] = True
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT)
+                                   stderr=subprocess.STDOUT, env=_docker_environment())
         process.stdin.write(canonical(document))
         process.stdin.close()
         try:
@@ -407,14 +449,19 @@ def build_volume_toolchain(repo):
     import fullmag_storage as storage
     from bootstrap_docker_toolchain import tracked_input_files, read_input, DEPENDENCY_MANIFEST
     from docker_compose_identity import compose_project_identity
-    from windows_folder_host import local_volume
+    import docker_platform
 
-    if os.name != "nt":
-        raise BuildControlError("Docker development requires native Windows PowerShell")
     repo = Path(repo).resolve(strict=True)
     layout = storage.resolve_layout(repo, "docker-all-gpu")
     identity = compose_project_identity(layout)
-    local_volume(repo)
+    try:
+        docker_platform.admit_storage_path(repo)
+        docker_platform.admit_storage_path(layout["storage_root"])
+        docker_host = docker_platform.require_local_linux_engine(
+            lambda *args: docker_capture(*args).stdout.decode("utf-8", "replace")
+        )
+    except docker_platform.DockerPlatformError as error:
+        raise BuildControlError(str(error)) from error
     configured = toolchain_configuration(repo, identity)
     service = configured["services"]["fem-gpu-toolchain"]
     build = service["build"]
@@ -449,8 +496,13 @@ def build_volume_toolchain(repo):
     digest = hashlib.sha256(canonical(source_identity)).hexdigest()
     service["image"] = "fullmag/fem-gpu-toolchain:inputs-" + digest[:24]
     with control.operation("toolchain", source_identity) as operation:
-        operation["receipt"].update(state="building", source_commit=storage.git(repo, "rev-parse", "HEAD"),
-                                    source_digest=digest)
+        operation["receipt"].update(
+            state="building",
+            source_commit=storage.git(repo, "rev-parse", "HEAD"),
+            source_digest=digest,
+            docker_host=docker_host,
+            runtime_identity=dict(self.runtime_identity),
+        )
         control.write(operation["root"] + "/compose.json", configured)
         previous = (control.read("toolchain/verified.json", optional=True)
                     or control.read("toolchain/current.json", optional=True))
@@ -472,7 +524,7 @@ def build_volume_toolchain(repo):
         # its only durable copy outside the image belongs to the control volume.
         args = control.helper_args("cat '" + DEPENDENCY_MANIFEST + "'")
         args[args.index(control.image)] = image[0]["Id"]
-        installed_run = bounded_capture(args, data=b"", timeout=90)
+        installed_run = bounded_capture(args, data=b"", timeout=90, env=_docker_environment())
         if installed_run.returncode or len(installed_run.stdout) > MAX_DOCUMENT_BYTES:
             raise BuildControlError("Built toolchain dependency manifest could not be read")
         installed = json.loads(installed_run.stdout)

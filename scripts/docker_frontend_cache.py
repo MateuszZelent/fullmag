@@ -680,6 +680,9 @@ VOLUME_SCHEMA_LABEL = "com.fullmag.frontend-cache.schema"
 VOLUME_PROFILE_LABEL = "com.fullmag.frontend-cache.profile"
 VOLUME_PROJECT_LABEL = "com.fullmag.frontend-cache.project"
 VOLUME_KEY_LABEL = "com.fullmag.frontend-cache.key"
+VOLUME_RUNTIME_PROFILE_LABEL = "com.fullmag.frontend-cache.runtime-profile"
+VOLUME_RUNTIME_UID_LABEL = "com.fullmag.frontend-cache.runtime-uid"
+VOLUME_RUNTIME_GID_LABEL = "com.fullmag.frontend-cache.runtime-gid"
 _V2_VOLUME_PREFIX = "fullmag-frontend-dev-v2"
 _FRONTEND_CONTROL_NAMESPACE = "frontend"
 FRONTEND_CONTROL_UID = 65532
@@ -693,6 +696,8 @@ def _v2_key(
     host_port: int,
     dependency_seed_sha256: str,
     toolpins: Mapping[str, Any] | None = None,
+    *,
+    runtime_identity: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Return a dependency identity whose key is independent of host port."""
 
@@ -709,6 +714,14 @@ def _v2_key(
     if not pins:
         raise FrontendCacheError("toolpins must not be empty")
     pins_sha256 = toolpins_digest(pins)
+    runtime = None
+    if runtime_identity is not None:
+        if (not isinstance(runtime_identity, tuple) or len(runtime_identity) != 2
+                or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                       for value in runtime_identity)):
+            raise FrontendCacheError("runtime_identity must be a nonzero numeric (uid, gid) pair")
+        runtime = {"profile": "linux-native-v1", "uid": runtime_identity[0],
+                   "gid": runtime_identity[1]}
     inputs = {
         "source_root": source,
         "worktree_id": worktree,
@@ -723,11 +736,15 @@ def _v2_key(
         "dependency_seed_sha256": dependency,
         "toolpins_sha256": pins_sha256,
     }
+    if runtime is not None:
+        inputs["runtime_identity"] = runtime
+        payload["runtime_identity"] = runtime
     return {
         "schema": "fullmag.frontend-cache-key.v2",
         "key": _sha256(payload),
         "inputs": inputs,
         "toolpins": pins,
+        "runtime_identity": runtime,
     }
 
 
@@ -826,6 +843,7 @@ def _v2_ensure_volume(
     project_id: str,
     key: str,
     profile: str = PROFILE,
+    runtime_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     labels = {
         VOLUME_SCHEMA_LABEL: SCHEMA,
@@ -833,6 +851,12 @@ def _v2_ensure_volume(
         VOLUME_PROJECT_LABEL: project_id,
         VOLUME_KEY_LABEL: key,
     }
+    if runtime_identity is not None:
+        labels.update({
+            VOLUME_RUNTIME_PROFILE_LABEL: str(runtime_identity["profile"]),
+            VOLUME_RUNTIME_UID_LABEL: str(runtime_identity["uid"]),
+            VOLUME_RUNTIME_GID_LABEL: str(runtime_identity["gid"]),
+        })
     record = _v2_volume_inspect(docker, name)
     if record is None:
         command: list[str] = ["volume", "create"]
@@ -970,8 +994,8 @@ def _v2_validate_state_maintenance_config(
         ENV_STATE_PROJECT_ID: environment[ENV_PROJECT_ID],
         ENV_STATE_CACHE_KEY: environment[ENV_KEY],
         ENV_STATE_VOLUME: environment[ENV_VOLUME_NAME],
-        ENV_STATE_OWNER_UID: "65532",
-        ENV_STATE_OWNER_GID: "65532",
+        ENV_STATE_OWNER_UID: environment[ENV_STATE_OWNER_UID],
+        ENV_STATE_OWNER_GID: environment[ENV_STATE_OWNER_GID],
     }
     observed_environment = service.get("environment")
     if not isinstance(observed_environment, Mapping):
@@ -1025,8 +1049,8 @@ def _v2_validate_state_maintenance_receipt(
         or receipt.get("cache_key") != environment[ENV_KEY]
         or receipt.get("volume_name") != environment[ENV_VOLUME_NAME]
         or receipt.get("root") != STATE_TARGET
-        or receipt.get("owner_uid") != 65532
-        or receipt.get("owner_gid") != 65532
+        or receipt.get("owner_uid") != int(environment[ENV_STATE_OWNER_UID])
+        or receipt.get("owner_gid") != int(environment[ENV_STATE_OWNER_GID])
         or receipt.get("directories") != expected_directories
     ):
         raise FrontendCacheError("frontend state maintenance receipt identity is invalid")
@@ -1114,6 +1138,7 @@ def _v2_prepare(
     toolpins: Mapping[str, Any] | None = None,
     compose_project: str | None = None,
     control_volume_name: str | None = None,
+    runtime_identity: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Create/reuse group-scoped named volumes without host build storage."""
 
@@ -1124,6 +1149,7 @@ def _v2_prepare(
         host_port,
         dependency_seed_sha256,
         toolpins,
+        runtime_identity=runtime_identity,
     )
     paths = _v2_cache_paths(
         layout,
@@ -1141,6 +1167,7 @@ def _v2_prepare(
         name=paths["volume_name"],
         project_id=paths["project_id"],
         key=identity["key"],
+        runtime_identity=identity["runtime_identity"],
     )
     control_volume = _v2_ensure_control_volume(
         docker,
@@ -1172,8 +1199,14 @@ def _v2_prepare(
         ENV_STATE_PROJECT_ID: paths["project_id"],
         ENV_STATE_CACHE_KEY: identity["key"],
         ENV_STATE_VOLUME: paths["volume_name"],
-        ENV_STATE_OWNER_UID: "65532",
-        ENV_STATE_OWNER_GID: "65532",
+        ENV_STATE_OWNER_UID: str(identity["runtime_identity"]["uid"]
+                                 if identity["runtime_identity"] else FRONTEND_CONTROL_UID),
+        ENV_STATE_OWNER_GID: str(identity["runtime_identity"]["gid"]
+                                 if identity["runtime_identity"] else FRONTEND_CONTROL_GID),
+        "FULLMAG_RUNTIME_UID": str(identity["runtime_identity"]["uid"]
+                                   if identity["runtime_identity"] else FRONTEND_CONTROL_UID),
+        "FULLMAG_RUNTIME_GID": str(identity["runtime_identity"]["gid"]
+                                   if identity["runtime_identity"] else FRONTEND_CONTROL_GID),
     }
     _v2_assert_no_active_consumer(
         docker,
@@ -1201,10 +1234,11 @@ def _v2_prepare(
         "control_root": paths["control_root"],
         "inputs_path": paths["inputs_path"],
         "control_owner": {
-            "uid": FRONTEND_CONTROL_UID,
-            "gid": FRONTEND_CONTROL_GID,
+            "uid": int(environment[ENV_STATE_OWNER_UID]),
+            "gid": int(environment[ENV_STATE_OWNER_GID]),
             "mode": FRONTEND_CONTROL_MODE,
         },
+        "runtime_identity": identity["runtime_identity"],
         "runtime_image_id": image_id,
         "volume": state_volume,
         "control_volume": control_volume,
@@ -1278,6 +1312,14 @@ def _v2_validate_container(
         if env.get(name) != str(expected[name]):
             raise FrontendCacheError(f"frontend container cache environment mismatch: {name}")
     config = document.get("Config")
+    if not isinstance(config, Mapping):
+        raise FrontendCacheError("frontend container has no configuration")
+    runtime_identity = profile.get("runtime_identity")
+    if runtime_identity is not None:
+        if (not isinstance(runtime_identity, Mapping)
+                or runtime_identity.get("profile") != "linux-native-v1"
+                or config.get("User") != f"{runtime_identity.get('uid')}:{runtime_identity.get('gid')}"):
+            raise FrontendCacheError("frontend container user differs from its Linux cache identity")
     labels = config.get("Labels") if isinstance(config, Mapping) else None
     if (
         not isinstance(labels, Mapping)

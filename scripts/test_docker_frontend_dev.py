@@ -213,6 +213,43 @@ class FrontendDevContractTests(TestCase):
     def setUp(self):
         self.module = load_module()
 
+    def test_manifest_accepts_explicit_linux_checkout(self):
+        with isolated(self.module):
+            manifest = json.loads(self.module.INPUTS_PATH.read_text())
+            manifest.update(source_root='/home/kelv/git/fullmag',
+                            source_selection='live_linux_selected_checkout')
+            self.module.INPUTS_PATH.write_text(json.dumps(manifest))
+            parsed = self.module.read_inputs()
+            self.assertEqual(parsed.source_root, '/home/kelv/git/fullmag')
+
+    def test_manifest_rejects_mismatched_or_noncanonical_checkout(self):
+        cases = [('/home/kelv/git/fullmag', None),
+                 ('/home/kelv/git/fullmag', 'live_windows_selected_checkout'),
+                 (r'C:\git\fullmag', 'live_linux_selected_checkout'),
+                 ('relative/checkout', 'live_linux_selected_checkout'),
+                 ('/home/kelv/../fullmag', 'live_linux_selected_checkout'),
+                 ('/home//kelv/fullmag', 'live_linux_selected_checkout'),
+                 ('/home/kelv/./fullmag', 'live_linux_selected_checkout'),
+                 ('/home/kelv/fullmag/', 'live_linux_selected_checkout'),
+                 (r'C:\git\fullmag', 'unknown')]
+        with isolated(self.module):
+            baseline = json.loads(self.module.INPUTS_PATH.read_text())
+            for root, selection in cases:
+                with self.subTest(root=root, selection=selection):
+                    manifest = dict(baseline, source_root=root)
+                    if selection is not None:
+                        manifest['source_selection'] = selection
+                    self.module.INPUTS_PATH.write_text(json.dumps(manifest))
+                    with self.assertRaises(self.module.FrontendDevError):
+                        self.module.read_inputs()
+
+    def test_manifest_accepts_explicit_windows_checkout(self):
+        with isolated(self.module):
+            manifest = json.loads(self.module.INPUTS_PATH.read_text())
+            manifest['source_selection'] = 'live_windows_selected_checkout'
+            self.module.INPUTS_PATH.write_text(json.dumps(manifest))
+            self.assertEqual(self.module.read_inputs().source_root, manifest['source_root'])
+
     def test_enabled_requires_exact_dev_mode(self):
         self.assertTrue(self.module.enabled({"FULLMAG_DOCKER_FRONTEND": "dev"}))
         self.assertFalse(self.module.enabled({"FULLMAG_DOCKER_FRONTEND": "DEV"}))

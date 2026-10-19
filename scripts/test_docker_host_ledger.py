@@ -435,16 +435,23 @@ class HostLedgerTests(unittest.TestCase):
                 "run_id": "a" * 32,
                 "backing_image": backing_image,
                 "host_receipt": {"filesystem": "ext4", "mount_active": True},
+                "environment": {
+                    "FULLMAG_HOST_LEDGER_RUNTIME_UID": str(ledger._runtime_ids()[0]),
+                    "FULLMAG_HOST_LEDGER_RUNTIME_GID": str(ledger._runtime_ids()[1]),
+                },
             }
             fake = FakeDocker({
                 "project_id": "test",
                 "backing_image": profile["backing_image"],
                 "mount_root": profile["mount_root"],
             })
+            runtime_uid, runtime_gid = ledger._runtime_ids()
             backend = {
-                "Id": "backend-id", "Image": IMAGE, "Config": {"User": "65532:65532", "Env": [
+                "Id": "backend-id", "Image": IMAGE, "Config": {"User": f"{runtime_uid}:{runtime_gid}", "Env": [
                     "FULLMAG_DOCKER_HOST_EXECUTION=1", "FULLMAG_HOST_LEDGER_PROFILE=host-ledger-v1",
                     "FULLMAG_HOST_LEDGER_ROOT=/host-ledger/ledger",
+                    f"FULLMAG_HOST_LEDGER_RUNTIME_UID={runtime_uid}",
+                    f"FULLMAG_HOST_LEDGER_RUNTIME_GID={runtime_gid}",
                 ]},
                 "Mounts": [{"Destination": "/host-ledger", "Type": "bind", "RW": True, "Source": profile["mount_root"]}],
                 "HostConfig": {"Privileged": False},
@@ -463,6 +470,9 @@ class HostLedgerTests(unittest.TestCase):
             direct_profile["host_receipt"] = {"filesystem": "ext4", "mount_active": True}
             with self.assertRaises(ledger.HostLedgerError):
                 ledger.validate_container(backend, direct_profile, fake)
+            backend["Config"]["User"] = f"{runtime_uid + 1}:{runtime_gid + 1}"
+            with self.assertRaises(ledger.HostLedgerError):
+                ledger.validate_container(backend, profile, fake)
             backend["Mounts"][0]["RW"] = False
             with self.assertRaises(ledger.HostLedgerError):
                 ledger.validate_container(backend, profile, fake)

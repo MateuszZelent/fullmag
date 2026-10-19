@@ -69,6 +69,7 @@ _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _CONFIG_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
 _DEVELOPMENT_BUILD_SCHEMA = "fullmag.windows-folder-development-build.v1"
+_LINUX_NATIVE_DEVELOPMENT_BUILD_SCHEMA = "fullmag.linux-native-development-build.v1"
 _PROVISIONAL_COMMIT = "0" * 40
 _PROVISIONAL_DIGEST = "0" * 64
 _SOURCE_IDENTITY_FIELDS = (
@@ -827,14 +828,17 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
                  project="fullmag-config-check", source_identity=None, workspace_state_root=None,
                  template=None, host_ledger=None, startup=None, frontend_cache=None,
                  previous_config_sha256=None, recovery=None, backend_start=None,
-                 device_access="gpu", device_overlay=None):
+                 device_access="gpu", device_overlay=None,
+                 storage_profile="windows-folder-v1"):
     """Resolve the versioned Compose definition; do not generate service topology."""
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
         raise ValueError("A full immutable image ID is required")
     if not 1024 <= port <= 65535:
         raise ValueError("Port must be between 1024 and 65535")
     if host_certificate is None:
-        raise ValueError("Windows host certificate is required")
+        raise ValueError("Host certificate is required")
+    if storage_profile not in {"windows-folder-v1", "linux-native-v1"}:
+        raise ValueError("Host storage profile is unsupported")
     device_access = _validate_device_access(device_access)
     if workspace_state_root is None:
         raise ValueError("Durable workspace user-data host root is required")
@@ -851,8 +855,35 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
         "FULLMAG_STATE_ROOT": str(state), "FULLMAG_HTTP_PORT": str(port),
         "FULLMAG_WORKSPACE_STATE_ROOT": str(workspace_state_root),
         "FULLMAG_HOST_CERTIFICATE": str(host_certificate),
+        "FULLMAG_SESSION_STORAGE_PROFILE": storage_profile,
+        "FULLMAG_HOST_CERTIFICATE_TARGET": certificate_target(storage_profile),
         "FULLMAG_BACKEND_HOSTNAME": "fullmag-" + state.parent.name,
     }
+    if storage_profile == "linux-native-v1":
+        host_certificate = Path(host_certificate)
+        state_root = Path(state).resolve(strict=False)
+        certificate_directory = host_certificate.parent.resolve(strict=False)
+        if (
+            host_certificate.name != "linux-native-host.json"
+            or certificate_directory == state_root
+            or certificate_directory.parent != state_root.parent
+        ):
+            raise ValueError(
+                "Linux host certificate must be in a dedicated sibling directory outside writable state"
+            )
+        try:
+            from linux_docker_host import runtime_identity
+
+            runtime_uid, runtime_gid = runtime_identity()
+        except (ImportError, OSError, ValueError) as error:
+            raise ValueError(f"Linux-native storage requires the current non-root identity: {error}") from error
+        environment.pop("FULLMAG_HOST_CERTIFICATE", None)
+        environment["FULLMAG_HOST_CERTIFICATE_DIR"] = str(host_certificate.parent)
+        environment["FULLMAG_RUNTIME_UID"] = str(runtime_uid)
+        environment["FULLMAG_RUNTIME_GID"] = str(runtime_gid)
+    else:
+        environment["FULLMAG_RUNTIME_UID"] = "65532"
+        environment["FULLMAG_RUNTIME_GID"] = "65532"
     operator_probe_values = None
     operator_probe_sha256 = None
     if inputs is not None or backend_start is not None:
@@ -1029,6 +1060,15 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
     for service in configured["services"].values():
         service.pop("build", None)
     return configured
+
+
+def certificate_target(profile):
+    """Return the Compose mount target for an explicit admission profile."""
+    if profile == "windows-folder-v1":
+        return "/run/fullmag/windows-folder-host.json"
+    if profile == "linux-native-v1":
+        return "/run/fullmag/host-admission"
+    raise ValueError("Host storage profile is unsupported")
 
 
 def prepare_gpu_release(layout, job_id, commit, *, source_digest=None, native_snapshot_sha256=None):
@@ -2813,7 +2853,9 @@ def _backend_assembly_receipt_identity(assembly):
     }
 
 
-def _provisional_development_certificate(inputs, source_identity):
+def _provisional_development_certificate(
+    inputs, source_identity, *, storage_profile="windows-folder-v1"
+):
     """Return the pre-build certificate and delegation for the backend gate.
 
     The backend service must be able to run the guest storage probes before a
@@ -2827,8 +2869,14 @@ def _provisional_development_certificate(inputs, source_identity):
     project = source_identity.get("project_name")
     if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
         raise ValueError("Development host certificate has no valid Compose project identity")
+    if storage_profile not in {"windows-folder-v1", "linux-native-v1"}:
+        raise ValueError("Development certificate storage profile is unsupported")
     delegation = {
-        "schema": _DEVELOPMENT_BUILD_SCHEMA,
+        "schema": (
+            _LINUX_NATIVE_DEVELOPMENT_BUILD_SCHEMA
+            if storage_profile == "linux-native-v1"
+            else _DEVELOPMENT_BUILD_SCHEMA
+        ),
         "cargo_profile": "backend-dev",
         "toolchain_image_id": inputs["toolchain_image_id"],
         "package_root": "/opt/fullmag/package",
@@ -3112,6 +3160,10 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
           backend_start=None, device_access=None):
     if project_name is not None and not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project_name):
         raise ValueError("Invalid Compose project name")
+    if os.name != "nt":
+        raise ValueError(
+            "The retained packaged-runtime launcher is Windows-only; Linux daily DEV uses the managed volume launcher"
+        )
     if (assembly_receipt is None) == (backend_start is None):
         raise ValueError("Exactly one of an assembly receipt or backend start inputs is required")
     if backend_start is not None and recovery_authorization is not None:
@@ -3581,8 +3633,6 @@ def start(repo, assembly_receipt, port, frontend="static", source_root=None,
                                 backend_start=backend_start,
                                 device_access=effective_device_access,
                                 device_overlay=compose_device_overlay_path)
-        if os.name != "nt":
-            raise ValueError("This Windows-folder launcher requires native Windows host attestation")
         from windows_folder_host import attest, local_volume, publish_evidence, read_owned_regular
         from docker_host_ledger import prepare as prepare_host_ledger
         engine_id = docker("info", "--format", "{{.ID}}")

@@ -4,7 +4,7 @@ Decyzja użytkownika z 17.10.2026: [ADR 0061](../adr/0061-docker-development-bui
 Kontrakt: dwa stałe kontenery aplikacji; backend buduje i uruchamia kod w tej
 samej instancji. Dane techniczne procesu budowania są izolowane w nazwanych
 wolumenach Docker/BuildKit przypisanych do grupy Compose. Sesje, projekty,
-ustawienia i wyniki symulacji pozostają w fizycznym storage Windows. Wdrożenie
+ustawienia i wyniki symulacji pozostają w skonfigurowanym trwałym storage hosta (Windows NTFS/ReFS albo Linux/WSL ext4/XFS/Btrfs). Wdrożenie
 i dowody tego wariantu: **NOT VERIFIED**.
 
 ## Źródła i usługi
@@ -78,9 +78,9 @@ operacyjną infrastrukturą zasobów, a nie cache'em buildu ani danymi sesji.
 
 ## Polecenia trybu developerskiego
 
-Uruchamiaj je z natywnego PowerShella Windows, z Git, natywnym Pythonem i Docker
+Na Windows uruchamiaj je z natywnego PowerShella, z Git, natywnym Pythonem i Docker
 Desktop w trybie kontenerów Linux. GPU wymaga obsługi NVIDIA w Docker Desktop.
-WSL może edytować źródła; obecny launcher odrzuca WSL jako ścieżkę startową.
+Decyzja użytkownika z 19.10.2026 rozszerza ten sam wolumenowy DEV na Linux/WSL z lokalnym Docker Linux, ext4/XFS/Btrfs i jawnym nie-rootowym UID/GID. Nie jest to fallback do dawnego runnera. Kontrakt i stan kwalifikacji opisuje [Docker w WSL](docker-wsl.md).
 Host nie potrzebuje Cargo ani CMake. `just` jest potrzebny dla recept i pełnego
 `setup_docker.py --check`; launcher Pythona można wywołać bez niego.
 
@@ -346,7 +346,7 @@ i rzeczywiste granice automatycznego sprzątania:
 | Toolchain, zależności, cache kompilatorów, staging i pakiet dev | Nazwane wolumeny Docker grupy Compose oraz BuildKit; nie hostowy `storage` |
 | Manifesty wejściowe, konteksty, logi buildu, receipty i provenance | Techniczne wolumeny Docker grupy Compose; nie Windows storage |
 | Kontrola runtime i metadata usług technicznych | Wydzielony podwolumen Docker grupy Compose; nie katalog sesji użytkownika |
-| Sesje, modele, wyniki i logi symulacji | Fizyczny storage Windows, mount `/state` |
+| Sesje, modele, wyniki i logi symulacji | Trwały storage wybranego hosta, mount `/state` |
 | Ustawienia, ostatnie projekty i historia grupy | `storage/user-data/<compose-project>/workspace.db`, mount `/user-data` |
 | Przydziały fizycznego CPU/GPU | Wspólny `host-ledger-v1` zarządzany osobnym kontraktem; nie cache buildu ani ledger per grupa |
 

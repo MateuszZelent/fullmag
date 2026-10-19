@@ -122,7 +122,7 @@ Nie stosuj starego `docker-dev-recreate` z hostowym receiptem dla tej trasy.
 Nie kopiuj konfiguracji ani terminal receipt z wolumenu do hostowego storage.
 
 
-W natywnym Windows PowerShell przejdź do wybranego checkoutu. Użyj tego samego
+W natywnym Windows PowerShell albo powłoce Linux/WSL przejdź do wybranego checkoutu. Linux/WSL wymaga lokalnego Docker Linux oraz checkoutu i storage na ext4/XFS/Btrfs; stosuj [przewodnik Linux/WSL](../../../../docs/guides/docker-wsl.md). Użyj tego samego
 checkoutu dla toolchaina i aplikacji; recepta toolchaina wybiera źródło z
 bieżącego justfile.
 

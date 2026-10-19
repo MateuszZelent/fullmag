@@ -506,9 +506,19 @@ def read_inputs(path: Path | None = None) -> DevelopmentInputs:
         or not source_root
         or len(source_root.encode()) > 2048
         or "\x00" in source_root
-        or not WINDOWS_PATH.match(source_root)
     ):
-        _fail("source_root must be a diagnostic Windows path")
+        _fail("source_root must be a bounded diagnostic checkout path")
+    selection = manifest.get("source_selection")
+    if selection == "live_linux_selected_checkout":
+        if (not source_root.startswith("/") or source_root.startswith("//")
+                or "\\" in source_root or ".." in Path(source_root).parts
+                or str(Path(source_root)) != source_root):
+            _fail("source_root must be a canonical absolute Linux path")
+    elif selection in (None, "live_windows_selected_checkout"):
+        if not WINDOWS_PATH.match(source_root):
+            _fail("source_root must be a diagnostic Windows path")
+    else:
+        _fail("source_selection must identify a Windows or Linux selected checkout")
     source_commit = manifest.get("source_commit")
     if not isinstance(source_commit, str) or not HEX40.fullmatch(source_commit):
         _fail("source_commit must be a lowercase full Git commit")

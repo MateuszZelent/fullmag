@@ -15,7 +15,10 @@ import stat
 import uuid
 
 import fullmag_storage as storage
-from windows_folder_host import local_volume, read_owned_regular
+if os.name == "nt":
+    from windows_folder_host import local_volume, read_owned_regular
+else:
+    from linux_docker_host import local_volume, read_owned_regular
 
 DIRECTORIES = ("app", "src", "public", "scripts")
 NEXT_CONFIG_RELATIVE = Path("apps/control-room/next.config.ts")
@@ -69,8 +72,7 @@ def select_checkout(repo, source_root=None):
     known = {Path(record["worktree"]).resolve() for record in storage.worktree_records(repo)}
     if selected not in known:
         raise ValueError("Development sources must be a registered checkout of this project")
-    if os.name == "nt":
-        local_volume(selected)
+    local_volume(selected)
     return selected
 
 
@@ -249,7 +251,7 @@ def describe(source, port):
         "schema": "fullmag.docker-development-inputs.v1",
         "source_root": str(source),
         "source_commit": commit,
-        "source_selection": "live_windows_selected_checkout",
+        "source_selection": "live_windows_selected_checkout" if os.name == "nt" else "live_linux_selected_checkout",
         "host_port": port,
         "worktree_id": worktree_id,
         "dependency_seed_files": sorted(dependency_entries),
@@ -326,8 +328,6 @@ def _validate_reused_workspace(destination, inputs, old_inputs, *, generated_sou
 
 
 def seed(source, state, port, *, reuse_from=None, write_file=None):
-    if os.name != "nt":
-        raise ValueError("Live Docker development sources require native Windows preflight")
     source = source.resolve(strict=True)
     source_volume = local_volume(source)
     initial_commit = storage.git(source, "rev-parse", "HEAD")
@@ -445,7 +445,8 @@ def seed(source, state, port, *, reuse_from=None, write_file=None):
         # recording the current checkout identity in the outer run receipt.
         return old_inputs
     return {"schema": "fullmag.docker-development-inputs.v1", "source_root": str(source),
-            "source_commit": commit, "source_selection": "live_windows_selected_checkout",
+            "source_commit": commit,
+            "source_selection": "live_windows_selected_checkout" if os.name == "nt" else "live_linux_selected_checkout",
             "source_volume": source_volume, "host_port": port,
             "worktree_id": storage.identifier(source),
             "dependency_seed_files": sorted(dependency_entries),
@@ -610,10 +611,12 @@ def seed_guest(
     state = Path(state)
     if not state.is_absolute() or state.is_symlink():
         raise ValueError("Docker frontend state root must be an absolute named-volume path")
-    if not isinstance(host_source_root, str) or not re.fullmatch(
+    windows_source = isinstance(host_source_root, str) and bool(re.fullmatch(
         r"(?:[A-Za-z]:[\\/].*|\\\\.*)", host_source_root
-    ):
-        raise ValueError("host_source_root must be a diagnostic Windows path")
+    ))
+    linux_source = isinstance(host_source_root, str) and host_source_root.startswith("/") and ".." not in Path(host_source_root).parts
+    if not (windows_source or linux_source):
+        raise ValueError("host_source_root must be a normalized absolute Windows or Linux path")
     if not isinstance(worktree_id, str) or not re.fullmatch(
         r"[a-z0-9][a-z0-9._-]{0,127}", worktree_id
     ):
@@ -746,7 +749,7 @@ def seed_guest(
         "schema": "fullmag.docker-development-inputs.v1",
         "source_root": host_source_root,
         "source_commit": source_commit,
-        "source_selection": "live_windows_selected_checkout",
+        "source_selection": "live_windows_selected_checkout" if windows_source else "live_linux_selected_checkout",
         "source_volume": str(source),
         "host_port": port,
         "worktree_id": worktree_id,

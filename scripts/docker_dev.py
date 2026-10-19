@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Start Fullmag's direct, fixed two-container Docker development workspace.
 
-``up`` prepares one registered Windows checkout, starts the persistent backend
-service and frontend service, and waits for the backend service to publish its
-receipt-validated package and runtime provenance.  The backend compiles inside
-that same long-lived service; no host package transfer or one-shot backend
-container is used.  ``build`` is an explicit alias for this service-owned
-build gate and leaves both services running so the receipt remains observable.
+``up`` prepares one registered Windows or native Linux/WSL checkout, admits its
+user-data storage on that host, starts the persistent backend and frontend
+services, and waits for receipt-validated package and runtime provenance. The
+backend compiles inside that same long-lived service; no host package transfer
+or one-shot backend container is used. ``build`` is an explicit alias for this
+service-owned build gate and leaves both services running so the receipt
+remains observable.
 
-The existing runtime launcher still owns Windows storage attestation, the
-frontend cache, host ledger, startup-script admission, and final Compose
-readiness.  The canonical Windows heavy-build lease covers only preparation
-of the image, toolchain, cache, and backend-start receipt.  The long-lived
-backend service owns its compile after that lease is released.  Frontend edits
-remain HMR-driven; an ordinary restart of the fixed backend service re-observes
-the live readonly source and rebuilds incrementally without a host ``up`` or
-``build`` invocation.
+The host-specific adapter owns storage admission and Docker endpoint pinning.
+The launcher owns the frontend cache, host ledger, startup-script admission,
+and final Compose readiness. The heavy-build lease covers image, toolchain,
+cache, and backend-start preparation. The long-lived backend service owns its
+compile after that lease is released. Frontend edits remain HMR-driven; an
+ordinary restart re-observes the live readonly source and rebuilds incrementally
+without a host ``up`` or ``build`` invocation.
 """
 
 from __future__ import annotations
@@ -291,10 +291,19 @@ def _repo_default() -> Path:
 
 def _require_native_windows() -> None:
     if os.name != "nt":
-        raise _fail(
-            "direct Docker Compose development must run with native Windows Python; "
-            "invoke it from PowerShell, not from WSL"
-        )
+        raise _fail("this legacy Docker DEV action is available only from native Windows")
+
+
+def _require_managed_dev_host() -> None:
+    from docker_platform import DockerPlatformError, host_profile, require_local_linux_engine, runtime_identity
+
+    try:
+        profile = host_profile()
+        if profile == "linux-native-v1":
+            runtime_identity()
+            require_local_linux_engine(lambda *args: _docker_capture(*args))
+    except DockerPlatformError as error:
+        raise _fail(str(error)) from error
 
 
 def _resolve_gpu_access(requested: str | None) -> str:
@@ -333,11 +342,14 @@ def _verify_docker_gpu_access(
 
     if device_access != "gpu" or policy is None:
         return device_access
+    from docker_platform import runtime_identity
+
+    runtime_user = "{}:{}".format(*runtime_identity())
     try:
         _docker_capture(
             "run", "--rm", "--pull", "never", "--network", "none",
             "--gpus", "all",
-            "--read-only", "--user", "65532:65532", "--cap-drop", "ALL",
+            "--read-only", "--user", runtime_user, "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true", "--pids-limit", "64",
             "--memory", "256m",
             "--label", f"org.fullmag.compose.project={compose_project}",
@@ -356,23 +368,24 @@ def _verify_docker_gpu_access(
 
 
 def _docker_argv(arguments: Sequence[object]) -> list[str]:
-    command = ["docker"]
-    if os.name == "nt":
-        command.extend(("--context", "desktop-linux"))
-    return command + [str(value) for value in arguments]
+    from docker_platform import docker_cli_prefix
+
+    return [*docker_cli_prefix(), *[str(value) for value in arguments]]
 
 
 def _docker_capture(*arguments: object, timeout: int = 60,
                     environment: Mapping[str, str] | None = None,
                     combined: bool = False) -> str:
     command = _docker_argv(arguments)
+    from docker_platform import docker_environment
+
     try:
         result = subprocess.run(
             command,
             text=True,
             capture_output=True,
             timeout=timeout,
-            env=None if environment is None else {**os.environ, **dict(environment)},
+            env=docker_environment(None if environment is None else {**os.environ, **dict(environment)}),
         )
     except subprocess.TimeoutExpired as error:
         raise DirectDockerOutcomeUnknown(
@@ -404,6 +417,7 @@ def _docker_live(log_path: Path | None, *arguments: object, timeout: int,
             value is not None for value in supplied_control):
         raise _fail("Docker build log persistence requires repo, project and control path")
     command = _docker_argv(arguments)
+    from docker_platform import docker_environment
     try:
         process = subprocess.Popen(
             command,
@@ -411,7 +425,7 @@ def _docker_live(log_path: Path | None, *arguments: object, timeout: int,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            env=None if environment is None else {**os.environ, **dict(environment)},
+            env=docker_environment(None if environment is None else {**os.environ, **dict(environment)}),
         )
     except OSError as error:
         raise _fail(f"cannot start Docker client: {error}") from error
@@ -664,7 +678,7 @@ def _image_labels(document: Mapping[str, object]) -> dict[str, str]:
 def _toolchain_setup_message(detail: str) -> DirectDockerError:
     return _fail(
         f"{detail}; Docker will not pull a FEM/GPU toolchain automatically. "
-        "Run `just docker-dev-toolchain` in the native Windows checkout first."
+        "Run `just docker-dev-toolchain` in the selected registered checkout first."
     )
 
 
@@ -926,6 +940,12 @@ def _select_source(repo: Path, source_root: Path | None) -> tuple[Path, dict[str
     if not selected.is_dir() or selected.is_symlink():
         raise _fail(f"selected source is not a real checkout: {selected}")
     layout = resolve_layout(selected, STORAGE_PROFILE)
+    from docker_platform import admit_storage_path
+
+    # Reject NTFS/DrvFS/CIFS or any other unsupported source/storage mount
+    # before initialize_runtime creates host-side user metadata.
+    admit_storage_path(selected)
+    admit_storage_path(layout["storage_root"])
     initialize_runtime(layout)
     return selected, layout
 
@@ -1451,7 +1471,7 @@ def _prepare_backend_cache(layout: Mapping[str, object], repo: Path, image_id: s
     result = dict(profile)
     # The selected Compose file contains the named-volume declarations. Keep
     # the canonical in-memory profile for consumers, but never materialize an
-    # overlay YAML on Windows storage.
+    # overlay YAML on host storage.
     result["compose_overlay"] = None
     result["compose_overlay_sha256"] = None
     result["maintenance_compose_overlay"] = None
@@ -1463,9 +1483,9 @@ def _backend_cache_package_root(cache: Mapping[str, object]) -> PurePosixPath:
     """Return the helper-attested daemon package target for the backend.
 
     The v2 helper owns a named-volume pair and creates both volumes with the
-    container UID before Compose is evaluated.  Native Windows Python must
-    pass the daemon path through unchanged; deriving a sibling under the run
-    root would silently switch the package back to Windows storage.
+    container UID before Compose is evaluated.  Host Python must pass the daemon
+    path through unchanged; deriving a sibling under the run root would
+    silently move the package back into host storage.
     """
 
     package_value = cache.get("package_root")
@@ -2731,7 +2751,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.action in {"up", "build"}:
-            _require_native_windows()
+            _require_managed_dev_host()
             from docker_dev_defaults import resolve_defaults
             selected = resolve_defaults(args.repo_root, source_root=args.source_root, port=getattr(args, "port", None))
             args.source_root = selected.source_root

@@ -1497,6 +1497,153 @@ class BackendPackageTests(unittest.TestCase):
             },
         )
 
+    def _linux_native_development_gate_fixture(self):
+        image_id = "sha256:" + "a" * 64
+        toolchain_image_id = "sha256:" + "b" * 64
+        group_identity = "fullmag-linux-test"
+        owner_token = "123e4567-e89b-12d3-a456-426614174000"
+        source_identity = {
+            "commit": "c" * 40,
+            "source_digest": "d" * 64,
+            "source_snapshot_sha256": "e" * 64,
+            "native_source_identity_sha256": "f" * 64,
+        }
+        provenance = {
+            "schema": "fullmag.docker-all-image.v1",
+            "state": "succeeded",
+            "cargo_profile": backend.BACKEND_CARGO_PROFILE,
+            "toolchain_image_id": toolchain_image_id,
+            "package_root": str(backend.PACKAGE_ROOT),
+            "commit": "1" * 40,
+            "binary_hashes": {"fullmag-api": "2" * 64},
+        }
+        receipt_sha256 = "3" * 64
+        host = {
+            "schema": "fullmag.linux-native-host-certificate.v1",
+            "storage_profile": "linux-native-v1",
+            "role": "session",
+            "owner_scope": "docker-local-unix",
+            "owner_token": owner_token,
+            "engine_id": "local-engine-1",
+            "docker_host": {
+                "profile": "linux-native-v1",
+                "selection": "DOCKER_CONTEXT",
+                "context_name": "default",
+                "endpoint": "unix:///var/run/docker.sock",
+                "daemon_id": "a" * 64,
+            },
+            "host_root": "/home/operator/storage/runs/session/state",
+            "filesystem": "ext4",
+            "device": 1,
+            "runtime_uid": os.getuid(),
+            "runtime_gid": os.getgid(),
+            "image_id": image_id,
+            "source_commit": provenance["commit"],
+            "binary_hashes": provenance["binary_hashes"],
+            "artifact_receipt_sha256": receipt_sha256,
+            "restart_expected_sha256": hashlib.sha256(
+                (owner_token + ":" + image_id).encode("ascii")
+            ).hexdigest(),
+            "restart_verified": False,
+            "development_build": {
+                "schema": "fullmag.linux-native-development-build.v1",
+                "cargo_profile": backend.BACKEND_CARGO_PROFILE,
+                "toolchain_image_id": toolchain_image_id,
+                "package_root": "/opt/fullmag/package",
+                "provenance_path": "/opt/fullmag/control/backend/runtime-provenance.json",
+                "group_identity": group_identity,
+                "source_identity": source_identity,
+            },
+        }
+        environment = {
+            "FULLMAG_RUNTIME_IMAGE_ID": image_id,
+            "FULLMAG_BACKEND_CARGO_PROFILE": backend.BACKEND_CARGO_PROFILE,
+            "FULLMAG_TOOLCHAIN_IMAGE_ID": toolchain_image_id,
+            "FULLMAG_COMPOSE_PROJECT": group_identity,
+        }
+        raw = (json.dumps(host, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+        return host, provenance, receipt_sha256, raw, environment
+
+    def test_linux_native_gate_accepts_matching_certificate(self):
+        host, provenance, receipt, raw, environment = self._linux_native_development_gate_fixture()
+        with patch.dict(os.environ, environment, clear=False):
+            self.assertEqual(
+                backend._validate_linux_native_attestation(
+                    host, host, raw, raw, provenance, receipt
+                ),
+                "pending",
+            )
+            host = dict(host, restart_verified=True)
+            raw = (json.dumps(host, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+            self.assertEqual(
+                backend._validate_linux_native_attestation(
+                    host, host, raw, raw, provenance, receipt
+                ),
+                "ready",
+            )
+
+    def test_linux_native_gate_waits_for_host_first_restart_marker_update(self):
+        host, provenance, receipt, _raw, environment = self._linux_native_development_gate_fixture()
+        owner = dict(host)
+        host["restart_verified"] = True
+        host_raw = (json.dumps(host, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+        owner_raw = (json.dumps(owner, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+        with patch.dict(os.environ, environment, clear=False):
+            self.assertEqual(
+                backend._validate_linux_native_attestation(
+                    host, owner, host_raw, owner_raw, provenance, receipt
+                ),
+                "pending",
+            )
+            owner["restart_verified"] = True
+            owner_raw = (json.dumps(owner, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+            self.assertEqual(
+                backend._validate_linux_native_attestation(
+                    host, owner, host_raw, owner_raw, provenance, receipt
+                ),
+                "ready",
+            )
+
+    def test_linux_native_gate_waits_for_current_build_audit_publication(self):
+        host, provenance, receipt, _raw, environment = self._linux_native_development_gate_fixture()
+        owner = json.loads(json.dumps(host))
+        owner["source_commit"] = "4" * 40
+        owner["binary_hashes"] = {"fullmag-api": "5" * 64}
+        owner["artifact_receipt_sha256"] = "6" * 64
+        owner["development_build"]["source_identity"] = {
+            "commit": "7" * 40,
+            "source_digest": "8" * 64,
+            "source_snapshot_sha256": "9" * 64,
+            "native_source_identity_sha256": "a" * 64,
+        }
+        host_raw = (json.dumps(host, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+        owner_raw = (json.dumps(owner, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+        with patch.dict(os.environ, environment, clear=False):
+            self.assertEqual(
+                backend._validate_linux_native_attestation(
+                    host, owner, host_raw, owner_raw, provenance, receipt
+                ),
+                "pending",
+            )
+            owner["engine_id"] = "different-engine"
+            owner_raw = (json.dumps(owner, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+            with self.assertRaisesRegex(backend.BackendBuildError, "certificate and owner marker differ"):
+                backend._validate_linux_native_attestation(
+                    host, owner, host_raw, owner_raw, provenance, receipt
+                )
+
+    def test_linux_native_gate_rejects_owner_first_restart_update(self):
+        host, provenance, receipt, _raw, environment = self._linux_native_development_gate_fixture()
+        owner = dict(host, restart_verified=True)
+        host_raw = (json.dumps(host, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+        owner_raw = (json.dumps(owner, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode()
+        with patch.dict(os.environ, environment, clear=False), self.assertRaisesRegex(
+            backend.BackendBuildError, "certificate and owner marker differ"
+        ):
+            backend._validate_linux_native_attestation(
+                host, owner, host_raw, owner_raw, provenance, receipt
+            )
+
     def test_windows_folder_development_gate_accepts_matching_certificate(self):
         with tempfile.TemporaryDirectory() as directory:
             (

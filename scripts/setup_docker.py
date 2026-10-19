@@ -8,12 +8,14 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import subprocess
 import sys
 import tempfile
 
 import fullmag_storage as storage
 
+DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = "fullmag.docker-host-setup.v1"
 GPU_ACCESS_CHOICES = frozenset({"auto", "required", "disabled"})
 KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -180,6 +182,53 @@ def validate_windows_volume(root: Path) -> None:
         raise SetupError("Storage tej trasy wymaga NTFS albo ReFS")
 
 
+def validate_linux_volume(root: Path) -> None:
+    if not sys.platform.startswith("linux"):
+        raise SetupError("Natywne storage wymaga hosta Linux lub WSL")
+    try:
+        from linux_docker_host import runtime_identity
+
+        runtime_identity()
+        root = storage.absolute(root, "Linux storage path")
+        forbidden = (Path("/mnt/c"), Path("/mnt/d"), Path("/tmp"), Path("/run"), Path("/dev/shm"))
+        if any(root == item or item in root.parents for item in forbidden):
+            raise SetupError("Linux DEV wymaga trwałego storage poza Windows/9p i katalogami tymczasowymi")
+        existing = root
+        while not existing.exists():
+            if existing.parent == existing:
+                raise SetupError("Nie można ustalić istniejącego katalogu nadrzędnego storage")
+            existing = existing.parent
+        if not existing.is_dir():
+            raise SetupError(f"Katalog nadrzędny Linux storage nie jest katalogiem: {existing}")
+        filesystem = storage.filesystem_type(existing)
+        if filesystem not in {"ext4", "xfs", "btrfs"}:
+            raise SetupError(
+                f"Linux DEV wymaga ext4, XFS lub Btrfs; wykryto {filesystem or 'nieznany'}: {root}"
+            )
+    except (ImportError, OSError, ValueError, storage.StorageError) as error:
+        raise SetupError(str(error)) from error
+
+
+def validate_host_paths(storage_root: Path, source_root: Path) -> None:
+    if os.name == "nt":
+        validate_windows_volume(storage_root)
+        validate_windows_volume(source_root)
+    elif sys.platform.startswith("linux"):
+        validate_linux_volume(storage_root)
+        validate_linux_volume(source_root)
+    else:
+        raise SetupError("Docker DEV wymaga natywnego Windows, Linux albo WSL")
+
+
+def validate_host_volume(root: Path) -> None:
+    if os.name == "nt":
+        validate_windows_volume(root)
+    elif sys.platform.startswith("linux"):
+        validate_linux_volume(root)
+    else:
+        raise SetupError("Docker DEV wymaga Windows, Linux albo WSL")
+
+
 def validate_port(value: str | int) -> int:
     try:
         port = int(value)
@@ -216,7 +265,22 @@ def host_checks(gpu_access: str = "auto") -> dict:
         raise SetupError("gpu-access musi być auto, required albo disabled")
     is_wsl = os.name != "nt" and (bool(os.environ.get("WSL_DISTRO_NAME"))
         or "microsoft" in __import__("platform").release().lower())
-    docker = ["docker"] + (["--context", "desktop-linux"] if os.name == "nt" else [])
+    docker_target = {"state": "unavailable"}
+    if os.name == "nt":
+        docker = ["docker", "--context", "desktop-linux"]
+        docker_target = {"state": "available", "value": "desktop-linux"}
+    else:
+        try:
+            from docker_platform import docker_target as resolve_docker_target
+
+            target = resolve_docker_target()
+            from docker_platform import docker_cli_prefix
+
+            docker = docker_cli_prefix()
+            docker_target = {"state": "available", "value": target.get("endpoint", "")}
+        except Exception as error:
+            docker = ["docker"]
+            docker_target = {"state": "failed", "detail": str(error)[:1024]}
     nvidia = (
         {"state": "not_required", "value": "disabled"}
         if gpu_access == "disabled" else
@@ -230,11 +294,16 @@ def host_checks(gpu_access: str = "auto") -> dict:
         "docker": probe([*docker, "version", "--format", "{{.Server.Version}}"]),
         "compose": probe([*docker, "compose", "version", "--short"]),
         "docker_os": probe([*docker, "info", "--format", "{{.OSType}}"]),
+        "docker_target": docker_target,
         "nvidia": nvidia,
         "gpu_container_execution": "NOT VERIFIED",
         "gpu_access": gpu_access,
     }
-    checks["application_launcher"] = "windows-folder-v1" if os.name == "nt" else "not_qualified_for_this_platform"
+    checks["application_launcher"] = (
+        "windows-folder-v1" if os.name == "nt" else
+        "linux-native-v1" if docker_target["state"] == "available" else
+        "not_qualified_for_this_platform"
+    )
     return checks
 
 
@@ -244,12 +313,10 @@ def plan(repo: Path, storage_root: str, source_root: str, port: int,
         raise SetupError("gpu-access musi być auto, required albo disabled")
     context = checkout_context(repo)
     root = validate_storage_root(storage_root, context)
-    validate_windows_volume(root)
     source = storage.absolute(source_root, "source checkout")
     if source not in context["checkouts"] or not source.is_dir():
         raise SetupError("Źródła muszą być zarejestrowanym checkoutem tego projektu")
-    validate_windows_volume(context["main"])
-    validate_windows_volume(source)
+    validate_host_paths(root, source)
     env_path = context["main"] / ".env"
     original = bounded_file(env_path) if env_path.exists() else None
     template = context["main"] / ".env.example"
@@ -277,7 +344,7 @@ def plan(repo: Path, storage_root: str, source_root: str, port: int,
 def apply_configuration(prepared: dict) -> dict:
     context = prepared["context"]
     root = validate_storage_root(str(prepared["storage_root"]), context)
-    validate_windows_volume(root)
+    validate_host_volume(root)
     destination = root / "index" / "docker-host-settings.json"
     previous = bounded_file(destination) if destination.exists() else None
     if previous is not None:
@@ -285,6 +352,7 @@ def apply_configuration(prepared: dict) -> dict:
         if not isinstance(old, dict) or old.get("schema") != SCHEMA or old.get("storage_root") != str(root):
             raise SetupError("Istniejące ustawienia Docker nie należą do tego storage")
     root.mkdir(parents=True, exist_ok=True)
+    validate_host_volume(root)
     marker = root / ".fullmag-storage.json"
     expected = {"schema": storage.SCHEMA, "project_root": str(context["project"])}
     if not marker.exists():
@@ -310,10 +378,9 @@ def show_checks(checks: dict) -> None:
         state = value.get("state") if isinstance(value, dict) else value
         detail = value.get("value", value.get("version", "")) if isinstance(value, dict) else ""
         print(f"  {name}: {state}" + (f" — {detail}" if detail else ""))
-    if checks["platform"] != "windows":
-        print("\nKonfigurujesz powłokę Linux/WSL. Launcher dwóch usług wymaga obecnie "
-              "natywnego Windows i checkoutu/storage NTFS/ReFS. Zapis ustawień nie "
-              "kwalifikuje startu aplikacji z WSL; użyj PowerShell dla tej trasy.")
+    if checks["platform"] in {"linux", "wsl"}:
+        print("\nLinux/WSL używa lokalnego demona Docker przez Unix socket oraz storage i źródeł "
+              "na ext4, XFS lub Btrfs. Ścieżki Windows/9p, SSH i TCP nie są obsługiwane.")
     print(f"  Dostęp urządzenia: {checks['gpu_access']}")
     if checks["gpu_access"] == "disabled":
         print("  GPU host proof: pominięty jawnie; zostanie wybrany profil CPU.")
@@ -325,7 +392,7 @@ def show_checks(checks: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--repo-root", type=Path, default=DEFAULT_REPO_ROOT)
     parser.add_argument("--check", action="store_true", help="Tylko odczyt; bez zapisu i pytań")
     parser.add_argument("--storage-root", help="Jawny, bezwzględny storage tego hosta")
     parser.add_argument("--source-root", help="Zarejestrowany checkout źródeł; domyślnie resolver Docker DEV")
@@ -350,10 +417,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.check:
             root_value = configured.get("FULLMAG_PROJECT_STORAGE_ROOT")
             if not root_value:
-                raise SetupError("Brak FULLMAG_PROJECT_STORAGE_ROOT; uruchom kreator w PowerShell")
+                raise SetupError("Brak FULLMAG_PROJECT_STORAGE_ROOT; uruchom kreator na wybranym hoście")
             root = validate_storage_root(root_value, context)
-            validate_windows_volume(root)
-            validate_windows_volume(context["main"])
+            validate_host_paths(root, defaults.source_root)
             storage.resolve_layout(context["repo"], "docker-all-gpu")
             for key in ("POSTGRES_PASSWORD", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
                 if not configured.get(key):
@@ -365,12 +431,12 @@ def main(argv: list[str] | None = None) -> int:
                 raise SetupError("Brak wymaganych narzędzi; sprawdź wyniki powyżej")
             if checks["docker_os"].get("value") != "linux" or not compose.is_file():
                 raise SetupError("Wymagany silnik Docker Linux i aktualny compose.dev.yaml")
+            if checks["application_launcher"] not in {"windows-folder-v1", "linux-native-v1"}:
+                raise SetupError("Host Docker nie spełnia lokalnego profilu storage")
             print("Konfiguracja hosta poprawna. Build i wykonanie Fullmaga: NOT VERIFIED.")
             return 0
-        if checks["platform"] != "windows":
-            raise SetupError("Otwórz PowerShell w checkoutcie Windows i uruchom: "
-                             "python -B scripts/setup_docker.py. Repo pod ~/git w WSL "
-                             "nie jest checkoutem Windows. Instrukcja: docs/guides/docker-new-windows-host.md")
+        if checks["platform"] not in {"windows", "linux", "wsl"}:
+            raise SetupError("Docker DEV wymaga natywnego Windows, Linux albo WSL")
         if not sys.stdin.isatty():
             raise SetupError("Uruchom kreator w terminalu interaktywnym albo użyj --check")
         print("\nKreator nie kompiluje ani nie uruchamia kontenerów. Nie usuwa istniejących danych.")
@@ -394,11 +460,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         result = apply_configuration(prepared)
         print(f"Zapisano konfigurację: {result['settings_path']}")
+        guide = (
+            "docs/guides/docker-wsl.md"
+            if checks["platform"] == "wsl"
+            else "docs/guides/docker-development-architecture.md"
+        )
         print("\nDalej: przygotowanie obrazu narzędziowego i bezpośredni start dwóch usług Compose. "
-              "Instrukcja: docs/guides/docker-development-architecture.md. "
+              f"Instrukcja: {guide}. "
               "Pełna ścieżka runtime wymaga jeszcze kwalifikacji.")
-        source_argument = "'" + str(prepared["source_root"]).replace("'", "''") + "'"
+        source_argument = (
+            shlex.quote(str(prepared["source_root"]))
+            if os.name != "nt"
+            else "'" + str(prepared["source_root"]).replace("'", "''") + "'"
+        )
         print("Uruchom wybrane źródła poleceniem:")
+        print("  just docker-dev-toolchain")
         print("  just docker-dev " + source_argument + " " + str(prepared["port"]))
         print("Opcjonalny trzeci argument docker-dev wskazuje skrypt symulacji w tym checkoutcie.")
         print("Skrypt w już działającej grupie: just docker-dev-script 'examples/x.py'")

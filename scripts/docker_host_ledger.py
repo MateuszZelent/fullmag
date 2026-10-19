@@ -38,6 +38,7 @@ MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 _PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 _IMAGE_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:[\\/].*")
+_MAX_RUNTIME_ID = 2**31 - 1
 
 
 class HostLedgerError(RuntimeError):
@@ -76,6 +77,32 @@ def _safe_image_id(value: Any) -> str:
     if not _IMAGE_RE.fullmatch(value):
         raise HostLedgerError("a full immutable image ID is required")
     return value
+
+
+def _runtime_ids(value: tuple[int, int] | None = None) -> tuple[int, int]:
+    """Resolve the service owner while keeping Windows on its fixed account."""
+    if value is None:
+        if os.name == "nt":
+            value = (65532, 65532)
+        else:
+            try:
+                from linux_docker_host import runtime_identity
+
+                value = runtime_identity()
+            except (ImportError, OSError, ValueError) as error:
+                raise HostLedgerError(f"Linux host-ledger requires the caller's non-root identity: {error}") from error
+    if (
+        not isinstance(value, tuple)
+        or len(value) != 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in value)
+    ):
+        raise HostLedgerError("host-ledger runtime identity must be a UID/GID integer pair")
+    uid, gid = value
+    if not (0 < uid <= _MAX_RUNTIME_ID and 0 < gid <= _MAX_RUNTIME_ID):
+        raise HostLedgerError("host-ledger runtime UID/GID are outside the non-root supported range")
+    if os.name == "nt" and value != (65532, 65532):
+        raise HostLedgerError("Windows host-ledger runtime identity must remain 65532:65532")
+    return uid, gid
 
 
 def _raw_path(value: Any, field: str) -> str:
@@ -862,9 +889,11 @@ def _run_maintenance(run_root: Path, compose_file: Path, image_id: str, project:
 
 
 def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
-            docker_callable: Callable[..., Any]) -> dict[str, Any]:
+            docker_callable: Callable[..., Any], *,
+            runtime_identity: tuple[int, int] | None = None) -> dict[str, Any]:
     """Prepare one persistent host-ledger mount and return launcher bindings."""
     image_id = _safe_image_id(image_id)
+    runtime_uid, runtime_gid = _runtime_ids(runtime_identity)
     values = _resolve_values(layout)
     repo = Path(repo)
     run_root = Path(run_root)
@@ -903,8 +932,8 @@ def prepare(layout: Mapping[str, Any], repo: Any, image_id: str, run_root: Any,
         "FULLMAG_HOST_LEDGER_HELPER_PATH": _daemon_path(helper_copy, "helper copy"),
         "FULLMAG_HOST_LEDGER_HELPER_IMAGE": image_id,
         "FULLMAG_HOST_LEDGER_HOST_PID": "1",
-        "FULLMAG_HOST_LEDGER_RUNTIME_UID": "65532",
-        "FULLMAG_HOST_LEDGER_RUNTIME_GID": "65532",
+        "FULLMAG_HOST_LEDGER_RUNTIME_UID": str(runtime_uid),
+        "FULLMAG_HOST_LEDGER_RUNTIME_GID": str(runtime_gid),
         "FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS": "120",
         "FULLMAG_DOCKER_HOST_ID": daemon_info["id_sha256"],
     }
@@ -1042,6 +1071,21 @@ def validate_container(document: Mapping[str, Any] | list[Mapping[str, Any]], pr
     for key in ("FULLMAG_HOST_LEDGER_MOUNT_ROOT", "FULLMAG_HOST_LEDGER_PROJECT_ID", "FULLMAG_DOCKER_HOST_ID"):
         if key in expected_env and env.get(key) != expected_env[key]:
             raise HostLedgerError(f"backend host-ledger environment differs for {key}")
+    raw_uid = expected_env.get("FULLMAG_HOST_LEDGER_RUNTIME_UID")
+    raw_gid = expected_env.get("FULLMAG_HOST_LEDGER_RUNTIME_GID")
+    if raw_uid is None and raw_gid is None and os.name == "nt":
+        expected_uid = (65532, 65532)
+    elif raw_uid is None and raw_gid is None:
+        expected_uid = _runtime_ids()
+    elif (not isinstance(raw_uid, str) or not re.fullmatch(r"[1-9][0-9]*", raw_uid)
+          or not isinstance(raw_gid, str) or not re.fullmatch(r"[1-9][0-9]*", raw_gid)):
+        raise HostLedgerError("managed host-ledger runtime UID/GID are not canonical nonzero ids")
+    else:
+        expected_uid = _runtime_ids((int(raw_uid), int(raw_gid)))
+    if any(env.get(key) != str(value) for key, value in zip(
+        ("FULLMAG_HOST_LEDGER_RUNTIME_UID", "FULLMAG_HOST_LEDGER_RUNTIME_GID"), expected_uid
+    )):
+        raise HostLedgerError("backend host-ledger runtime identity differs from the managed owner")
     expected_mount = profile_values.get("mount_root")
     mounts = [m for m in actual.get("Mounts", []) or [] if isinstance(m, Mapping) and m.get("Destination") == MOUNT_TARGET]
     if len(mounts) != 1 or mounts[0].get("Type") != "bind" or not mounts[0].get("RW"):
@@ -1049,7 +1093,7 @@ def validate_container(document: Mapping[str, Any] | list[Mapping[str, Any]], pr
     if expected_mount is not None and not _same_daemon_path(mounts[0].get("Source"), expected_mount):
         raise HostLedgerError("backend /host-ledger source differs from the managed mount root")
     host_config = actual.get("HostConfig") or {}
-    if host_config.get("Privileged") or config.get("User") != "65532:65532":
+    if host_config.get("Privileged") or config.get("User") != f"{expected_uid[0]}:{expected_uid[1]}":
         raise HostLedgerError("backend host-ledger service isolation mismatch")
     _invoke(docker_callable, *backend_verify_command(container_id), timeout=60)
 

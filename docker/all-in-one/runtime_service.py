@@ -17,6 +17,7 @@ import re
 import socket
 import stat
 import subprocess
+import sys
 import time
 import uuid
 from typing import Any, Mapping, NoReturn, Sequence
@@ -25,11 +26,15 @@ STATE_ROOT = Path("/state")
 SOURCE_ROOT = Path("/opt/fullmag/source")
 PACKAGE_ROOT = Path("/opt/fullmag/package")
 IMAGE_ROOT = Path("/opt/fullmag")
-HOST_CERTIFICATE = Path("/run/fullmag/windows-folder-host.json")
+WINDOWS_HOST_CERTIFICATE = Path("/run/fullmag/windows-folder-host.json")
+LINUX_HOST_CERTIFICATE = Path("/run/fullmag/host-admission/linux-native-host.json")
 WORKTREE_ID = TARGET_ID = "docker-all"
 COMPUTE_POOL_ID = "docker-all.compute"
 PREPARATION_POOL_ID = "docker-all.preparation"
 WINDOWS_STORAGE_PROFILE = "windows-folder-v1"
+LINUX_STORAGE_PROFILE = "linux-native-v1"
+STORAGE_PROFILES = frozenset({WINDOWS_STORAGE_PROFILE, LINUX_STORAGE_PROFILE})
+MAX_RUNTIME_ID = 2**31 - 1
 STORAGE_SCHEMA = "fullmag_storage_v1"
 RUNTIME_CONFIG_SCHEMA = "runtime_service_config.v1"
 HOST_PROFILE_SCHEMA = "fullmag.docker-host-profile.v1"
@@ -217,7 +222,7 @@ class RuntimePaths:
     package: Path = PACKAGE_ROOT
     config: Path = STATE_ROOT / ".fullmag" / CONFIG_RELATIVE
     provenance: Path = IMAGE_ROOT / "provenance.json"
-    host_certificate: Path = HOST_CERTIFICATE
+    host_certificate: Path = WINDOWS_HOST_CERTIFICATE
 
 
 @dataclasses.dataclass(frozen=True)
@@ -553,6 +558,7 @@ def _store_relative_path(paths: RuntimePaths, relative: PurePosixPath) -> Path:
 
 def canonical_paths(environment: Mapping[str, str] | None = None) -> RuntimePaths:
     environment = os.environ if environment is None else environment
+    profile = storage_profile(environment)
     state = _env_path(environment, "FULLMAG_CONTAINER_STATE_ROOT", STATE_ROOT)
     storage = _env_path(environment, "FULLMAG_PROJECT_STORAGE_ROOT", state)
     runs = _env_path(environment, "FULLMAG_RUNS_ROOT", storage / "runs" / WORKTREE_ID)
@@ -608,16 +614,73 @@ def canonical_paths(environment: Mapping[str, str] | None = None) -> RuntimePath
         package=package,
         config=config,
         provenance=provenance,
-        host_certificate=HOST_CERTIFICATE,
+        host_certificate=host_certificate_path(profile),
     )
+
+
+def _runtime_identity(environment: Mapping[str, str] | None = None) -> tuple[int, int]:
+    """Resolve Linux's current non-root process identity without host helpers."""
+
+    if not sys.platform.startswith("linux"):
+        raise ValueError("Native Linux runtime identity is available only on Linux")
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if not callable(getuid) or not callable(getgid):
+        raise ValueError("Native Linux runtime identity is unavailable")
+    uid, gid = getuid(), getgid()
+    if uid <= 0 or gid <= 0:
+        raise ValueError("Linux Docker runtime requires a non-root caller UID and GID")
+    if uid > MAX_RUNTIME_ID or gid > MAX_RUNTIME_ID:
+        raise ValueError("Linux Docker runtime caller UID and GID exceed the supported range")
+
+    values = os.environ if environment is None else environment
+    for name, observed in (("FULLMAG_RUNTIME_UID", uid), ("FULLMAG_RUNTIME_GID", gid)):
+        raw = values.get(name)
+        if raw is None:
+            continue
+        if not isinstance(raw, str) or re.fullmatch(r"[1-9][0-9]*", raw) is None:
+            raise ValueError(f"{name} must be a canonical nonzero decimal id")
+        requested = int(raw, 10)
+        if requested > MAX_RUNTIME_ID or requested != observed:
+            raise ValueError(f"{name} must equal the current non-root caller identity")
+    return uid, gid
+
+
+def storage_profile(environment: Mapping[str, str] | None = None) -> str:
+    """Resolve the one explicitly selected host-storage admission profile."""
+
+    values = os.environ if environment is None else environment
+    profile = values.get("FULLMAG_SESSION_STORAGE_PROFILE", WINDOWS_STORAGE_PROFILE)
+    if profile not in STORAGE_PROFILES:
+        _fail("all-in-Docker storage requires an explicit supported host profile")
+    if profile == LINUX_STORAGE_PROFILE:
+        try:
+            uid, gid = _runtime_identity(values)
+        except ValueError as error:
+            _fail(f"Linux-native storage requires the current non-root caller identity: {error}")
+        if values.get("FULLMAG_RUNTIME_UID", str(uid)) != str(uid) or values.get(
+            "FULLMAG_RUNTIME_GID", str(gid)
+        ) != str(gid):
+            _fail("Linux runtime UID/GID must equal the current non-root caller")
+    return profile
+
+
+def host_certificate_path(profile: str | None = None) -> Path:
+    profile = profile or storage_profile()
+    if profile == WINDOWS_STORAGE_PROFILE:
+        return WINDOWS_HOST_CERTIFICATE
+    if profile == LINUX_STORAGE_PROFILE:
+        return LINUX_HOST_CERTIFICATE
+    _fail("all-in-Docker storage requires an explicit supported host profile")
 
 
 def prepare_storage(paths: RuntimePaths | None = None) -> RuntimePaths:
     """Prepare mapped directories and the fixed project marker only."""
 
     paths = paths or canonical_paths()
-    if os.environ.get("FULLMAG_SESSION_STORAGE_PROFILE") != WINDOWS_STORAGE_PROFILE:
-        _fail("all-in-Docker storage requires explicit windows-folder-v1 admission")
+    profile = storage_profile()
+    if paths.host_certificate != host_certificate_path(profile):
+        _fail("host certificate path differs from the selected storage profile")
     _ensure_directory(paths.state, "container state")
     _ensure_directory(paths.state_root, "runtime control volume")
     _ensure_directory(runtime_services_root(paths), "runtime services volume view")
@@ -661,12 +724,16 @@ def api_environment(paths: RuntimePaths, config_path: Path | None = None) -> dic
             "FULLMAG_FEM_MESH_CACHE_DIR", str(FEM_MESH_CACHE_ROOT)
         ),
         "CUDA_CACHE_PATH": os.environ.get("CUDA_CACHE_PATH", str(CUDA_CACHE_ROOT)),
-        "FULLMAG_SESSION_STORAGE_PROFILE": WINDOWS_STORAGE_PROFILE,
+        "FULLMAG_SESSION_STORAGE_PROFILE": storage_profile(),
         "FULLMAG_RUNTIME_SERVICE_CONFIG": str(config_path),
     }
     image_id = os.environ.get("FULLMAG_RUNTIME_IMAGE_ID")
     if image_id:
         values["FULLMAG_RUNTIME_IMAGE_ID"] = image_id
+    if values["FULLMAG_SESSION_STORAGE_PROFILE"] == LINUX_STORAGE_PROFILE:
+        uid, gid = _runtime_identity()
+        values["FULLMAG_RUNTIME_UID"] = str(uid)
+        values["FULLMAG_RUNTIME_GID"] = str(gid)
     return values
 
 
