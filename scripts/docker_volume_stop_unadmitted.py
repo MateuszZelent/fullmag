@@ -643,13 +643,78 @@ def _runtime_control_volume_mount(
     return name, RUNTIME_CONTROL_SUBPATH
 
 
+def _observed_runtime_identity(
+    actual_backend: Mapping[str, object], control: BuildControl
+) -> tuple[str, int, int]:
+    """Bind the receipt reader to the control-volume and observed backend identity."""
+    import docker_platform
+
+    try:
+        host_identity = docker_platform.runtime_identity_record()
+    except (docker_platform.DockerPlatformError, ValueError) as error:
+        raise _fail("current host runtime identity is unavailable for terminal validation") from error
+    control_identity = getattr(control, "runtime_identity", None)
+    if not isinstance(host_identity, Mapping) or not isinstance(control_identity, Mapping):
+        raise _fail("control or host runtime identity is missing")
+    profile = host_identity.get("profile")
+    uid, gid = host_identity.get("uid"), host_identity.get("gid")
+    if (
+        profile not in {"windows-folder-v1", "linux-native-v1"}
+        or type(uid) is not int or uid <= 0
+        or type(gid) is not int or gid <= 0
+        or any(control_identity.get(key) != value for key, value in (
+            ("profile", profile), ("uid", uid), ("gid", gid)
+        ))
+    ):
+        raise _fail("control-volume runtime identity differs from the current host caller")
+
+    config = actual_backend.get("Config")
+    raw_environment = config.get("Env") if isinstance(config, Mapping) else None
+    if not isinstance(config, Mapping) or not isinstance(raw_environment, list):
+        raise _fail("observed backend runtime identity is unavailable")
+
+    def environment_values(name):
+        return [item.partition("=")[2] for item in raw_environment
+                if isinstance(item, str) and item.partition("=")[0] == name]
+
+    if environment_values("FULLMAG_SESSION_STORAGE_PROFILE") != [profile]:
+        raise _fail("observed backend storage profile differs from the pinned runtime identity")
+    if profile == docker_platform.WINDOWS_PROFILE:
+        expected_user = f"{docker_platform.WINDOWS_RUNTIME_UID}:{docker_platform.WINDOWS_RUNTIME_GID}"
+        if (uid, gid) != (docker_platform.WINDOWS_RUNTIME_UID, docker_platform.WINDOWS_RUNTIME_GID):
+            raise _fail("Windows runtime identity differs from the established container user")
+        for name, expected in (
+            ("FULLMAG_RUNTIME_UID", str(docker_platform.WINDOWS_RUNTIME_UID)),
+            ("FULLMAG_RUNTIME_GID", str(docker_platform.WINDOWS_RUNTIME_GID)),
+        ):
+            values = environment_values(name)
+            if values not in ([], [expected]):
+                raise _fail("observed backend " + name + " differs from the pinned runtime identity")
+    elif profile == "linux-native-v1":
+        expected_user = f"{uid}:{gid}"
+        for name, expected in (
+            ("FULLMAG_RUNTIME_UID", str(uid)),
+            ("FULLMAG_RUNTIME_GID", str(gid)),
+        ):
+            if environment_values(name) != [expected]:
+                raise _fail("observed backend " + name + " differs from the pinned runtime identity")
+    else:
+        raise _fail("observed backend storage profile is unsupported")
+    if config.get("User") != expected_user:
+        raise _fail("observed backend user differs from the pinned runtime identity")
+    return profile, uid, gid
+
+
 def _runtime_control_validation_helper(
     actual_backend: Mapping[str, object], control: BuildControl
 ) -> list[str]:
     """Build a readonly helper using the backend image and exact subpath mount."""
+    import docker_platform
+
     image = actual_backend.get("Image")
     if not isinstance(image, str) or not IMAGE_ID_RE.fullmatch(image):
         raise _fail("backend image identity is unavailable for terminal validation")
+    profile, uid, gid = _observed_runtime_identity(actual_backend, control)
     volume, subpath = _runtime_control_volume_mount(actual_backend, control.project)
     script = r'''
 import json, sys
@@ -666,7 +731,7 @@ if len(data) > 8 * 1024 * 1024:
 sys.stdout.buffer.write(data)
 '''
     args = [
-        "docker", "--context", "desktop-linux", "run", "--rm", "-i", "--pull", "never",
+        *docker_platform.docker_cli_prefix(), "run", "--rm", "-i", "--pull", "never",
         "--network", "none", "--runtime", "runc", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges:true", "--pids-limit", "32", "--memory", "64m",
         "--cpus", "0.25", "--env", "NVIDIA_VISIBLE_DEVICES=void",
@@ -683,8 +748,11 @@ sys.stdout.buffer.write(data)
         "--env", "FULLMAG_REPO_ROOT=/opt/fullmag/source",
         "--env", "FULLMAG_RUNTIME_ROOT=/opt/fullmag/package",
         "--env", "FULLMAG_WORKTREE_ID=docker-all",
+        "--env", f"FULLMAG_SESSION_STORAGE_PROFILE={profile}",
+        "--env", f"FULLMAG_RUNTIME_UID={uid}",
+        "--env", f"FULLMAG_RUNTIME_GID={gid}",
         "--mount", f"type=volume,src={volume},dst=/opt/fullmag/runtime-control,readonly,volume-subpath={subpath},volume-nocopy",
-        "--user", "65532:65532", "--entrypoint", "/usr/local/bin/python3", image,
+        "--user", f"{uid}:{gid}", "--entrypoint", "/usr/local/bin/python3", image,
         "-B", "-c", script,
     ]
     return args
@@ -694,8 +762,12 @@ def _read_terminal_process_receipt(
     actual_backend: Mapping[str, object], control: BuildControl
 ) -> tuple[bytes, dict[str, object]]:
     """Validate and read the canonical receipt through the backend image."""
+    import docker_platform
+
     arguments = _runtime_control_validation_helper(actual_backend, control)
-    result = bounded_capture(arguments, data=b"", timeout=90)
+    result = bounded_capture(
+        arguments, data=b"", env=docker_platform.docker_process_environment(), timeout=90
+    )
     if result.returncode:
         raise _fail(
             "canonical runtime-control receipt could not be read: "

@@ -51,6 +51,77 @@ pub(crate) struct LiveScenePreparationReadModel {
 pub(crate) const LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA: &str =
     "fullmag.live_scene_preparation_read_model.v1";
 
+const CANONICAL_PREPARATION_STAGE_IDS: [&str; 9] = [
+    "runtime_startup",
+    "script_materialization",
+    "validation",
+    "planning",
+    "domain_preparation",
+    "meshing",
+    "mesh_postprocessing",
+    "solver_initialization",
+    "ready",
+];
+
+fn canonical_completed_preparation_stages(
+    ready_at_unix_ms: u64,
+    detail: &str,
+) -> Vec<SimulationPreparationStageSnapshot> {
+    const SOLVER_INITIALIZATION_DETAIL: &str =
+        "Native solver initialization is deferred until Compute; no solver was invoked during preparation";
+    const READY_DETAIL: &str = "Authored model preparation is ready; Compute has not run";
+
+    CANONICAL_PREPARATION_STAGE_IDS
+        .into_iter()
+        .map(|id| {
+            let is_ready = id == "ready";
+            let is_solver_initialization = id == "solver_initialization";
+            let stage_detail = if is_solver_initialization {
+                SOLVER_INITIALIZATION_DETAIL
+            } else if is_ready {
+                READY_DETAIL
+            } else {
+                detail
+            };
+            SimulationPreparationStageSnapshot {
+                id: id.into(),
+                label: id.replace('_', " "),
+                detail: stage_detail.into(),
+                status: if is_solver_initialization {
+                    "skipped"
+                } else {
+                    "completed"
+                }
+                .into(),
+                started_at_unix_ms: is_ready.then_some(ready_at_unix_ms),
+                completed_at_unix_ms: is_ready.then_some(ready_at_unix_ms),
+                duration_ms: is_ready.then_some(0),
+                clock_adjustment: None,
+                progress_percent: (!is_solver_initialization).then_some(100),
+                progress_label: if is_ready {
+                    Some("ready".into())
+                } else if is_solver_initialization {
+                    Some("awaiting Compute".into())
+                } else {
+                    None
+                },
+            }
+        })
+        .collect()
+}
+
+fn canonical_ready_preparation_log(
+    timestamp_unix_ms: u64,
+    message: &str,
+) -> SimulationPreparationLogEntrySnapshot {
+    SimulationPreparationLogEntrySnapshot {
+        timestamp_unix_ms,
+        level: "info".into(),
+        stage_id: "ready".into(),
+        message: message.into(),
+    }
+}
+
 /// Build the native-layer carrier for a prepared multilayer magnetization.
 ///
 /// The runner owns the canonical field layout.  The values are flattened in
@@ -383,7 +454,14 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
     command_id: &str,
     command_kind: &str,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
-    let (scene_document, run_id, requested_execution, display_projection, preparation_revision) = {
+    let (
+        scene_document,
+        run_id,
+        requested_execution,
+        display_projection,
+        preparation_revision,
+        existing_preparation,
+    ) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -419,12 +497,19 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
             .map(|run| run.run_id.clone())
             .unwrap_or_else(|| snapshot.session.run_id.clone());
         let preparation_revision = snapshot.simulation_preparation_revision.saturating_add(1);
+        let existing_preparation = snapshot.simulation_preparation.as_ref().map(|preparation| {
+            (
+                preparation.preparation_id.clone(),
+                preparation.started_at_unix_ms,
+            )
+        });
         (
             scene_document,
             run_id,
             requested_execution,
             display_projection,
             preparation_revision,
+            existing_preparation,
         )
     };
 
@@ -442,6 +527,12 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
             .as_bytes(),
         )
     );
+    let preparation_started_at_unix_ms = existing_preparation
+        .filter(|(existing_id, _)| existing_id == &preparation_id)
+        .map(|(_, started_at)| started_at)
+        .unwrap_or_else(|| {
+            u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX)
+        });
     let materialized = materialize_live_scene_preparation_model(LiveScenePreparationInput {
         repo_root: state.repo_root.clone(),
         workspace_root: state.current_workspace_root.clone(),
@@ -493,28 +584,18 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
     let preparation = SimulationPreparationSnapshot {
         preparation_id: preparation_id.clone(),
         revision: preparation_revision,
-        status: "completed".into(),
+        status: "ready".into(),
         active_stage_id: None,
-        started_at_unix_ms: now,
+        started_at_unix_ms: preparation_started_at_unix_ms,
         completed_at_unix_ms: Some(now),
-        stages: vec![SimulationPreparationStageSnapshot {
-            id: command_kind.into(),
-            label: "Prepare model and mesh".into(),
-            detail: "canonical live preparation receipt committed".into(),
-            status: "completed".into(),
-            started_at_unix_ms: Some(now),
-            completed_at_unix_ms: Some(now),
-            duration_ms: Some(0),
-            clock_adjustment: None,
-            progress_percent: Some(100),
-            progress_label: Some("ready".into()),
-        }],
-        log_tail: vec![SimulationPreparationLogEntrySnapshot {
-            timestamp_unix_ms: now,
-            level: "info".into(),
-            stage_id: command_kind.into(),
-            message: "canonical live scene preparation completed".into(),
-        }],
+        stages: canonical_completed_preparation_stages(
+            now,
+            "canonical live preparation receipt committed",
+        ),
+        log_tail: vec![canonical_ready_preparation_log(
+            now,
+            "canonical live authored model preparation ready; Compute has not run",
+        )],
         failure: None,
     };
     {
@@ -731,7 +812,7 @@ pub(crate) async fn publish_accepted_frontier_preparation(
     }
 }
 
-fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) -> Result<(), ApiError> {
+pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) -> Result<(), ApiError> {
     let stopped = |status: &str| {
         matches!(
             status,
@@ -769,7 +850,12 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
     step_id: &str,
     command_kind: &str,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
-    let (scene_revision, display_projection, preparation_revision) = {
+    let (
+        scene_revision,
+        display_projection,
+        preparation_revision,
+        existing_preparation,
+    ) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -801,10 +887,17 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
             serde_json::to_value(&snapshot.display_selection).map_err(|error| {
                 ApiError::internal(format!("failed to encode display projection: {error}"))
             })?;
+        let existing_preparation = snapshot.simulation_preparation.as_ref().map(|preparation| {
+            (
+                preparation.preparation_id.clone(),
+                preparation.started_at_unix_ms,
+            )
+        });
         (
             scene_revision,
             display_projection,
             snapshot.simulation_preparation_revision.saturating_add(1),
+            existing_preparation,
         )
     };
 
@@ -817,6 +910,8 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
     };
     let run_id_for_worker = run_id.to_owned();
     let step_id_for_worker = step_id.to_owned();
+    let observed_preparation_started_at_unix_ms =
+        u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX);
     let materialized = tokio::task::spawn_blocking(move || {
         let store = fullmag_session::SessionStore::open_existing(&store_root).map_err(|error| {
             ApiError::with_status_and_code(
@@ -916,6 +1011,10 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
 
     let (receipt, execution_plan, requested_execution) = materialized;
     let preparation_id = receipt.preparation_id.clone();
+    let preparation_started_at_unix_ms = existing_preparation
+        .filter(|(existing_id, _)| existing_id == &preparation_id)
+        .map(|(_, started_at)| started_at)
+        .unwrap_or(observed_preparation_started_at_unix_ms);
     let plan_fingerprint = receipt.plan_fingerprint.clone();
     let binding = PreparationBinding::from_receipt(&receipt).map_err(|error| {
         ApiError::conflict(format!("accepted preparation binding is invalid: {error}"))
@@ -968,28 +1067,18 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
     let preparation = SimulationPreparationSnapshot {
         preparation_id: preparation_id.clone(),
         revision: preparation_revision,
-        status: "completed".into(),
+        status: "ready".into(),
         active_stage_id: None,
-        started_at_unix_ms: now,
+        started_at_unix_ms: preparation_started_at_unix_ms,
         completed_at_unix_ms: Some(now),
-        stages: vec![SimulationPreparationStageSnapshot {
-            id: command_kind.into(),
-            label: "Prepare model and mesh".into(),
-            detail: "accepted task preparation receipt committed".into(),
-            status: "completed".into(),
-            started_at_unix_ms: Some(now),
-            completed_at_unix_ms: Some(now),
-            duration_ms: Some(0),
-            clock_adjustment: None,
-            progress_percent: Some(100),
-            progress_label: Some("ready".into()),
-        }],
-        log_tail: vec![SimulationPreparationLogEntrySnapshot {
-            timestamp_unix_ms: now,
-            level: "info".into(),
-            stage_id: command_kind.into(),
-            message: "accepted task preparation completed".into(),
-        }],
+        stages: canonical_completed_preparation_stages(
+            now,
+            "accepted task preparation receipt committed",
+        ),
+        log_tail: vec![canonical_ready_preparation_log(
+            now,
+            "accepted task authored model preparation ready; Compute has not run",
+        )],
         failure: None,
     };
     let mut current = state.current_live_state.write().await;
@@ -1889,6 +1978,58 @@ mod tests {
         format!("sha256:{}", character.to_string().repeat(64))
     }
 
+    #[test]
+    fn completed_preparation_uses_canonical_stages_and_ready_log_stage() {
+        let now = 1_700_000_000_123;
+        let stages = canonical_completed_preparation_stages(now, "receipt committed");
+        assert_eq!(
+            stages
+                .iter()
+                .map(|stage| stage.id.as_str())
+                .collect::<Vec<_>>(),
+            CANONICAL_PREPARATION_STAGE_IDS,
+        );
+        let solver_initialization = stages
+            .iter()
+            .find(|stage| stage.id == "solver_initialization")
+            .expect("canonical solver initialization stage");
+        assert_eq!(solver_initialization.status, "skipped");
+        assert_eq!(
+            solver_initialization.detail,
+            "Native solver initialization is deferred until Compute; no solver was invoked during preparation"
+        );
+        assert_eq!(solver_initialization.progress_percent, None);
+        assert_eq!(
+            solver_initialization.progress_label.as_deref(),
+            Some("awaiting Compute")
+        );
+        assert!(solver_initialization.started_at_unix_ms.is_none());
+        assert!(solver_initialization.completed_at_unix_ms.is_none());
+        assert!(solver_initialization.duration_ms.is_none());
+
+        assert!(stages.iter().filter(|stage| stage.id != "solver_initialization").all(
+            |stage| stage.status == "completed" && stage.progress_percent == Some(100)
+        ));
+        assert!(stages.iter().filter(|stage| {
+            stage.id != "solver_initialization" && stage.id != "ready"
+        }).all(|stage| {
+            stage.started_at_unix_ms.is_none()
+                && stage.completed_at_unix_ms.is_none()
+                && stage.duration_ms.is_none()
+        }));
+        let ready = stages.last().expect("canonical ready stage");
+        assert_eq!(ready.started_at_unix_ms, Some(now));
+        assert_eq!(ready.completed_at_unix_ms, Some(now));
+        assert_eq!(ready.duration_ms, Some(0));
+        assert_eq!(ready.status, "completed");
+        assert_eq!(ready.detail, "Authored model preparation is ready; Compute has not run");
+        assert_eq!(ready.progress_label.as_deref(), Some("ready"));
+
+        let log = canonical_ready_preparation_log(now, "preparation completed");
+        assert_eq!(log.stage_id, "ready");
+        assert_eq!(log.timestamp_unix_ms, now);
+    }
+
     fn accepted_source(
         run_id: &str,
         specification_character: char,
@@ -2786,11 +2927,31 @@ mod tests {
         let mut snapshot = crate::session::default_current_live_state(&request);
         assert!(ensure_preparation_run_is_active(&snapshot).is_ok());
         snapshot.session.status = "stopping".into();
+        snapshot.run = Some(crate::types::RunManifest {
+            run_id: "stop-during-preparation-run".into(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "stopping".into(),
+            total_steps: 1,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: ".".into(),
+        });
         let error = ensure_preparation_run_is_active(&snapshot)
             .expect_err("Stop must fence a later preparation poll for the same session");
         assert_eq!(
             error.code.as_deref(),
             Some("accepted_preparation_run_stopped")
+        );
+        assert_eq!(snapshot.session.status, "stopping");
+        assert_eq!(
+            snapshot.run.as_ref().map(|run| run.status.as_str()),
+            Some("stopping")
         );
     }
 

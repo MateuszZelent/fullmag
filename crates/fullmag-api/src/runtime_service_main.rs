@@ -63,6 +63,22 @@ struct SchedulerChild {
     observation_unknown: bool,
 }
 
+fn startup_phase_event(phase: &str, status: &str, started_at: Instant, deadline: Instant) {
+    let now = Instant::now();
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema_version": "runtime_startup_phase.v1",
+            "event": "startup_phase",
+            "component": "runtime_service",
+            "phase": phase,
+            "status": status,
+            "elapsed_ms": now.saturating_duration_since(started_at).as_millis(),
+            "remaining_ms": deadline.saturating_duration_since(now).as_millis(),
+        })
+    );
+}
+
 async fn publish_compute_node_sample(
     ledger: Arc<HostResourceLedger>,
     inventory_owner: Option<Arc<HostInventoryOwner>>,
@@ -2324,7 +2340,9 @@ fn run() -> Result<()> {
 
 fn run_service(path: PathBuf) -> Result<()> {
     let config = ServiceConfig::read(&path)?;
-    let startup_deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds);
+    let startup_started = Instant::now();
+    let startup_deadline =
+        startup_started + Duration::from_secs(config.startup_timeout_seconds);
     let store = fullmag_runtime_control::retry_store_writer_busy(|| {
         SessionStore::open_existing(&config.store_root)
     })?;
@@ -2391,21 +2409,42 @@ fn run_service(path: PathBuf) -> Result<()> {
         let mut unknown_publishers = Vec::new();
         let mut drain_confirmation = None;
         let work: Result<()> = async {
-            let pools = publish_pools(
+            startup_phase_event("publish_pools", "start", startup_started, startup_deadline);
+            let pools = match publish_pools(
                 &config,
                 &store,
                 &bin,
                 &logs,
                 &mut unknown_publishers,
                 startup_deadline,
-            )?;
+            ) {
+                Ok(pools) => {
+                    startup_phase_event(
+                        "publish_pools",
+                        "complete",
+                        startup_started,
+                        startup_deadline,
+                    );
+                    pools
+                }
+                Err(error) => {
+                    startup_phase_event(
+                        "publish_pools",
+                        "failed",
+                        startup_started,
+                        startup_deadline,
+                    );
+                    return Err(error);
+                }
+            };
             generations = Some(pools);
             for role in ["compute", "preparation"] {
                 children
                     .0
                     .push(spawn_scheduler(&config, &path, &bin, &logs, role, &token)?);
             }
-            await_event(
+            startup_phase_event("boot", "start", startup_started, startup_deadline);
+            let boot = await_event(
                 &mut children,
                 "boot",
                 &token,
@@ -2413,7 +2452,18 @@ fn run_service(path: PathBuf) -> Result<()> {
                 pools,
                 startup_deadline,
             )
-            .await?;
+            .await;
+            if boot.is_err() {
+                startup_phase_event("boot", "failed", startup_started, startup_deadline);
+            }
+            boot?;
+            startup_phase_event("boot", "complete", startup_started, startup_deadline);
+            startup_phase_event(
+                "initial_sample",
+                "start",
+                startup_started,
+                startup_deadline,
+            );
             if let Some(ledger) = host_ledger.as_ref() {
                 host_admission = Some(
                     fullmag_runtime_control::host_runtime::HostRuntimeAdmission::open(&config)?
@@ -2441,11 +2491,27 @@ fn run_service(path: PathBuf) -> Result<()> {
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
+                startup_phase_event(
+                    "initial_sample",
+                    "complete",
+                    startup_started,
+                    startup_deadline,
+                );
+            } else {
+                startup_phase_event(
+                    "initial_sample",
+                    "skipped",
+                    startup_started,
+                    startup_deadline,
+                );
             }
+            startup_phase_event("release", "start", startup_started, startup_deadline);
             for child in &mut children.0 {
                 child.release()?;
             }
-            await_event(
+            startup_phase_event("release", "complete", startup_started, startup_deadline);
+            startup_phase_event("ready", "start", startup_started, startup_deadline);
+            let ready = await_event(
                 &mut children,
                 "ready",
                 &token,
@@ -2453,7 +2519,12 @@ fn run_service(path: PathBuf) -> Result<()> {
                 pools,
                 startup_deadline,
             )
-            .await?;
+            .await;
+            if ready.is_err() {
+                startup_phase_event("ready", "failed", startup_started, startup_deadline);
+            }
+            ready?;
+            startup_phase_event("ready", "complete", startup_started, startup_deadline);
             owner.publish(
                 RuntimeServiceState::Ready,
                 Some(pools.0),

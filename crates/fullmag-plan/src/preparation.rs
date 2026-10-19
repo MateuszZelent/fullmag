@@ -12,7 +12,7 @@ use fullmag_ir::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const PREPARATION_PLAN_SCHEMA: &str = "preparation_plan.v1";
 pub const PREPARATION_PLAN_ACCEPTED_RUN_SCHEMA: &str = "preparation_plan.v2";
@@ -1186,14 +1186,10 @@ impl<'a> FdmPreparationEvidence<'a> {
                             "FDM grid certificate does not match the resolved plan: {error}"
                         ))
                     })?;
-                let marker_ids = fdm
-                    .region_mask
-                    .iter()
-                    .copied()
-                    .filter(|id| *id != 0)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
+                let marker_ids = collect_active_region_marker_ids(
+                    fdm.region_mask.as_slice(),
+                    fdm.active_mask.as_deref(),
+                )?;
                 Self::new(
                     certificate,
                     marker_ids,
@@ -1333,6 +1329,39 @@ impl<'a> FdmPreparationEvidence<'a> {
             mode: mode.to_string(),
         })
     }
+}
+
+/// Collect the region IDs represented by the realized cells.  Region ID zero
+/// is a valid implicit material for an active cell; only an inactive zero is
+/// background.  Explicit positive IDs remain evidence even when an upstream
+/// plan retained one on an inactive cell, so this helper never hides a
+/// resolved positive marker or bypasses the plan's prior mask validation.
+fn collect_active_region_marker_ids(
+    region_mask: &[u32],
+    active_mask: Option<&[bool]>,
+) -> Result<Vec<u32>, PreparationPlanError> {
+    if let Some(active_mask) = active_mask {
+        if active_mask.len() != region_mask.len() {
+            return Err(PreparationPlanError::Contract(format!(
+                "FDM region mask length {} differs from active mask length {}",
+                region_mask.len(),
+                active_mask.len()
+            )));
+        }
+    }
+    let marker_ids = region_mask
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(index, region_id)| {
+            if region_id != 0 || active_mask.map_or(true, |mask| mask[index]) {
+                Some(region_id)
+            } else {
+                None
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    Ok(marker_ids.into_iter().collect())
 }
 
 fn fingerprint_payload<T: Serialize>(payload: &T) -> Result<String, PreparationPlanError> {
@@ -2664,6 +2693,41 @@ mod tests {
         }
     }
 
+    fn fdm_uniform_region_zero_execution_plan_fixture() -> fullmag_ir::ExecutionPlanIR {
+        let active_mask = [true, true, false, true];
+        let region_mask = [0, 0, 0, 0];
+        let certificate = fullmag_ir::FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [2, 2, 1],
+            [1.0e-9, 2.0e-9, 1.0e-9],
+            3,
+            1024,
+            Some(&active_mask),
+            &region_mask,
+        )
+        .unwrap();
+        let mut fdm = fullmag_ir::FdmPlanIR::default();
+        fdm.grid = fullmag_ir::GridDimensions { cells: [2, 2, 1] };
+        fdm.cell_size = [1.0e-9, 2.0e-9, 1.0e-9];
+        fdm.grid_certificate = Some(certificate);
+        fdm.active_mask = Some(active_mask.to_vec());
+        fdm.region_mask = region_mask.to_vec();
+        fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: fullmag_ir::IR_VERSION.into(),
+                requested_backend: fullmag_ir::BackendTarget::Auto,
+                resolved_backend: fullmag_ir::BackendTarget::Fdm,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: fullmag_ir::BackendPlanIR::Fdm(fdm),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: fullmag_ir::ProvenancePlanIR::default(),
+        }
+    }
+
     fn fem_mesh_fixture() -> MeshIR {
         MeshIR::from_legacy_tet4(
             "preparation-tet".into(),
@@ -2761,6 +2825,43 @@ mod tests {
             .certificates
             .iter()
             .all(|certificate| certificate.validate_for(&materialized.plan).is_ok()));
+    }
+
+    #[test]
+    fn fdm_marker_ids_include_active_zero_and_preserve_positive_markers() {
+        assert_eq!(
+            collect_active_region_marker_ids(&[0, 2, 0], Some(&[true, false, false])).unwrap(),
+            vec![0, 2]
+        );
+        assert_eq!(
+            collect_active_region_marker_ids(&[0, 0], Some(&[false, false])).unwrap(),
+            Vec::<u32>::new()
+        );
+        let error = collect_active_region_marker_ids(&[0], Some(&[true, false])).unwrap_err();
+        assert!(error.to_string().contains("length"));
+    }
+
+    #[test]
+    fn fdm_materialization_accepts_uniform_active_region_zero() {
+        let execution_plan = fdm_uniform_region_zero_execution_plan_fixture();
+        let materialized = PreparationMaterialization::from_fdm_execution_plan(
+            fingerprint('a'),
+            7,
+            fullmag_ir::BackendTarget::Auto,
+            &execution_plan,
+            fingerprint('b'),
+            fingerprint('c'),
+        )
+        .expect("active implicit region zero is valid FDM preparation evidence");
+        let mesh_certificate = materialized
+            .certificates
+            .iter()
+            .find(|certificate| certificate.producer.kind == PreparationProducerKind::Mesh)
+            .unwrap();
+        assert_eq!(
+            mesh_certificate.marker_map.as_ref().unwrap().marker_ids,
+            vec![0]
+        );
     }
 
     #[test]

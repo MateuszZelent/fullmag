@@ -35,6 +35,21 @@ struct SchedulerResourceOffer {
     budget: ResourceBudget,
 }
 
+fn scheduler_startup_event(phase: &str, started_at: Instant) {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema_version": "scheduler_startup_phase.v1",
+            "event": "startup_phase",
+            "component": "accepted_compute_scheduler",
+            "phase": phase,
+            "elapsed_ms": Instant::now()
+                .saturating_duration_since(started_at)
+                .as_millis(),
+        })
+    );
+}
+
 struct SchedulerArgs {
     store_root: PathBuf,
     run_ids: Vec<String>,
@@ -331,9 +346,12 @@ fn run_scheduler(
     shutdown_requested: Arc<AtomicBool>,
     host_admission: Option<fullmag_runtime_control::host_runtime::HostRuntimeAdmission>,
 ) -> Result<()> {
+    let startup_started = Instant::now();
+    scheduler_startup_event("beforeopen", startup_started);
     let store =
         retry_store_writer_busy(|| fullmag_session::SessionStore::open_existing(&args.store_root))
             .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
+    scheduler_startup_event("afteropen", startup_started);
     let mut run_ids = Vec::with_capacity(args.run_ids.len());
     let mut unique_run_ids = std::collections::BTreeSet::new();
     for value in args.run_ids {
@@ -366,6 +384,7 @@ fn run_scheduler(
             bail!("scheduler pool checkpoint does not match the configured run source");
         }
     }
+    scheduler_startup_event("checkpoint", startup_started);
     let worker_executable = match args.worker_executable {
         Some(path) => path,
         None => sibling_worker_executable()?,
@@ -396,30 +415,53 @@ fn run_scheduler(
     let mut peak_queued_run_count = 0usize;
     let mut peak_backpressured_run_count = 0usize;
     let mut active_workers = ActiveWorkers::default();
+    let mut first_loop_reported = false;
+    let mut reconciliation_deferred_reported = false;
+    let mut reconciliation_stages_reported = false;
     while args
         .max_tasks
         .map_or(true, |max_tasks| executed.len() < max_tasks)
         || !active_workers.is_empty()
     {
+        if !first_loop_reported {
+            scheduler_startup_event("firstloop", startup_started);
+            first_loop_reported = true;
+        }
         let draining = shutdown_requested.load(Ordering::Acquire);
         if draining && active_workers.is_empty() {
             break;
         }
         let mut reconciliation_deferred = false;
         if let Some(host_admission) = host_admission.as_ref() {
+            let log_reconciliation_stages = !reconciliation_stages_reported;
             let reconciliation = (|| -> Result<()> {
+                if log_reconciliation_stages {
+                    scheduler_startup_event("reconcile_tentative_start", startup_started);
+                }
                 retry_store_writer_busy(|| {
                     host_admission.reconcile_tentative_store_admissions(&store)
                 })
                 .context("compute scheduler: reconcile tentative store admissions")?;
+                if log_reconciliation_stages {
+                    scheduler_startup_event("reconcile_tentative_complete", startup_started);
+                    scheduler_startup_event("reconcile_released_start", startup_started);
+                }
                 retry_store_writer_busy(|| {
                     host_admission.reconcile_released_store_reservations(&store)
                 })
                 .context("compute scheduler: reconcile released host reservations")?;
+                if log_reconciliation_stages {
+                    scheduler_startup_event("reconcile_released_complete", startup_started);
+                    scheduler_startup_event("reconcile_cancellation_start", startup_started);
+                }
                 retry_store_writer_busy(|| host_admission.reconcile_task_cancellations(&store))
                     .context("compute scheduler: reconcile task cancellations")?;
+                if log_reconciliation_stages {
+                    scheduler_startup_event("reconcile_cancellation_complete", startup_started);
+                }
                 Ok(())
             })();
+            reconciliation_stages_reported = true;
             match reconciliation {
                 Ok(()) => {}
                 Err(error) if is_store_writer_busy(&error) => {
@@ -427,6 +469,10 @@ fn run_scheduler(
                         error = ?error,
                         "compute scheduler deferred host reconciliation while the session store writer is busy"
                     );
+                    if !reconciliation_deferred_reported {
+                        scheduler_startup_event("reconciliation_deferred", startup_started);
+                        reconciliation_deferred_reported = true;
+                    }
                     reconciliation_deferred = true;
                 }
                 Err(error) => return Err(error),

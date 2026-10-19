@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -236,6 +239,70 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
         ):
             docker_volume_dev._assert_ledger_peer_documents([unknown], expected)
 
+    def test_linux_start_identity_roundtrips_into_retained_storage_receipt(self):
+        profile = "linux-native-v1"
+        runtime_identity = (234567, 345678)
+        identity_record = {"uid": runtime_identity[0], "gid": runtime_identity[1]}
+        operation = {"receipt": {"inputs": {}}}
+        self.assertEqual(
+            docker_volume_dev._stamp_start_storage_identity(
+                operation, profile, runtime_identity
+            ),
+            identity_record,
+        )
+        self.assertEqual(operation["receipt"]["storage_profile"], profile)
+        self.assertEqual(operation["receipt"]["runtime_identity"], identity_record)
+        self.assertEqual(operation["receipt"]["inputs"]["runtime_identity"], identity_record)
+        start_source = inspect.getsource(docker_volume_dev.start)
+        self.assertIn("_stamp_start_storage_identity(", start_source)
+        self.assertIn('operation_inputs["storage_profile"] = host_profile', start_source)
+        self.assertIn('operation_inputs["runtime_identity"] = {', start_source)
+
+        image = "sha256:" + "a" * 64
+        docker_host = {"profile": profile, "daemon_id": "local-daemon"}
+        certificate = {"image_id": image, "storage_profile": profile, "owner_token": "owner"}
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "state"
+            state.mkdir()
+            certificate_path = Path(temporary) / "state-host-admission" / "linux-native-host.json"
+            owner_path = state / ".fullmag-linux-native-owner.json"
+            retained = operation["receipt"]
+            retained.update(
+                state_root=str(state),
+                docker_host=docker_host,
+                owner_token="owner",
+                host_certificate_sha256=hashlib.sha256(b"certificate").hexdigest(),
+            )
+            with patch.object(docker_volume_dev.storage, "validate_path", side_effect=lambda path, *_: Path(path)), \
+                 patch.object(docker_volume_dev, "_host_certificate_paths", return_value=(certificate_path, owner_path)), \
+                 patch.object(docker_volume_dev, "_read_host_certificate", return_value=certificate), \
+                 patch.object(docker_volume_dev, "_verify_linux_certificate_owner"), \
+                 patch.object(docker_platform, "admit_storage_path", return_value={"filesystem": "ext4", "device": "/dev/test"}), \
+                 patch.object(docker_platform, "runtime_identity_record", return_value={
+                     "profile": profile, "uid": runtime_identity[0], "gid": runtime_identity[1],
+                 }), \
+                 patch.object(docker_platform, "read_owned_regular", return_value=b"certificate"):
+                result = docker_volume_dev._load_retained_storage(
+                    {"runtime_root": str(Path(temporary))},
+                    retained,
+                    profile,
+                    image,
+                    docker_host,
+                )
+                self.assertEqual(result, (state, certificate_path, owner_path, certificate))
+                retained.pop("runtime_identity")
+                with self.assertRaisesRegex(
+                    docker_volume_dev.BuildControlError,
+                    "runtime UID/GID differs from its pinned receipt",
+                ):
+                    docker_volume_dev._load_retained_storage(
+                        {"runtime_root": str(Path(temporary))},
+                        retained,
+                        profile,
+                        image,
+                        docker_host,
+                    )
+
     def test_start_wires_preparation_before_mount_and_compose(self):
         source = inspect.getsource(docker_volume_dev.start)
         self.assertLess(
@@ -246,6 +313,41 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
             source.index("_precreate_new_windows_runtime_state(state)"),
             source.index("_start_compose_services(control, operation, document)"),
         )
+
+    def test_new_control_helper_captures_strip_endpoint_overrides_and_keep_pinned_prefix(self):
+        endpoint_prefix = ["docker", "--host", "unix:///run/user/234567/docker.sock"]
+
+        class Control:
+            image = "sha256:" + "a" * 64
+
+            @staticmethod
+            def path(relative):
+                return "/opt/fullmag/control/" + relative
+
+            @staticmethod
+            def helper_args(script):
+                return [*docker_platform.docker_cli_prefix(), "run", Control.image, script]
+
+        result = SimpleNamespace(returncode=0, stdout=b"{}", stderr=b"")
+        readers = (
+            (docker_volume_dev._read_cancelled_activation_bytes, (Control(), "runtime-control/cancelled.json")),
+            (docker_volume_dev._read_runtime_config_digest, (Control(),)),
+        )
+        for reader, arguments in readers:
+            with self.subTest(reader=reader.__name__), \
+                 patch.dict(os.environ, {
+                     "PATH": "/usr/bin",
+                     "DOCKER_HOST": "tcp://untrusted.invalid:2375",
+                     "DOCKER_CONTEXT": "untrusted-context",
+                 }, clear=True), \
+                 patch.object(docker_platform.os, "name", "posix"), \
+                 patch.object(docker_platform, "docker_cli_prefix", return_value=endpoint_prefix), \
+                 patch.object(docker_volume_dev, "bounded_capture", return_value=result) as capture:
+                reader(*arguments)
+
+            command = capture.call_args.args[0]
+            self.assertEqual(command[:3], endpoint_prefix)
+            self.assertEqual(capture.call_args.kwargs["env"], {"PATH": "/usr/bin"})
 
 
 if __name__ == "__main__":

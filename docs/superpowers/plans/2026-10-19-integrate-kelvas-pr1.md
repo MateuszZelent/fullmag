@@ -7,6 +7,17 @@ build/cache/staging/provenance/logi i receipty buildu pozostają w Docker
 named volumes / BuildKit; sesje, wyniki, projekty i ustawienia w wybranym
 trwałym storage hosta.
 
+## Aktualny stan odbioru źródeł
+
+Źródła PR zostały przeniesione do aktualnej ścieżki wolumenowej i połączone
+z masterem `377f3ced6d314ecfc46bc63211563dca4483765f`. Testy interpretowane
+i niezależne review zakończyły się bez otwartych ustaleń. Build Rust,
+pełny runtime Linux/WSL, restart/HMR/WebGL, SessionStore i GPU pozostają
+**NOT VERIFIED**. Integracja do zdalnego mastera i cleanup nie są ukończone.
+Konfiguracja Docker Desktop dla Ubuntu2 jest włączona, lecz bieżące połączenie
+WSL jest niesprawne. Oczekiwane są także ścieżki native checkout/storage od
+operatora. Nie wykonano restartu ani modyfikacji konfiguracji WSL.
+
 ## Tożsamość
 
 - Baza naszego mastera: `6d3fcc08285e075cab0019cb235f21c7a2a9841f`.
@@ -61,7 +72,7 @@ trwałym storage hosta.
 - Cleanup tylko worktree tego zadania po potwierdzeniu czystości, scalenia
   i braku aktywnych konsumentów. Dirty master jest możliwą blokadą ff.
 
-## Bieżący checkpoint
+## Checkpoint początkowy
 
 - Rejestr zadania zapisany; merge rozpoczęty w izolacji, master bez zmian.
 - PR źródłowy jest draftem; sześć konfliktów z bieżącym masterem.
@@ -154,3 +165,65 @@ pokryć oba przypadki. Nie zatrzymujemy ani nie rekonfigurujemy peerów.
 - Wszystkie sześć konfliktów jest rozstrzygnięte w treści, brak markerów;
   indeks merge pozostaje niezmieniony do stagingu właściciela integracji.
 - Etap jest zweryfikowany źródłowo; build i runtime nadal NOT VERIFIED.
+
+## Zapis etapu i integracja bieżącego mastera
+
+- Commit źródłowego etapu: `fe0a772db4ee4bfba8e05d934dd38ff4e5ef39d0`.
+  Obejmuje port PR #1, regresje, dokumentację i oba zamknięte ustalenia review.
+  Dowody źródłowe powyżej; runtime/build nie są przez ten commit kwalifikowane.
+- Następny merge włączył master `377f3ced6d314ecfc46bc63211563dca4483765f`.
+  Jedyny konflikt tekstowy: `scripts/docker_volume_dev.py`. Właściciel launchera
+  łączy Linux identity/certificate/daemon/ledger z nowymi dowodami anulowania,
+  graceful drain i consumed recovery authority. Guest runtime/frontend łączą
+  się automatycznie i podlegają osobnej kontroli przecięć.
+- README otrzymuje odsyłacz do Linux/WSL zamiast nieaktualnego zakazu startu.
+
+## Kontrola przecięć z PR #199
+
+- Konflikt launchera rozstrzygnięty bez utraty gate Linux ani nowych warunków
+  anulowania/drain/recovery. Dziewięć odpowiednich zestawów interpretowanych
+  w Ubuntu2 zakończyło się OK; jeden test maintenance wymaga CAP_CHOWN i ma skip.
+- Auto-merge guest: frontend 44/44, successor recovery 4/4, Linux identity 2/2,
+  runtime recovery 8/8 i container runtime recovery 5/5 PASS. Bez edycji guest.
+- Dodatkowa kontrola konsumentów ujawniła stały Windows Docker context/user
+  w helperze terminalnego drain oraz blokadę Linux w live activate i Windows
+  certificate-only w container recovery. Pełny DEV wymaga portu tych aktywnych
+  operacji, bez usuwania dowodów ownership/capability/lock/drain. Zmiany są
+  odrębnym zakresem source review; runtime pozostaje NOT VERIFIED.
+
+## Uzupełnienie dostępu WSL i wspólnego admission
+
+- Read-only test Windows `docker.exe --context desktop-linux version` z Ubuntu2
+  również nie działa: `Exec format error`. Binfmt jest enabled, lecz wpis
+  `/proc/sys/fs/binfmt_misc/WSLInterop` nie istnieje; zmienna `WSL_INTEROP` istnieje.
+  `/etc/wsl.conf` ma tylko `appendWindowsPath=false` w sekcji interop, nie jawne
+  `enabled=false`. Nie zmieniano binfmt, usług, mountów ani konfiguracji WSL.
+- Wspólny `linux_docker_host.local_volume` odrzuca teraz nietrwałe rooty również
+  przy obsługiwanym filesystemie. Kreator współdzieli `TRANSIENT_ROOTS`.
+  Regresja 2 testów najpierw wykazała 5 brakujących odmów, po poprawce PASS;
+  24 testy kreatora także PASS. Root o podobnym prefiksie `/tmp-data` pozostaje
+  dozwolony; nie jest odrzucany błędnym porównaniem tekstowego prefiksu.
+- Kontrola lokalnych linków 13 zmienionych dokumentów/README: PASS.
+
+## Końcowy odbiór po połączeniu mastera
+
+- Ubuntu2: stop-unadmitted 26/26 PASS, runtime state 10/10 PASS, activate
+  24/24 PASS, container recovery 10/10 PASS. Windows starsze grupy bez
+  jawnych UID/GID pozostają obsługiwane wyłącznie dla profilu Windows i
+  zaobserwowanego `65532:65532`; duplikaty i sprzeczne wartości są odmową.
+- Ponowione po zmianie guest runtime przez merge: full runtime 108 testów,
+  OK z 4 skipami; guest Linux 12/12 PASS; backend DEV 61/61 PASS.
+- Początkowa diagnoza brakującej identity w receipcie została doprecyzowana:
+  pole istniało, lecz było zapisywane późno. Tożsamość jest teraz przypięta
+  w inputs i top-level przed setupem; regresja obejmuje utworzenie i retained
+  odczyt oraz odmowę brakującego pola.
+- Nowe helper captures używają przypiętego prefiksu Docker i oczyszczonego
+  środowiska. Terminalny probe ma zgodną identity host/control/Config.User/Env.
+- Activation i recovery Linux sprawdzają prywatny certyfikat, raw/canonical
+  digest, owner, daemon oraz UID/GID przed mutacjami i ponownie przed removal.
+  Probe potwierdza euid/egid oraz niezmieniony daemon po zakończeniu.
+- Niezależne review zmian merge, obu poprawek zgodności i activate/recovery:
+  bez otwartych ustaleń. To dowód źródeł, nie rzeczywistego wykonania Dockera.
+- Żadnego buildu aplikacji ani kompilacji testów jednostkowych nie wykonano.
+  Nie uruchomiono grupy Compose tego worktree. Brak ciężkich danych tego
+  etapu do kwalifikowanego usunięcia; cudze grupy i cache zachowano.

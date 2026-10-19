@@ -90,6 +90,19 @@ def isolated(module):
     with tempfile.TemporaryDirectory(prefix="fullmag-frontend-dev-") as raw:
         root = Path(raw)
         workspace = root / "workspace"
+        source = root / "source"
+        source.mkdir()
+        for relative, kind in module.READONLY_SOURCE_FIXTURES:
+            target = source / relative
+            if kind == "directory":
+                target.mkdir(parents=True)
+                if relative == "docker":
+                    (target / "dev").mkdir()
+                    (target / "dev" / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+                    (target / "fem-gpu").mkdir()
+                    (target / "fem-gpu" / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+            else:
+                target.write_text(relative, encoding="utf-8")
         app = workspace / "apps" / "control-room"
         for name in module.LIVE_DIRECTORY_NAMES:
             (app / name).mkdir(parents=True)
@@ -136,6 +149,7 @@ def isolated(module):
             "RECEIPT_PATH": root / "frontend-dev-receipt.json",
             "LOG_PATH": root / "next.log",
             "RUNTIME_LOCK_PATH": root / "cache" / ".fullmag-frontend-runtime.lock",
+            "SOURCE_CONTAINER_ROOT": source,
         }
         (root / "cache").mkdir(parents=True, exist_ok=True)
         runtime_lock = root / "cache" / ".fullmag-frontend-runtime.lock"
@@ -145,7 +159,12 @@ def isolated(module):
         for name, value in names.items():
             setattr(module, name, value)
         try:
-            yield root, workspace, module.read_inputs(inputs_path)
+            with patch.dict(
+                os.environ,
+                {"FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT": str(source)},
+                clear=False,
+            ):
+                yield root, workspace, module.read_inputs(inputs_path)
         finally:
             for name, value in old.items():
                 setattr(module, name, value)
@@ -208,6 +227,97 @@ class FrontendControlVolumeContractTests(TestCase):
         with patch.object(module, "FRONTEND_CACHE_KEY", "wrong"):
             with self.assertRaisesRegex(module.FrontendDevError, "lowercase SHA-256"):
                 module._validate_control_volume_contract()
+
+class FrontendReadonlySourceFixtureLinkTests(TestCase):
+    def test_allowlisted_fixtures_are_exact_readonly_links_and_never_copied(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory(prefix="fullmag-frontend-fixtures-") as raw:
+            root = Path(raw)
+            source = root / "source"
+            workspace = root / "workspace"
+            source.mkdir()
+            workspace.mkdir()
+            for relative, kind in module.READONLY_SOURCE_FIXTURES:
+                target = source / relative
+                if kind == "directory":
+                    target.mkdir(parents=True)
+                    (target / "fixture.txt").write_text(relative, encoding="utf-8")
+                    if relative == "docker":
+                        (target / "dev").mkdir()
+                        (target / "dev" / "Dockerfile").write_text(
+                            "FROM scratch\n", encoding="utf-8"
+                        )
+                        (target / "fem-gpu").mkdir()
+                        (target / "fem-gpu" / "Dockerfile").write_text(
+                            "FROM scratch\n", encoding="utf-8"
+                        )
+                else:
+                    target.write_text(relative, encoding="utf-8")
+
+            before = {path: path.stat().st_mtime_ns for path in source.rglob("*")}
+            linked = module._ensure_readonly_source_fixture_links(source, workspace)
+            self.assertEqual(
+                linked, tuple(relative for relative, _ in module.READONLY_SOURCE_FIXTURES)
+            )
+            for relative, kind in module.READONLY_SOURCE_FIXTURES:
+                destination = workspace / relative
+                self.assertTrue(destination.is_symlink(), relative)
+                self.assertEqual(os.readlink(destination), str(source / relative))
+                self.assertEqual(
+                    destination.resolve(strict=True), (source / relative).resolve(strict=True)
+                )
+                if kind == "directory":
+                    self.assertTrue((destination / "fixture.txt").is_file())
+            self.assertEqual(
+                (workspace / "docker" / "dev" / "Dockerfile").read_text(encoding="utf-8"),
+                "FROM scratch\n",
+            )
+            self.assertEqual(
+                (workspace / "docker" / "fem-gpu" / "Dockerfile").read_text(encoding="utf-8"),
+                "FROM scratch\n",
+            )
+            self.assertEqual(
+                before, {path: path.stat().st_mtime_ns for path in source.rglob("*")}
+            )
+
+            # Restarts revalidate the same links without replacing them.
+            self.assertEqual(
+                linked, module._ensure_readonly_source_fixture_links(source, workspace)
+            )
+
+    def test_rejects_foreign_or_copied_fixture_destinations(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory(prefix="fullmag-frontend-fixture-reject-") as raw:
+            root = Path(raw)
+            source = root / "source"
+            workspace = root / "workspace"
+            source.mkdir()
+            workspace.mkdir()
+            for relative, kind in module.READONLY_SOURCE_FIXTURES:
+                target = source / relative
+                if kind == "directory":
+                    target.mkdir(parents=True)
+                else:
+                    target.write_text(relative, encoding="utf-8")
+            outside = root / "outside"
+            outside.mkdir()
+            (workspace / ".github").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(module.FrontendDevError, "target differs"):
+                module._ensure_readonly_source_fixture_links(source, workspace)
+
+            (workspace / ".github").unlink()
+            (workspace / ".github").mkdir()
+            with self.assertRaisesRegex(
+                module.FrontendDevError, "must remain a readonly source link"
+            ):
+                module._ensure_readonly_source_fixture_links(source, workspace)
+
+            (workspace / ".github").rmdir()
+            (source / "docs").rmdir()
+            (source / "docs").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(module.FrontendDevError, "may not be a symlink"):
+                module._ensure_readonly_source_fixture_links(source, workspace)
+
 
 class FrontendDevContractTests(TestCase):
     def setUp(self):
@@ -274,6 +384,12 @@ class FrontendDevContractTests(TestCase):
                 environment = self.module._safe_environment(inputs)
             self.assertEqual(environment["FULLMAG_DOCKER_FRONTEND"], "dev")
             self.assertEqual(environment["NODE_ENV"], "development")
+            self.assertEqual(
+                environment["PYTHONPATH"],
+                str(_root / "workspace" / "packages" / "fullmag-py" / "src"),
+            )
+            self.assertNotIn("/opt/fullmag/package", environment["PYTHONPATH"].split(os.pathsep))
+            self.assertEqual(environment["FULLMAG_REPO_ROOT"], str(_workspace))
             self.assertNotIn("NODE_OPTIONS", environment)
             inspector = self.module._receipt_base(inputs, None)["inspector"]
             self.assertEqual(inspector["profile"], "next-dev")
@@ -1178,15 +1294,17 @@ else:
             self.assertEqual(receipt["state"], "stopped")
 
     def test_live_failure_receipt_blocks_takeover(self):
-        with self.assertRaises(self.module.FrontendDevError):
-            self.module._reject_existing_owner(
-                {"state": "stop-timeout", "pid": os.getpid()}
-            )
+        with isolated(self.module):
+            with self.assertRaises(self.module.FrontendDevError):
+                self.module._reject_existing_owner(
+                    {"state": "stop-timeout", "pid": os.getpid()}
+                )
 
     @skipIf(os.name == "nt", "Linux process identity probing is a container contract")
     def test_terminal_failed_receipt_without_identity_requires_recovery(self):
-        with self.assertRaises(self.module.FrontendDevUnknown):
-            self.module._reject_existing_owner({"state": "failed", "pid": 4194303})
+        with isolated(self.module):
+            with self.assertRaises(self.module.FrontendDevUnknown):
+                self.module._reject_existing_owner({"state": "failed", "pid": 4194303})
 
     @skipIf(os.name == "nt", "directory fsync is a Linux container filesystem contract")
     def test_pid_reuse_marks_active_owner_unknown_without_takeover(self):

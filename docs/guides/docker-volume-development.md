@@ -15,9 +15,13 @@ Przeczytaj skill `.agents/skills/fullmag-docker-build/SKILL.md`.
 ```powershell
 $source = "<absolutny-zarejestrowany-checkout>"
 Set-Location $source
-just docker-dev-toolchain
 just docker-dev
 ```
+
+`just docker-dev` sam przygotowuje lub ponownie wykorzystuje zgodny toolchain
+i obrazy helperów. Osobne `just docker-dev-toolchain` jest opcjonalne: pozwala
+przygotować zależności wcześniej albo diagnozować ten etap bez startu aplikacji.
+Nie kompiluje aplikacji; ta buduje się w stałym `backend`.
 
 Kreator zapisuje `FULLMAG_SOURCE_ROOT` i `FULLMAG_HTTP_PORT` do `.env` głównego
 checkoutu. Domyślne źródła: jawny argument → zmienna procesu → bieżący worktree
@@ -49,6 +53,18 @@ sprawdza prywatną sieć bez obcych konsumentów, restartuje backend i ponownie
 uruchamia ten sam frontend. Zachowuje cache oraz storage użytkownika wybranego hosta. Nie jest komendą do przerywania obliczeń. Wymaga wyłącznego okna operatorskiego,
 bez równoległych klientów wysyłających polecenia do tej grupy; odczyt health
 nie jest dowodem opróżnienia wszystkich kolejek aplikacji.
+Wyjątkiem od braku aktywnej sesji jest dokładnie przypięty model nieudanej
+aktywacji, którego przyjęte zadanie zostało jawnie anulowane przed rozpoczęciem
+przygotowania. Wymagany jest trwały dowód anulowania, brak rezerwacji i bieżącego
+runu, pusta kolejka oraz zgodność skryptu i rewizji sceny. Kontrola odbywa się
+ponownie po zatrzymaniu frontendu. Po zatrzymaniu backendu launcher weryfikuje
+autentykowany drain właściciela runtime przed ponownym startem; nieznany wynik
+zatrzymania pozostawia usługi zatrzymane i wymaga odzyskiwania.
+Po wcześniejszym odzyskaniu namespace kolejne zwykłe restarty weryfikują
+uwierzytelniony drain późniejszego właściciela. Historyczne archiwum recovery
+pozostaje niezmienne; nowszy `LAUNCH.json`, generacje pul i checkpointy są
+sprawdzane względem tego właściciela i konfiguracji, zamiast porównywania ich
+bajtów ze starym archiwum. Istniejące runy i ich historia pozostają zachowane.
 Frontend obserwuje katalogi `app`, `src`, `public`, `scripts` i aktualizuje UI
 przez HMR. Zmiana helperów obrazu wymaga przygotowania nowego obrazu i jawnego
 odtworzenia usług; sam restart zachowuje przypięty obraz.
@@ -58,6 +74,19 @@ startu; opcja `restart_backend=true` może uruchomić zachowany zatrzymany backe
 `docker-dev-recreate-volume` wymaga zatrzymanego backendu i dokładnych pinów
 próby/konfiguracji. Zachowuje wolumeny; opcja `fresh_state=true` tworzy nowy root
 sesji, pozostawiając poprzedni. Nie powtarza automatycznie aktywacji Solve.
+Oczekująca transakcja recovery zachowuje dokładną pierwotną autoryzację po
+ponownej walidacji. Sama publikacja receipt `recovered` nie usuwa uprawnienia
+potrzebnego przy pierwszym starcie po recovery. Jeżeli późniejszy właściciel
+zakończy start błędem, `docker-dev-stop-failed` zapisuje dowód jego kontrolowanego
+zatrzymania. Przy następnym `docker-dev-recreate-volume` launcher sprawdza ten
+dowód oraz zakończoną transakcję recovery, pomija jej zużytą autoryzację i
+przypina SHA bieżącej konfiguracji odczytanej pod `OWNER.lock`. Nowy start może
+zmienić wyłącznie generację przy zachowaniu profilu operatora. Metadane tego
+restartu są oddzielone od autoryzacji recovery. Nie powstaje nowy request recovery,
+nie zmienia się historia i nie jest ponawiane Solve. Zachowywany jest oryginalny
+storage sesji; `fresh_state=true` pozostaje odrzucane.
+Nadzór startu odczytuje receipt PID 1 przez kanoniczne `runtime_service.process_receipt_path(canonical_paths())`, z technicznego wolumenu runtime-control. Potwierdzony `failed_outcome_retained` przerywa oczekiwanie na gotowość; nie czeka na pełny timeout i nie ponawia Solve.
+`just docker-dev-stop-failed <source> <container-id> <image-id> <process-receipt-sha256>` może zatrzymać również nadzorcę po nieudanym starcie native runtime. Wymaga zakończonego API, właściciela `failed`, obu schedulerów zakończonych poprawnie, braku żywych procesów i aktywnych lease’ów oraz zwolnionych rezerwacji hosta. Zapisuje dowód przed zatrzymaniem i weryfikuje niezmienionego właściciela po nim. Nie odzyskuje GPU, nie zmienia ownera i nie powtarza skryptu. Obserwacja nieznana lub aktywne zasoby blokują tę komendę.
 Stara komenda odtwarzania przez hostowy receipt DEV odmawia wykonania.
 
 ### Aktywacja skryptu w już działającym Workspace
@@ -113,9 +142,12 @@ kodem 2; nie oznacza wykonania symulacji. Raport zachowuje osobno identyfikator
 operacji oraz `development_attempt`. Długi komunikat błędu pozostaje ograniczony
 do 2048 znaków, lecz zachowuje początek i końcową przyczynę tracebacku.
 
-Domyślny `request_id` jest deterministyczny na podstawie próby i hasha pliku:
-ten sam skrypt z tym samym domyślnym ID odtwarza terminalny wynik, a inny hash
-otrzymuje odrębny receipt. Nowe żądanie nadal przechodzi przez istniejącą
+Każde jawne wywołanie otrzymuje nowy domyślny `request_id` w postaci
+`docker-volume-<uuid>`, zapisany w receipcie przed wysłaniem żądania. Dzięki temu
+ten sam plik może posłużyć do kolejnej symulacji. Jawny `request_id` pozostaje
+stabilnym kluczem idempotencji i odtwarza wynik tego konkretnego żądania.
+Nieznany wynik wcześniejszej operacji nadal blokuje nowe wywołanie. Nowe żądanie
+przechodzi przez istniejącą
 walidację Workspace: musi być pusty według kontraktu API. Zamknięcie runu nie
 retiruje bieżącego Workspace, więc samo podanie nowego `request_id` jako piątego
 argumentu nie wystarcza; potrzebne jest istniejące, jawne przejście do pustego

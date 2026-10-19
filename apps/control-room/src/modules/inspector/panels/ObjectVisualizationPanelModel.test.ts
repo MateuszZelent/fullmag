@@ -1175,14 +1175,20 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual(selectionTarget);
   });
 
-  it("withholds visualization targets and FEM resources until the lane is explicit", () => {
+  it("keeps an explicit object visualization target while the lane is unresolved", () => {
     const selection = {
       kind: "object.visualization",
       label: "Film visualization",
       moduleSource: "inspector",
       nodeId: "model:object:film:visualization",
       objectId: "film",
-      ref: null,
+      ref: {
+        kind: "object.visualization",
+        nodeId: "model:object:film:visualization",
+        objectId: "film",
+        type: "scene-object",
+        visualizationTargetId: "object:film",
+      },
     } as const;
     const selectionTarget = resolveVisualizationTargetFromSelection(selection);
 
@@ -1192,11 +1198,45 @@ describe("ObjectVisualizationPanelModel", () => {
       selection,
       selectionTarget,
     });
-    expect(unresolvedTarget).toBeNull();
+    expect(unresolvedTarget).toEqual(selectionTarget);
     expect(
       resolveObjectVisualizationResourceGates({
         lane: "unresolved",
         target: unresolvedTarget,
+      }),
+    ).toEqual({ fdm: false, fem: false });
+  });
+
+  it("withholds structured-grid targets until the lane is explicit", () => {
+    const selection = {
+      kind: "mesh.grid.descriptor",
+      label: "Structured Grid",
+      moduleSource: "inspector",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: {
+        kind: "mesh.grid.descriptor",
+        nodeId: "model:mesh:grid",
+        scope: "descriptor",
+        type: "fdm-domain",
+        visualizationTargetId: "fdm-domain",
+      },
+    } as const;
+    const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+    const unresolvedTarget = resolveObjectVisualizationTargetForLane({
+      lane: "unresolved",
+      selection,
+      selectionTarget,
+    });
+    expect(unresolvedTarget).toBeNull();
+  });
+
+  it("keeps lane-specific resource gates independent of target resolution", () => {
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "unresolved",
+        target: null,
       }),
     ).toEqual({ fdm: false, fem: false });
     expect(
@@ -1220,7 +1260,7 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(
       resolveObjectVisualizationResourceGates({
         lane: "fem",
-        target: selectionTarget,
+        target: { id: "object:film", kind: "object" },
       }),
     ).toEqual({ fdm: false, fem: true });
   });

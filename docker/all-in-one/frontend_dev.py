@@ -111,6 +111,25 @@ INSPECTOR_OUTPUT_RE = re.compile(
 )
 LIVE_DIRECTORY_NAMES = ("app", "src", "public", "scripts")
 LIVE_DIRECTORY_PATHS = tuple(f"apps/control-room/{name}" for name in LIVE_DIRECTORY_NAMES)
+# Vitest and the frontend smoke contracts execute from the writable workspace
+# but read a small, explicit set of repository fixtures outside the live
+# Control Room mount.  Keep these entries as symlinks into the readonly source
+# bind: copying them would duplicate source data in the named volume and would
+# make a stale fixture survive a checkout change.  The allowlist is deliberately
+# explicit; no operator-supplied source-relative path is accepted.
+SOURCE_CONTAINER_ROOT = Path("/opt/fullmag/source")
+READONLY_SOURCE_FIXTURES = (
+    (".github", "directory"),
+    ("crates", "directory"),
+    ("docker", "directory"),
+    ("docs", "directory"),
+    ("examples", "directory"),
+    ("packages", "directory"),
+    ("public_docs", "directory"),
+    ("scripts", "directory"),
+    ("justfile", "file"),
+    ("readme.md", "file"),
+)
 REQUIRED_MANIFEST_KEYS = frozenset(
     {
         "schema",
@@ -427,22 +446,146 @@ def _validate_control_volume_contract() -> None:
         )
 
 
+def _source_container_root() -> Path:
+    """Return the fixed readonly checkout mount used by frontend fixtures."""
+
+    raw = os.environ.get("FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT", str(SOURCE_CONTAINER_ROOT))
+    source = Path(raw)
+    if source != SOURCE_CONTAINER_ROOT:
+        _fail(
+            "FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT must be the fixed readonly "
+            f"source mount {SOURCE_CONTAINER_ROOT}"
+        )
+    _path_without_parent(source, "frontend source mount")
+    try:
+        metadata = source.lstat()
+    except FileNotFoundError as error:
+        raise FrontendDevError(f"frontend source mount is missing: {source}") from error
+    except OSError as error:
+        raise FrontendDevError(f"cannot inspect frontend source mount: {error}") from error
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        _fail("frontend source mount must be a real directory")
+    return source
+
+
+def _ensure_readonly_source_fixture_links(
+    source: Path, workspace: Path | None = None
+) -> tuple[str, ...]:
+    """Expose allowlisted source fixtures in the named workspace by exact links.
+
+    The helper only creates links below ``workspace``.  It never copies or
+    modifies source bytes, and it refuses a pre-existing directory/file or a
+    link whose target is not the exact allowlisted path.
+    """
+
+    source = _path_without_parent(Path(source), "frontend source mount")
+    if workspace is None:
+        workspace = WORKSPACE_ROOT
+    workspace = _path_without_parent(Path(workspace), "frontend workspace")
+    try:
+        source_metadata = source.lstat()
+        workspace_metadata = workspace.lstat()
+    except FileNotFoundError as error:
+        raise FrontendDevError("frontend source mount or workspace is missing") from error
+    except OSError as error:
+        raise FrontendDevError(f"cannot inspect frontend fixture roots: {error}") from error
+    if not stat.S_ISDIR(source_metadata.st_mode) or stat.S_ISLNK(source_metadata.st_mode):
+        _fail("frontend source mount must be a real directory")
+    if not stat.S_ISDIR(workspace_metadata.st_mode) or stat.S_ISLNK(workspace_metadata.st_mode):
+        _fail("frontend workspace must be a real named-volume directory")
+    source_resolved = source.resolve(strict=True)
+
+    linked: list[str] = []
+    for relative, kind in READONLY_SOURCE_FIXTURES:
+        source_path = source / relative
+        destination = workspace / relative
+        try:
+            source_metadata = source_path.lstat()
+        except FileNotFoundError as error:
+            raise FrontendDevError(
+                f"required frontend source fixture is missing: {relative}"
+            ) from error
+        except OSError as error:
+            raise FrontendDevError(
+                f"cannot inspect frontend source fixture {relative}: {error}"
+            ) from error
+        if stat.S_ISLNK(source_metadata.st_mode):
+            _fail(f"frontend source fixture may not be a symlink: {relative}")
+        if kind == "directory" and not stat.S_ISDIR(source_metadata.st_mode):
+            _fail(f"frontend source fixture is not a directory: {relative}")
+        if kind == "file" and not stat.S_ISREG(source_metadata.st_mode):
+            _fail(f"frontend source fixture is not a regular file: {relative}")
+        try:
+            resolved_source = source_path.resolve(strict=True)
+            resolved_source.relative_to(source_resolved)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise FrontendDevError(
+                f"frontend source fixture escapes the readonly source mount: {relative}"
+            ) from error
+        if resolved_source != source_path:
+            _fail(f"frontend source fixture resolves through a link: {relative}")
+
+        parent = destination.parent
+        _path_without_parent(parent, f"frontend fixture parent {relative}")
+        try:
+            parent_metadata = parent.lstat()
+        except FileNotFoundError as error:
+            raise FrontendDevError(
+                f"frontend fixture parent is missing: {parent}"
+            ) from error
+        if not stat.S_ISDIR(parent_metadata.st_mode) or stat.S_ISLNK(parent_metadata.st_mode):
+            _fail(f"frontend fixture parent is not a real directory: {parent}")
+        try:
+            existing = destination.lstat()
+        except FileNotFoundError:
+            existing = None
+        except OSError as error:
+            raise FrontendDevError(
+                f"cannot inspect frontend fixture destination {relative}: {error}"
+            ) from error
+        expected_target = str(source_path)
+        if existing is None:
+            try:
+                destination.symlink_to(expected_target, target_is_directory=(kind == "directory"))
+            except OSError as error:
+                raise FrontendDevError(
+                    f"cannot create readonly frontend fixture link {relative}: {error}"
+                ) from error
+            existing = destination.lstat()
+        if not stat.S_ISLNK(existing.st_mode):
+            _fail(
+                f"frontend fixture destination must remain a readonly source link: {relative}"
+            )
+        try:
+            actual_target = os.readlink(destination)
+        except OSError as error:
+            raise FrontendDevError(
+                f"cannot read frontend fixture link {relative}: {error}"
+            ) from error
+        if actual_target != expected_target:
+            _fail(
+                f"frontend fixture link target differs from the selected source: {relative}"
+            )
+        linked.append(relative)
+    return tuple(linked)
+
+
 def _ensure_inputs_manifest() -> None:
-    """Create the guest manifest once, inside named volumes, when absent.
+    """Create the guest manifest and readonly source fixture links once.
 
     The source bind is readonly and may expose a Windows checkout.  The
     container therefore receives the diagnostic Windows root, worktree ID and
     commit through environment variables prepared by the Compose launcher;
     ``seed_guest`` performs the bounded copy into the frontend state volume.
-    Existing manifests are never rewritten during a restart.
+    Existing manifests are never rewritten during a restart, but the exact
+    allowlisted fixture links are revalidated on every start.
     """
 
     _validate_control_volume_contract()
+    source = _source_container_root()
     if INPUTS_PATH.exists():
+        _ensure_readonly_source_fixture_links(source)
         return
-    source = Path(
-        os.environ.get("FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT", "/opt/fullmag/source")
-    )
     host_source_root = os.environ.get("FULLMAG_SOURCE_ROOT")
     worktree_id = os.environ.get("FULLMAG_SOURCE_WORKTREE_ID")
     source_commit = os.environ.get("FULLMAG_SOURCE_COMMIT")
@@ -473,6 +616,7 @@ def _ensure_inputs_manifest() -> None:
             manifest_path=INPUTS_PATH,
             frontend_cache_key=FRONTEND_CACHE_KEY,
         )
+        _ensure_readonly_source_fixture_links(source)
     except Exception as error:
         if isinstance(error, FrontendDevError):
             raise
@@ -1155,6 +1299,12 @@ def _safe_environment(
         NODE_FS_THREADS_ENV: str(NODE_FS_THREADS),
         "FULLMAG_API_PROXY_TARGET": API_PROXY_TARGET,
         "FULLMAG_API_URL": API_PROXY_TARGET,
+        # Frontend smoke scripts execute the pure Python DSL from the
+        # validated readonly source link.  Keep the native runtime package
+        # out of this process: it belongs to the backend service and is not a
+        # frontend fixture dependency.
+        "PYTHONPATH": str(WORKSPACE_ROOT / "packages" / "fullmag-py" / "src"),
+        "FULLMAG_REPO_ROOT": str(WORKSPACE_ROOT),
         "FULLMAG_WEB_PUBLIC_HOST": "localhost",
         "FULLMAG_WEB_PUBLIC_PORT": str(inputs.host_port),
         # Leave the browser API-base variables unset.  The control-room

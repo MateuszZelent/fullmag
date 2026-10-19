@@ -2583,7 +2583,7 @@ def _parser() -> argparse.ArgumentParser:
     activate_parser.add_argument("--script", type=Path, required=True)
     activate_parser.add_argument(
         "--request-id",
-        help="optional stable request fence; default is derived from attempt and script hash",
+        help="optional stable request fence; default is fresh for each explicit invocation",
     )
     script_parser = subparsers.add_parser(
         "script",

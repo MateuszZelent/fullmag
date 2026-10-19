@@ -186,11 +186,11 @@ def validate_linux_volume(root: Path) -> None:
     if not sys.platform.startswith("linux"):
         raise SetupError("Natywne storage wymaga hosta Linux lub WSL")
     try:
-        from linux_docker_host import runtime_identity
+        from linux_docker_host import TRANSIENT_ROOTS, runtime_identity
 
         runtime_identity()
         root = storage.absolute(root, "Linux storage path")
-        forbidden = (Path("/mnt/c"), Path("/mnt/d"), Path("/tmp"), Path("/run"), Path("/dev/shm"))
+        forbidden = (Path("/mnt/c"), Path("/mnt/d"), *TRANSIENT_ROOTS)
         if any(root == item or item in root.parents for item in forbidden):
             raise SetupError("Linux DEV wymaga trwałego storage poza Windows/9p i katalogami tymczasowymi")
         existing = root

@@ -299,6 +299,188 @@ class StopUnadmittedTests(unittest.TestCase):
         ):
             stop._runtime_control_volume_mount(backend, "fullmag-master")
 
+    @staticmethod
+    def receipt_backend(profile, uid, gid):
+        volume = "fullmag-build-control-test"
+        return {
+            "Image": "sha256:" + "a" * 64,
+            "Config": {
+                "User": f"{uid}:{gid}",
+                "Env": [
+                    f"FULLMAG_SESSION_STORAGE_PROFILE={profile}",
+                    f"FULLMAG_RUNTIME_UID={uid}",
+                    f"FULLMAG_RUNTIME_GID={gid}",
+                ],
+            },
+            "Mounts": [{
+                "Destination": "/opt/fullmag/runtime-control",
+                "Type": "volume",
+                "Name": volume,
+                "RW": True,
+            }],
+            "HostConfig": {"Mounts": [{
+                "Target": "/opt/fullmag/runtime-control",
+                "Type": "volume",
+                "Source": volume,
+                "ReadOnly": False,
+                "VolumeOptions": {"Subpath": "runtime-control"},
+            }]},
+        }
+
+    @staticmethod
+    def receipt_control(profile, uid, gid):
+        return SimpleNamespace(
+            project="fullmag-worktree-test",
+            runtime_identity={"profile": profile, "uid": uid, "gid": gid},
+        )
+
+    @staticmethod
+    def receipt_volume_inspection():
+        return SimpleNamespace(stdout=json.dumps([{
+            "Name": "fullmag-build-control-test",
+            "Driver": "local",
+            "Options": {},
+            "Labels": {"com.fullmag.compose.project": "fullmag-worktree-test"},
+        }]).encode())
+
+    def test_linux_receipt_probe_pins_endpoint_and_high_runtime_identity(self):
+        import docker_platform
+
+        profile, uid, gid = "linux-native-v1", 234567, 345678
+        backend = self.receipt_backend(profile, uid, gid)
+        control = self.receipt_control(profile, uid, gid)
+        receipt = SimpleNamespace(returncode=0, stdout=b'{"state":"drained"}', stderr=b"")
+        cleaned_environment = {"PATH": "/usr/bin"}
+        with patch.object(stop, "docker_capture", return_value=self.receipt_volume_inspection()), \
+             patch.object(stop, "bounded_capture", return_value=receipt) as capture, \
+             patch.object(docker_platform, "runtime_identity_record", return_value={
+                 "profile": profile, "uid": uid, "gid": gid,
+             }), \
+             patch.object(docker_platform, "docker_cli_prefix", return_value=[
+                 "docker", "--host", "unix:///run/user/234567/docker.sock",
+             ]) as prefix, \
+             patch.object(docker_platform, "docker_process_environment", return_value=cleaned_environment) as process_env:
+            raw, document = stop._read_terminal_process_receipt(backend, control)
+
+        self.assertEqual(document, {"state": "drained"})
+        self.assertEqual(raw, b'{"state":"drained"}')
+        command = capture.call_args.args[0]
+        self.assertEqual(command[:3], ["docker", "--host", "unix:///run/user/234567/docker.sock"])
+        self.assertIn("FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1", command)
+        self.assertIn("FULLMAG_RUNTIME_UID=234567", command)
+        self.assertIn("FULLMAG_RUNTIME_GID=345678", command)
+        self.assertIn("--user", command)
+        self.assertEqual(command[command.index("--user") + 1], "234567:345678")
+        self.assertIn(
+            "type=volume,src=fullmag-build-control-test,dst=/opt/fullmag/runtime-control,readonly,volume-subpath=runtime-control,volume-nocopy",
+            command,
+        )
+        self.assertIs(capture.call_args.kwargs["env"], cleaned_environment)
+        prefix.assert_called_once_with()
+        process_env.assert_called_once_with()
+
+    def test_windows_receipt_probe_keeps_desktop_context_and_default_identity(self):
+        import docker_platform
+
+        profile, uid, gid = "windows-folder-v1", 65532, 65532
+        backend = self.receipt_backend(profile, uid, gid)
+        # Compose's established Windows services rely on the UID/GID defaults
+        # and do not export these two variables into the backend container.
+        backend["Config"]["Env"] = ["FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1"]
+        control = self.receipt_control(profile, uid, gid)
+        receipt = SimpleNamespace(returncode=0, stdout=b'{"state":"drained"}', stderr=b"")
+        windows_environment = {"PATH": r"C:\Windows\System32", "DOCKER_HOST": "tcp://unused"}
+        with patch.object(stop, "docker_capture", return_value=self.receipt_volume_inspection()), \
+             patch.object(stop, "bounded_capture", return_value=receipt) as capture, \
+             patch.object(docker_platform, "runtime_identity_record", return_value={
+                 "profile": profile, "uid": uid, "gid": gid,
+             }), \
+             patch.object(docker_platform, "docker_cli_prefix", return_value=[
+                 "docker", "--context", "desktop-linux",
+             ]), \
+             patch.object(docker_platform, "docker_process_environment", return_value=windows_environment):
+            stop._read_terminal_process_receipt(backend, control)
+
+        command = capture.call_args.args[0]
+        self.assertEqual(command[:3], ["docker", "--context", "desktop-linux"])
+        self.assertIn("FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1", command)
+        self.assertIn("FULLMAG_RUNTIME_UID=65532", command)
+        self.assertIn("FULLMAG_RUNTIME_GID=65532", command)
+        self.assertEqual(command[command.index("--user") + 1], "65532:65532")
+        self.assertIs(capture.call_args.kwargs["env"], windows_environment)
+
+    def test_windows_runtime_identity_accepts_legacy_absent_ids_and_rejects_duplicates(self):
+        import docker_platform
+
+        profile, uid, gid = "windows-folder-v1", 65532, 65532
+        backend = self.receipt_backend(profile, uid, gid)
+        control = self.receipt_control(profile, uid, gid)
+        profile_env = "FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1"
+        backend["Config"]["Env"] = [profile_env]
+        with patch.object(docker_platform, "runtime_identity_record", return_value={
+            "profile": profile, "uid": uid, "gid": gid,
+        }):
+            self.assertEqual(stop._observed_runtime_identity(backend, control), (profile, uid, gid))
+            backend["Config"]["User"] = "1000:1000"
+            with self.assertRaises(stop.StopUnadmittedError):
+                stop._observed_runtime_identity(backend, control)
+            backend["Config"]["User"] = "65532:65532"
+            invalid_entries = (
+                ["FULLMAG_RUNTIME_UID=1000"],
+                ["FULLMAG_RUNTIME_GID=1000"],
+                ["FULLMAG_RUNTIME_UID=65532", "FULLMAG_RUNTIME_UID=65532"],
+                ["FULLMAG_RUNTIME_GID=65532", "FULLMAG_RUNTIME_GID=65532"],
+                [profile_env],
+            )
+            for invalid in invalid_entries:
+                with self.subTest(invalid=invalid):
+                    backend["Config"]["Env"] = [profile_env, *invalid]
+                    with self.assertRaises(stop.StopUnadmittedError):
+                        stop._observed_runtime_identity(backend, control)
+
+    def test_linux_runtime_identity_requires_one_canonical_uid_and_gid_entry(self):
+        import docker_platform
+
+        profile, uid, gid = "linux-native-v1", 234567, 345678
+        backend = self.receipt_backend(profile, uid, gid)
+        control = self.receipt_control(profile, uid, gid)
+        expected = [
+            "FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1",
+            f"FULLMAG_RUNTIME_UID={uid}",
+            f"FULLMAG_RUNTIME_GID={gid}",
+        ]
+        with patch.object(docker_platform, "runtime_identity_record", return_value={
+            "profile": profile, "uid": uid, "gid": gid,
+        }):
+            for invalid in (
+                [expected[0], expected[2]],
+                [expected[0], expected[1]],
+                [*expected, expected[1]],
+                [expected[0], f"FULLMAG_RUNTIME_UID=0{uid}", expected[2]],
+                [expected[0], expected[1], f"FULLMAG_RUNTIME_GID={gid + 1}"],
+            ):
+                with self.subTest(invalid=invalid):
+                    backend["Config"]["Env"] = invalid
+                    with self.assertRaises(stop.StopUnadmittedError):
+                        stop._observed_runtime_identity(backend, control)
+
+    def test_receipt_probe_refuses_identity_that_differs_from_host_or_backend(self):
+        import docker_platform
+
+        profile, uid, gid = "linux-native-v1", 123456, 234567
+        control = self.receipt_control(profile, uid, gid)
+        valid = self.receipt_backend(profile, uid, gid)
+        with patch.object(docker_platform, "runtime_identity_record", return_value={
+            "profile": profile, "uid": uid, "gid": gid,
+        }), patch.object(stop, "docker_capture") as docker:
+            foreign_user = self.receipt_backend(profile, uid + 1, gid)
+            with self.assertRaises(stop.StopUnadmittedError):
+                stop._runtime_control_validation_helper(foreign_user, control)
+            foreign_control = self.receipt_control(profile, uid + 1, gid)
+            with self.assertRaises(stop.StopUnadmittedError):
+                stop._runtime_control_validation_helper(valid, foreign_control)
+        docker.assert_not_called()
+
     def test_retained_attempt_pins_config_source_and_image(self):
         args = self.args()
         selected = Path("/checkout").resolve()

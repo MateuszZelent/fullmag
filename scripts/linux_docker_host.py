@@ -13,6 +13,7 @@ import fullmag_storage as storage
 PROFILE = "linux-native-v1"
 CERTIFICATE_TARGET = "/run/fullmag/host-admission/linux-native-host.json"
 _MAX_ID = 2**31 - 1
+TRANSIENT_ROOTS = tuple(Path(root) for root in ("/tmp", "/var/tmp", "/run", "/dev/shm"))
 
 
 def _require_linux() -> None:
@@ -47,6 +48,8 @@ def runtime_identity(environment=None) -> tuple[int, int]:
 def local_volume(path):
     _require_linux()
     path = storage.absolute(path, "native Linux path")
+    if any(path == root or root in path.parents for root in TRANSIENT_ROOTS):
+        raise ValueError("Native Docker storage requires a persistent path outside temporary roots")
     try:
         metadata = path.stat()
     except OSError as error:

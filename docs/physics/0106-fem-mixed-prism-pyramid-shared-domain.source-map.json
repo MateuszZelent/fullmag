@@ -836,8 +836,8 @@
       "id": "exact-rings-source",
       "path": "examples/permalloy_layer_cofeb_rings_relax_300nm.py",
       "symbol": "study",
-      "responsibility": "Acceptance fixture for the planned positive-gap multi-body workload: one swept prism layer and one disconnected tet4 CoFeB ring with body-specific material and initial-state assignments.",
-      "evidence_status": "planned_source_fixture_currently_rejected"
+      "responsibility": "Canonical source-contract fixture for the implemented v2 positive-gap multi-body workload: one swept prism layer and one disconnected tet4 CoFeB ring with body-specific material and initial-state assignments.",
+      "evidence_status": "source_contract_implemented_runtime_and_physics_not_verified"
     },
     {
       "id": "body-material-authoring",

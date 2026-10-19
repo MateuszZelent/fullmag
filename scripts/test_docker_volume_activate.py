@@ -18,14 +18,30 @@ from docker_build_control import BuildControlError
 
 
 class DockerVolumeActivationTests(unittest.TestCase):
-    def test_default_request_fence_is_stable_and_bounded(self) -> None:
+    def test_default_request_fence_is_fresh_and_namespaced(self) -> None:
         attempt = "a" * 32
         digest = "b" * 64
         helper = SimpleNamespace(StartupScriptError=ValueError)
         first = activate._request_id(helper, attempt, digest, None)
-        self.assertEqual(first, activate._request_id(helper, attempt, digest, None))
-        self.assertLessEqual(len(first), 128)
-        self.assertEqual(first, "docker-volume-" + attempt + "-" + digest[:16])
+        second = activate._request_id(helper, attempt, digest, None)
+        self.assertNotEqual(first, second)
+        self.assertRegex(first, r"^docker-volume-[0-9a-f]{32}$")
+        self.assertRegex(second, r"^docker-volume-[0-9a-f]{32}$")
+
+    def test_explicit_request_fence_is_validated_and_preserved(self) -> None:
+        explicit = "operator-request-42"
+        validated = []
+
+        def validate(value):
+            validated.append(value)
+            return value
+
+        helper = SimpleNamespace(StartupScriptError=ValueError, _validate_request_id=validate)
+        self.assertEqual(
+            activate._request_id(helper, "a" * 32, "b" * 64, explicit),
+            explicit,
+        )
+        self.assertEqual(validated, [explicit])
 
     def test_selected_helper_loader_uses_selected_prepare_contract(self) -> None:
         """The worktree helper must supply prepare, even if the main helper differs."""
@@ -424,6 +440,138 @@ class DockerVolumeActivationTests(unittest.TestCase):
             with self.assertRaises(BuildControlError):
                 activate._validate_running_group(
                     control, identity, document, terminal, backend_image
+                )
+
+    def test_linux_linked_receipts_preserve_selected_host_identity(self) -> None:
+        control, original_attempt, original, linked, config_sha256, image, _documents = (
+            self._linked_receipt_fixture()
+        )
+        docker_host = {
+            "profile": "linux-native-v1",
+            "selection": "context",
+            "context_name": "local",
+            "endpoint": "unix:///run/user/1000/docker.sock",
+            "daemon_id": "engine-1",
+        }
+        runtime_identity = {"uid": 1000, "gid": 1000}
+        owner_token = "11111111-1111-4111-8111-111111111111"
+        original.update(
+            storage_profile="linux-native-v1",
+            docker_host=docker_host,
+            runtime_identity=runtime_identity,
+            owner_token=owner_token,
+        )
+        linked.update(
+            storage_profile="linux-native-v1",
+            docker_host=copy.deepcopy(docker_host),
+            runtime_identity=runtime_identity,
+            owner_token=owner_token,
+        )
+        expected = {
+            "storage_profile": "linux-native-v1",
+            "docker_host": docker_host,
+            "runtime_identity": runtime_identity,
+        }
+        activate._validate_linked_runtime_terminal(
+            linked,
+            phase="resume",
+            original_attempt=original_attempt,
+            original=original,
+            source_root=original["inputs"]["source_root"],
+            image=image,
+            config_sha256=config_sha256,
+            expected_host_identity=expected,
+        )
+        linked["docker_host"]["endpoint"] = "unix:///run/user/1001/docker.sock"
+        with self.assertRaisesRegex(BuildControlError, "docker_host"):
+            activate._validate_linked_runtime_terminal(
+                linked,
+                phase="resume",
+                original_attempt=original_attempt,
+                original=original,
+                source_root=original["inputs"]["source_root"],
+                image=image,
+                config_sha256=config_sha256,
+                expected_host_identity=expected,
+            )
+
+    def test_activation_host_gate_pins_linux_identity(self) -> None:
+        import docker_platform
+        import docker_volume_dev
+        import docker_dev
+
+        host = {
+            "profile": "linux-native-v1",
+            "selection": "context",
+            "context_name": "local",
+            "endpoint": "unix:///run/user/1000/docker.sock",
+            "daemon_id": "engine-1",
+        }
+        with patch.object(docker_dev, "_require_managed_dev_host") as gate, \
+                patch.object(docker_platform, "host_profile", return_value="linux-native-v1"), \
+                patch.object(docker_platform, "runtime_identity_record", return_value={
+                    "profile": "linux-native-v1", "uid": 1000, "gid": 1000,
+                }), \
+                patch.object(docker_volume_dev, "_current_docker_host", return_value=host):
+            profile, selected_host, identity = activate._managed_host_identity()
+        gate.assert_called_once_with()
+        self.assertEqual(profile, "linux-native-v1")
+        self.assertEqual(selected_host, host)
+        self.assertEqual(identity["runtime_identity"], {"uid": 1000, "gid": 1000})
+
+    def test_linux_activation_requires_verified_certificate_receipt(self) -> None:
+        certificate = {
+            "schema": "fullmag.linux-native-host-certificate.v1",
+            "storage_profile": "linux-native-v1",
+            "restart_verified": True,
+            "owner_token": "11111111-1111-4111-8111-111111111111",
+            "source_commit": "a" * 40,
+            "binary_hashes": {"fullmag-api": "b" * 64},
+            "artifact_receipt_sha256": "c" * 64,
+            "development_build": {
+                "schema": "fullmag.linux-native-development-build.v1",
+            },
+        }
+        docker_host = {
+            "profile": "linux-native-v1", "selection": "context",
+            "context_name": "local", "endpoint": "unix:///run/user/1000/docker.sock",
+            "daemon_id": "engine-1",
+        }
+        runtime_identity = {"uid": 1000, "gid": 1000}
+        terminal = {
+            "state_root": "/tmp/fullmag/state",
+            "storage_profile": "linux-native-v1",
+            "docker_host": docker_host,
+            "runtime_identity": runtime_identity,
+            "owner_token": certificate["owner_token"],
+            "host_certificate_sha256": "d" * 64,
+            "linux_native_certificate_sha256": hashlib.sha256(
+                activate.canonical(certificate)
+            ).hexdigest(),
+        }
+        loaded = (Path("/tmp/fullmag/state"), Path("/tmp/fullmag/cert"),
+                  Path("/tmp/fullmag/owner"), certificate)
+        with patch("docker_volume_dev._load_retained_storage", return_value=loaded):
+            result = activate._validate_activation_storage_admission(
+                {"runtime_root": Path("/tmp/fullmag")}, terminal,
+                image="sha256:" + "e" * 64,
+                profile="linux-native-v1",
+                docker_host=docker_host,
+                runtime_identity=runtime_identity,
+            )
+        self.assertEqual(result["certificate"], certificate)
+        certificate["restart_verified"] = False
+        terminal["linux_native_certificate_sha256"] = hashlib.sha256(
+            activate.canonical(certificate)
+        ).hexdigest()
+        with patch("docker_volume_dev._load_retained_storage", return_value=loaded):
+            with self.assertRaisesRegex(BuildControlError, "restart admission"):
+                activate._validate_activation_storage_admission(
+                    {"runtime_root": Path("/tmp/fullmag")}, terminal,
+                    image="sha256:" + "e" * 64,
+                    profile="linux-native-v1",
+                    docker_host=docker_host,
+                    runtime_identity=runtime_identity,
                 )
 
     def test_retained_group_accepts_distinct_backend_and_frontend_images(self) -> None:

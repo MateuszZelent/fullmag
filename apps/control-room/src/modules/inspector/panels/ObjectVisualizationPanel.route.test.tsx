@@ -700,16 +700,18 @@ describe("ObjectVisualizationPanel lane routing", () => {
     const html = renderToStaticMarkup(<ObjectVisualizationPanel selection={selection} />);
 
     expect(html).not.toContain("Structured grid cells");
-    // Owner identity must still resolve independently of the numerical lane.
+    // An explicit object visualization remains addressable while the lane is
+    // pending, but lane-specific resources stay disabled until status resolves.
+    expect(html).toContain("Target ID:object:film");
     expect(testState.resourceCalls.find((call) => call.name === "scene")).toMatchObject({
       enabled: true,
     });
-    for (const name of [
-      "domain-meta",
-      "fdm-membership",
-      "visualization-state",
-      "shared-domain-manifest",
-    ]) {
+    expect(
+      testState.resourceCalls.find((call) => call.name === "visualization-state"),
+    ).toMatchObject({
+      enabled: true,
+    });
+    for (const name of ["domain-meta", "fdm-membership", "shared-domain-manifest"]) {
       expect(testState.resourceCalls.find((call) => call.name === name)).toMatchObject({
         enabled: false,
       });

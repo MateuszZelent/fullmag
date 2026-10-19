@@ -701,6 +701,30 @@ def _docker_engine_id() -> str:
     return output
 
 
+def _managed_host_context(expected_docker_host=None):
+    """Return the managed host profile, runtime identity and pinned daemon."""
+
+    import docker_platform
+    from docker_volume_dev import _current_docker_host
+
+    try:
+        profile = docker_platform.host_profile()
+        identity = docker_platform.runtime_identity_record()
+        docker_host = _current_docker_host()
+    except Exception as error:
+        _fail("Cannot prove the selected managed Docker host: " + str(error))
+    if identity.get("profile") != profile:
+        _fail("Docker runtime identity profile differs from the selected host")
+    uid, gid = identity.get("uid"), identity.get("gid")
+    if type(uid) is not int or uid <= 0 or type(gid) is not int or gid <= 0:
+        _fail("Selected managed host has an invalid runtime UID/GID")
+    if not isinstance(docker_host, Mapping) or docker_host.get("profile") != profile:
+        _fail("Selected Docker endpoint differs from the managed host profile")
+    if expected_docker_host is not None and dict(docker_host) != dict(expected_docker_host):
+        _fail("Selected Docker endpoint or daemon changed during recovery")
+    return profile, {"uid": uid, "gid": gid}, dict(docker_host)
+
+
 def _bind_source(container: Mapping[str, object], destination: str) -> str:
     mounts = container.get("Mounts")
     if not isinstance(mounts, list):
@@ -721,10 +745,16 @@ def _bind_source(container: Mapping[str, object], destination: str) -> str:
 
 
 def _ledger_and_store_snapshot(
-    control: BuildControl, backend: Mapping[str, object]
-) -> dict[str, str]:
+    control: BuildControl,
+    backend: Mapping[str, object],
+    *,
+    expected_docker_host=None,
+) -> dict[str, object]:
     """Read the exact accepted store and shared ledger through an isolated helper."""
 
+    import docker_platform
+
+    profile, identity, docker_host = _managed_host_context(expected_docker_host)
     state_source = _bind_source(backend, "/state")
     ledger_source = _bind_source(backend, "/host-ledger")
     script = r'''import fcntl, hashlib, json, os, pathlib, time
@@ -777,7 +807,7 @@ for current, directories, files in os.walk(store, topdown=True, followlinks=Fals
         if path.is_symlink() or not path.is_file(): raise RuntimeError('accepted store contains an invalid file')
         if name in {'run_intent.json','run_catalog.json'}: records.append(str(path.relative_to(store)))
 if records: raise RuntimeError('accepted store contains admitted run records')
-print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':records},sort_keys=True))
+print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':records,'runtime_uid':os.geteuid(),'runtime_gid':os.getegid()},sort_keys=True))
 '''
     image = backend.get("Image")
     if not isinstance(image, str) or IMAGE_RE.fullmatch(image) is None:
@@ -787,7 +817,7 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
     # the store/ledger readers.  The script is passed as Python argv, never as
     # a shell program, so the probe cannot accidentally execute through bash.
     args = [
-        "docker", "--context", "desktop-linux", "run", "--rm", "-i",
+        *docker_platform.docker_cli_prefix(), "run", "--rm", "-i",
         "--pull", "never", "--network", "none", "--runtime", "runc",
         "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges:true", "--pids-limit", "32",
@@ -798,10 +828,13 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         "--label", f"org.fullmag.compose.project={control.project}",
         "--mount", f"type=bind,src={state_source},dst=/state,readonly",
         "--mount", f"type=bind,src={ledger_source},dst=/host-ledger,readonly",
-        "--user", "65532:65532", "--entrypoint", "/usr/local/bin/python3",
+        "--user", f"{identity['uid']}:{identity['gid']}",
+        "--entrypoint", "/usr/local/bin/python3",
         image, "-B", "-c", script,
     ]
-    result = bounded_capture(args, data=b"", timeout=90)
+    result = bounded_capture(
+        args, data=b"", timeout=90, env=docker_platform.docker_environment()
+    )
     if result.returncode:
         _fail("accepted store/ledger proof failed: " + result.stderr.decode("utf-8", "replace")[-4096:])
     try:
@@ -814,6 +847,10 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         _require_sha(value.get(key), f"storage proof {key}")
     if value.get("run_records") != []:
         _fail("accepted store/ledger proof contains run records")
+    if (value.get("runtime_uid") != identity["uid"]
+            or value.get("runtime_gid") != identity["gid"]):
+        _fail("accepted store/ledger proof ran under another runtime UID/GID")
+    _managed_host_context(docker_host)
     return dict(value)
 
 
@@ -1187,10 +1224,113 @@ def _validate_owner_host(owner: Mapping[str, object], backend: Mapping[str, obje
         _fail("backend hostname does not bind the native owner host")
 
 
+def _validate_linux_certificate_build(certificate, operation):
+    """Require the retained Linux admission proof to match its successful receipt."""
+
+    delegation = certificate.get("development_build")
+    binaries = certificate.get("binary_hashes")
+    source_commit = certificate.get("source_commit")
+    artifact_sha = certificate.get("artifact_receipt_sha256")
+    if (certificate.get("restart_verified") is not True
+            or not isinstance(delegation, Mapping)
+            or delegation.get("schema") != "fullmag.linux-native-development-build.v1"
+            or not isinstance(binaries, Mapping) or not binaries
+            or any(not isinstance(value, str) or SHA256_RE.fullmatch(value) is None
+                   for value in binaries.values())
+            or not isinstance(source_commit, str)
+            or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+            or not isinstance(artifact_sha, str) or SHA256_RE.fullmatch(artifact_sha) is None):
+        _fail("retained Linux certificate lacks verified build/delegation proof")
+    certificate_sha = _sha256(_canonical(certificate))
+    if operation.get("linux_native_certificate_sha256") != certificate_sha:
+        _fail("retained Linux certificate differs from its canonical operation receipt")
+
+
 def _validate_reused_session_before_removal(
-    layout: Mapping[str, object], state_root: object, old_image_id: str, engine_id: str
+    layout: Mapping[str, object],
+    state_root: object,
+    old_image_id: str,
+    engine_id: str,
+    *,
+    operation: Mapping[str, object] | None = None,
+    expected_docker_host: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Validate the existing Windows session before any old container removal."""
+    """Validate the existing native session before any old container removal."""
+
+    import docker_platform
+
+    profile = docker_platform.host_profile()
+    if profile == "linux-native-v1":
+        if not isinstance(operation, Mapping):
+            _fail("retained Linux session has no pinned development operation receipt")
+        try:
+            current_profile, runtime_identity, docker_host = _managed_host_context(
+                expected_docker_host
+            )
+        except ContainerRecoveryError:
+            raise
+        if current_profile != "linux-native-v1" or docker_host.get("daemon_id") != engine_id:
+            _fail("retained Linux session belongs to another local Docker daemon")
+        if str(state_root) != operation.get("state_root"):
+            _fail("retained Linux state root differs from its development receipt")
+        expected_identity = {
+            "storage_profile": current_profile,
+            "docker_host": docker_host,
+            "runtime_identity": runtime_identity,
+        }
+        inputs = operation.get("inputs")
+        if not isinstance(inputs, Mapping):
+            _fail("retained Linux session has no immutable operation inputs")
+        input_identity = {
+            "storage_profile": current_profile,
+            "runtime_identity": runtime_identity,
+        }
+        if "docker_host" in inputs:
+            input_identity["docker_host"] = docker_host
+        for record, label, identity_fields in (
+            (operation, "receipt", expected_identity),
+            (inputs, "inputs", input_identity),
+        ):
+            for key, value in identity_fields.items():
+                if record.get(key) != value:
+                    _fail("retained Linux session " + label + " " + key + " differs from this host")
+        try:
+            from docker_volume_dev import _load_retained_storage
+
+            state, certificate_path, owner_marker, certificate = _load_retained_storage(
+                layout, operation, current_profile, old_image_id, docker_host
+            )
+        except (OSError, KeyError, TypeError, ValueError, RuntimeError) as error:
+            if isinstance(error, ContainerRecoveryError):
+                raise
+            _fail("retained Linux storage proof is unavailable before removal: " + str(error))
+        _validate_linux_certificate_build(certificate, operation)
+        return {
+            "state": state,
+            "host_certificate": certificate_path,
+            "owner_marker": owner_marker,
+            "certificate": certificate,
+        }
+
+    if profile != "windows-folder-v1":
+        _fail("container recovery requires a managed Windows or Linux host")
+    if expected_docker_host is not None:
+        try:
+            current_profile, runtime_identity, docker_host = _managed_host_context(
+                expected_docker_host
+            )
+        except ContainerRecoveryError:
+            raise
+        if current_profile != profile or docker_host.get("daemon_id") != engine_id:
+            _fail("retained Windows session belongs to another Docker daemon")
+        if isinstance(operation, Mapping):
+            for key, value in (
+                ("storage_profile", profile),
+                ("docker_host", docker_host),
+                ("runtime_identity", runtime_identity),
+            ):
+                if operation.get(key) is not None and operation.get(key) != value:
+                    _fail("retained Windows session " + key + " differs from the selected host")
 
     try:
         state = storage.validate_path(
@@ -1261,6 +1401,10 @@ def _revalidate_recovery_boundary(
     project: str,
     compose: Mapping[str, object],
     *,
+    layout: Mapping[str, object],
+    expected_terminal: Mapping[str, object],
+    expected_docker_host: Mapping[str, object],
+    old_image_id: str,
     expected_backend: Mapping[str, object],
     expected_frontend: Mapping[str, object],
     expected_owner: Mapping[str, object],
@@ -1298,6 +1442,8 @@ def _revalidate_recovery_boundary(
         _fail("retained Compose document changed before the destructive boundary")
     if terminal.get("phase") != "development" or terminal.get("attempt") != attempt:
         _fail("retained development attempt changed before the destructive boundary")
+    if canonical(terminal) != canonical(expected_terminal):
+        _fail("retained development receipt changed before the destructive boundary")
     _validate_pre_admission_stop_journal(journal, authorization, attempt)
 
     current_transition = _load_recovery_transition(
@@ -1353,7 +1499,18 @@ def _revalidate_recovery_boundary(
     device_release, device_mapping = _device_release_from_config(
         runtime_config, device_access=old_access
     )
+    _, _, docker_host = _managed_host_context(expected_docker_host)
     engine_id = _docker_engine_id()
+    if docker_host.get("daemon_id") != engine_id:
+        _fail("Docker engine identity changed before the destructive boundary")
+    _validate_reused_session_before_removal(
+        layout,
+        terminal.get("state_root"),
+        old_image_id,
+        engine_id,
+        operation=terminal,
+        expected_docker_host=docker_host,
+    )
     engine_sha = _sha256(engine_id.encode("utf-8"))
     pins = (
         current_transition["pins"]
@@ -1374,7 +1531,9 @@ def _revalidate_recovery_boundary(
         _fail("Docker container images changed before the destructive boundary")
     if backend.get("Id") != expected_backend.get("Id") or frontend.get("Id") != expected_frontend.get("Id"):
         _fail("Docker inspection identities changed before the destructive boundary")
-    storage_proof = _ledger_and_store_snapshot(control, pinned_backend)
+    storage_proof = _ledger_and_store_snapshot(
+        control, pinned_backend, expected_docker_host=docker_host
+    )
     for key in ("store_root_sha256", "ledger_root_sha256", "ledger_snapshot_sha256"):
         if storage_proof.get(key) != expected_storage.get(key):
             _fail(f"storage proof {key} changed before the destructive boundary")
@@ -1393,6 +1552,7 @@ def _revalidate_recovery_boundary(
         "device_release": device_release,
         "device_mapping": device_mapping,
         "engine_id": engine_id,
+        "docker_host": docker_host,
         "engine_sha": engine_sha,
         "pins": pins,
         "storage_proof": storage_proof,
@@ -1518,12 +1678,20 @@ def recover(args: argparse.Namespace) -> None:
     the request/manifest are published before the exact old IDs are removed.
     """
 
-    from docker_dev import _compose_identity, _select_source, _resolve_gpu_access, _verify_docker_gpu_access
+    from docker_dev import (
+        _compose_identity,
+        _require_managed_dev_host,
+        _resolve_gpu_access,
+        _select_source,
+        _verify_docker_gpu_access,
+    )
     from docker_volume_dev import (
         _operator_probe_record_from_retained,
         _validate_recovery_metadata,
         start,
     )
+    _require_managed_dev_host()
+    host_profile, runtime_identity, docker_host = _managed_host_context()
     authorization_reference = getattr(args, "recovery_authorization", None)
     if not isinstance(authorization_reference, str):
         _fail(f"{AUTHORIZATION_ENV} is required")
@@ -1570,6 +1738,15 @@ def recover(args: argparse.Namespace) -> None:
         _fail("retained attempt is not the selected development operation")
     if compose.get("name") != control.project:
         _fail("retained Compose document belongs to another project")
+    old_image_id = authorization["old_image_id"]
+    _validate_reused_session_before_removal(
+        layout,
+        terminal.get("state_root"),
+        old_image_id,
+        docker_host.get("daemon_id"),
+        operation=terminal,
+        expected_docker_host=docker_host,
+    )
     transition = _load_recovery_transition(
         control, authorization, control.project, compose
     )
@@ -1602,7 +1779,10 @@ def recover(args: argparse.Namespace) -> None:
     device_release, device_mapping = _device_release_from_config(
         runtime_config, device_access=old_access
     )
-    engine_sha = _docker_engine_sha()
+    engine_id = _docker_engine_id()
+    if docker_host.get("daemon_id") != engine_id:
+        _fail("Docker engine identity changed during recovery admission")
+    engine_sha = _sha256(engine_id.encode("utf-8"))
     pins = transition["pins"] if transition is not None else [
         _container_pin(backend, "backend", control.project),
         _container_pin(frontend, "frontend", control.project),
@@ -1614,7 +1794,9 @@ def recover(args: argparse.Namespace) -> None:
         or pins[1]["image_id"] != authorization["old_image_id"]
     ):
         _fail("Docker container pins changed since authorization")
-    storage_proof = _ledger_and_store_snapshot(control, backend)
+    storage_proof = _ledger_and_store_snapshot(
+        control, backend, expected_docker_host=docker_host
+    )
     manifest = transition["manifest"] if transition is not None else _manifest(
         authorization, engine_sha, backend, frontend, pins, device_release, device_mapping
     )
@@ -1655,6 +1837,9 @@ def recover(args: argparse.Namespace) -> None:
             "old_image_id": authorization["old_image_id"],
         },
     }
+    if host_profile == "linux-native-v1":
+        operation_inputs["storage_profile"] = host_profile
+        operation_inputs["runtime_identity"] = runtime_identity
     with control.operation("development", operation_inputs) as operation:
         fresh = _revalidate_recovery_boundary(
             control,
@@ -1662,6 +1847,10 @@ def recover(args: argparse.Namespace) -> None:
             attempt,
             control.project,
             compose,
+            layout=layout,
+            expected_terminal=terminal,
+            expected_docker_host=docker_host,
+            old_image_id=old_image_id,
             expected_backend=backend,
             expected_frontend=frontend,
             expected_owner=owner,
@@ -1684,14 +1873,18 @@ def recover(args: argparse.Namespace) -> None:
         device_mapping = fresh["device_mapping"]
         engine_id = fresh["engine_id"]
         engine_sha = fresh["engine_sha"]
+        if fresh["docker_host"] != docker_host:
+            _fail("Docker endpoint identity changed before the destructive boundary")
         pins = fresh["pins"]
         storage_proof = fresh["storage_proof"]
         transition = fresh["transition"]
         retained_session = _validate_reused_session_before_removal(
             layout,
             terminal.get("state_root"),
-            authorization["old_image_id"],
+            old_image_id,
             engine_id,
+            operation=terminal,
+            expected_docker_host=docker_host,
         )
         transition_root = f"{RECOVERY_RELATIVE_ROOT}/{authorization['request_id']}"
         if transition is None:
@@ -1778,6 +1971,21 @@ def recover(args: argparse.Namespace) -> None:
                 else [backend, frontend]
             )
             if remaining:
+                current_terminal, _ = _control_json(
+                    control, f"development/attempts/{attempt}/terminal.json"
+                )
+                if (current_terminal is None
+                        or canonical(current_terminal) != canonical(terminal)):
+                    _fail("retained development receipt changed immediately before container removal")
+                _managed_host_context(docker_host)
+                _validate_reused_session_before_removal(
+                    layout,
+                    current_terminal.get("state_root"),
+                    old_image_id,
+                    _docker_engine_id(),
+                    operation=current_terminal,
+                    expected_docker_host=docker_host,
+                )
                 docker_capture("rm", *[item["Id"] for item in remaining], timeout=120)
             for pin in pins:
                 _assert_container_absent(pin["container_id"])

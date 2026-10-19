@@ -123,6 +123,7 @@ jobs:
         env:
           RUST_MIN_STACK: 8388608
         run: |
+          cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
@@ -779,6 +780,13 @@ jobs:
           python -B scripts/test_docker_container_runtime_recovery.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
+          python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
+          python -B scripts/test_docker_volume_readiness_receipt.py -v
+          python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_native_failed_recreate.py -v
+          python -B scripts/test_docker_retained_recovery_context.py -v
+          python -B scripts/test_runtime_service_successor.py -v
+          python -B scripts/test_runtime_service_recovery_busy_retry.py -v
           python -B scripts/test_docker_dev_owned_control.py -v
           python -B scripts/test_docker_volume_receipts.py -v
           python -B scripts/test_docker_volume_stop_unadmitted.py -v

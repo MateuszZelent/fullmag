@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from pathlib import Path, PurePath, PurePosixPath
 import re
 import sys
+import uuid
 
 import fullmag_storage as storage
 from docker_build_control import (
@@ -122,7 +123,7 @@ def _request_id(startup_helper, attempt: str, source_sha256: str, explicit: str 
             return startup_helper._validate_request_id(explicit)
         except _helper_error_type(startup_helper) as error:
             raise BuildControlError(str(error)) from error
-    return f"docker-volume-{attempt}-{source_sha256[:16]}"
+    return "docker-volume-" + uuid.uuid4().hex
 
 
 def _authorization_bytes(startup_helper, authorization: Mapping[str, object]) -> bytes:
@@ -317,6 +318,7 @@ def _validate_linked_runtime_terminal(
     source_root: str,
     image: str,
     config_sha256: str,
+    expected_host_identity: Mapping[str, object] | None = None,
 ) -> None:
     if not isinstance(terminal, Mapping):
         raise BuildControlError("Linked runtime terminal is not an object")
@@ -369,6 +371,21 @@ def _validate_linked_runtime_terminal(
         if key in original and terminal.get(key) != original.get(key):
             raise BuildControlError("Linked runtime terminal " + key + " differs")
 
+    if original.get("storage_profile") == "linux-native-v1":
+        for key in ("storage_profile", "docker_host", "runtime_identity", "owner_token"):
+            value = original.get(key)
+            if value is None or terminal.get(key) != value:
+                raise BuildControlError("Linked Linux runtime terminal " + key + " differs")
+            if (expected_host_identity is not None and key in expected_host_identity
+                    and value != expected_host_identity.get(key)):
+                raise BuildControlError("Linked Linux runtime terminal " + key + " differs from the selected host")
+    elif expected_host_identity is not None:
+        for key in ("storage_profile", "docker_host", "runtime_identity"):
+            value = original.get(key)
+            expected = expected_host_identity.get(key)
+            if value is not None and value != expected:
+                raise BuildControlError("Retained runtime terminal " + key + " differs from the selected host")
+
 
 def _linked_runtime_terminals(
     control: BuildControl,
@@ -378,6 +395,7 @@ def _linked_runtime_terminals(
     source_root: str,
     image: str,
     config_sha256: str,
+    expected_host_identity: Mapping[str, object] | None = None,
 ) -> list[Mapping[str, object]]:
     if not isinstance(original, Mapping):
         raise BuildControlError("Original DEV terminal is not an object")
@@ -422,6 +440,7 @@ def _linked_runtime_terminals(
             source_root=source_root,
             image=image,
             config_sha256=config_sha256,
+            expected_host_identity=expected_host_identity,
         )
         linked.append(terminal)
     if not linked:
@@ -480,7 +499,8 @@ def _run_fixed_activation(
         return value
     if value is not None and value.get("state") == "unknown":
         raise ControlOutcomeUnknown(
-            "Startup activation outcome is unknown; activation.json prevents retry"
+            "Startup activation outcome is unknown; activation.json prevents retry: "
+            + str(value.get("error", "No diagnostic supplied"))[-4096:]
         )
     marker = docker_capture(
         "exec",
@@ -493,7 +513,8 @@ def _run_fixed_activation(
     )
     if marker.returncode == 0:
         raise ControlOutcomeUnknown(
-            "Backend activation failed after publishing activation.json; retry is forbidden"
+            "Backend activation failed after publishing activation.json; retry is forbidden: "
+            + output.decode("utf-8", "replace")[-4096:]
         )
     detail = output.decode("utf-8", "replace")[-4096:]
     raise BuildControlError(f"Backend activation wrapper failed: {detail}")
@@ -512,9 +533,10 @@ def _activation_operation_inputs(
     backend_container: str,
     activation_receipt_key: str,
     activation_receipt_path: str,
-) -> dict[str, str]:
+    host_identity: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Build activation inputs without colliding with operation.attempt."""
-    return {
+    result: dict[str, object] = {
         "development_attempt": development_attempt,
         "config_sha256": config_sha256,
         "source_root": source_root,
@@ -526,6 +548,120 @@ def _activation_operation_inputs(
         "backend_container": backend_container,
         "activation_receipt_key": activation_receipt_key,
         "activation_receipt_path": activation_receipt_path,
+    }
+    if host_identity is not None:
+        result.update(host_identity)
+    return result
+
+
+def _managed_host_identity() -> tuple[str, dict[str, object], dict[str, object]]:
+    """Admit and pin the managed Docker endpoint and runtime identity."""
+
+    from docker_dev import _require_managed_dev_host
+    import docker_platform
+    from docker_volume_dev import _current_docker_host
+
+    _require_managed_dev_host()
+    try:
+        profile = docker_platform.host_profile()
+        runtime = docker_platform.runtime_identity_record()
+        docker_host = _current_docker_host()
+    except Exception as error:
+        raise BuildControlError("Cannot prove the selected managed Docker host: " + str(error)) from error
+    if runtime.get("profile") != profile:
+        raise BuildControlError("Runtime identity profile differs from the selected host")
+    uid, gid = runtime.get("uid"), runtime.get("gid")
+    if (type(uid) is not int or uid <= 0 or type(gid) is not int or gid <= 0):
+        raise BuildControlError("Selected managed host has an invalid runtime UID/GID")
+    if not isinstance(docker_host, Mapping) or docker_host.get("profile") != profile:
+        raise BuildControlError("Selected Docker endpoint differs from the managed host profile")
+    expected: dict[str, object] = {
+        "storage_profile": profile,
+        "docker_host": dict(docker_host),
+        "runtime_identity": {"uid": uid, "gid": gid},
+    }
+    return profile, dict(docker_host), expected
+
+
+def _validate_activation_storage_admission(
+    layout: Mapping[str, object],
+    terminal: Mapping[str, object],
+    *,
+    image: str,
+    profile: str,
+    docker_host: Mapping[str, object],
+    runtime_identity: Mapping[str, int],
+) -> dict[str, object]:
+    """Validate retained host ownership before writing activation provenance."""
+
+    from docker_volume_dev import _load_retained_storage
+
+    expected_identity = {
+        "storage_profile": profile,
+        "docker_host": dict(docker_host),
+        "runtime_identity": dict(runtime_identity),
+    }
+    for key, value in expected_identity.items():
+        observed = terminal.get(key)
+        if profile == "linux-native-v1" and observed != value:
+            raise BuildControlError("Retained Linux activation " + key + " differs from the selected host")
+        if observed is not None and observed != value:
+            raise BuildControlError("Retained activation " + key + " differs from the selected host")
+
+    try:
+        state, certificate_path, owner_path, certificate = _load_retained_storage(
+            layout, terminal, profile, image, dict(docker_host)
+        )
+    except (OSError, KeyError, TypeError, ValueError, RuntimeError, storage.StorageError) as error:
+        if isinstance(error, BuildControlError):
+            raise
+        raise BuildControlError("Retained activation storage admission failed: " + str(error)) from error
+
+    if profile == "linux-native-v1":
+        if certificate.get("restart_verified") is not True:
+            raise BuildControlError("Retained Linux storage has no verified restart admission")
+        delegation = certificate.get("development_build")
+        binaries = certificate.get("binary_hashes")
+        if (not isinstance(delegation, Mapping)
+                or delegation.get("schema") != "fullmag.linux-native-development-build.v1"
+                or not isinstance(binaries, Mapping) or not binaries
+                or any(not isinstance(value, str) or not SHA256_RE.fullmatch(value)
+                       for value in binaries.values())
+                or not isinstance(certificate.get("source_commit"), str)
+                or not re.fullmatch(r"[0-9a-f]{40}", certificate["source_commit"])
+                or not isinstance(certificate.get("artifact_receipt_sha256"), str)
+                or not SHA256_RE.fullmatch(certificate["artifact_receipt_sha256"])):
+            raise BuildControlError("Retained Linux certificate has incomplete build/delegation proof")
+        if terminal.get("linux_native_certificate_sha256") != hashlib.sha256(
+            canonical(certificate)
+        ).hexdigest():
+            raise BuildControlError("Retained Linux certificate differs from its canonical operation receipt")
+    else:
+        from windows_folder_host import HOST_SCHEMA, local_volume
+
+        native = local_volume(state)
+        owner = certificate.get("owner_token")
+        try:
+            parsed_owner = uuid.UUID(str(owner))
+        except (ValueError, TypeError, AttributeError) as error:
+            raise BuildControlError("Retained Windows storage owner token is invalid") from error
+        if (parsed_owner.int == 0 or str(parsed_owner) != owner
+                or certificate.get("schema") != HOST_SCHEMA
+                or certificate.get("storage_profile") != "windows-folder-v1"
+                or certificate.get("role") != "session"
+                or certificate.get("owner_scope") != "docker-desktop-linux"
+                or certificate.get("engine_id") != docker_host.get("daemon_id")
+                or certificate.get("image_id") != image
+                or any(certificate.get(field) != native.get(field) for field in (
+                    "host_root", "host_filesystem", "host_drive_type",
+                    "host_volume_serial", "host_root_no_reparse",
+                ))):
+            raise BuildControlError("Retained Windows storage certificate differs from the current host")
+    return {
+        "state": state,
+        "host_certificate": certificate_path,
+        "owner_marker": owner_path,
+        "certificate": certificate,
     }
 
 
@@ -551,9 +687,9 @@ def _record_activation_result(operation: dict[str, object], result: Mapping[str,
 
 
 def activate(args: argparse.Namespace) -> None:
-    from docker_dev import _compose_identity, _require_native_windows, _select_source
+    from docker_dev import _compose_identity, _select_source
 
-    _require_native_windows()
+    profile, docker_host, host_identity = _managed_host_identity()
     if not ATTEMPT_RE.fullmatch(args.attempt):
         raise BuildControlError("Script activation requires an exact attempt UUID")
     if not SHA256_RE.fullmatch(args.config_sha256):
@@ -592,21 +728,32 @@ def activate(args: argparse.Namespace) -> None:
         source_root=str(selected),
         image=image,
         config_sha256=args.config_sha256,
+        expected_host_identity=host_identity,
     )
     backend_id = frontend_id = None
+    selected_runtime_terminal = None
     validation_error = None
     for runtime_terminal in runtime_terminals:
         try:
+            _validate_activation_storage_admission(
+                layout,
+                runtime_terminal,
+                image=image,
+                profile=profile,
+                docker_host=docker_host,
+                runtime_identity=host_identity["runtime_identity"],
+            )
             backend_id, frontend_id = _validate_running_group(
                 control, identity, document, runtime_terminal, image,
                 source_root=str(selected),
             )
+            selected_runtime_terminal = runtime_terminal
             break
         except BuildControlError as error:
             validation_error = error
     if backend_id is None or frontend_id is None:
         detail = f": {validation_error}" if validation_error else ""
-        raise BuildControlError("No linked runtime terminal matches the running Compose group" + detail)
+        raise BuildControlError("No linked runtime terminal matches the admitted storage and running Compose group" + detail)
 
     from docker_volume_dev import _startup_helper
 
@@ -635,6 +782,16 @@ def activate(args: argparse.Namespace) -> None:
     provenance = _authorization_bytes(startup_helper, authorization_document)
     provenance_sha256 = hashlib.sha256(provenance).hexdigest()
 
+    activation_host_identity = {
+        "storage_profile": profile,
+        "docker_host": docker_host,
+        "runtime_identity": host_identity["runtime_identity"],
+    }
+    if profile == "linux-native-v1":
+        activation_host_identity.update(
+            owner_token=selected_runtime_terminal.get("owner_token"),
+            host_certificate_sha256=selected_runtime_terminal.get("host_certificate_sha256"),
+        )
     inputs = _activation_operation_inputs(
         development_attempt=args.attempt,
         config_sha256=args.config_sha256,
@@ -647,6 +804,7 @@ def activate(args: argparse.Namespace) -> None:
         backend_container=backend_id,
         activation_receipt_key=activation_receipt_key,
         activation_receipt_path=activation_receipt_path,
+        host_identity=activation_host_identity,
     )
     with control.operation("activation", inputs) as operation:
         operation["receipt"].update(inputs, state="preparing")

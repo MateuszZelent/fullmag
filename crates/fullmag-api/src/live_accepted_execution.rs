@@ -32,6 +32,16 @@ pub(crate) struct AcceptedLiveExecution {
 pub(crate) struct AcceptedLiveStudyExecution {
     pub run_id: String,
     pub step_ids: Vec<String>,
+    /// A durable RunIntent was accepted, but derived preparation needs
+    /// operator recovery. The accepted identity remains visible; callers must
+    /// not retry the solver or publish a second run.
+    pub preparation_error: Option<AcceptedLiveStudyPreparationError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AcceptedLiveStudyPreparationError {
+    pub code: String,
+    pub message: String,
 }
 
 /// Immutable result of the expensive accepted-study preparation phase.
@@ -121,6 +131,9 @@ pub(crate) async fn submit_live_command_with_transition(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
+        if let Some(error) = accepted_preparation_recovery_error(snapshot) {
+            return Err(error);
+        }
         snapshot.scene_document.clone()
     };
 
@@ -137,14 +150,53 @@ pub(crate) async fn submit_live_command_with_transition(
     // Study RunIntent. The first interactive Run/Relax command releases that
     // accepted run; it must not create a second run or silently discard later
     // authored stages.
-    if matches!(command.kind.as_str(), "run" | "relax" | "solve" | "resume")
-        && current_live_run_waits_for_solve(state).await?
-    {
-        crate::router_v2::handlers::simulation::commands::validate_accepted_command_admission(
-            state, context, command,
-        )
-        .await?;
-        return release_waiting_live_study_with_transition(state, context, &command.command_id).await;
+    if matches!(command.kind.as_str(), "run" | "relax" | "solve" | "resume") {
+        // `waiting_for_compute` is also the read-model status used by an
+        // accepted run whose manual start gate is still held. Check the
+        // durable gate before preparing anything new; otherwise the same
+        // authored Study can receive a second RunIntent while its first run
+        // is merely waiting for Compute.
+        if docker_api_only_runtime() {
+            match current_live_waiting_for_compute_gate(state, context).await? {
+                Some(ExistingAcceptedRunGate::Held(_run_id)) => {
+                    crate::router_v2::handlers::simulation::commands::validate_accepted_command_admission(
+                        state, context, command,
+                    )
+                    .await?;
+                    return release_accepted_live_study_with_transition(
+                        state,
+                        context,
+                        &command.command_id,
+                    )
+                    .await;
+                }
+                Some(ExistingAcceptedRunGate::Pending(run_id)) => {
+                    return Err(ApiError::with_status_and_code(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "accepted_preparation_pending",
+                        format!(
+                            "accepted run `{run_id}` preparation is not ready; Compute remains held"
+                        ),
+                    ));
+                }
+                Some(ExistingAcceptedRunGate::Released(run_id)) => {
+                    return Err(ApiError::conflict_with_code(
+                        "accepted_run_already_active",
+                        format!(
+                            "accepted live run `{run_id}` has already released its compute gate"
+                        ),
+                    ));
+                }
+                None => {}
+            }
+        }
+        if current_live_run_waits_for_solve(state).await? {
+            crate::router_v2::handlers::simulation::commands::validate_accepted_command_admission(
+                state, context, command,
+            )
+            .await?;
+            return release_waiting_live_study_with_transition(state, context, &command.command_id).await;
+        }
     }
 
     // The caller holds the same transition fence used by scene/session
@@ -243,6 +295,24 @@ pub(crate) async fn submit_live_command_with_transition(
     // accepted run after an HTTP cancellation.
     validate_live_scene_for_context(state, context, &prepared.scene).await?;
     let accepted = commit_prepared_live_accepted(&prepared)?;
+    if let Some(preparation_error) = accepted.preparation_error.as_ref() {
+        publish_accepted_live_study_with_preparation_failure_under_transition(
+            state,
+            context,
+            &accepted.run_id,
+            &accepted.step_ids,
+            "waiting_for_compute",
+            preparation_error,
+        )
+        .await?;
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_run_recovery_required",
+            format!(
+                "accepted run `{}` is durable but preparation is incomplete; no solve or retry was started: {}: {}",
+                accepted.run_id, preparation_error.code, preparation_error.message
+            ),
+        ));
+    }
 
     let step_id = accepted
         .step_ids
@@ -255,6 +325,48 @@ pub(crate) async fn submit_live_command_with_transition(
     }))
 }
 
+fn accepted_preparation_recovery_error(
+    snapshot: &crate::types::SessionStateResponse,
+) -> Option<ApiError> {
+    let startup = snapshot.metadata.as_ref().and_then(|metadata| {
+        metadata
+            .pointer("/docker_startup")
+            .filter(|record| {
+                record
+                    .get("preparation_status")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("failed")
+            })
+            .or_else(|| metadata.pointer("/accepted_preparation"))
+    })?;
+    if startup
+        .get("preparation_status")
+        .and_then(serde_json::Value::as_str)
+        != Some("failed")
+    {
+        return None;
+    }
+    let run_id = snapshot
+        .run
+        .as_ref()
+        .map(|run| run.run_id.as_str())
+        .unwrap_or(snapshot.session.run_id.as_str());
+    let code = startup
+        .get("preparation_error_code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("accepted_run_recovery_required");
+    let message = startup
+        .get("preparation_error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("accepted run preparation requires operator recovery");
+    Some(ApiError::unprocessable_with_code(
+        "accepted_run_recovery_required",
+        format!(
+            "accepted run `{run_id}` remains bound but requires recovery before another compute: {code}: {message}"
+        ),
+    ))
+}
+
 async fn current_live_run_waits_for_solve(state: &Arc<AppState>) -> Result<bool, ApiError> {
     let current = state.current_live_state.read().await;
     let snapshot = current
@@ -264,6 +376,129 @@ async fn current_live_run_waits_for_solve(state: &Arc<AppState>) -> Result<bool,
         .run
         .as_ref()
         .is_some_and(|run| run.status == "waiting_for_solve"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExistingAcceptedRunGate {
+    Held(String),
+    Pending(String),
+    Released(String),
+}
+
+fn accepted_frontier_preparation_is_ready(
+    preparation: Option<&crate::types::SimulationPreparationSnapshot>,
+    mesh_workspace: Option<&serde_json::Value>,
+    run_id: &str,
+) -> bool {
+    let Some(preparation) = preparation else {
+        return false;
+    };
+    if preparation.status != "ready" || preparation.failure.is_some() {
+        return false;
+    }
+    let Some(mesh_workspace) = mesh_workspace.and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    if mesh_workspace.get("status").and_then(serde_json::Value::as_str) != Some("completed")
+        || mesh_workspace
+            .get("accepted_run_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(run_id)
+        || mesh_workspace
+            .get("accepted_step_id")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return false;
+    }
+    let Some(mesh_preparation_id) = mesh_workspace
+        .get("preparation_id")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    if mesh_preparation_id != preparation.preparation_id {
+        return false;
+    }
+    let Some(plan_fingerprint) = mesh_workspace
+        .get("plan_fingerprint")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let Some(plan_fingerprint_hex) = plan_fingerprint.strip_prefix("sha256:") else {
+        return false;
+    };
+    plan_fingerprint_hex.len() == 64
+        && plan_fingerprint_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// Resolve the durable start gate for the existing accepted run before a new
+/// command can prepare another Study. The live read model uses
+/// `waiting_for_compute` both for a held manual gate and for an already
+/// released run, so its status alone is not an admission decision.
+async fn current_live_waiting_for_compute_gate(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+) -> Result<Option<ExistingAcceptedRunGate>, ApiError> {
+    let (run_id, preparation_ready) = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        let Some(run) = snapshot.run.as_ref() else {
+            return Ok(None);
+        };
+        if run.status != "waiting_for_compute" {
+            return Ok(None);
+        }
+        let run_id = run.run_id.clone();
+        let preparation_ready = accepted_frontier_preparation_is_ready(
+            snapshot.simulation_preparation.as_ref(),
+            snapshot.mesh_workspace.as_ref(),
+            &run_id,
+        );
+        (run_id, preparation_ready)
+    };
+    let Some(store_root) = state.submit_store_root.clone() else {
+        return Err(ApiError::with_status_and_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "accepted_execution_store_unavailable",
+            "cannot resolve the existing accepted run start gate without durable execution storage",
+        ));
+    };
+    let gate_run_id = run_id.clone();
+    let gate_released = tokio::task::spawn_blocking(move || {
+        let store = open_submit_store(&store_root)?;
+        store
+            .accepted_run_start_permitted(&gate_run_id)
+            .map_err(|error| {
+                ApiError::conflict_with_code(
+                    "accepted_run_start_gate_unavailable",
+                    format!("existing accepted run start gate cannot be read: {error:#}"),
+                )
+            })
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(format!("accepted run start gate lookup task failed: {error}"))
+    })??;
+    Ok(Some(if gate_released {
+        ExistingAcceptedRunGate::Released(run_id)
+    } else if preparation_ready {
+        ExistingAcceptedRunGate::Held(run_id)
+    } else {
+        ExistingAcceptedRunGate::Pending(run_id)
+    }))
 }
 
 /// Release the existing accepted Study after an interactive Solve command.
@@ -583,6 +818,9 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
+        if let Some(error) = accepted_preparation_recovery_error(snapshot) {
+            return Err(error);
+        }
         let scene = snapshot
             .scene_document
             .clone()
@@ -654,6 +892,24 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
         false,
     )
     .await?;
+    if let Some(preparation_error) = accepted.preparation_error.as_ref() {
+        publish_accepted_live_study_with_preparation_failure_under_transition(
+            state,
+            context,
+            &accepted.run_id,
+            &accepted.step_ids,
+            "waiting_for_compute",
+            preparation_error,
+        )
+        .await?;
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_run_recovery_required",
+            format!(
+                "accepted run `{}` is durable but preparation is incomplete; no solve or retry was started: {}: {}",
+                accepted.run_id, preparation_error.code, preparation_error.message
+            ),
+        ));
+    }
     crate::router_v2::handlers::simulation::commands::publish_accepted_live_study_under_transition(
         state,
         context,
@@ -670,6 +926,67 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
     };
     crate::validate_current_live_request_context(state, &accepted_context).await?;
     Ok(accepted_context)
+}
+
+async fn publish_accepted_live_study_with_preparation_failure_under_transition(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    run_id: &str,
+    step_ids: &[String],
+    status: &str,
+    preparation_error: &AcceptedLiveStudyPreparationError,
+) -> Result<(), ApiError> {
+    let mut current = state.current_live_state.write().await;
+    let snapshot = current
+        .as_mut()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({"previous_metadata": metadata});
+    }
+    let metadata_object = metadata
+        .as_object_mut()
+        .expect("accepted preparation metadata must be an object");
+    metadata_object.insert(
+        "accepted_preparation".to_string(),
+        json!({
+            "status": "failed",
+            "run_id": run_id,
+            "step_ids": step_ids,
+            "preparation_status": "failed",
+            "preparation_error_code": preparation_error.code.clone(),
+            "preparation_error": preparation_error.message.clone(),
+        }),
+    );
+    crate::router_v2::handlers::simulation::commands::apply_accepted_live_study_snapshot(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+        run_id,
+        step_ids,
+        status,
+        Some(metadata),
+    )?;
+    let realtime_snapshot = snapshot.clone();
+    drop(current);
+    // The accepted run and its recovery marker are already bound atomically
+    // before this first publication await. A realtime failure therefore
+    // cannot expose an accepted run that is still retryable.
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime_state =
+        crate::current_live_realtime_state_from_snapshot(state, &realtime_snapshot, display_revision)
+            .await;
+    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
+    Ok(())
 }
 
 /// Persist a Docker live Stop against the exact accepted run. Running or
@@ -1361,7 +1678,12 @@ pub(crate) fn commit_prepared_live_accepted(
             ));
         }
     }
-    crate::run_intent_persistence::commit_validated_run_intent_with_backlog_limit(
+    // A successful return is the typed commit boundary: the persistence
+    // helper validates the immutable intent, writes the CAS/RunIntent under
+    // one lease, and constructs its SubmitReceipt from that same intent. Do
+    // not add a fallible post-commit validation here; after acceptance any
+    // error path must preserve the accepted identity for recovery.
+    let _committed = crate::run_intent_persistence::commit_validated_run_intent_with_backlog_limit(
         &store,
         &prepared.intent,
         &prepared.definition,
@@ -1376,23 +1698,44 @@ pub(crate) fn commit_prepared_live_accepted(
             format!("durable accepted RunIntent commit failed: {error:#}"),
         )
     })?;
-
-    crate::run_intent_persistence::materialize_accepted_run_catalog(
+    let preparation_error = match crate::run_intent_persistence::materialize_accepted_run_catalog(
         &store,
         &prepared.run_id,
         &prepared.project_id,
-    )
-    .map_err(|error| {
-        ApiError::unprocessable_with_code(
-            "accepted_run_catalog_failed",
-            format!("durable accepted run catalog materialization failed: {error:#}"),
-        )
-    })?;
+    ) {
+        Ok(_) => None,
+        Err(error) => {
+            let message = format!(
+                "durable accepted run catalog materialization failed: {}",
+                bounded_recovery_error(format!("{error:#}")),
+            );
+            tracing::error!(
+                run_id = %prepared.run_id,
+                error = %message,
+                "accepted RunIntent survived derived preparation failure; keeping identity for recovery"
+            );
+            Some(AcceptedLiveStudyPreparationError {
+                code: "accepted_run_catalog_failed".to_string(),
+                message,
+            })
+        }
+    };
 
     Ok(AcceptedLiveStudyExecution {
         run_id: prepared.run_id.clone(),
         step_ids: prepared.step_ids.clone(),
+        preparation_error,
     })
+}
+
+const MAX_RECOVERY_ERROR_CHARS: usize = 1024;
+
+fn bounded_recovery_error(message: String) -> String {
+    let mut bounded = message.chars().take(MAX_RECOVERY_ERROR_CHARS).collect::<String>();
+    if message.chars().count() > MAX_RECOVERY_ERROR_CHARS {
+        bounded.push_str("...");
+    }
+    bounded
 }
 
 fn select_live_step(
@@ -1671,8 +2014,10 @@ fn profile_catalog_error(message: String) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_gpu_relaxation_algorithm, request_accepted_stop_for_catalog,
-        validate_scene_revision_and_content,
+        accepted_frontier_preparation_is_ready, bounded_gpu_relaxation_algorithm,
+        bounded_recovery_error, request_accepted_stop_for_catalog,
+        validate_scene_revision_and_content, AcceptedLiveStudyExecution,
+        AcceptedLiveStudyPreparationError, MAX_RECOVERY_ERROR_CHARS,
     };
 
     #[test]
@@ -1729,6 +2074,101 @@ mod tests {
             coordinator_watermark: None,
             coordinator_genesis: None,
         }
+    }
+
+    #[test]
+    fn accepted_recovery_preserves_identity_and_bounds_detail() {
+        let original = "x".repeat(MAX_RECOVERY_ERROR_CHARS + 32);
+        let bounded = bounded_recovery_error(original);
+        assert_eq!(bounded.chars().count(), MAX_RECOVERY_ERROR_CHARS + 3);
+        assert!(bounded.ends_with("..."));
+
+        let accepted = AcceptedLiveStudyExecution {
+            run_id: "run-accepted-recovery".to_string(),
+            step_ids: vec!["step-0".to_string(), "step-1".to_string()],
+            preparation_error: Some(AcceptedLiveStudyPreparationError {
+                code: "accepted_run_catalog_failed".to_string(),
+                message: bounded,
+            }),
+        };
+        assert_eq!(accepted.run_id, "run-accepted-recovery");
+        assert_eq!(accepted.step_ids, ["step-0", "step-1"]);
+        assert_eq!(
+            accepted.preparation_error.as_ref().map(|error| error.code.as_str()),
+            Some("accepted_run_catalog_failed")
+        );
+    }
+
+    #[test]
+    fn held_compute_gate_requires_current_run_bound_ready_frontier() {
+        let preparation: crate::types::SimulationPreparationSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "preparation_id": "prep-1",
+                "revision": 1,
+                "status": "ready",
+                "active_stage_id": null,
+                "started_at_unix_ms": 1,
+                "completed_at_unix_ms": 2,
+                "stages": [{
+                    "id": "startup",
+                    "label": "Prepare model and mesh",
+                    "detail": "accepted task preparation receipt committed",
+                    "status": "completed",
+                    "started_at_unix_ms": 1,
+                    "completed_at_unix_ms": 2,
+                    "duration_ms": 1,
+                    "clock_adjustment": null,
+                    "progress_percent": 100,
+                    "progress_label": "ready"
+                }],
+                "log_tail": [],
+                "failure": null
+            }))
+            .expect("preparation fixture");
+        let workspace = serde_json::json!({
+            "status": "completed",
+            "accepted_run_id": "run-1",
+            "accepted_step_id": "step-1",
+            "preparation_id": "prep-1",
+            "plan_fingerprint": format!("sha256:{}", "a".repeat(64))
+        });
+        assert!(accepted_frontier_preparation_is_ready(
+            Some(&preparation),
+            Some(&workspace),
+            "run-1"
+        ));
+
+        let mut wrong_run = workspace.clone();
+        wrong_run["accepted_run_id"] = serde_json::json!("run-2");
+        assert!(!accepted_frontier_preparation_is_ready(
+            Some(&preparation),
+            Some(&wrong_run),
+            "run-1"
+        ));
+
+        let mut pending = preparation.clone();
+        pending.status = "running".into();
+        assert!(!accepted_frontier_preparation_is_ready(
+            Some(&pending),
+            Some(&workspace),
+            "run-1"
+        ));
+
+        let mut mismatched_preparation = workspace.clone();
+        mismatched_preparation["preparation_id"] = serde_json::json!("prep-other");
+        assert!(!accepted_frontier_preparation_is_ready(
+            Some(&preparation),
+            Some(&mismatched_preparation),
+            "run-1"
+        ));
+
+        let mut invalid_fingerprint = workspace;
+        invalid_fingerprint["plan_fingerprint"] = serde_json::json!("a".repeat(64));
+        assert!(!accepted_frontier_preparation_is_ready(
+            Some(&preparation),
+            Some(&invalid_fingerprint),
+            "run-1"
+        ));
     }
 
     #[test]

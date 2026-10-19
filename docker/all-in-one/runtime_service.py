@@ -1810,12 +1810,256 @@ def _container_recovery_expected_sources(owner: Mapping[str, Any]) -> set[str]:
     }
 
 
+def _container_recovery_successor_sources(owner: Mapping[str, Any]) -> set[str]:
+    """Return the bounded records that a clean successor may republish.
+
+    The recovery archive describes the pre-recovery owner.  A later clean
+    service start necessarily rotates the launch record and both scheduler
+    resource generations.  Checkpoints may be published during that start,
+    so they are included as optional successor records.  The caller still
+    validates every record against the authenticated successor owner and the
+    pinned runtime configuration.
+    """
+
+    compute_pool = _recovery_store_id(
+        owner.get("compute_pool_id"), "container recovery successor compute pool id"
+    )
+    preparation_pool = _recovery_store_id(
+        owner.get("preparation_pool_id"),
+        "container recovery successor preparation pool id",
+    )
+    return {
+        "runtime-services/LAUNCH.json",
+        f"scheduler_pools/{compute_pool}.resources.json",
+        f"scheduler_pools/{preparation_pool}.preparation-resources.json",
+        f"scheduler_pools/{compute_pool}.json",
+        f"scheduler_pools/{preparation_pool}.preparation.json",
+    }
+
+
+def _container_recovery_successor_config_profile(value: Any) -> dict[str, Any]:
+    """Normalize the only configuration field rotated by an authenticated restart."""
+
+    if not isinstance(value, dict):
+        _fail("container recovery successor configuration must contain an object")
+    profile = dict(value)
+    host_execution = profile.get("host_execution")
+    if host_execution is not None:
+        if not isinstance(host_execution, dict):
+            _fail("container recovery successor host execution is not an object")
+        host_execution = dict(host_execution)
+        host_execution.pop("runtime_generation_sha256", None)
+        profile["host_execution"] = host_execution
+    return profile
+
+
+def _validate_container_recovery_successor_checkpoint(
+    paths: RuntimePaths,
+    relative: PurePosixPath,
+    owner: Mapping[str, Any],
+    name: str,
+) -> None:
+    """Validate one successor checkpoint while retaining terminal history.
+
+    The empty-store requirement belongs to the initial native recovery before
+    the first replacement owner starts.  This successor is a normal service
+    owner that has already drained, so cancelled and completed run IDs remain
+    valid durable history and must not be deleted or treated as new work.
+    """
+
+    path = _store_relative_path(paths, relative)
+    if not os.path.lexists(path):
+        return
+    checkpoint, _ = _read_stable_container_recovery_json(
+        path, name, MAX_CONTAINER_RECOVERY_REQUEST_BYTES
+    )
+    if (
+        set(checkpoint)
+        != {"schema_version", "pool_id", "sequence", "run_source", "run_ids", "next_run_id"}
+        or checkpoint.get("schema_version") != "scheduler_pool_checkpoint.v1"
+    ):
+        _fail(f"{name} schema is unsupported")
+    pool_id = relative.name
+    if relative.name.endswith(".preparation.json"):
+        pool_id = relative.name[: -len(".preparation.json")]
+    elif relative.name.endswith(".json"):
+        pool_id = relative.name[: -len(".json")]
+    pool_id = _recovery_store_id(pool_id, f"{name} pool id")
+    if checkpoint.get("pool_id") != pool_id:
+        _fail(f"{name} pool identity differs from its path")
+    expected_pool = (
+        owner.get("preparation_pool_id")
+        if relative.name.endswith(".preparation.json")
+        else owner.get("compute_pool_id")
+    )
+    if checkpoint.get("pool_id") != expected_pool:
+        _fail(f"{name} pool identity differs from the successor owner")
+    sequence = checkpoint.get("sequence")
+    if type(sequence) is not int or sequence <= 0:
+        _fail(f"{name} has an invalid sequence")
+    run_source = checkpoint.get("run_source")
+    if run_source not in {"explicit", "store"}:
+        _fail(f"{name} has an invalid run source")
+    run_ids = checkpoint.get("run_ids")
+    if not isinstance(run_ids, list) or len({value for value in run_ids if isinstance(value, str)}) != len(run_ids):
+        _fail(f"{name} has invalid run ids")
+    for run_id in run_ids:
+        _recovery_store_id(run_id, f"{name} run id")
+    next_run_id = checkpoint.get("next_run_id")
+    if next_run_id is not None:
+        _recovery_store_id(next_run_id, f"{name} next run id")
+    if run_source == "explicit" and not run_ids:
+        _fail(f"{name} explicit source has no run ids")
+
+
+def _validate_container_recovery_successor(
+    paths: RuntimePaths,
+    context: Mapping[str, Any],
+    archive_root: Path,
+    successor_owner: Mapping[str, Any],
+) -> set[str]:
+    """Validate the dynamic evidence of one authenticated clean successor.
+
+    This path is used only after ``_read_authenticated_terminal_drain`` has
+    authenticated the ready owner, its durable pin, and the drained owner.
+    It does not bless arbitrary live-store changes: only the five native
+    records which the service republishes on a clean start are exempted from
+    the historical archive byte comparison.
+    """
+
+    _validate_terminal_owner(
+        successor_owner, state="ready", name="authenticated successor service owner"
+    )
+    if _owner_identity(successor_owner) == _owner_identity(context["expected_owner"]):
+        _fail("container recovery successor owner is still the historical owner")
+    successor_sources = _container_recovery_successor_sources(successor_owner)
+
+    historical_config, _ = _read_stable_container_recovery_json(
+        archive_root / "configuration.json",
+        "container recovery archived configuration",
+        MAX_CONTAINER_RECOVERY_REQUEST_BYTES,
+    )
+    current_config, _ = _read_stable_container_recovery_json(
+        paths.config,
+        "container recovery successor configuration",
+        MAX_CONTAINER_RECOVERY_REQUEST_BYTES,
+    )
+    if _container_recovery_successor_config_profile(current_config) != _container_recovery_successor_config_profile(historical_config):
+        _fail("container recovery successor configuration changed its operator profile")
+    if current_config.get("target_id") != successor_owner.get("target_id"):
+        _fail("container recovery successor configuration targets a different service")
+    if current_config.get("compute_pool_id") != successor_owner.get("compute_pool_id") or current_config.get("preparation_pool_id") != successor_owner.get("preparation_pool_id"):
+        _fail("container recovery successor configuration differs from owner pool identity")
+    launch, _ = _read_stable_container_recovery_json(
+        runtime_services_root(paths) / "LAUNCH.json",
+        "container recovery successor launch record",
+        MAX_CONTAINER_RECOVERY_REQUEST_BYTES,
+    )
+    historical_launch, _ = _read_stable_container_recovery_json(
+        archive_root / "LAUNCH.json",
+        "container recovery archived launch record",
+        MAX_CONTAINER_RECOVERY_REQUEST_BYTES,
+    )
+    historical_launch_id = historical_launch.get("launch_id")
+    if (
+        set(historical_launch)
+        != {"schema_version", "launch_id", "state", "pid"}
+        or historical_launch.get("schema_version") != "runtime_service_launch.v1"
+        or not isinstance(historical_launch_id, str)
+        or UUID_RE.fullmatch(historical_launch_id) is None
+    ):
+        _fail("container recovery archived launch record is unsupported")
+    launch_id = launch.get("launch_id")
+    if (
+        set(launch)
+        != {"schema_version", "launch_id", "state", "pid"}
+        or
+        launch.get("schema_version") != "runtime_service_launch.v1"
+        or not isinstance(launch_id, str)
+        or UUID_RE.fullmatch(launch_id) is None
+        or launch.get("state") != "ready"
+        or launch.get("pid") != successor_owner.get("pid")
+        or launch_id == historical_launch.get("launch_id")
+    ):
+        _fail("container recovery successor launch is not the authenticated ready owner")
+
+    compute_pool = successor_owner.get("compute_pool_id")
+    preparation_pool = successor_owner.get("preparation_pool_id")
+    compute_generation = successor_owner.get("compute_pool_generation")
+    preparation_generation = successor_owner.get("preparation_pool_generation")
+    historical_owner = context["expected_owner"]
+    historical_compute_generation = historical_owner.get("compute_pool_generation")
+    historical_preparation_generation = historical_owner.get("preparation_pool_generation")
+    if (
+        type(compute_generation) is not int
+        or compute_generation <= 0
+        or type(preparation_generation) is not int
+        or preparation_generation <= 0
+        or type(historical_compute_generation) is not int
+        or historical_compute_generation <= 0
+        or type(historical_preparation_generation) is not int
+        or historical_preparation_generation <= 0
+        or compute_generation <= historical_compute_generation
+        or preparation_generation <= historical_preparation_generation
+    ):
+        _fail("container recovery successor owner has invalid pool generations")
+    pool_specs = (
+        (
+            f"scheduler_pools/{compute_pool}.resources.json",
+            "scheduler_resource_pool.v1",
+            compute_pool,
+            compute_generation,
+            "compute_resources",
+        ),
+        (
+            f"scheduler_pools/{preparation_pool}.preparation-resources.json",
+            "preparation_resource_pool.v1",
+            preparation_pool,
+            preparation_generation,
+            "preparation_resources",
+        ),
+    )
+    for source, schema, pool_id, generation, config_key in pool_specs:
+        relative = PurePosixPath(source)
+        record, _ = _read_stable_container_recovery_json(
+            _store_relative_path(paths, relative),
+            f"container recovery successor {source}",
+            MAX_CONTAINER_RECOVERY_REQUEST_BYTES,
+        )
+        if (
+            set(record) != {"schema_version", "pool_id", "generation", "resources"}
+            or record.get("schema_version") != schema
+            or record.get("pool_id") != pool_id
+            or type(record.get("generation")) is not int
+            or record.get("generation") != generation
+        ):
+            _fail(f"container recovery successor pool record differs from owner {source}")
+        expected_resources = current_config.get(config_key)
+        if not isinstance(expected_resources, list) or record.get("resources") != expected_resources:
+            _fail(f"container recovery successor pool resources differ from configuration {source}")
+
+    for source in (
+        f"scheduler_pools/{compute_pool}.json",
+        f"scheduler_pools/{preparation_pool}.preparation.json",
+    ):
+        _validate_container_recovery_successor_checkpoint(
+            paths,
+            PurePosixPath(source),
+            successor_owner,
+            f"container recovery successor {source}",
+        )
+
+    _observe_recovery_log_sources(paths, successor_owner)
+    return successor_sources
+
+
 def _validate_container_recovery_archive(
     paths: RuntimePaths,
     context: Mapping[str, Any],
     result: Mapping[str, Any],
     *,
     authenticated_drained_owner_sha256: str | None = None,
+    authenticated_successor_owner: Mapping[str, Any] | None = None,
 ) -> None:
     request = context["request"]
     authorization = context["authorization"]
@@ -1894,6 +2138,17 @@ def _validate_container_recovery_archive(
     _assert_no_links(archive_root, "container recovery archive")
     if not archive_root.is_dir() or archive_root.is_symlink():
         _fail("container recovery archive is not a directory")
+    successor_sources = set()
+    successor_optional_sources: set[str] = set()
+    if authenticated_successor_owner is not None:
+        if authenticated_drained_owner_sha256 is None:
+            _fail("container recovery successor is missing its drained-owner proof")
+        successor_sources = _validate_container_recovery_successor(
+            paths, context, archive_root, authenticated_successor_owner
+        )
+        successor_optional_sources = _recovery_checkpoint_sources(
+            authenticated_successor_owner
+        )
     for source, expected_digest in archived.items():
         relative = _recovery_relative_path(source, "container recovery archived source")
         expected_digest = _container_recovery_hex(
@@ -1915,6 +2170,14 @@ def _validate_container_recovery_archive(
                 _fail("container recovery configuration archive is not pinned")
             continue
         live_path = _store_relative_path(paths, relative)
+        if source in successor_sources and not os.path.lexists(live_path):
+            # Checkpoint records are optional on a clean successor.  The
+            # successor validator checks identity and shape when one is
+            # present; an archived checkpoint may legitimately disappear
+            # when the restarted service has not published one yet.
+            if source in successor_optional_sources:
+                continue
+            _fail(f"container recovery successor evidence is missing: {source}")
         live_bytes = _read_stable_container_recovery_file(
             live_path, "container recovery live evidence", maximum
         )
@@ -1936,12 +2199,16 @@ def _validate_container_recovery_archive(
             if live_owner_sha256 not in allowed_owner_sha256:
                 _fail("container recovery live owner changed outside its pinned transition")
             continue
+        if source in successor_sources:
+            continue
         if live_bytes != archive_bytes:
             _fail(f"container recovery archived evidence differs from live store: {source}")
     for source in absent_names:
         relative = _recovery_relative_path(source, "container recovery absent source")
         live_path = _store_relative_path(paths, relative)
         _assert_no_links(live_path.parent, "container recovery absent-source parent")
+        if source in successor_sources:
+            continue
         if os.path.lexists(live_path):
             _fail(f"container recovery absent source was published: {source}")
 
@@ -1952,6 +2219,7 @@ def _validate_container_recovery_receipt(
     result: Mapping[str, Any],
     *,
     authenticated_drained_owner_sha256: str | None = None,
+    authenticated_successor_owner: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     request = context["request"]
     authorization = context["authorization"]
@@ -1994,6 +2262,7 @@ def _validate_container_recovery_receipt(
         context,
         result,
         authenticated_drained_owner_sha256=authenticated_drained_owner_sha256,
+        authenticated_successor_owner=authenticated_successor_owner,
     )
     return dict(result)
 
@@ -2080,6 +2349,7 @@ def _validate_container_recovery_drained_proof(
         context,
         recovered,
         authenticated_drained_owner_sha256=current_owner_sha256,
+        authenticated_successor_owner=drain["pin"],
     )
     expected_owner = context["expected_owner"]
     if _owner_identity(current_owner) == _owner_identity(expected_owner):

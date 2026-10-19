@@ -89,6 +89,14 @@ class ContainerRecoveryTests(unittest.TestCase):
         class Control:
             project = "fullmag-test"
 
+        host = {
+            "profile": "windows-folder-v1",
+            "selection": "windows-default",
+            "context_name": "desktop-linux",
+            "endpoint": "desktop-linux",
+            "daemon_id": "windows-engine",
+        }
+        runtime = {"uid": 65532, "gid": 65532}
         backend = {
             "Image": "sha256:" + "f" * 64,
             "Mounts": [
@@ -101,19 +109,224 @@ class ContainerRecoveryTests(unittest.TestCase):
             "ledger_root_sha256": "2" * 64,
             "ledger_snapshot_sha256": "3" * 64,
             "run_records": [],
+            "runtime_uid": runtime["uid"],
+            "runtime_gid": runtime["gid"],
         }).encode()
         result = type("Result", (), {"returncode": 0, "stdout": output, "stderr": b""})()
-        with patch.object(recovery, "bounded_capture", return_value=result) as capture:
+        import docker_platform
+
+        with patch.object(recovery, "_managed_host_context", return_value=(
+                "windows-folder-v1", runtime, host)), \
+                patch.object(recovery, "bounded_capture", return_value=result) as capture, \
+                patch.object(docker_platform, "docker_cli_prefix", return_value=[
+                    "docker", "--context", "desktop-linux",
+                ]), \
+                patch.object(docker_platform, "docker_environment", return_value={}):
             proof = recovery._ledger_and_store_snapshot(Control(), backend)
         self.assertEqual(proof["ledger_snapshot_sha256"], "3" * 64)
         argv = capture.call_args.args[0]
         self.assertIn("/usr/local/bin/python3", argv)
+        self.assertIn("--context", argv)
+        self.assertIn("desktop-linux", argv)
+        self.assertIn("65532:65532", argv)
         self.assertIn("-B", argv)
         self.assertIn("-c", argv)
         self.assertIn("type=bind,src=/windows/state,dst=/state,readonly", argv)
         self.assertIn("type=bind,src=/windows/ledger,dst=/host-ledger,readonly", argv)
         self.assertIn("deadline=time.monotonic()+5", " ".join(argv))
         self.assertNotIn("bind-nonrecursive", " ".join(argv))
+
+    def test_linux_storage_probe_pins_local_endpoint_and_runtime_identity(self):
+        import docker_platform
+
+        class Control:
+            project = "fullmag-test"
+
+        host = {
+            "profile": "linux-native-v1",
+            "selection": "context",
+            "context_name": "local-user",
+            "endpoint": "unix:///run/user/1001/docker.sock",
+            "daemon_id": "linux-engine",
+        }
+        runtime = {"uid": 1001, "gid": 1002}
+        backend = {
+            "Image": "sha256:" + "f" * 64,
+            "Mounts": [
+                {"Destination": "/state", "Type": "bind", "Source": "/srv/fullmag/state", "RW": True},
+                {"Destination": "/host-ledger", "Type": "bind", "Source": "/srv/fullmag/ledger", "RW": True},
+            ],
+        }
+        output = json.dumps({
+            "store_root_sha256": "1" * 64,
+            "ledger_root_sha256": "2" * 64,
+            "ledger_snapshot_sha256": "3" * 64,
+            "run_records": [],
+            "runtime_uid": runtime["uid"],
+            "runtime_gid": runtime["gid"],
+        }).encode()
+        result = type("Result", (), {"returncode": 0, "stdout": output, "stderr": b""})()
+        with patch.object(recovery, "_managed_host_context", return_value=(
+                "linux-native-v1", runtime, host)), \
+                patch.object(recovery, "bounded_capture", return_value=result) as capture, \
+                patch.object(docker_platform, "docker_cli_prefix", return_value=[
+                    "docker", "--host", host["endpoint"],
+                ]), \
+                patch.object(docker_platform, "docker_environment", return_value={
+                    "PATH": "/usr/bin",
+                }):
+            proof = recovery._ledger_and_store_snapshot(
+                Control(), backend, expected_docker_host=host
+            )
+        argv = capture.call_args.args[0]
+        self.assertEqual(argv[:3], ["docker", "--host", host["endpoint"]])
+        self.assertIn("1001:1002", argv)
+        self.assertEqual(capture.call_args.kwargs["env"], {"PATH": "/usr/bin"})
+        self.assertEqual(proof["runtime_uid"], 1001)
+        self.assertEqual(proof["runtime_gid"], 1002)
+        wrong_user_output = json.dumps({
+            "store_root_sha256": "1" * 64,
+            "ledger_root_sha256": "2" * 64,
+            "ledger_snapshot_sha256": "3" * 64,
+            "run_records": [],
+            "runtime_uid": 0,
+            "runtime_gid": 0,
+        }).encode()
+        wrong_user = type("Result", (), {
+            "returncode": 0, "stdout": wrong_user_output, "stderr": b"",
+        })()
+        with patch.object(recovery, "_managed_host_context", return_value=(
+                "linux-native-v1", runtime, host)), \
+                patch.object(recovery, "bounded_capture", return_value=wrong_user), \
+                patch.object(docker_platform, "docker_cli_prefix", return_value=[
+                    "docker", "--host", host["endpoint"],
+                ]), \
+                patch.object(docker_platform, "docker_environment", return_value={
+                    "PATH": "/usr/bin",
+                }):
+            with self.assertRaisesRegex(recovery.ContainerRecoveryError, "UID/GID"):
+                recovery._ledger_and_store_snapshot(
+                    Control(), backend, expected_docker_host=host
+                )
+
+    def test_linux_reused_session_requires_certificate_and_operation_identity(self):
+        import docker_platform
+        import docker_volume_dev
+
+        host = {
+            "profile": "linux-native-v1",
+            "selection": "context",
+            "context_name": "local-user",
+            "endpoint": "unix:///run/user/1001/docker.sock",
+            "daemon_id": "linux-engine",
+        }
+        identity = {"uid": 1001, "gid": 1002}
+        certificate = {
+            "schema": "fullmag.linux-native-host-certificate.v1",
+            "storage_profile": "linux-native-v1",
+            "image_id": "sha256:" + "a" * 64,
+            "owner_token": "11111111-1111-4111-8111-111111111111",
+            "restart_verified": True,
+            "source_commit": "b" * 40,
+            "binary_hashes": {"fullmag-api": "c" * 64},
+            "artifact_receipt_sha256": "d" * 64,
+            "development_build": {
+                "schema": "fullmag.linux-native-development-build.v1",
+            },
+        }
+        operation = {
+            "state_root": "/runtime/state",
+            "storage_profile": "linux-native-v1",
+            "docker_host": host,
+            "runtime_identity": identity,
+            "owner_token": certificate["owner_token"],
+            "host_certificate_sha256": "e" * 64,
+            "linux_native_certificate_sha256": hashlib.sha256(
+                recovery._canonical(certificate)
+            ).hexdigest(),
+            "inputs": {
+                "storage_profile": "linux-native-v1",
+                "runtime_identity": identity,
+            },
+        }
+        loaded = (Path("/runtime/state"), Path("/runtime/certificate"),
+                  Path("/runtime/owner"), certificate)
+        with patch.object(docker_platform, "host_profile", return_value="linux-native-v1"), \
+                patch.object(recovery, "_managed_host_context", return_value=(
+                    "linux-native-v1", identity, host)), \
+                patch.object(docker_volume_dev, "_load_retained_storage", return_value=loaded):
+            proof = recovery._validate_reused_session_before_removal(
+                {"runtime_root": Path("/runtime")}, "/runtime/state",
+                operation["inputs"].get("image_id", certificate["image_id"]),
+                "linux-engine", operation=operation, expected_docker_host=host,
+            )
+        self.assertEqual(proof["certificate"], certificate)
+
+        operation["runtime_identity"] = {"uid": 1002, "gid": 1002}
+        with patch.object(docker_platform, "host_profile", return_value="linux-native-v1"), \
+                patch.object(recovery, "_managed_host_context", return_value=(
+                    "linux-native-v1", identity, host)), \
+                patch.object(docker_volume_dev, "_load_retained_storage", return_value=loaded):
+            with self.assertRaisesRegex(recovery.ContainerRecoveryError, "runtime_identity"):
+                recovery._validate_reused_session_before_removal(
+                    {"runtime_root": Path("/runtime")}, "/runtime/state",
+                    certificate["image_id"], "linux-engine", operation=operation,
+                    expected_docker_host=host,
+                )
+
+        operation["runtime_identity"] = identity
+        certificate["restart_verified"] = False
+        operation["linux_native_certificate_sha256"] = hashlib.sha256(
+            recovery._canonical(certificate)
+        ).hexdigest()
+        with patch.object(docker_platform, "host_profile", return_value="linux-native-v1"), \
+                patch.object(recovery, "_managed_host_context", return_value=(
+                    "linux-native-v1", identity, host)), \
+                patch.object(docker_volume_dev, "_load_retained_storage", return_value=loaded):
+            with self.assertRaisesRegex(recovery.ContainerRecoveryError, "verified build"):
+                recovery._validate_reused_session_before_removal(
+                    {"runtime_root": Path("/runtime")}, "/runtime/state",
+                    certificate["image_id"], "linux-engine", operation=operation,
+                    expected_docker_host=host,
+                )
+
+    def test_windows_reused_session_keeps_host_certificate_validation(self):
+        import docker_platform
+        import fullmag_docker_runtime as runtime
+        import windows_folder_host
+
+        state = Path("/runtime/state")
+        native = {
+            "host_root": str(state),
+            "host_filesystem": "NTFS",
+            "host_drive_type": "fixed",
+            "host_volume_serial": "volume-1",
+            "host_root_no_reparse": True,
+        }
+        owner = "11111111-1111-4111-8111-111111111111"
+        certificate = {
+            "schema": windows_folder_host.HOST_SCHEMA,
+            "storage_profile": "windows-folder-v1",
+            "role": "session",
+            "owner_scope": "docker-desktop-linux",
+            "owner_token": owner,
+            **native,
+            "image_id": "sha256:" + "a" * 64,
+            "engine_id": "windows-engine",
+        }
+
+        def read_certificate(path, _label):
+            return certificate if Path(path).name == "windows-folder-host.json" else dict(certificate)
+
+        with patch.object(docker_platform, "host_profile", return_value="windows-folder-v1"), \
+                patch.object(recovery.storage, "validate_path", return_value=state), \
+                patch.object(runtime, "_read_reuse_json", side_effect=read_certificate), \
+                patch.object(windows_folder_host, "local_volume", return_value=native):
+            proof = recovery._validate_reused_session_before_removal(
+                {"runtime_root": Path("/runtime")}, state,
+                certificate["image_id"], "windows-engine",
+            )
+        self.assertEqual(proof["certificate"], certificate)
 
     def test_container_pin_normalizes_docker_null_device_requests(self):
         container = {

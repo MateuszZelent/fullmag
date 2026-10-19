@@ -29,6 +29,21 @@ pub(crate) const MAX_SCRIPT_BYTES: usize = 1024 * 1024;
 
 const STARTUP_METADATA_KEY: &str = "docker_startup";
 const MAX_REQUEST_ID_BYTES: usize = 128;
+const MAX_STARTUP_ERROR_CHARS: usize = 4096;
+const MAX_PREPARATION_ERROR_CODE_CHARS: usize = 128;
+const MAX_PREPARATION_ERROR_MESSAGE_CHARS: usize = 1024;
+const MAX_PREPARATION_LOG_MESSAGE_CHARS: usize = 2048;
+const CANONICAL_PREPARATION_STAGES: [(&str, &str); 9] = [
+    ("runtime_startup", "Runtime startup"),
+    ("script_materialization", "Script materialization"),
+    ("validation", "Validation"),
+    ("planning", "Planning"),
+    ("domain_preparation", "Domain preparation"),
+    ("meshing", "Meshing"),
+    ("mesh_postprocessing", "Mesh postprocessing"),
+    ("solver_initialization", "Solver initialization"),
+    ("ready", "Ready"),
+];
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -150,7 +165,11 @@ pub(crate) async fn activate_current_live_startup(
     // Publish the temporary owner before doing any expensive Python/Gmsh
     // preparation.  Status and current-run reads can now observe `activating`
     // while the transition fence is available to other requests.
-    publish_startup_placeholder(&state, &context).await?;
+    if let Err(error) = publish_startup_placeholder(&state, &context).await {
+        drop(transition);
+        mark_startup_placeholder_failure(&state, &context, &request, &loaded, &error).await;
+        return Err(error);
+    }
     drop(transition);
 
     // Preparation is side-effect free with respect to accepted durable state:
@@ -182,14 +201,17 @@ pub(crate) async fn activate_current_live_startup(
     )
     .await
     {
-        // A replacement or scene edit won the fence.  Do not mark the new
-        // scene failed and do not create a RunIntent for the stale preparation.
+        // A replacement or scene edit won the fence. Keep the current scene
+        // and its authoring metadata; terminalize only this placeholder.
+        drop(transition);
+        mark_startup_placeholder_failure(&state, &context, &request, &loaded, &error).await;
         return Err(error);
     }
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
-            mark_startup_failure(&state, &context, &request, &loaded, &error).await;
+            drop(transition);
+            mark_startup_placeholder_failure(&state, &context, &request, &loaded, &error).await;
             return Err(error);
         }
     };
@@ -230,7 +252,8 @@ pub(crate) async fn activate_current_live_startup(
         )
     {
         drop(current);
-        mark_startup_failure(&state, &context, &request, &loaded, &error).await;
+        drop(transition);
+        mark_startup_placeholder_failure(&state, &context, &request, &loaded, &error).await;
         return Err(error);
     }
 
@@ -238,13 +261,39 @@ pub(crate) async fn activate_current_live_startup(
     {
         Ok(accepted) => accepted,
         Err(error) => {
-            // The write guard remains held, and no state mutation follows a
-            // failed commit. There is no detached writer after this branch.
+            // No durable RunIntent was proven. Terminalize only the temporary
+            // owner; a failed pre-acceptance path must not invent a run.
             drop(current);
-            mark_startup_failure(&state, &context, &request, &loaded, &error).await;
+            drop(transition);
+            mark_startup_placeholder_failure(&state, &context, &request, &loaded, &error).await;
             return Err(error);
         }
     };
+    let accepted_context = CurrentLiveRequestContext {
+        session_id: context.session_id.clone(),
+        run_id: Some(accepted.run_id.clone()),
+        session_epoch: context.session_epoch,
+        request_scope_epoch: context.request_scope_epoch.clone(),
+    };
+    let preparation_error_message = accepted.preparation_error.as_ref().map(|preparation_error| {
+        format!("{}: {}", preparation_error.code, preparation_error.message)
+    });
+    if let Some(preparation_error) = accepted.preparation_error.as_ref() {
+        // Keep the accepted run and planned step identity in the candidate
+        // snapshot. The existing waiting_for_compute state remains the public
+        // run state; the preparation error is explicit in startup metadata.
+        if !apply_accepted_preparation_failure_snapshot(
+            &mut accepted_snapshot,
+            &accepted_context,
+            session_epoch,
+            preparation_error,
+        ) {
+            drop(current);
+            return Err(ApiError::conflict(
+                "accepted_run_recovery_context_changed_before_publication",
+            ));
+        }
+    }
     *snapshot = accepted_snapshot;
     let realtime_snapshot = snapshot.clone();
     drop(current);
@@ -255,18 +304,26 @@ pub(crate) async fn activate_current_live_startup(
     // Preserve event order against session replacement. The helper owns the
     // transition guard through the accepted event publication and releases it
     // only after the event has entered the realtime stream.
-    publish_accepted_startup_realtime(&state, &realtime_snapshot, transition).await?;
+    if let Err(error) =
+        publish_accepted_startup_realtime(&state, &realtime_snapshot, transition).await
+    {
+        mark_startup_failure(&state, &accepted_context, &request, &loaded, &error).await;
+        return Err(error);
+    }
+    if let Some(message) = preparation_error_message {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_run_recovery_required",
+            format!(
+                "accepted run `{}` is durable but preparation is incomplete; no solve or retry was started: {message}",
+                accepted.run_id
+            ),
+        ));
+    }
 
     // The synchronous publication above changes the live run identity from
     // the temporary startup placeholder to the accepted durable run. Every
     // subsequent read and write carries that new identity through the same
     // transition fence.
-    let accepted_context = CurrentLiveRequestContext {
-        session_id: context.session_id.clone(),
-        run_id: Some(accepted.run_id.clone()),
-        session_epoch: context.session_epoch,
-        request_scope_epoch: context.request_scope_epoch.clone(),
-    };
 
     // Only the first dependency-ready stage is the active startup model/mesh.
     // The shared accepted-frontier helper keeps later authored stages in the
@@ -288,6 +345,13 @@ pub(crate) async fn activate_current_live_startup(
     // by the stale startup request.
     let _transition = state.current_live_session_transition.lock().await;
     crate::validate_current_live_request_context(&state, &accepted_context).await?;
+    {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::live_scene_preparation::ensure_preparation_run_is_active(snapshot)?;
+    }
     if let Err(error) = preparation {
         // Preserve stopping/cancelled/terminal owner state.  The preparation
         // helper already reported the active-run fence failure, so marking a
@@ -345,16 +409,23 @@ pub(crate) async fn activate_current_live_startup(
     } else {
         "waiting_for_compute"
     };
-    let response = publish_startup_result(
+    let response = match publish_startup_result(
         &state,
         &accepted_context,
         &request,
         &loaded,
-        accepted.run_id,
-        accepted.step_ids,
+        accepted.run_id.clone(),
+        accepted.step_ids.clone(),
         status,
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            mark_startup_failure(&state, &accepted_context, &request, &loaded, &error).await;
+            return Err(error);
+        }
+    };
     Ok(Json(response))
 }
 
@@ -876,6 +947,22 @@ fn replay_or_reject(
         .get("run_id")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::conflict("Docker startup replay has no accepted run identity"))?;
+    if record.get("preparation_status").and_then(Value::as_str) == Some("failed") {
+        let code = record
+            .get("preparation_error_code")
+            .and_then(Value::as_str)
+            .unwrap_or("accepted_run_recovery_required");
+        let message = record
+            .get("preparation_error")
+            .and_then(Value::as_str)
+            .unwrap_or("accepted run preparation requires operator recovery");
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_run_recovery_required",
+            format!(
+                "accepted run `{run_id}` remains bound but requires recovery before another compute: {code}: {message}"
+            ),
+        ));
+    }
     let step_ids = record
         .get("step_ids")
         .and_then(Value::as_array)
@@ -1057,6 +1144,32 @@ async fn publish_startup_result(
     Ok(response)
 }
 
+async fn mark_startup_placeholder_failure(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    request: &DockerStartupRequest,
+    loaded: &LoadedStartupScene,
+    error: &ApiError,
+) {
+    let mut current = state.current_live_state.write().await;
+    let Some(snapshot) = current.as_mut() else {
+        return;
+    };
+    // Only the temporary pre-acceptance owner may use this path. An accepted
+    // durable run is handled by mark_startup_failure, which preserves identity.
+    if snapshot.session.status != "activating" || snapshot.run.is_some() {
+        return;
+    }
+    let _ = apply_startup_failure_snapshot(
+        snapshot,
+        context,
+        state.current_live_session_epoch.load(Ordering::Acquire),
+        request,
+        loaded,
+        error,
+    );
+}
+
 async fn mark_startup_failure(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
@@ -1064,35 +1177,459 @@ async fn mark_startup_failure(
     loaded: &LoadedStartupScene,
     error: &ApiError,
 ) {
-    let Ok(mut current) = state.current_live_state.try_write() else {
-        return;
-    };
+    let mut current = state.current_live_state.write().await;
     let Some(snapshot) = current.as_mut() else {
         return;
     };
-    if crate::ensure_current_live_request_context(
+    let _ = apply_startup_failure_snapshot(
         snapshot,
         context,
         state.current_live_session_epoch.load(Ordering::Acquire),
+        request,
+        loaded,
+        error,
+    );
+}
+
+fn bounded_startup_error(message: &str) -> String {
+    let mut bounded = message.chars().take(MAX_STARTUP_ERROR_CHARS).collect::<String>();
+    if message.chars().count() > MAX_STARTUP_ERROR_CHARS {
+        bounded.push_str("...");
+    }
+    bounded
+}
+
+fn bounded_preparation_value(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn startup_failure_preparation_id(snapshot: &crate::types::SessionStateResponse) -> String {
+    let identity = format!("{}\0{}", snapshot.session.session_id, snapshot.session.run_id);
+    format!(
+        "docker-startup-prep-{}",
+        fullmag_session::hex_sha256(identity.as_bytes())
     )
-    .is_err()
-    {
+}
+
+fn canonical_preparation_stage_index(id: &str) -> Option<usize> {
+    CANONICAL_PREPARATION_STAGES
+        .iter()
+        .position(|(canonical_id, _)| *canonical_id == id)
+}
+
+fn canonical_preparation_stage(id: &str, label: &str) -> crate::types::SimulationPreparationStageSnapshot {
+    crate::types::SimulationPreparationStageSnapshot {
+        id: id.to_string(),
+        label: label.to_string(),
+        detail: String::new(),
+        status: "pending".to_string(),
+        started_at_unix_ms: None,
+        completed_at_unix_ms: None,
+        duration_ms: None,
+        clock_adjustment: None,
+        progress_percent: None,
+        progress_label: None,
+    }
+}
+
+fn has_canonical_preparation_stage_order(
+    stages: &[crate::types::SimulationPreparationStageSnapshot],
+) -> bool {
+    stages.len() == CANONICAL_PREPARATION_STAGES.len()
+        && stages
+            .iter()
+            .map(|stage| stage.id.as_str())
+            .eq(CANONICAL_PREPARATION_STAGES.iter().map(|(id, _)| *id))
+}
+
+fn normalize_preparation_stages(
+    stages: &[crate::types::SimulationPreparationStageSnapshot],
+) -> Vec<crate::types::SimulationPreparationStageSnapshot> {
+    if has_canonical_preparation_stage_order(stages) {
+        return stages.to_vec();
+    }
+    let mut normalized = CANONICAL_PREPARATION_STAGES
+        .iter()
+        .map(|(id, label)| canonical_preparation_stage(id, label))
+        .collect::<Vec<_>>();
+    let mut populated = [false; CANONICAL_PREPARATION_STAGES.len()];
+    let mut unknown_stage = None;
+    for stage in stages {
+        if let Some(index) = canonical_preparation_stage_index(&stage.id) {
+            if !populated[index] {
+                normalized[index] = stage.clone();
+                populated[index] = true;
+            }
+        } else if unknown_stage.is_none() {
+            unknown_stage = Some(stage.clone());
+        }
+    }
+    if !populated[0] {
+        if let Some(mut stage) = unknown_stage {
+            stage.id = "runtime_startup".to_string();
+            normalized[0] = stage;
+        }
+    }
+    normalized
+}
+
+fn canonical_or_runtime_stage_id(id: &str) -> String {
+    if canonical_preparation_stage_index(id).is_some() {
+        id.to_string()
+    } else {
+        "runtime_startup".to_string()
+    }
+}
+
+fn normalize_preparation_diagnostics(
+    preparation: &mut crate::types::SimulationPreparationSnapshot,
+) -> bool {
+    let mut changed = false;
+    if !has_canonical_preparation_stage_order(&preparation.stages) {
+        preparation.stages = normalize_preparation_stages(&preparation.stages);
+        changed = true;
+    }
+    for entry in &mut preparation.log_tail {
+        let stage_id = canonical_or_runtime_stage_id(&entry.stage_id);
+        if stage_id != entry.stage_id {
+            entry.stage_id = stage_id;
+            changed = true;
+        }
+    }
+    if let Some(failure) = preparation.failure.as_mut() {
+        let stage_id = canonical_or_runtime_stage_id(&failure.stage_id);
+        if stage_id != failure.stage_id {
+            failure.stage_id = stage_id;
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn build_failed_preparation_snapshot(
+    preparation_id: String,
+    revision: u64,
+    timestamp_unix_ms: u64,
+    error_code: &str,
+    error_message: &str,
+) -> crate::types::SimulationPreparationSnapshot {
+    let error_code = bounded_preparation_value(error_code, MAX_PREPARATION_ERROR_CODE_CHARS);
+    let summary = bounded_preparation_value(
+        error_message,
+        MAX_PREPARATION_ERROR_MESSAGE_CHARS,
+    );
+    let stage_id = "runtime_startup";
+    let stages = CANONICAL_PREPARATION_STAGES
+        .into_iter()
+        .map(|(id, label)| {
+            let failed = id == stage_id;
+            let mut stage = canonical_preparation_stage(id, label);
+            if failed {
+                stage.detail = summary.clone();
+                stage.status = "failed".to_string();
+                stage.started_at_unix_ms = Some(timestamp_unix_ms);
+                stage.completed_at_unix_ms = Some(timestamp_unix_ms);
+                stage.duration_ms = Some(0);
+            }
+            stage
+        })
+        .collect();
+    crate::types::SimulationPreparationSnapshot {
+        preparation_id,
+        revision,
+        status: "failed".to_string(),
+        active_stage_id: None,
+        started_at_unix_ms: timestamp_unix_ms,
+        completed_at_unix_ms: Some(timestamp_unix_ms),
+        stages,
+        log_tail: vec![crate::types::SimulationPreparationLogEntrySnapshot {
+            timestamp_unix_ms,
+            level: "error".to_string(),
+            stage_id: stage_id.to_string(),
+            message: bounded_preparation_value(
+                error_message,
+                MAX_PREPARATION_LOG_MESSAGE_CHARS,
+            ),
+        }],
+        failure: Some(crate::types::SimulationPreparationFailureSnapshot {
+            error_code,
+            summary: summary.clone(),
+            detail: None,
+            stage_id: stage_id.to_string(),
+            diagnostics_correlation_id: None,
+        }),
+    }
+}
+
+fn apply_preparation_failure_snapshot(
+    snapshot: &mut crate::types::SessionStateResponse,
+    error_code: &str,
+    error_message: &str,
+) {
+    let timestamp_unix_ms = u64::try_from(crate::unix_time_millis_now()).unwrap_or(u64::MAX);
+    let bounded_code = bounded_preparation_value(error_code, MAX_PREPARATION_ERROR_CODE_CHARS);
+    let bounded_summary = bounded_preparation_value(
+        error_message,
+        MAX_PREPARATION_ERROR_MESSAGE_CHARS,
+    );
+    let current_revision = snapshot.simulation_preparation_revision;
+    if snapshot.simulation_preparation.is_some() {
+        let next_revision = {
+            let preparation = snapshot
+                .simulation_preparation
+                .as_mut()
+                .expect("preparation presence checked above");
+            let mut changed = normalize_preparation_diagnostics(preparation);
+            let next_revision = current_revision
+                .max(preparation.revision)
+                .saturating_add(1)
+                .max(1);
+            let has_failure = preparation.failure.is_some();
+            let already_failed = preparation.status == "failed"
+                && preparation.active_stage_id.is_none()
+                && preparation.completed_at_unix_ms.is_some()
+                && has_failure;
+            if !already_failed {
+                changed = true;
+                preparation.status = "failed".to_string();
+                preparation.active_stage_id = None;
+                preparation.completed_at_unix_ms = Some(timestamp_unix_ms);
+                if !has_failure {
+                    preparation.failure = Some(
+                        crate::types::SimulationPreparationFailureSnapshot {
+                            error_code: bounded_code,
+                            summary: bounded_summary.clone(),
+                            detail: None,
+                            stage_id: "runtime_startup".to_string(),
+                            diagnostics_correlation_id: None,
+                        },
+                    );
+                }
+            }
+            if changed {
+                preparation.revision = next_revision;
+                Some(next_revision)
+            } else {
+                None
+            }
+        };
+        if let Some(next_revision) = next_revision {
+            snapshot.simulation_preparation_revision = next_revision;
+        }
         return;
     }
-    snapshot.session.status = "startup_failed".to_string();
-    snapshot.runtime_status = build_runtime_status_view("startup_failed");
-    snapshot.metadata = Some(json!({
-        STARTUP_METADATA_KEY: {
-            "request": request,
-            "request_id": request.request_id,
-            "source_sha256": loaded.source.sha256,
-            "source_size_bytes": loaded.source.size_bytes,
-            "status": "startup_failed",
-            "error": error.message,
-            "runtime_metadata": loaded.runtime,
-        }
-    }));
+
+    let revision = current_revision.saturating_add(1).max(1);
+    let preparation_id = startup_failure_preparation_id(snapshot);
+    snapshot.simulation_preparation = Some(build_failed_preparation_snapshot(
+        preparation_id,
+        revision,
+        timestamp_unix_ms,
+        &bounded_code,
+        &bounded_summary,
+    ));
+    snapshot.simulation_preparation_revision = revision;
+}
+
+fn apply_accepted_preparation_failure_snapshot(
+    snapshot: &mut crate::types::SessionStateResponse,
+    context: &CurrentLiveRequestContext,
+    session_epoch: u64,
+    preparation_error: &crate::live_accepted_execution::AcceptedLiveStudyPreparationError,
+) -> bool {
+    apply_accepted_recovery_snapshot(
+        snapshot,
+        context,
+        session_epoch,
+        &preparation_error.code,
+        &preparation_error.message,
+        None,
+    )
+}
+
+fn apply_accepted_recovery_snapshot(
+    snapshot: &mut crate::types::SessionStateResponse,
+    context: &CurrentLiveRequestContext,
+    session_epoch: u64,
+    error_code: &str,
+    error_message: &str,
+    stale_failure: Option<Value>,
+) -> bool {
+    if crate::ensure_current_live_request_context(snapshot, context, session_epoch).is_err() {
+        return false;
+    }
+    apply_preparation_failure_snapshot(snapshot, error_code, error_message);
+    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({"previous_metadata": metadata});
+    }
+    let metadata_object = metadata
+        .as_object_mut()
+        .expect("accepted recovery metadata must be an object");
+    if let Some(stale_failure) = stale_failure {
+        metadata_object.insert("docker_startup_failure".to_string(), stale_failure);
+    }
+    let startup = metadata_object
+        .entry(STARTUP_METADATA_KEY.to_string())
+        .or_insert_with(|| json!({}));
+    if !startup.is_object() {
+        *startup = json!({});
+    }
+    let startup_object = startup
+        .as_object_mut()
+        .expect("accepted startup metadata must be an object");
+    startup_object.insert("preparation_status".to_string(), json!("failed"));
+    if !startup_object.contains_key("preparation_error_code") {
+        startup_object.insert(
+            "preparation_error_code".to_string(),
+            json!(error_code),
+        );
+    }
+    if !startup_object.contains_key("preparation_error") {
+        startup_object.insert(
+            "preparation_error".to_string(),
+            json!(bounded_startup_error(error_message)),
+        );
+    } else if startup_object
+        .get("preparation_error_code")
+        .and_then(Value::as_str)
+        != Some(error_code)
+    {
+        startup_object.insert(
+            "recovery_followup_error".to_string(),
+            json!({
+                "code": error_code,
+                "message": bounded_startup_error(error_message),
+            }),
+        );
+    }
+    // Preserve the original request, source, status and step_ids. They are
+    // the accepted immutable owner record; recovery metadata is additive.
+    if !startup_object.contains_key("status") {
+        startup_object.insert("status".to_string(), json!("waiting_for_compute"));
+    }
+    if let Some(run) = snapshot.run.as_ref() {
+        startup_object
+            .entry("accepted_run".to_string())
+            .or_insert_with(|| json!(true));
+        startup_object
+            .entry("run_id".to_string())
+            .or_insert_with(|| json!(run.run_id.clone()));
+    }
+    snapshot.metadata = Some(metadata);
+    snapshot.session.status = "waiting_for_compute".to_string();
+    snapshot.runtime_status = build_runtime_status_view("waiting_for_compute");
+    if let Some(run) = snapshot.run.as_mut() {
+        run.status = "waiting_for_compute".to_string();
+    }
     snapshot.state_version = snapshot.state_version.saturating_add(1);
+    true
+}
+
+fn apply_startup_failure_snapshot(
+    snapshot: &mut crate::types::SessionStateResponse,
+    context: &CurrentLiveRequestContext,
+    session_epoch: u64,
+    request: &DockerStartupRequest,
+    loaded: &LoadedStartupScene,
+    error: &ApiError,
+) -> bool {
+    if crate::ensure_current_live_request_context(snapshot, context, session_epoch).is_err() {
+        return false;
+    }
+    let scene_matches = snapshot
+        .scene_document
+        .as_ref()
+        .map(|scene| scene == &loaded.scene)
+        .unwrap_or(true);
+    let current_scene_revision = snapshot
+        .scene_document
+        .as_ref()
+        .map(|scene| scene.revision);
+    let failure = json!({
+        "request_id": request.request_id.clone(),
+        "source_sha256": loaded.source.sha256.clone(),
+        "source_size_bytes": loaded.source.size_bytes,
+        "status": "startup_failed",
+        "error_code": error.code.clone(),
+        "error": bounded_startup_error(&error.message),
+        "captured_scene_revision": loaded.scene.revision,
+        "current_scene_revision": current_scene_revision,
+    });
+
+    // Once a RunIntent was accepted, every later failure is recovery-required.
+    // Keep its immutable request/steps/status metadata and add only the
+    // bounded recovery detail. A scene edit still gets a separate stale
+    // diagnostic so it cannot overwrite the user's newer authoring state.
+    if snapshot.run.is_some() {
+        return apply_accepted_recovery_snapshot(
+            snapshot,
+            context,
+            session_epoch,
+            error.code
+                .as_deref()
+                .unwrap_or("accepted_run_recovery_required"),
+            &error.message,
+            (!scene_matches).then_some(failure),
+        );
+    }
+
+    // A scene edit can retain the same session/run/epoch. Preserve the current
+    // authoring metadata and record this stale attempt separately.
+    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({"previous_metadata": metadata});
+    }
+    let metadata_object = metadata
+        .as_object_mut()
+        .expect("startup failure metadata must be an object");
+    if !scene_matches {
+        metadata_object.insert("docker_startup_failure".to_string(), failure);
+    } else {
+        let startup = metadata_object
+            .entry(STARTUP_METADATA_KEY.to_string())
+            .or_insert_with(|| json!({}));
+        if !startup.is_object() {
+            *startup = json!({});
+        }
+        let startup_object = startup
+            .as_object_mut()
+            .expect("startup metadata must be an object");
+        startup_object.insert("request".to_string(), json!(request));
+        startup_object.insert("request_id".to_string(), json!(request.request_id.clone()));
+        startup_object.insert("source_sha256".to_string(), json!(loaded.source.sha256.clone()));
+        startup_object.insert("source_size_bytes".to_string(), json!(loaded.source.size_bytes));
+        startup_object.insert("status".to_string(), json!("startup_failed"));
+        startup_object.insert("error_code".to_string(), json!(error.code.clone()));
+        startup_object.insert(
+            "error".to_string(),
+            json!(bounded_startup_error(&error.message)),
+        );
+        startup_object.insert("runtime_metadata".to_string(), json!(loaded.runtime.clone()));
+        if let Some(run) = snapshot.run.as_ref() {
+            startup_object.insert("accepted_run".to_string(), json!(true));
+            startup_object.insert("run_id".to_string(), json!(run.run_id.clone()));
+        }
+    }
+    snapshot.metadata = Some(metadata);
+    if scene_matches {
+        apply_preparation_failure_snapshot(
+            snapshot,
+            error.code
+                .as_deref()
+                .unwrap_or("docker_startup_failed"),
+            &error.message,
+        );
+        snapshot.session.status = "startup_failed".to_string();
+        snapshot.runtime_status = build_runtime_status_view("startup_failed");
+    } else {
+        // The placeholder no longer owns the edited scene. Leave the
+        // authoring workspace commandable and expose only the stale attempt.
+        snapshot.session.status = "awaiting_command".to_string();
+        snapshot.runtime_status = build_runtime_status_view("awaiting_command");
+    }
+    snapshot.state_version = snapshot.state_version.saturating_add(1);
+    true
 }
 
 #[cfg(test)]
@@ -1119,6 +1656,441 @@ mod tests {
                 legacy_cli: false,
             },
         }
+    }
+
+    fn loaded_scene_for_test(scene: SceneDocument) -> LoadedStartupScene {
+        LoadedStartupScene {
+            source: CapturedSource {
+                path: PathBuf::from("/opt/fullmag/source/examples/scene.py"),
+                sha256: "a".repeat(64),
+                size_bytes: 1,
+                bytes: Vec::new(),
+            },
+            scene,
+            runtime: DockerStartupRuntimeMetadata {
+                interactive: true,
+                wait_for_solve: true,
+            },
+        }
+    }
+
+    fn placeholder_context(snapshot: &crate::types::SessionStateResponse) -> CurrentLiveRequestContext {
+        CurrentLiveRequestContext {
+            session_id: snapshot.session.session_id.clone(),
+            run_id: Some(snapshot.session.run_id.clone()),
+            session_epoch: 17,
+            request_scope_epoch: "scope:17".to_string(),
+        }
+    }
+
+    #[test]
+    fn stale_placeholder_failure_keeps_new_scene_metadata_separate() {
+        let snapshot_request: CurrentLiveSnapshotRequest =
+            serde_json::from_value(json!({"session_id": "startup-scene-edit"}))
+                .expect("minimal startup snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.session.status = "activating".to_string();
+        snapshot.session.run_id = "run-startup-placeholder".to_string();
+        snapshot.runtime_status = build_runtime_status_view("activating");
+        let mut captured_scene = SceneDocument::default();
+        captured_scene.revision = 1;
+        let mut edited_scene = captured_scene.clone();
+        edited_scene.revision = 2;
+        edited_scene.scene.name = "edited while preparing".to_string();
+        snapshot.scene_document = Some(edited_scene.clone());
+        snapshot.metadata = Some(json!({
+            "editor": {"draft": "keep"},
+            STARTUP_METADATA_KEY: {"request": "current-placeholder"}
+        }));
+        let context = placeholder_context(&snapshot);
+        let error = ApiError::conflict("startup_scene_revision_or_content_changed");
+
+        assert!(apply_startup_failure_snapshot(
+            &mut snapshot,
+            &context,
+            17,
+            &request(),
+            &loaded_scene_for_test(captured_scene),
+            &error,
+        ));
+        assert_eq!(snapshot.scene_document, Some(edited_scene));
+        assert_eq!(snapshot.session.status, "awaiting_command");
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/editor/draft")
+                .and_then(Value::as_str)),
+            Some("keep")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/request")
+                .and_then(Value::as_str)),
+            Some("current-placeholder")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup_failure/error")
+                .and_then(Value::as_str)),
+            Some("startup_scene_revision_or_content_changed")
+        );
+    }
+
+    #[test]
+    fn accepted_preparation_failure_keeps_run_identity_and_step_ids() {
+        let snapshot_request: CurrentLiveSnapshotRequest =
+            serde_json::from_value(json!({"session_id": "startup-accepted-recovery"}))
+                .expect("minimal startup snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.session.status = "waiting_for_compute".to_string();
+        snapshot.session.run_id = "run-accepted-recovery".to_string();
+        snapshot.runtime_status = build_runtime_status_view("waiting_for_compute");
+        snapshot.run = Some(RunManifest {
+            run_id: "run-accepted-recovery".to_string(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "waiting_for_compute".to_string(),
+            total_steps: 1,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: ".".to_string(),
+        });
+        snapshot.scene_document = Some(SceneDocument::default());
+        snapshot.metadata = Some(json!({
+            STARTUP_METADATA_KEY: {
+                "status": "waiting_for_compute",
+                "run_id": "run-accepted-recovery",
+                "step_ids": ["step-recovery"]
+            }
+        }));
+        let context = placeholder_context(&snapshot);
+        let preparation_error =
+            crate::live_accepted_execution::AcceptedLiveStudyPreparationError {
+                code: "accepted_run_catalog_failed".to_string(),
+                message: "catalog materialization failed after RunIntent acceptance".to_string(),
+            };
+
+        assert!(apply_accepted_preparation_failure_snapshot(
+            &mut snapshot,
+            &context,
+            17,
+            &preparation_error,
+        ));
+        assert_eq!(snapshot.session.status, "waiting_for_compute");
+        assert_eq!(
+            snapshot.run.as_ref().map(|run| run.run_id.as_str()),
+            Some("run-accepted-recovery")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/run_id")
+                .and_then(Value::as_str)),
+            Some("run-accepted-recovery")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/step_ids/0")
+                .and_then(Value::as_str)),
+            Some("step-recovery")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/preparation_status")
+                .and_then(Value::as_str)),
+            Some("failed")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/preparation_error_code")
+                .and_then(Value::as_str)),
+            Some("accepted_run_catalog_failed")
+        );
+        let preparation = snapshot
+            .simulation_preparation
+            .as_ref()
+            .expect("accepted preparation failures must publish the preparation resource");
+        assert_eq!(preparation.status, "failed");
+        assert_eq!(preparation.stages.len(), CANONICAL_PREPARATION_STAGES.len());
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .map(|stage| stage.id.as_str())
+                .collect::<Vec<_>>(),
+            CANONICAL_PREPARATION_STAGES
+                .iter()
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        );
+        let failure = preparation
+            .failure
+            .as_ref()
+            .expect("accepted preparation failure must be visible in its resource");
+        assert_eq!(failure.error_code, "accepted_run_catalog_failed");
+        assert_eq!(failure.stage_id, "runtime_startup");
+        assert!(failure.summary.contains("catalog materialization failed"));
+    }
+
+    #[test]
+    fn accepted_failure_normalizes_legacy_preparation_for_resource() {
+        let snapshot_request: CurrentLiveSnapshotRequest =
+            serde_json::from_value(json!({"session_id": "startup-legacy-preparation"}))
+                .expect("minimal startup snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.session.status = "waiting_for_compute".to_string();
+        snapshot.session.run_id = "run-legacy-preparation".to_string();
+        snapshot.runtime_status = build_runtime_status_view("waiting_for_compute");
+        snapshot.run = Some(RunManifest {
+            run_id: "run-legacy-preparation".to_string(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "waiting_for_compute".to_string(),
+            total_steps: 1,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: ".".to_string(),
+        });
+        snapshot.scene_document = Some(SceneDocument::default());
+        snapshot.simulation_preparation_revision = 7;
+        snapshot.simulation_preparation = Some(crate::types::SimulationPreparationSnapshot {
+            preparation_id: "legacy-preparation-id".to_string(),
+            revision: 7,
+            status: "completed".to_string(),
+            active_stage_id: None,
+            started_at_unix_ms: 10,
+            completed_at_unix_ms: Some(11),
+            stages: vec![crate::types::SimulationPreparationStageSnapshot {
+                id: "startup".to_string(),
+                label: "Legacy startup".to_string(),
+                detail: "legacy stage detail".to_string(),
+                status: "completed".to_string(),
+                started_at_unix_ms: Some(10),
+                completed_at_unix_ms: Some(11),
+                duration_ms: Some(1),
+                clock_adjustment: None,
+                progress_percent: Some(100),
+                progress_label: Some("legacy ready".to_string()),
+            }],
+            log_tail: vec![crate::types::SimulationPreparationLogEntrySnapshot {
+                timestamp_unix_ms: 11,
+                level: "error".to_string(),
+                stage_id: "startup".to_string(),
+                message: "legacy failure message".to_string(),
+            }],
+            failure: Some(crate::types::SimulationPreparationFailureSnapshot {
+                error_code: "legacy_failure".to_string(),
+                summary: "legacy failure summary".to_string(),
+                detail: Some("legacy failure detail".to_string()),
+                stage_id: "startup".to_string(),
+                diagnostics_correlation_id: Some("diag-legacy".to_string()),
+            }),
+        });
+        let context = placeholder_context(&snapshot);
+        let preparation_error =
+            crate::live_accepted_execution::AcceptedLiveStudyPreparationError {
+                code: "replacement_error".to_string(),
+                message: "a later error must not erase the original preparation failure"
+                    .to_string(),
+            };
+
+        assert!(apply_accepted_preparation_failure_snapshot(
+            &mut snapshot,
+            &context,
+            17,
+            &preparation_error,
+        ));
+        let preparation = snapshot
+            .simulation_preparation
+            .as_ref()
+            .expect("legacy preparation should remain available");
+        assert_eq!(preparation.preparation_id, "legacy-preparation-id");
+        assert_eq!(preparation.stages.len(), CANONICAL_PREPARATION_STAGES.len());
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .map(|stage| stage.id.as_str())
+                .collect::<Vec<_>>(),
+            CANONICAL_PREPARATION_STAGES
+                .iter()
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        );
+        let failure = preparation
+            .failure
+            .as_ref()
+            .expect("legacy failure should be preserved");
+        assert_eq!(failure.error_code, "legacy_failure");
+        assert_eq!(failure.summary, "legacy failure summary");
+        assert_eq!(failure.detail.as_deref(), Some("legacy failure detail"));
+        assert_eq!(failure.stage_id, "runtime_startup");
+        assert_eq!(failure.diagnostics_correlation_id.as_deref(), Some("diag-legacy"));
+        assert_eq!(preparation.log_tail[0].stage_id, "runtime_startup");
+        assert_eq!(preparation.log_tail[0].message, "legacy failure message");
+    }
+
+    #[test]
+    fn accepted_later_failure_preserves_startup_owner_metadata() {
+        let snapshot_request: CurrentLiveSnapshotRequest =
+            serde_json::from_value(json!({"session_id": "startup-frontier-recovery"}))
+                .expect("minimal startup snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.session.status = "waiting_for_compute".to_string();
+        snapshot.session.run_id = "run-frontier-recovery".to_string();
+        snapshot.runtime_status = build_runtime_status_view("waiting_for_compute");
+        snapshot.run = Some(RunManifest {
+            run_id: "run-frontier-recovery".to_string(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "waiting_for_compute".to_string(),
+            total_steps: 2,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: ".".to_string(),
+        });
+        let scene = SceneDocument::default();
+        snapshot.scene_document = Some(scene.clone());
+        let owner_request = request();
+        snapshot.metadata = Some(json!({
+            STARTUP_METADATA_KEY: {
+                "request": owner_request,
+                "request_id": "startup-test-1",
+                "source_sha256": "a".repeat(64),
+                "source_size_bytes": 1,
+                "status": "waiting_for_compute",
+                "run_id": "run-frontier-recovery",
+                "step_ids": ["step-first", "step-second"],
+                "scene_revision": scene.revision,
+                "runtime_metadata": {"interactive": true, "wait_for_solve": true},
+            }
+        }));
+        let context = placeholder_context(&snapshot);
+        let error = ApiError::conflict_with_code(
+            "accepted_frontier_preparation_failed",
+            "frontier receipt is unavailable",
+        );
+
+        assert!(apply_startup_failure_snapshot(
+            &mut snapshot,
+            &context,
+            17,
+            &request(),
+            &loaded_scene_for_test(scene),
+            &error,
+        ));
+        assert_eq!(snapshot.session.status, "waiting_for_compute");
+        assert_eq!(snapshot.run.as_ref().map(|run| run.run_id.as_str()), Some("run-frontier-recovery"));
+        assert_eq!(snapshot.run.as_ref().map(|run| run.status.as_str()), Some("waiting_for_compute"));
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/request_id")
+                .and_then(Value::as_str)),
+            Some("startup-test-1")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/step_ids/1")
+                .and_then(Value::as_str)),
+            Some("step-second")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/status")
+                .and_then(Value::as_str)),
+            Some("waiting_for_compute")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/preparation_status")
+                .and_then(Value::as_str)),
+            Some("failed")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/preparation_error_code")
+                .and_then(Value::as_str)),
+            Some("accepted_frontier_preparation_failed")
+        );
+        assert!(snapshot
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("docker_startup_failure"))
+            .is_none());
+
+        let followup = ApiError::conflict_with_code(
+            "realtime_publication_failed",
+            "realtime publication failed after recovery was recorded",
+        );
+        assert!(apply_startup_failure_snapshot(
+            &mut snapshot,
+            &context,
+            17,
+            &request(),
+            &loaded_scene_for_test(SceneDocument::default()),
+            &followup,
+        ));
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/preparation_error_code")
+                .and_then(Value::as_str)),
+            Some("accepted_frontier_preparation_failed")
+        );
+        assert_eq!(
+            snapshot.metadata.as_ref().and_then(|metadata| metadata
+                .pointer("/docker_startup/recovery_followup_error/code")
+                .and_then(Value::as_str)),
+            Some("realtime_publication_failed")
+        );
+    }
+
+    #[test]
+    fn startup_replay_does_not_report_success_after_accepted_preparation_failure() {
+        let request = request();
+        let source = CapturedSource {
+            path: PathBuf::from(request.source.path.clone()),
+            sha256: request.source.sha256.clone(),
+            size_bytes: 1,
+            bytes: Vec::new(),
+        };
+        let snapshot_request: CurrentLiveSnapshotRequest =
+            serde_json::from_value(json!({"session_id": "startup-replay-recovery"}))
+                .expect("minimal startup snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.session.run_id = "run-replay-recovery".to_string();
+        snapshot.session.status = "waiting_for_compute".to_string();
+        snapshot.metadata = Some(json!({
+            STARTUP_METADATA_KEY: {
+                "request": request,
+                "source_sha256": source.sha256,
+                "source_size_bytes": source.size_bytes,
+                "status": "waiting_for_compute",
+                "run_id": "run-replay-recovery",
+                "step_ids": [123],
+                "scene_revision": 0,
+                "runtime_metadata": {"interactive": true, "wait_for_solve": true},
+                "preparation_status": "failed",
+                "preparation_error_code": "accepted_run_catalog_failed",
+                "preparation_error": "catalog materialization failed",
+            }
+        }));
+
+        let error = replay_or_reject(&request, &source, &snapshot)
+            .expect_err("a preparation failure must not replay as accepted");
+        assert_eq!(error.code.as_deref(), Some("accepted_run_recovery_required"));
     }
 
     #[test]

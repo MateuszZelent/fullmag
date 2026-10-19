@@ -746,7 +746,27 @@ export function resolveObjectVisualizationTargetForLane({
   selectionTarget: VisualizationTargetRef | null;
 }): VisualizationTargetRef | null {
   if (artifactInspection) return selectionTarget?.kind === "object" ? selectionTarget : null;
-  if (lane === "unresolved") return null;
+
+  const objectVisualizationSelection =
+    selection.kind === "object.antenna.visualization" ||
+    selection.kind === "object.visualization" ||
+    selection.kind === "object.visualization.debug" ||
+    selection.kind === "object.region.visualization" ||
+    selection.kind === "object.region.visualization.debug";
+  const explicitObjectVisualizationSelection =
+    objectVisualizationSelection && selection.ref?.type === "scene-object";
+
+  if (lane === "unresolved") {
+    // An explicit object/region visualization node already carries a semantic
+    // target. Keep its display controls usable while the numerical lane is
+    // still loading; lane-specific field and mesh resources stay disabled
+    // until the status identifies FDM or FEM.
+    return explicitObjectVisualizationSelection &&
+      (selectionTarget?.kind === "object" || selectionTarget?.kind === "region")
+      ? selectionTarget
+      : null;
+  }
+
   if (selection.kind === "object.antenna.visualization") {
     // The conductor owns its result carriers; never substitute a magnetic layer.
     return selectionTarget?.kind === "object" ? selectionTarget : null;
@@ -776,11 +796,6 @@ export function resolveObjectVisualizationTargetForLane({
     return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
   }
 
-  const objectVisualizationSelection =
-    selection.kind === "object.visualization" ||
-    selection.kind === "object.visualization.debug" ||
-    selection.kind === "object.region.visualization" ||
-    selection.kind === "object.region.visualization.debug";
   if (objectVisualizationSelection) {
     if (lane === "fdm" && selection.objectId) {
       const nativeLayer = fdmNativeLayers?.find(
