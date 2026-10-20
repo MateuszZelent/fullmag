@@ -4229,24 +4229,178 @@ def _mixed_v2_body_aabb(
     return center - extent, center + extent
 
 
+class _MixedV2NeumaierSum:
+    """Match the native mixed-v2 compensated binary64 accumulator."""
+
+    __slots__ = ("_sum", "_correction")
+
+    def __init__(self) -> None:
+        self._sum = 0.0
+        self._correction = 0.0
+
+    def add(self, value: float) -> None:
+        value = float(value)
+        next_sum = self._sum + value
+        if abs(self._sum) >= abs(value):
+            self._correction += (self._sum - next_sum) + value
+        else:
+            self._correction += (value - next_sum) + self._sum
+        self._sum = next_sum
+
+    def total(self) -> float:
+        return self._sum + self._correction
+
+
+def _mixed_v2_compensated_sum(values: Iterator[float]) -> float:
+    total = _MixedV2NeumaierSum()
+    for value in values:
+        total.add(value)
+    return total.total()
+
+
+def _mixed_v2_det3(columns: Sequence[Sequence[float]]) -> float:
+    """Evaluate the determinant in the native validator's operation order."""
+    a00, a01, a02 = (float(value) for value in columns[0])
+    a10, a11, a12 = (float(value) for value in columns[1])
+    a20, a21, a22 = (float(value) for value in columns[2])
+    return (
+        a00 * (a11 * a22 - a12 * a21)
+        - a01 * (a10 * a22 - a12 * a20)
+        + a02 * (a10 * a21 - a11 * a20)
+    )
+
+
+def _mixed_v2_sub3(
+    left: Sequence[float], right: Sequence[float]
+) -> tuple[float, float, float]:
+    return tuple(float(left[index]) - float(right[index]) for index in range(3))  # type: ignore[return-value]
+
+
+def _mixed_v2_cross3(
+    left: Sequence[float], right: Sequence[float]
+) -> tuple[float, float, float]:
+    return (
+        float(left[1]) * float(right[2]) - float(left[2]) * float(right[1]),
+        float(left[2]) * float(right[0]) - float(left[0]) * float(right[2]),
+        float(left[0]) * float(right[1]) - float(left[1]) * float(right[0]),
+    )
+
+
+def _mixed_v2_dot3(left: Sequence[float], right: Sequence[float]) -> float:
+    return (
+        float(left[0]) * float(right[0])
+        + float(left[1]) * float(right[1])
+        + float(left[2]) * float(right[2])
+    )
+
+
+def _mixed_v2_mapped_jacobian(
+    coordinates: NDArray[np.float64],
+    derivatives: NDArray[np.float64],
+) -> tuple[tuple[float, float, float], ...]:
+    """Build a mapped Jacobian with the native fixed loop order."""
+    jacobian = [[0.0, 0.0, 0.0] for _ in range(3)]
+    for coordinate, derivative in zip(coordinates, derivatives, strict=True):
+        for physical_axis in range(3):
+            for reference_axis in range(3):
+                jacobian[physical_axis][reference_axis] += (
+                    float(coordinate[physical_axis])
+                    * float(derivative[reference_axis])
+                )
+    return tuple(tuple(row) for row in jacobian)
+
+
+def _mixed_v2_reference_derivative_samples(
+    family: str,
+) -> NDArray[np.float64]:
+    samples = _mixed_reference_derivative_samples(family)
+    if family == "pyramid5":
+        # The shared helper uses r-then-s order; native validation uses the
+        # Rust tuple order (-q,-q), (q,-q), (-q,q), (q,q).
+        samples = samples.reshape(2, 2, 2, 5, 3).transpose(0, 2, 1, 3, 4)
+        samples = samples.reshape(-1, 5, 3)
+    return samples
+
+
+def _mixed_v2_cell_jacobian_determinants(
+    family: str, coordinates: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    if family == "tet4":
+        return np.asarray(
+            [
+                _mixed_v2_det3(
+                    (
+                        _mixed_v2_sub3(coordinates[1], coordinates[0]),
+                        _mixed_v2_sub3(coordinates[2], coordinates[0]),
+                        _mixed_v2_sub3(coordinates[3], coordinates[0]),
+                    )
+                )
+            ],
+            dtype=np.float64,
+        )
+    if family in {"prism6", "pyramid5"}:
+        return np.asarray(
+            [
+                _mixed_v2_det3(
+                    _mixed_v2_mapped_jacobian(coordinates, derivatives)
+                )
+                for derivatives in _mixed_v2_reference_derivative_samples(family)
+            ],
+            dtype=np.float64,
+        )
+    raise ValueError(f"mixed v2 Jacobians do not support {family}")
+
+
+def _mixed_v2_cell_scaled_jacobians(
+    family: str, coordinates: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    values: list[float] = []
+    if family not in {"tet4", "prism6", "pyramid5"}:
+        raise ValueError(f"mixed v2 scaled Jacobians do not support {family}")
+    for derivatives in _mixed_v2_reference_derivative_samples(family):
+        matrix = _mixed_v2_mapped_jacobian(coordinates, derivatives)
+        column_norms = []
+        for reference_axis in range(3):
+            squared = 0.0
+            for physical_axis in range(3):
+                value = matrix[physical_axis][reference_axis]
+                squared += value * value
+            column_norms.append(math.sqrt(squared))
+        denominator = column_norms[0] * column_norms[1] * column_norms[2]
+        determinant = _mixed_v2_det3(matrix)
+        values.append(abs(determinant) / denominator if denominator else 0.0)
+    return np.asarray(values, dtype=np.float64)
+
+
 def _mixed_v2_cell_volume(family: str, coordinates: NDArray[np.float64]) -> float:
     """Compute a positive geometric cell volume without a topology downgrade."""
-    jacobians = _cell_jacobian_determinants(family, coordinates)
+    jacobians = _mixed_v2_cell_jacobian_determinants(family, coordinates)
     if family == "tet4":
         return abs(float(jacobians[0])) / 6.0
     if family == "prism6":
         # The reference triangular prism has unit volume.  The quadrature
         # samples used by the quality proof therefore integrate det(J)
         # directly for the linear prism map.
-        return abs(float(np.mean(jacobians)))
+        return abs(_mixed_v2_compensated_sum(iter(jacobians.tolist()))) / len(jacobians)
     if family == "pyramid5":
         base = coordinates[:4]
         apex = coordinates[4]
         triangles = ((0, 1, 2), (0, 2, 3))
-        return float(sum(
-            abs(float(np.linalg.det(np.stack((base[j] - base[i], base[k] - base[i], apex - base[i]), axis=1)))) / 6.0
-            for i, j, k in triangles
-        ))
+        return _mixed_v2_compensated_sum(
+            iter(
+                abs(
+                    _mixed_v2_det3(
+                        (
+                            _mixed_v2_sub3(base[j], base[i]),
+                            _mixed_v2_sub3(base[k], base[i]),
+                            _mixed_v2_sub3(apex, base[i]),
+                        )
+                    )
+                )
+                / 6.0
+                for i, j, k in triangles
+            )
+        )
     raise ValueError(f"mixed v2 volume does not support {family}")
 
 
@@ -4507,8 +4661,12 @@ def _mixed_v2_closed_faceted_magnetic_volume(mesh: MeshData) -> float:
                 (ordinal, int(mesh.element_markers[ordinal]))
             )
 
-    volumes_by_marker: dict[int, float] = {1: 0.0, 2: 0.0}
+    volumes_by_marker = {
+        1: _MixedV2NeumaierSum(),
+        2: _MixedV2NeumaierSum(),
+    }
     seen_by_marker: dict[int, int] = {1: 0, 2: 0}
+    interface_facets: list[tuple[tuple[int, ...], int, str, int]] = []
     for ordinal, (family, role, marker) in enumerate(
         zip(
             mesh.facet_types.tolist(),
@@ -4517,8 +4675,14 @@ def _mixed_v2_closed_faceted_magnetic_volume(mesh: MeshData) -> float:
             strict=True,
         )
     ):
-        if role != "material_interface" or int(marker) != MIXED_INTERFACE_MARKER:
-            continue
+        if role == "material_interface" and int(marker) == MIXED_INTERFACE_MARKER:
+            nodes = tuple(int(node) for node in mesh.facet_node_ids(ordinal))
+            interface_facets.append(
+                (tuple(sorted(nodes)), ordinal, str(family), int(marker))
+            )
+    # The native validator iterates its BTreeMap of explicit facets in sorted
+    # node-key order.  Use the same order before feeding the compensated sums.
+    for _key, ordinal, family, marker in sorted(interface_facets):
         nodes = tuple(int(node) for node in mesh.facet_node_ids(ordinal))
         owners = face_owners.get(tuple(sorted(nodes)), [])
         magnetic_owners = [owner for owner in owners if owner[1] in volumes_by_marker]
@@ -4539,27 +4703,47 @@ def _mixed_v2_closed_faceted_magnetic_volume(mesh: MeshData) -> float:
                 f"mixed v2 magnetic interface has unsupported facet family {family!r}"
             )
         owner_nodes = mesh.cell_node_ids(owner_ordinal)
-        owner_centroid = np.mean(mesh.nodes[owner_nodes], axis=0)
-        face_centroid = np.mean(points, axis=0)
-        signed = 0.0
+        owner_centroid = [0.0, 0.0, 0.0]
+        for node in owner_nodes:
+            for axis in range(3):
+                owner_centroid[axis] += float(mesh.nodes[int(node), axis])
+        owner_centroid = [value / len(owner_nodes) for value in owner_centroid]
+        face_centroid = [0.0, 0.0, 0.0]
+        for point in points:
+            for axis in range(3):
+                face_centroid[axis] += float(point[axis])
+        face_centroid = [value / len(points) for value in face_centroid]
+        signed = _MixedV2NeumaierSum()
         for i, j, k in triangles:
-            normal = np.cross(points[j] - points[i], points[k] - points[i])
-            if float(np.dot(normal, face_centroid - owner_centroid)) < 0.0:
+            normal = _mixed_v2_cross3(
+                _mixed_v2_sub3(points[j], points[i]),
+                _mixed_v2_sub3(points[k], points[i]),
+            )
+            if _mixed_v2_dot3(
+                normal, _mixed_v2_sub3(face_centroid, owner_centroid)
+            ) < 0.0:
                 j, k = k, j
-            signed += float(
-                np.linalg.det(
-                    np.stack((points[i], points[j], points[k]), axis=1)
+            signed.add(
+                _mixed_v2_det3(
+                    (
+                        points[i],
+                        points[j],
+                        points[k],
+                    )
                 )
                 / 6.0
             )
-        volumes_by_marker[owner_marker] += signed
+        volumes_by_marker[owner_marker].add(signed.total())
         seen_by_marker[owner_marker] += 1
     if any(seen_by_marker[marker] == 0 for marker in volumes_by_marker):
         raise RuntimeError("mixed v2 magnetic interface facets are incomplete")
-    volumes = [abs(value) for value in volumes_by_marker.values()]
+    volumes = [
+        abs(volumes_by_marker[marker].total())
+        for marker in sorted(volumes_by_marker)
+    ]
     if not all(math.isfinite(value) and value > 0.0 for value in volumes):
         raise RuntimeError("mixed v2 closed faceted magnetic volume is invalid")
-    return float(sum(volumes))
+    return _mixed_v2_compensated_sum(iter(volumes))
 
 
 def attach_disconnected_mixed_p1_certificate_v2(
@@ -4618,13 +4802,27 @@ def attach_disconnected_mixed_p1_certificate_v2(
         by_family[str(family)] = by_family.get(str(family), 0) + 1
 
     cell_volumes = np.zeros(mesh.n_elements, dtype=np.float64)
+    shared_volume_accumulator = _MixedV2NeumaierSum()
+    magnetic_volume_accumulators = {
+        1: _MixedV2NeumaierSum(),
+        2: _MixedV2NeumaierSum(),
+    }
     jacobians: dict[str, list[float]] = {}
     scaled: dict[str, list[float]] = {}
     for ordinal, family in enumerate(mesh.cell_types.tolist()):
         coordinates = mesh.nodes[mesh.cell_node_ids(ordinal)]
         cell_volumes[ordinal] = _mixed_v2_cell_volume(str(family), coordinates)
-        jacobians.setdefault(str(family), []).extend(_cell_jacobian_determinants(str(family), coordinates).tolist())
-        scaled.setdefault(str(family), []).extend(_mixed_cell_scaled_jacobians(str(family), coordinates).tolist())
+        cell_jacobians = _mixed_v2_cell_jacobian_determinants(
+            str(family), coordinates
+        )
+        jacobians.setdefault(str(family), []).extend(cell_jacobians.tolist())
+        scaled.setdefault(str(family), []).extend(
+            _mixed_v2_cell_scaled_jacobians(str(family), coordinates).tolist()
+        )
+        shared_volume_accumulator.add(float(cell_volumes[ordinal]))
+        marker = int(mesh.element_markers[ordinal])
+        if marker in magnetic_volume_accumulators:
+            magnetic_volume_accumulators[marker].add(float(cell_volumes[ordinal]))
     if not np.all(np.isfinite(cell_volumes)) or np.any(cell_volumes <= 0.0):
         raise RuntimeError("mixed v2 mesh contains nonpositive cell volume")
     jacobian_minima = {family: float(np.min(values)) for family, values in sorted(jacobians.items())}
@@ -4677,12 +4875,21 @@ def attach_disconnected_mixed_p1_certificate_v2(
         )
     realized_magnetic_min = tuple(float(value) for value in np.min(mesh.nodes[magnetic_nodes], axis=0))
     realized_magnetic_max = tuple(float(value) for value in np.max(mesh.nodes[magnetic_nodes], axis=0))
-    shared_volume = float(np.sum(cell_volumes))
-    magnetic_volume = float(np.sum(cell_volumes[magnetic_mask]))
+    shared_volume = shared_volume_accumulator.total()
+    magnetic_volume = _mixed_v2_compensated_sum(
+        iter(
+            magnetic_volume_accumulators[marker].total()
+            for marker in sorted(magnetic_volume_accumulators)
+        )
+    )
     faceted_magnetic_volume = _mixed_v2_closed_faceted_magnetic_volume(mesh)
     if not math.isfinite(faceted_magnetic_volume) or faceted_magnetic_volume <= 0.0:
         raise RuntimeError("mixed v2 closed faceted magnetic volume is invalid")
-    expected_shared_volume = float(np.prod(np.asarray(airbox_bounds_max_m) - np.asarray(airbox_bounds_min_m)))
+    airbox_extent = tuple(
+        float(airbox_bounds_max_m[index]) - float(airbox_bounds_min_m[index])
+        for index in range(3)
+    )
+    expected_shared_volume = airbox_extent[0] * airbox_extent[1] * airbox_extent[2]
     magnetic_bounds_scale = max(float(np.max(np.asarray(body_bounds_max_m) - np.asarray(body_bounds_min_m))), 1.0e-30)
     airbox_bounds_scale = max(float(np.max(np.asarray(airbox_bounds_max_m) - np.asarray(airbox_bounds_min_m))), 1.0e-30)
     magnetic_bounds_error = max(

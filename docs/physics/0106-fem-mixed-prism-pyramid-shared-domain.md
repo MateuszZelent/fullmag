@@ -415,6 +415,23 @@ assigned from that same sum. The analytic CAD volume and its approximation
 error are separate convergence evidence. A curved boundary approximation must
 not be hidden by weakening the closed-mesh volume-integrity tolerance.
 
+The closed-faceted boundary integral and the magnetic-cell volume sum are
+independent reductions over the realized mesh. `expected_magnetic_volume_m3`
+therefore remains bound to the closed-faceted integral, and
+`magnetic_relative_volume_error` remains the derived dimensionless residual
+between the two totals. The producer correction is owned by
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` symbols
+`attach_disconnected_mixed_p1_certificate_v2` and
+`_mixed_v2_closed_faceted_magnetic_volume`: both totals must use the same
+explicit `det3` operation order and fixed-order Neumaier-compensated binary64
+reduction. The native consumer symbols `CompensatedSum` and
+`validate_mixed_layer_topology_certificate_v2_against_mesh` in
+`crates/fullmag-ir/src/mixed_certificate_v2.rs` define the corresponding
+consumer contract. This preserves the existing `16 * f64::EPSILON` absolute
+allowance for dimensionless fields when the residual is near zero. It leaves
+the independent integral, v2 fields, units, topology, and backend/device
+qualification unchanged.
+
 For each body, material coefficients are owned by that body and interpolated
 only inside its magnetic finite-element space:
 
@@ -676,8 +693,11 @@ abs(claimed - recomputed)
 
 only for dimensionless `scaled_jacobian_minima_by_family`,
 `scaled_jacobian_p05_by_family`, `magnetic_relative_volume_error`, and
-`shared_domain_relative_volume_error`. This accounts for NumPy/LAPACK versus
-direct-Rust determinant and reduction ordering. No other certificate field
+`shared_domain_relative_volume_error`. This bound applies after the producer
+and consumer use the same explicit determinant operation and fixed-order
+compensated reduction. It covers remaining binary64 representation
+differences; it does not cover a producer-side determinant or reduction
+algorithm that differs from the native contract. No other certificate field
 inherits the `16 * f64::EPSILON` absolute allowance: dimensional Jacobians,
 volumes, and related scalar evidence retain `1e-12` relative plus `1e-30`
 absolute comparison, while bounds, plane coordinates, counts, markers, and
@@ -1957,6 +1977,7 @@ It is a proposal for a staged source implementation and qualification path.
 | Mixed-tetrahedral repair policy validation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_validate_mixed_tet_repair_policy` | fail-closed validation owner for the source-mapped production constant `_STRICT_MIXED_TET_REPAIR_POLICY` | FEM CPU/GPU shared meshing contract | focused valid/invalid private-policy tests |
 | Mixed-tetrahedral repair execution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_repair_mixed_tetrahedra` | validates the private policy and invokes the non-overridable fail-closed policy executor before extraction and certification | FEM CPU/GPU shared meshing contract | focused selector/probe integration, strict created/left degeneracy tests, and Netgen certificate-boundary tests; candidate N=10 pending |
 | Certificate generation, current Python oracle | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence during meshing; artifact persistence independently revalidates the claimed certificate natively | FEM CPU/GPU | current Python source/contract evidence; Rust engine, host bridge, and artifact caller are host-tested; managed runtime remains not verified |
+| Mixed-body v2 producer volume reduction alignment | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `attach_disconnected_mixed_p1_certificate_v2`; `_mixed_v2_closed_faceted_magnetic_volume` | preserves the independent closed-faceted oracle and aligns cell and boundary totals with the native explicit determinant and Neumaier reduction contract | FEM CPU/GPU shared meshing contract | source correction with focused Python regressions; managed runtime remains not verified |
 | Current Python evidence oracle | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_recompute_mixed_certificate_evidence` | computes the readable reference evidence and preserves current equations, ordering, and tolerances | backend-neutral reference consumed by FEM CPU/GPU | current source/contract oracle |
 | Canonical typed certificate schema | `crates/fullmag-ir/src/mesh_assets.rs` | `MixedLayerTopologyCertificateV1IR` | owns the complete certificate field set and rejects unknown fields before a certificate can contribute to the bridge digest or canonical validation | backend-neutral `fullmag-ir`; consumed by FEM CPU/GPU | full `fullmag-ir` suite: 372 passing tests; production caller/runtime not verified |
 | Language-neutral certificate evidence computation | `crates/fullmag-ir/src/mixed_certificate.rs` | `compute_mixed_certificate_evidence` | computes deterministic mixed-certificate evidence from typed `MeshIR` with immutable Rayon records and canonical ordered reductions | backend-neutral `fullmag-ir`; intended for FEM CPU/GPU | implemented and unit-qualified: 8 parallel/determinism tests plus 21 `mesh_assets` tests; bridge and artifact caller host-tested; managed runtime not verified |

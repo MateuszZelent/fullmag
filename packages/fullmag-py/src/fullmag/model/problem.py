@@ -99,6 +99,9 @@ _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 # neighboring geometry's size field after canonical owner binding changes.
 _FEM_MESH_CACHE_VERSION = "v10"
 _FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
+_FEM_MIXED_V2_VOLUME_REDUCTION_CONTRACT = (
+    "fullmag.mixed-certificate-v2.volume.det3-neumaier.v1"
+)
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -754,13 +757,17 @@ def _fem_shared_domain_cache_document(
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
     object_regions: Sequence[dict[str, object]] | None,
     cache_identity: Mapping[str, object] | None = None,
+    mixed_v2_volume_reduction_contract: str | None = None,
 ) -> tuple[str, dict[str, object]]:
     """Return the persistent identity for a generated shared FEM domain.
 
     The cache is deliberately keyed from the resolved source geometry
     fingerprints (including imported-file stat data), not only from object
     names.  This keeps a stale cache from surviving an STL/STEP replacement
-    while avoiding a repository-wide source scan on every run.
+    while avoiding a repository-wide source scan on every run.  The mixed-v2
+    volume-reduction contract is included only for the canonical disconnected
+    Box-plus-annulus route, so its producer arithmetic refresh does not
+    invalidate unrelated FEM assets.
     """
     document: dict[str, object] = {
         "schema": _FEM_SHARED_DOMAIN_CACHE_SCHEMA,
@@ -779,6 +786,10 @@ def _fem_shared_domain_cache_document(
     }
     if cache_identity is not None:
         document["cache_identity"] = dict(cache_identity)
+    if mixed_v2_volume_reduction_contract is not None:
+        document["mixed_v2_volume_reduction_contract"] = (
+            mixed_v2_volume_reduction_contract
+        )
     encoded = json.dumps(
         document,
         sort_keys=True,
@@ -1211,6 +1222,13 @@ def build_geometry_assets_for_request(
                 }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
+            from fullmag.meshing._gmsh_swept import _disconnected_mixed_p1_pair
+
+            mixed_v2_volume_reduction_contract = (
+                _FEM_MIXED_V2_VOLUME_REDUCTION_CONTRACT
+                if _disconnected_mixed_p1_pair(geometries) is not None
+                else None
+            )
 
             # A generated shared-domain mesh is much more expensive than the
             # surrounding Python model assembly. Reuse a certified native
@@ -1278,6 +1296,9 @@ def build_geometry_assets_for_request(
                     per_object_recipes=per_object_recipes,
                     object_regions=authored_regions,
                     cache_identity=cache_identity,
+                    mixed_v2_volume_reduction_contract=(
+                        mixed_v2_volume_reduction_contract
+                    ),
                 )
                 shared_cache_dir = fem_mesh_cache_dir / (
                     "shared_domains-v2" if v2_cache_enabled else "shared_domains"

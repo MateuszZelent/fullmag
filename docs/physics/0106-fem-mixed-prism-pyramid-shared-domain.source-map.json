@@ -1135,6 +1135,13 @@
       "responsibility": "Provide the CPU reference tangent-gradient operation used for derivative and parity gates."
     },
     {
+      "id": "mixed-certificate-v2-python-volume-reduction",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "attach_disconnected_mixed_p1_certificate_v2",
+      "responsibility": "Producer-side alignment for magnetic cell and independent closed-faceted volume totals; the helper _mixed_v2_closed_faceted_magnetic_volume retains the separate realized-boundary oracle while adopting the native explicit determinant and Neumaier reduction contract.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
       "id": "mixed-certificate-v2-volume-reduction",
       "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
       "symbol": "CompensatedSum",
