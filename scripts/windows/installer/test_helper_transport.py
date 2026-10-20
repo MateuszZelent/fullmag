@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 
@@ -174,6 +175,116 @@ class HelperTransportContract(unittest.TestCase):
         self.assertEqual(lines[0], READY)
         replies = [json.loads(line) for line in lines[1:4]]
         self.assertEqual([reply.get("state") for reply in replies], ["blocked"] * 3)
+
+    @unittest.skipUnless(os.name == "nt", "embedded PowerShell execution is Windows-only")
+    def test_prerequisite_public_session_preserves_requested_lane(self) -> None:
+        """The bound prerequisite reply must retain the all-realizations scope."""
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if powershell is None:
+            self.skipTest("Windows PowerShell is unavailable")
+
+        protocol = _raw_script(self.source, "ProtocolScript")
+        public_start = protocol.index("function Get-PublicSession")
+        public_end = protocol.index("\nfunction Get-PublicProposal", public_start)
+        public_session = protocol[public_start:public_end]
+
+        prerequisites_start = protocol.index("      'bootstrap_prerequisites' {")
+        prerequisites_end = protocol.index("      'preview' {", prerequisites_start)
+        prerequisites = protocol[prerequisites_start:prerequisites_end]
+        shaping_start = prerequisites.index(
+            "$public = Get-PublicSession $rebound"
+        )
+        shaping_end = prerequisites.index(
+            "Write-Public $public", shaping_start
+        )
+        shaping = prerequisites[shaping_start:shaping_end]
+
+        script = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                "function Assert-FullmagInstallerEnvSession { param($Session) return $true }",
+                "function Get-FullmagInstallerEnvPublicIdentity {",
+                "  param($Session)",
+                "  return [ordered]@{",
+                "    requested_checkout = [string]$Session.requested_checkout",
+                "    main_checkout = [string]$Session.main_checkout",
+                "    template_path = [string]$Session.template_path",
+                "    manifest_path = [string]$Session.manifest_path",
+                "    resolver_script = [string]$Session.resolver_script",
+                "    template_hash = 'template-hash'",
+                "    manifest_hash = 'manifest-hash'",
+                "    resolver_hash = 'resolver-hash'",
+                "    git_top = [string]$Session.git_top",
+                "    git_head = '0123456789012345678901234567890123456789'",
+                "    git_worktrees_hash = 'git-worktrees-hash'",
+                "    requested_git_top = [string]$Session.requested_git_top",
+                "    requested_git_head = '0123456789012345678901234567890123456789'",
+                "    requested_git_worktrees_hash = 'requested-worktrees-hash'",
+                "  }",
+                "}",
+                public_session,
+                "$sessions = @{}",
+                "$lane = 'all'",
+                "$request = [pscustomobject]@{ session_id = 'old-session' }",
+                "$rebound = [pscustomobject][ordered]@{",
+                "  session_id = 'new-session'; python_command = 'C:\\Python\\python.exe'",
+                "  requested_checkout = 'C:\\src\\fullmag'; main_checkout = 'C:\\src\\fullmag'",
+                "  template_path = 'C:\\src\\fullmag\\.env.example'; manifest_path = 'C:\\src\\fullmag\\windows_build_requirements.json'",
+                "  resolver_script = 'C:\\src\\fullmag\\scripts\\fullmag_storage.py'; storage_profile = 'windows-native-fem-gpu'",
+                "  git_top = 'C:\\src\\fullmag'; requested_git_top = 'C:\\src\\fullmag'; fields = @()",
+                "}",
+                "$report = [pscustomobject][ordered]@{",
+                "  lane = 'all'; readiness = 'prerequisites_ready'; storage_root = 'C:\\storage'; storage_profile = 'windows-native-fem-gpu'",
+                "  tools = [pscustomobject][ordered]@{",
+                "    git = [pscustomobject]@{ path = 'C:\\Git\\cmd\\git.exe'; version = '2.55.0' }",
+                "    python = [pscustomobject]@{ path = 'C:\\Python\\python.exe'; version = '3.12.2' }",
+                "  }",
+                "}",
+                shaping,
+                "if ($public.lane -ne 'all') { throw 'all-realizations scope is missing' }",
+                "$report.lane = 'cpu'",
+                shaping,
+                "if ($public.lane -ne 'cpu') { throw 'the child scope mismatch was masked' }",
+                "$report.lane = 'all'",
+                shaping,
+                "$public | ConvertTo-Json -Depth 12",
+            ]
+        )
+
+        script_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8-sig", suffix=".ps1", delete=False
+            ) as script_file:
+                script_file.write(script)
+                script_path = script_file.name
+            result = subprocess.run(
+                [
+                    powershell,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    script_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=15,
+                check=False,
+            )
+        finally:
+            if script_path:
+                os.unlink(script_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        public = json.loads(result.stdout.decode("utf-8"))
+        self.assertEqual(public.get("state"), "complete")
+        self.assertEqual(public.get("readiness"), "prerequisites_ready")
+        self.assertEqual(public.get("lane"), "all")
+        self.assertEqual(public.get("tools", {}).get("python", {}).get("path"),
+                         "C:\\Python\\python.exe")
 
 
 if __name__ == "__main__":

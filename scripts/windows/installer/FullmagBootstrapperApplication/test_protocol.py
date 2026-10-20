@@ -163,6 +163,24 @@ class BootstrapperApplicationSourceContract(unittest.TestCase):
         self.assertIn("admitted_python_path_reparse", protocol)
         self.assertNotIn(")PS\"", protocol)
 
+    def test_bound_prerequisite_public_session_preserves_requested_lane(self) -> None:
+        protocol = "".join(_extract_protocol_chunks(CPP))
+        prerequisites_start = protocol.index("      'bootstrap_prerequisites' {")
+        prerequisites_end = protocol.index("      'preview' {", prerequisites_start)
+        prerequisites = protocol[prerequisites_start:prerequisites_end]
+        shaping_start = prerequisites.index(
+            "$public = Get-PublicSession $rebound"
+        )
+        shaping_end = prerequisites.index(
+            "Write-Public $public", shaping_start
+        )
+        shaping = prerequisites[shaping_start:shaping_end]
+        self.assertIn("$public['lane'] = [string]$report.lane", shaping)
+        self.assertLess(
+            shaping.index("$public['lane'] = [string]$report.lane"),
+            shaping.index("$public['tools'] = [ordered]@{"),
+        )
+
     def test_helper_requests_are_worker_owned_and_cancelled_without_ui_blocking(self) -> None:
         self.assertIn("std::thread helperThread_", HEADER)
         self.assertIn("helperRequestInFlight_", HEADER)

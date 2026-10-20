@@ -1265,6 +1265,10 @@ function Get-PublicProposal($Proposal, [bool]$Committed, $Session) {
         }
 
         if ($exitCode -eq 0) {
+          if (-not [string]::Equals([string]$report.lane, $lane,
+              [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'prerequisite bootstrap returned a different installer scope'
+          }
           $python = [string]$report.tools.python.path
           $previousPath = $env:Path
           try {
@@ -1282,6 +1286,7 @@ function Get-PublicProposal($Proposal, [bool]$Committed, $Session) {
           $sessions[[string]$rebound.session_id] = $rebound
           $public = Get-PublicSession $rebound
           $public['state'] = 'complete'
+          $public['lane'] = [string]$report.lane
           $public['readiness'] = [string]$report.readiness
           $public['storage_root'] = [string]$report.storage_root
           $public['storage_profile'] = [string]$report.storage_profile

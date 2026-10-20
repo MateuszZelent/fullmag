@@ -1084,6 +1084,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyResponse(BrokerResponse response)
     {
+        var failureMessage = response.Ok ? string.Empty : response.Errors.FirstOrDefault() ?? response.Message;
         BrokerState = response.State;
         if (response.Progress is >= 0 and <= 100)
         {
@@ -1096,12 +1097,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 ? "The operation was accepted."
                 : UserFacingMessage(response.Message);
         }
-        else
-        {
-            Block(response.Errors.FirstOrDefault() ?? response.Message);
-        }
 
         ApplyResponsePayload(response.Payload, preserveConfirmedCommit: CommitConfirmed(response));
+        if (!response.Ok)
+        {
+            // Rebinding invalidates old session state, but must not hide the rejection.
+            Block(failureMessage);
+        }
         RaiseNavigationProperties();
     }
 

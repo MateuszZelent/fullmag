@@ -341,6 +341,20 @@ def main() -> None:
     require(view_model, 'JsonPayload.String(response.Payload, "state")', "commit payload state")
     require(view_model, "ResetSessionDerivedState", "session rebind invalidates stale preview")
     require(view_model, "preserveConfirmedCommit", "confirmed commit session rebind")
+    apply_response_start = view_model.index("private void ApplyResponse(BrokerResponse response)")
+    apply_response_end = view_model.index("private void ApplyResponsePayload", apply_response_start)
+    apply_response = view_model[apply_response_start:apply_response_end]
+    require(
+        apply_response,
+        "var failureMessage = response.Ok",
+        "failed reply keeps its user-facing error message",
+    )
+    require_order(
+        apply_response,
+        "ApplyResponsePayload(response.Payload, preserveConfirmedCommit: CommitConfirmed(response));",
+        "Block(failureMessage);",
+        "session metadata reset cannot hide a failed reply",
+    )
     require(view_model, "BrokerOperations.Discover", "source admission uses the trusted discover operation")
     require(view_model, 'private const string InstallationScope = "all";', "fixed all-realizations scope")
     require(view_model, "HasInstallationScope", "all-realizations admission gate")
