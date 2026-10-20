@@ -112,6 +112,149 @@ class NativeFemContractTests(unittest.TestCase):
     def test_native_fem_build_and_receipt_are_closed_and_manifest_bound(self):
         self._assert_closed_native_fem_build_and_receipt()
 
+    def _run_native_fem_build_only_for_output_contract(self, output_dir=None):
+        calls = []
+        manifest = (
+            Path(self.layout["build_root"])
+            / "windows-fem-runtime"
+            / "build-manifest.json"
+        )
+
+        def fake_build(command, _repo, child_env, *_args, **_kwargs):
+            calls.append(command)
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_bytes(manifest_bytes(self.layout, child_env))
+            return subprocess.CompletedProcess(command, 0)
+
+        script_before = self.script.read_bytes()
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "file_lock", self._unlocked), \
+             patch.object(storage, "git", side_effect=self._fixture_git), \
+             patch.object(storage, "_run_logged_command", side_effect=fake_build):
+            result = storage.run_windows_fem(
+                self.layout,
+                frontend="dev",
+                device="gpu",
+                run_mode="headless",
+                script_path="examples/problem.py",
+                output_dir=output_dir,
+                web_port=0,
+                build_mode="true",
+                build_only=True,
+            )
+        receipt = json.loads(
+            (Path(self.layout["runtime_root"]) / "native-fem-receipt.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(self.script.read_bytes(), script_before)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 1)
+        return calls[0], receipt
+
+    def test_native_fem_default_leaves_output_to_authored_script_policy(self):
+        command, receipt = self._run_native_fem_build_only_for_output_contract()
+
+        self.assertNotIn("-OutputDir", command)
+        self.assertIsNone(receipt["output_dir"])
+        self.assertEqual(receipt["output_policy"], "script-adjacent-default")
+        self.assertTrue(Path(self.layout["runtime_root"]).is_dir())
+        self.assertFalse((Path(self.layout["runs_root"]) / "windows-fem").exists())
+
+    def test_native_fem_runtime_handoff_keeps_script_default_and_pins_build(self):
+        commands = []
+        manifest_id = "a" * 64
+        script_before = self.script.read_bytes()
+
+        def fake_managed(_layout, command, **kwargs):
+            commands.append(list(command))
+            state = {
+                "schema": storage.SCHEMA,
+                "worktree_id": self.layout["worktree_id"],
+                "profile": self.layout["profile"],
+                "repo_root": self.layout["repo_root"],
+                "attempt_id": kwargs["attempt_id"],
+                "execution_mode": kwargs["execution_mode"],
+                "state": "completed",
+                "exit_code": 0,
+                "build_manifest_sha256": manifest_id,
+                "started_at": "fixture",
+                "finished_at": "fixture",
+            }
+            kwargs["result_record"].update(state)
+            status_path = Path(self.layout["build_root"]) / "build-status.json"
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            status_path.write_text(json.dumps(state), encoding="utf-8")
+            return 0
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "file_lock", self._unlocked), \
+             patch.object(storage, "git", side_effect=self._fixture_git), \
+             patch.object(storage, "_run_managed_command", side_effect=fake_managed):
+            result = storage.run_windows_fem(
+                self.layout,
+                frontend="dev",
+                device="gpu",
+                run_mode="headless",
+                script_path="examples/problem.py",
+                web_port=0,
+                build_mode="true",
+                build_only=False,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(commands), 2)
+        build_command, runtime_command = commands
+        self.assertNotIn("-OutputDir", build_command)
+        self.assertNotIn("-OutputDir", runtime_command)
+        self.assertIn("-BuildOnly", build_command)
+        self.assertNotIn("-BuildOnly", runtime_command)
+        self.assertEqual(
+            runtime_command[runtime_command.index("-BuildMode") + 1], "false"
+        )
+        self.assertEqual(
+            runtime_command[runtime_command.index("-ExpectedBuildId") + 1],
+            manifest_id,
+        )
+        receipt = json.loads(
+            (Path(self.layout["runtime_root"]) / "native-fem-receipt.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertIsNone(receipt["output_dir"])
+        self.assertEqual(receipt["output_policy"], "script-adjacent-default")
+        self.assertEqual(receipt["state"], "completed")
+        self.assertEqual(receipt["build_manifest_sha256"], manifest_id)
+        self.assertEqual(self.script.read_bytes(), script_before)
+        self.assertTrue(Path(self.layout["runtime_root"]).is_dir())
+        self.assertFalse((Path(self.layout["runs_root"]) / "windows-fem").exists())
+
+    def test_native_fem_explicit_output_override_remains_storage_scoped(self):
+        explicit = Path(self.layout["build_storage_root"]) / "user-results"
+        command, receipt = self._run_native_fem_build_only_for_output_contract(explicit)
+
+        output_index = command.index("-OutputDir")
+        self.assertEqual(Path(command[output_index + 1]), explicit.resolve())
+        self.assertEqual(receipt["output_dir"], str(explicit.resolve()))
+        self.assertEqual(receipt["output_policy"], "explicit")
+        self.assertTrue(explicit.is_dir())
+
+    def test_native_fem_rejects_explicit_output_outside_storage(self):
+        outside = self.repo / "examples" / "outside-results"
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "git", side_effect=self._fixture_git), \
+             self.assertRaisesRegex(storage.StorageError, "must be contained by"):
+            storage.run_windows_fem(
+                self.layout,
+                frontend="dev",
+                device="gpu",
+                run_mode="headless",
+                script_path="examples/problem.py",
+                output_dir=outside,
+                web_port=0,
+                build_mode="true",
+                build_only=True,
+            )
+        self.assertFalse(outside.exists())
+
     def test_native_fem_preserves_existing_checkout_compatibility_state(self):
         legacy = self.repo / ".fullmag"
         legacy.mkdir()

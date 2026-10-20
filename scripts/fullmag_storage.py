@@ -2969,7 +2969,9 @@ def run_windows_fem(
     The resolver owns profile selection, the native heavy slot and the
     terminal build manifest.  The PowerShell child only receives the bounded
     arguments below; arbitrary commands remain on ``run`` and are rejected for
-    native Windows profiles by the heavy-slot guard.
+    native Windows profiles by the heavy-slot guard.  When no output override
+    is supplied, the authored-script CLI/core retains its source-adjacent
+    result policy.
     """
     if not _is_native_windows():
         raise StorageError("Native Windows FEM requires native Windows")
@@ -3015,11 +3017,11 @@ def run_windows_fem(
         if resolved_output == output_root:
             raise StorageError("Native FEM output must be a storage subdirectory")
     else:
-        resolved_output = validate_path(
-            Path(layout["runs_root"]) / "windows-fem" / uuid.uuid4().hex,
-            layout["storage_root"],
-            "native FEM output",
-        )
+        # Leave the implicit result location to the authored-script CLI/core
+        # policy.  The managed resolver still owns technical roots and
+        # receipts, but must not replace the user's source-adjacent default
+        # with a canonical UUID run directory.
+        resolved_output = None
     full_workspace_identity = None
     origin_probe = Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json"
     if (build_mode == "false" and not build_only and frontend == "static" and device == "gpu"
@@ -3032,9 +3034,9 @@ def run_windows_fem(
             layout, resolved_device=resolved_device, requested_device=device,
             frontend=frontend,
         )
-    # Initialize the canonical storage tree before creating a run directory;
-    # no output is allowed to appear before the managed marker and layout have
-    # passed their final mutation-boundary checks.
+    # Initialize the canonical technical storage tree before invoking the
+    # child; no user output is allowed to appear before the managed marker and
+    # layout have passed their final mutation-boundary checks.
     reuse_manifest_identity = None
     if build_mode == "false" and frontend == "dev" and run_mode == "interactive":
         # A separately invoked dev runtime must reuse the port-owned frontend
@@ -3045,7 +3047,8 @@ def run_windows_fem(
         )
         expected_build_id = reuse_manifest_identity
     initialize(layout)
-    resolved_output.mkdir(parents=True, exist_ok=True)
+    if resolved_output is not None:
+        resolved_output.mkdir(parents=True, exist_ok=True)
     if web_port == 0 and run_mode == "interactive":
         # Pick an ephemeral host port for the native UI handoff.  The launcher
         # receives the concrete port, so it never has to infer one from state.
@@ -3059,8 +3062,10 @@ def run_windows_fem(
         "-BuildMode", build_mode, "-Frontend", frontend,
         "-BackendProfile", "release", "-Backend", "fem",
         "-Device", resolved_device, "-RunMode", run_mode,
-        "-OutputDir", str(resolved_output), "-WebPort", str(web_port),
     ]
+    if resolved_output is not None:
+        command.extend(("-OutputDir", str(resolved_output)))
+    command.extend(("-WebPort", str(web_port)))
     if resolved_script is not None:
         command.extend(("-ScriptPath", str(resolved_script)))
     if build_only:
@@ -3178,7 +3183,13 @@ def run_windows_fem(
             "build_only": bool(build_only),
             "script": str(resolved_script) if resolved_script is not None else None,
             "script_sha256": resolved_script_sha256,
-            "output_dir": str(resolved_output),
+            # None means the authored-script CLI/core owns the default result
+            # location; this field must not claim that technical storage is
+            # the user's result directory.
+            "output_dir": str(resolved_output) if resolved_output is not None else None,
+            "output_policy": (
+                "explicit" if resolved_output is not None else "script-adjacent-default"
+            ),
             "execution_mode": active_execution_mode,
             "attempt_id": active_attempt_id,
             "state": status.get("state", "interrupted"),
